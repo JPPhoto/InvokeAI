@@ -11,6 +11,7 @@ import type {
   WorkflowSeedFieldAdvance,
 } from './types';
 
+import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from './callSavedWorkflow';
 import { createWorkflowId } from './document';
 import { getWorkflowFieldInvalidReason, isDirectInputField } from './fields';
 import {
@@ -54,6 +55,11 @@ const isEmptyValue = (value: unknown): boolean =>
 
 const getNodeDisplayName = (node: WorkflowInvocationNode, templates: InvocationTemplates): string =>
   node.data.label || templates[node.data.type]?.title || node.data.type;
+
+const getNodeInputTemplates = (
+  node: WorkflowInvocationNode,
+  template: InvocationTemplates[string]
+): FieldInputTemplate[] => Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates });
 
 /**
  * Translates a board field value to the backend shape: `auto` and `none`
@@ -118,7 +124,7 @@ export const getProjectGraphReadiness = (
       continue;
     }
 
-    for (const inputTemplate of Object.values(template.inputs)) {
+    for (const inputTemplate of getNodeInputTemplates(node, template)) {
       if (connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
         continue;
       }
@@ -204,8 +210,10 @@ export const compileProjectGraph = (
       use_cache: node.data.useCache,
     };
 
+    const workflowInputs: Record<string, unknown> = {};
+
     for (const instance of Object.values(node.data.inputs)) {
-      const inputTemplate = template.inputs[instance.name];
+      const inputTemplate = node.data.dynamicInputTemplates?.[instance.name] ?? template.inputs[instance.name];
 
       if (!inputTemplate || instance.value === undefined) {
         continue;
@@ -214,8 +222,19 @@ export const compileProjectGraph = (
       const value = toGraphInputValue(inputTemplate, instance.value);
 
       if (value !== undefined) {
-        graphNode[instance.name] = value;
+        if (
+          node.data.type === 'call_saved_workflow' &&
+          instance.name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX)
+        ) {
+          workflowInputs[instance.name] = value;
+        } else {
+          graphNode[instance.name] = value;
+        }
       }
+    }
+
+    if (node.data.type === 'call_saved_workflow') {
+      graphNode.workflow_inputs = workflowInputs;
     }
 
     backendGraph.nodes[node.id] = graphNode as WorkflowBackendGraph['nodes'][string];
@@ -246,7 +265,18 @@ export const compileProjectGraph = (
     const targetNode = backendGraph.nodes[edge.destination.node_id];
 
     if (targetNode) {
-      delete targetNode[edge.destination.field];
+      if (
+        targetNode.type === 'call_saved_workflow' &&
+        edge.destination.field.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX)
+      ) {
+        const workflowInputs = targetNode.workflow_inputs;
+
+        if (workflowInputs && typeof workflowInputs === 'object') {
+          delete (workflowInputs as Record<string, unknown>)[edge.destination.field];
+        }
+      } else {
+        delete targetNode[edge.destination.field];
+      }
     }
   }
 

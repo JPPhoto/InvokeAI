@@ -34,6 +34,23 @@ import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
 import { DEFAULT_LORA_WEIGHT_CONFIG, sanitizeBatchCount, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
+import {
+  buildSavedWorkflowOptions,
+  getSavedWorkflowDisplayState,
+  getSavedWorkflowListItemFromRecord,
+  getSavedWorkflowPickerOwnedQuery,
+  getSavedWorkflowPickerSharedQuery,
+  getSavedWorkflowSelectionOption,
+  getSavedWorkflowSelectionState,
+  mergeSavedWorkflowPickerItems,
+  MISSING_WORKFLOW_OPTION_VALUE,
+  shouldFetchNextSavedWorkflowPickerPage,
+} from '@features/workflow/data/savedWorkflowFieldUtils';
+import {
+  getWorkflowPagesItems,
+  savedWorkflowDetailQueryOptions,
+  savedWorkflowPickerQueryOptions,
+} from '@features/workflow/data/savedWorkflowQueries';
 import { isSeedInputField } from '@features/workflow/graph';
 import {
   getWorkflowMediaFieldDropId,
@@ -72,12 +89,13 @@ import {
 } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SeedInput } from '@platform/ui/SeedInput';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-react';
 import {
   lazy,
   Suspense,
   useCallback,
+  useDeferredValue,
   useEffect,
   useId,
   useMemo,
@@ -1483,6 +1501,124 @@ const CONNECTION_ONLY_FALLBACK = (
   </Text>
 );
 
+const SavedWorkflowInput = ({ onChange, template, value }: WorkflowFieldInputProps) => {
+  const { t } = useTranslation();
+  const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const ownedParams = useMemo(() => getSavedWorkflowPickerOwnedQuery(deferredSearch), [deferredSearch]);
+  const sharedParams = useMemo(() => getSavedWorkflowPickerSharedQuery(deferredSearch), [deferredSearch]);
+  const ownedQuery = useInfiniteQuery(savedWorkflowPickerQueryOptions(ownedParams));
+  const sharedQuery = useInfiniteQuery(savedWorkflowPickerQueryOptions(sharedParams));
+  const ownedItems = getWorkflowPagesItems(ownedQuery.data);
+  const sharedItems = getWorkflowPagesItems(sharedQuery.data);
+  const items = useMemo(() => mergeSavedWorkflowPickerItems(ownedItems, sharedItems), [ownedItems, sharedItems]);
+  const workflowId = typeof value === 'string' ? value : '';
+  const selectedInList = items.some((item) => item.workflow_id === workflowId);
+  const detailQuery = useQuery({
+    ...savedWorkflowDetailQueryOptions(workflowId),
+    enabled: workflowId !== '' && !selectedInList,
+  });
+  const selectedWorkflow = detailQuery.data ? getSavedWorkflowListItemFromRecord(detailQuery.data) : undefined;
+  const selectionState = useMemo(
+    () => getSavedWorkflowSelectionState(items, workflowId, selectedWorkflow),
+    [items, selectedWorkflow, workflowId]
+  );
+  const selectedOption = useMemo(() => {
+    const option = getSavedWorkflowSelectionOption(selectionState);
+
+    return option?.value === MISSING_WORKFLOW_OPTION_VALUE
+      ? { ...option, label: t('nodes.savedWorkflowMissing') }
+      : option;
+  }, [selectionState, t]);
+  const options = useMemo(() => {
+    const base = buildSavedWorkflowOptions(items);
+
+    if (selectedOption && !base.some((option) => option.value === selectedOption.value)) {
+      return [selectedOption, ...base];
+    }
+
+    return base;
+  }, [items, selectedOption]);
+  const displayState = getSavedWorkflowDisplayState(selectionState);
+  const clearSelection = useCallback(() => onChange(''), [onChange]);
+  const fetchNextPage = useCallback(() => {
+    if (shouldFetchNextSavedWorkflowPickerPage(ownedQuery)) {
+      void ownedQuery.fetchNextPage();
+    }
+
+    if (shouldFetchNextSavedWorkflowPickerPage(sharedQuery)) {
+      void sharedQuery.fetchNextPage();
+    }
+  }, [ownedQuery, sharedQuery]);
+  const isLoading = ownedQuery.isLoading || sharedQuery.isLoading;
+  const isFetching = ownedQuery.isFetching || sharedQuery.isFetching;
+  const statusText =
+    displayState.statusLabel === 'choose'
+      ? t('nodes.savedWorkflowChoose')
+      : displayState.statusLabel === 'missing'
+        ? t('nodes.savedWorkflowMissing')
+        : null;
+
+  return (
+    <Stack gap="1" minW="0" w="full">
+      <HStack gap="1" minW="0" w="full">
+        <Combobox
+          aria-label={template.title}
+          flex="1"
+          noResultsText={t('nodes.noMatchingWorkflows')}
+          options={options}
+          searchPlaceholder={isLoading ? t('common.loading') : t('nodes.savedWorkflowSearch')}
+          value={selectedOption?.value ?? null}
+          onInputValueChange={setSearch}
+          onListScrollToBottom={fetchNextPage}
+          onValueChange={onChange}
+        />
+        {workflowId ? (
+          <IconButton
+            aria-label={t('nodes.savedWorkflowClear')}
+            className="nodrag"
+            size="xs"
+            variant="ghost"
+            onClick={clearSelection}
+          >
+            <XIcon />
+          </IconButton>
+        ) : null}
+      </HStack>
+      {selectionState.status === 'selected' ? (
+        <HStack flexWrap="wrap" gap="1" minW="0">
+          <Text color="fg.muted" fontSize="2xs" minW="0" truncate>
+            {selectionState.workflow.name}
+          </Text>
+          {displayState.badges.includes('unsupported') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowUnsupported')}</Badge>
+          ) : null}
+          {displayState.badges.includes('default') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowDefaultBadge')}</Badge>
+          ) : null}
+          {displayState.badges.includes('shared') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowShared')}</Badge>
+          ) : null}
+        </HStack>
+      ) : (
+        <Badge alignSelf="flex-start" fontSize="2xs">
+          {statusText}
+        </Badge>
+      )}
+      {displayState.compatibility?.message ? (
+        <Text color="fg.subtle" fontSize="2xs">
+          {displayState.compatibility.message}
+        </Text>
+      ) : null}
+      {isFetching ? (
+        <Text color="fg.subtle" fontSize="2xs">
+          {t('nodes.savedWorkflowUpdating')}
+        </Text>
+      ) : null}
+    </Stack>
+  );
+};
+
 export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
   // COLLECTION fields hold arrays; only image lists have a list widget. Other
   // collections stay connection-only even when a migrated linear-form element
@@ -1492,6 +1628,8 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
   }
 
   switch (props.template.type.name) {
+    case 'SavedWorkflowField':
+      return <SavedWorkflowInput {...props} />;
     case 'StringField':
       return <StringInput {...props} />;
     case 'IntegerField':

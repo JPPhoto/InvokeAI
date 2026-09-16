@@ -19,6 +19,7 @@ import {
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import { useWorkflowNodeExecutionState } from '@features/workflow/ui/WorkflowUiContext';
 import {
+  CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   cloneWorkflowFieldDefault,
   formatOutputFieldValue,
   getFieldTypeLabel,
@@ -674,6 +675,7 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
 };
 
 const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeType>) => {
+  const { t } = useTranslation();
   const { editGraph } = useProjectGraphCommands();
   const isZoomedOut = useIsZoomedOut();
   const node = data.documentNode;
@@ -705,7 +707,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   const outputRows = getOutputFieldRows(getOutputFieldNamesByScope(outputTemplates));
   const isOpen = node.data.isOpen;
   const isRunning = execution?.status === 'running';
-  const isMissingRequiredInput = hasMissingRequiredInputs(node, Object.values(template.inputs), connectedFieldNames);
+  const isMissingRequiredInput = hasMissingRequiredInputs(node, inputTemplates, connectedFieldNames);
   const isCompact = data.isCompact && !selected;
   const withFooter = !isZoomedOut && templateView.isExecutable && templateView.hasImageOutput;
   const withOutputPreview = Boolean(execution?.outputImageUrl);
@@ -770,6 +772,14 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
               template={inputTemplate}
             />
           ))}
+          {node.data.type === 'call_saved_workflow' &&
+          inputTemplates.every(
+            (inputTemplate) => !inputTemplate.name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX)
+          ) ? (
+            <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
+              {t('nodes.savedWorkflowSelectExposedFields')}
+            </Text>
+          ) : null}
         </Box>
       ) : (
         <HiddenHandles inputTemplates={inputTemplates} outputTemplates={outputTemplates} />

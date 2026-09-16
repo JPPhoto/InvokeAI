@@ -220,6 +220,39 @@ const parseForm = (
     }
   }
 
+  // Legacy workflows may carry both a form and an exposedFields list. Keep
+  // fields added after the form was saved instead of silently dropping them.
+  const root = form.elements[form.rootElementId];
+
+  if (root?.type === 'container') {
+    const existingFieldKeys = new Set(
+      Object.values(form.elements)
+        .filter(
+          (element): element is Extract<WorkflowFormElement, { type: 'node-field' }> => element.type === 'node-field'
+        )
+        .map((element) => `${element.data.fieldIdentifier.nodeId}:${element.data.fieldIdentifier.fieldName}`)
+    );
+
+    for (const fieldIdentifier of exposedFields) {
+      const fieldKey = `${fieldIdentifier.nodeId}:${fieldIdentifier.fieldName}`;
+
+      if (!nodeIds.has(fieldIdentifier.nodeId) || existingFieldKeys.has(fieldKey)) {
+        continue;
+      }
+
+      const element: WorkflowFormElement = {
+        data: { fieldIdentifier, showDescription: false, showShuffle: false },
+        id: createWorkflowId('node-field'),
+        parentId: root.id,
+        type: 'node-field',
+      };
+
+      form.elements[element.id] = element;
+      root.data.children.push(element.id);
+      existingFieldKeys.add(fieldKey);
+    }
+  }
+
   // Drop node-field elements that point at nodes which did not survive parsing.
   for (const element of Object.values(form.elements)) {
     if (element.type !== 'node-field' || nodeIds.has(element.data.fieldIdentifier.nodeId)) {
@@ -365,6 +398,17 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
   return { document, warnings };
 };
 
+const serializeInvocationNode = (node: Extract<WorkflowNode, { type: 'invocation' }>) => {
+  const { dynamicInputTemplates: _dynamicInputTemplates, ...data } = structuredClone(node.data);
+
+  return {
+    data: { ...data, id: node.id },
+    id: node.id,
+    position: { ...node.position },
+    type: node.type,
+  };
+};
+
 /** Serializes the document to legacy WorkflowV3 JSON (loadable by the v6 editor and the library backend). */
 export const serializeWorkflowJson = (document: ProjectGraphState): Record<string, unknown> => ({
   author: document.author,
@@ -394,12 +438,7 @@ export const serializeWorkflowJson = (document: ProjectGraphState): Record<strin
             position: { ...node.position },
             type: node.type,
           }
-        : {
-            data: { ...structuredClone(node.data), id: node.id },
-            id: node.id,
-            position: { ...node.position },
-            type: node.type,
-          }
+        : serializeInvocationNode(node)
   ),
   notes: document.notes,
   tags: document.tags,

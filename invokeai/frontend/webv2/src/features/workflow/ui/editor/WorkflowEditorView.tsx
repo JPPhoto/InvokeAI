@@ -57,6 +57,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 
+import { CallSavedWorkflowSyncRuntime } from './CallSavedWorkflowSyncRuntime';
 import { buildDuplicateElements, buildPasteElements, copyNodesToClipboard, useHasClipboardNodes } from './clipboard';
 import { ConnectorFlowNode } from './ConnectorFlowNode';
 import { CurrentImageFlowNode } from './CurrentImageFlowNode';
@@ -1214,6 +1215,7 @@ export const WorkflowEditorView = ({ runtime }: { runtime: WorkflowRuntimeApi })
 
   return (
     <ReactFlowProvider>
+      <CallSavedWorkflowSyncRuntime />
       <Flex direction="column" h="full" minH="0" w="full">
         <Box flex="1" minH="0" position="relative">
           <WorkflowFlow key={flowIdentity} runtime={runtime} />
