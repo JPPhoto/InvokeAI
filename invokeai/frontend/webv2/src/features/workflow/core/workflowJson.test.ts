@@ -125,6 +125,64 @@ describe('workflow JSON round-trip', () => {
 });
 
 describe('parseWorkflowJson tolerance', () => {
+  it('reads the legacy per-element shuffle setting and keeps the settings bag for the legacy editor', () => {
+    const { document, warnings } = parseWorkflowJson({
+      edges: [],
+      form: {
+        elements: {
+          root: { data: { children: ['f1'], layout: 'column' }, id: 'root', type: 'container' },
+          f1: {
+            data: {
+              fieldIdentifier: { fieldName: 'steps', nodeId: 'n1' },
+              settings: { component: 'number-input', showShuffle: true },
+            },
+            id: 'f1',
+            parentId: 'root',
+            type: 'node-field',
+          },
+        },
+        rootElementId: 'root',
+      },
+      name: 'Legacy Shuffle',
+      nodes: [
+        {
+          data: { id: 'n1', inputs: { steps: { label: '', name: 'steps', value: 20 } }, type: 'noise' },
+          id: 'n1',
+          position: { x: 0, y: 0 },
+          type: 'invocation',
+        },
+      ],
+      version: '1.0.0',
+    });
+
+    expect(warnings).toEqual([]);
+
+    const field = document.form.elements.f1;
+
+    expect(field?.type === 'node-field' && field.data).toEqual({
+      fieldIdentifier: { fieldName: 'steps', nodeId: 'n1' },
+      settings: { component: 'number-input', showShuffle: true },
+      showDescription: false,
+      showShuffle: true,
+    });
+
+    const toggled = projectGraphReducer(document, {
+      elementId: 'f1',
+      showShuffle: false,
+      type: 'setNodeFieldShowShuffle',
+    });
+    const toggledField = toggled.form.elements.f1;
+    const serialized = serializeWorkflowJson(toggled) as { form: { elements: Record<string, { data: unknown }> } };
+
+    expect(toggledField?.type === 'node-field' && toggledField.data.settings).toEqual({
+      component: 'number-input',
+      showShuffle: false,
+    });
+    expect(serialized.form.elements.f1?.data).toMatchObject({
+      settings: { component: 'number-input', showShuffle: false },
+    });
+  });
+
   it('migrates pre-form exposedFields into form elements', () => {
     const { document, warnings } = parseWorkflowJson({
       edges: [],

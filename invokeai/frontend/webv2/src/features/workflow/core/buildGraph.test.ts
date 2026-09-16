@@ -150,14 +150,23 @@ describe('getProjectGraphReadiness', () => {
 
   it('reports missing required inputs and unknown node types', () => {
     const { doc, sourceId } = buildDocument();
-    const withEmptyValue = projectGraphReducer(doc, {
+    const withEmptyString = projectGraphReducer(doc, {
       fieldName: 'value',
       nodeId: sourceId,
       type: 'setFieldValue',
       value: '',
     });
 
-    expect(getProjectGraphReadiness(withEmptyValue, loadedSnapshot).reasons[0]).toMatch(/missing required input/);
+    expect(getProjectGraphReadiness(withEmptyString, loadedSnapshot)).toEqual({ canInvoke: true, reasons: [] });
+
+    const withMissingValue = projectGraphReducer(doc, {
+      fieldName: 'value',
+      nodeId: sourceId,
+      type: 'setFieldValue',
+      value: undefined,
+    });
+
+    expect(getProjectGraphReadiness(withMissingValue, loadedSnapshot).reasons[0]).toMatch(/missing required input/);
 
     const unknownTemplates: InvocationTemplatesSnapshot = {
       error: null,

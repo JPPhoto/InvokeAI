@@ -78,6 +78,7 @@ export const isHighConfidenceVideoEdit = (changedKeys: readonly string[]): boole
 
 const GRAPH_EDIT_CONFIDENCE = {
   addEdge: true,
+  reconnectEdge: true,
   addFormElement: false,
   addGraphElements: true,
   addNode: true,
@@ -97,6 +98,7 @@ const GRAPH_EDIT_CONFIDENCE = {
   setFormElementContent: false,
   setMetadata: false,
   setNodeFieldShowDescription: false,
+  setNodeFieldShowShuffle: false,
   setNodeIsIntermediate: false,
   setNodeIsOpen: false,
   setNodeLabel: false,

@@ -543,11 +543,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   useEffect(() => () => previewHeaderStore.clear(), []);
 
   const executeViewerHotkey = useEffectEvent((commandId: string) => {
-    if (commandId === 'viewer.toggleViewer') {
-      runtime.workbench.closeWidgetInstance(runtime.instanceId);
-      return;
-    }
-
     if (commandId === 'viewer.swapImages' && selectedItem?.kind === 'image' && compareImage) {
       swapCompareImages();
       return;
@@ -575,7 +570,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
 
   useEffect(() => {
     const hotkeys = [
-      ['viewer.toggleViewer', t('widgets.preview.commands.togglePreview'), ['z']],
       ['viewer.deleteImage', t('widgets.preview.commands.deletePreviewImage'), ['delete', 'backspace']],
       ['viewer.toggleFilmstrip', t('widgets.preview.commands.toggleFilmstrip'), ['t']],
       ...(selectedItem?.kind === 'image'

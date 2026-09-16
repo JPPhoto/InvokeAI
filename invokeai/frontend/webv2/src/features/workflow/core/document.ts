@@ -4,6 +4,7 @@ import type {
   ContainerFormElement,
   FieldIdentifier,
   InvocationTemplate,
+  NodeFieldFormElement,
   ProjectGraphState,
   WorkflowCurrentImageNode,
   WorkflowConnectorNode,
@@ -304,6 +305,8 @@ export type ProjectGraphAction =
   /** Moves stepping-mode seeds past a queued submission; each field is fenced on the value and mode it was planned from. */
   | { type: 'advanceSeedFields'; advances: readonly WorkflowSeedFieldAdvance[] }
   | { type: 'addEdge'; edge: WorkflowEdge }
+  /** Replaces `edgeId` with `edge` as one undoable step (dragging an edge end to a new handle). */
+  | { type: 'reconnectEdge'; edgeId: string; edge: WorkflowEdge }
   | { type: 'removeEdges'; edgeIds: string[] }
   | { type: 'exposeField'; fieldIdentifier: FieldIdentifier }
   | { type: 'unexposeField'; fieldIdentifier: FieldIdentifier }
@@ -318,11 +321,13 @@ export type ProjectGraphAction =
     }
   | { type: 'setFormElementContent'; elementId: string; content: string }
   | { type: 'setNodeFieldShowDescription'; elementId: string; showDescription: boolean }
+  | { type: 'setNodeFieldShowShuffle'; elementId: string; showShuffle: boolean }
   | { type: 'setContainerLayout'; elementId: string; layout: 'row' | 'column' }
   | { type: 'setMetadata'; patch: Partial<WorkflowMetadata> };
 
 const undoLabels: Partial<Record<ProjectGraphAction['type'], string>> = {
   addEdge: 'Connect workflow fields',
+  reconnectEdge: 'Reconnect workflow fields',
   addFormElement: 'Edit workflow form',
   addGraphElements: 'Paste workflow nodes',
   addNode: 'Add workflow node',
@@ -335,6 +340,7 @@ const undoLabels: Partial<Record<ProjectGraphAction['type'], string>> = {
   removeNodes: 'Delete workflow nodes',
   setContainerLayout: 'Edit workflow form',
   setNodeFieldShowDescription: 'Edit workflow form',
+  setNodeFieldShowShuffle: 'Edit workflow form',
   unexposeField: 'Remove workflow field from form',
 };
 
@@ -370,6 +376,26 @@ const setFieldInstance = (
       data: { ...node.data, inputs: { ...node.data.inputs, [fieldName]: getInstance(instance) } },
     };
   });
+
+const patchNodeFieldElement = (
+  document: ProjectGraphState,
+  elementId: string,
+  patch: Partial<Omit<NodeFieldFormElement['data'], 'fieldIdentifier'>>
+): ProjectGraphState => {
+  const element = document.form.elements[elementId];
+
+  if (!element || element.type !== 'node-field') {
+    return document;
+  }
+
+  return {
+    ...document,
+    form: {
+      ...document.form,
+      elements: { ...document.form.elements, [element.id]: { ...element, data: { ...element.data, ...patch } } },
+    },
+  };
+};
 
 const addEdgeToDocument = (document: ProjectGraphState, edge: WorkflowEdge): ProjectGraphState => {
   // A non-collect input holds at most one connection; connecting replaces it.
@@ -557,6 +583,16 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
     case 'addEdge': {
       return addEdgeToDocument(document, action.edge);
     }
+    case 'reconnectEdge': {
+      if (!document.edges.some((edge) => edge.id === action.edgeId)) {
+        return document;
+      }
+
+      return addEdgeToDocument(
+        { ...document, edges: document.edges.filter((edge) => edge.id !== action.edgeId) },
+        action.edge
+      );
+    }
     case 'removeEdges': {
       const removedEdgeIds = new Set(action.edgeIds);
 
@@ -574,7 +610,7 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       return {
         ...document,
         form: appendToRoot(document.form, {
-          data: { fieldIdentifier: { ...action.fieldIdentifier }, showDescription: false },
+          data: { fieldIdentifier: { ...action.fieldIdentifier }, showDescription: false, showShuffle: false },
           id: createWorkflowId('node-field'),
           type: 'node-field',
         }),
@@ -657,22 +693,16 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       };
     }
     case 'setNodeFieldShowDescription': {
-      const element = document.form.elements[action.elementId];
+      return patchNodeFieldElement(document, action.elementId, { showDescription: action.showDescription });
+    }
+    case 'setNodeFieldShowShuffle': {
+      const settings = document.form.elements[action.elementId];
+      const legacySettings = settings?.type === 'node-field' ? settings.data.settings : undefined;
 
-      if (!element || element.type !== 'node-field') {
-        return document;
-      }
-
-      return {
-        ...document,
-        form: {
-          ...document.form,
-          elements: {
-            ...document.form.elements,
-            [element.id]: { ...element, data: { ...element.data, showDescription: action.showDescription } },
-          },
-        },
-      };
+      return patchNodeFieldElement(document, action.elementId, {
+        showShuffle: action.showShuffle,
+        ...(legacySettings ? { settings: { ...legacySettings, showShuffle: action.showShuffle } } : {}),
+      });
     }
     case 'setMetadata': {
       return { ...document, ...action.patch };

@@ -267,6 +267,7 @@
       "decrementDescription": "Use successive seeds, decreasing by 1."
     },
     "newSeed": "New seed",
+    "shuffle": "Shuffle",
     "seedNextBatch": "Next batch: {{seed}}",
     "seedNextBatchRange": "Next batch: {{first}} → {{last}}",
     "decreaseValue": "Decrease value",
@@ -1438,7 +1439,11 @@
     "forLoopLinkageInvalid": "Loop linkage must connect a For to its ForReturn",
     "forLoopLinkageDuplicate": "A For and ForReturn can each belong to only one loop",
     "forReturnOwnership": "Each ForReturn must belong to exactly one For",
+    "executionCompleted": "Completed",
+    "executionFailed": "Failed",
     "forLoopBodyBoundary": "For loop body",
+    "imageCollectionCount_one": "{{count}} image",
+    "imageCollectionCount_other": "{{count}} images",
     "forLoopBodyBoundaryStatus": {
       "missing_linkage": "missing loop linkage",
       "invalid_linkage": "invalid loop linkage",
@@ -2474,7 +2479,6 @@
         "nextComparisonMode": "Next comparison mode",
         "swapComparisonImages": "Swap comparison images",
         "toggleFilmstrip": "Toggle filmstrip",
-        "togglePreview": "Toggle preview",
         "zoomToActual": "Zoom preview to 100%",
         "zoomToFit": "Zoom preview to fit"
       },

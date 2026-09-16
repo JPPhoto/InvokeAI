@@ -104,10 +104,20 @@ const zFormElement = z.discriminatedUnion('type', [
     type: z.literal('container'),
   }),
   z.object({
-    data: z.looseObject({
-      fieldIdentifier: zFieldIdentifier,
-      showDescription: z.boolean().catch(false),
-    }),
+    data: z
+      .looseObject({
+        fieldIdentifier: zFieldIdentifier,
+        showDescription: z.boolean().catch(false),
+        showShuffle: z.boolean().optional(),
+        // The legacy editor keeps its per-element settings (component, bounds, shuffle) here; they
+        // are carried through untouched so a workflow saved from webv2 still opens the same there.
+        settings: z.looseObject({ showShuffle: z.boolean().optional() }).optional(),
+      })
+      .transform(({ settings, showShuffle, ...data }) => ({
+        ...data,
+        ...(settings ? { settings } : {}),
+        showShuffle: showShuffle ?? settings?.showShuffle ?? false,
+      })),
     id: z.string(),
     parentId: z.string().optional(),
     type: z.literal('node-field'),
@@ -198,7 +208,7 @@ const parseForm = (
     if (root?.type === 'container') {
       for (const fieldIdentifier of exposedFields) {
         const element: WorkflowFormElement = {
-          data: { fieldIdentifier, showDescription: false },
+          data: { fieldIdentifier, showDescription: false, showShuffle: false },
           id: createWorkflowId('node-field'),
           parentId: root.id,
           type: 'node-field',
