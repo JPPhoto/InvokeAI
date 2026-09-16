@@ -268,7 +268,7 @@ await i18n.use(initReactI18next).init({
   resources: {
     en: {
       translation: {
-        common: { countOfTotal: '{{count}} of {{total}}' },
+        common: { countOfTotal: '{{count}} of {{total}}', generating: 'Generating' },
         widgets: {
           preview: {
             framesPerSecond: '{{count}} fps',
@@ -1490,13 +1490,11 @@ describe('preview keyboard navigation boundary', () => {
 
     await render();
 
-    // The footer island is up during the live render, fed by queue data: the
-    // slot's requested output size, and working prev/next.
+    // Live status reports the requested size without suggesting board navigation.
     expect(host?.textContent).toContain('64 × 64');
-    expect(host?.querySelector('button[aria-label="Next item in board"]')).not.toBeNull();
-    // No progress badge over the frame — the image is styled exactly like a
-    // finished item, so completion changes pixels, not chrome.
-    expect(host?.textContent).not.toContain('Generating');
+    expect(host?.querySelector('button[aria-label="Next item in board"]')).toBeNull();
+    expect(host?.textContent).toContain('Generating');
+    expect(host?.textContent).not.toContain('0 items');
     expect(host?.querySelector<HTMLImageElement>('img[src^="data:image/png"]')).not.toBeNull();
   });
 
@@ -1656,6 +1654,34 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
+  it('restores comparison after live activity ends and allows comparison with live preference enabled while idle', async () => {
+    const values = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    values.compareImage = mocks.recentImages[1];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    await render();
+    expect(host!.textContent).toContain('widgets.preview.exitCompare');
+    mocks.project.queue.items = [queueItem];
+    mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
+    await rerender();
+    expect(host!.textContent).not.toContain('widgets.preview.exitCompare');
+    mocks.runningProgressTargets = [];
+    mocks.project.queue.items = [];
+    await rerender();
+    expect(host!.textContent).toContain('widgets.preview.exitCompare');
+  });
+  it('keeps pinned live controls and footer inside the widget without saved-image arrows or zero count', async () => {
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
+    await render();
+    await act(() => followControls.pin('queue-item-live:1'));
+    const boundary = host!.querySelector<HTMLElement>('[role="region"]')!;
+    expect(boundary.getBoundingClientRect().bottom).toBeLessThanOrEqual(host!.getBoundingClientRect().bottom);
+    expect(host!.querySelector('button[aria-label="Next item in board"]')).toBeNull();
+    expect(host!.querySelector('button[aria-label="Previous item in board"]')).toBeNull();
+    expect(host!.textContent).not.toContain('0 items');
+    expect(host!.textContent).toContain('Generating');
+  });
   it('does not consume arrow keys in comparison mode', async () => {
     (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).compareImage = {
       ...mocks.project.widgetInstances.gallery.state.values.recentImages[1],

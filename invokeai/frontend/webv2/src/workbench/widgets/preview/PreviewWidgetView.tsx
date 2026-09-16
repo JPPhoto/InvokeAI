@@ -213,11 +213,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [galleryValues.semanticImageQuery]
   );
   const selectedItemKey = selectedItem ? toGalleryItemKey(selectedItem) : null;
-  const isComparing =
-    !showProgressImagesInViewer &&
-    selectedItem?.kind === 'image' &&
-    compareImage !== null &&
-    toGalleryItemKey({ kind: 'image', name: compareImage.imageName }) !== selectedItemKey;
   const liveGalleryPlaceholders = useMemo(
     () => livePreview.sessions.filter((session) => session.state === 'running'),
     [livePreview.sessions]
@@ -225,6 +220,11 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const pinnedSession = livePreview.sessions.find((session) => session.id === livePreview.pinnedSessionId);
   const activeGalleryPlaceholder = pinnedSession ?? liveGalleryPlaceholders[0] ?? livePreview.sessions[0] ?? null;
   const shouldFollowLive = showProgressImagesInViewer && activeGalleryPlaceholder !== null;
+  const isComparing =
+    !shouldFollowLive &&
+    selectedItem?.kind === 'image' &&
+    compareImage !== null &&
+    toGalleryItemKey({ kind: 'image', name: compareImage.imageName }) !== selectedItemKey;
   const { t } = useTranslation();
   const navigationBoundaryRef = useRef<HTMLDivElement | null>(null);
   const overviewButtonRef = useCallback((element: HTMLButtonElement | null) => {
@@ -582,11 +582,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       {/* Single always-mounted keyboard boundary: DOM focus survives swaps
           between the live, selected, and compare branches, so arrow
           navigation keeps working across them. */}
-      {shouldFollowLive && pinnedSession ? (
-        <Button ref={overviewButtonRef} alignSelf="start" size="2xs" variant="ghost" onClick={livePreview.showAll}>
-          {t('widgets.preview.showAllActivePreviews')}
-        </Button>
-      ) : null}
       <Stack
         ref={navigationBoundaryRef}
         aria-label={t('widgets.labels.preview')}
@@ -599,6 +594,18 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
         w="full"
         onKeyDown={handleNavigationKeyDown}
       >
+        {shouldFollowLive && pinnedSession ? (
+          <Button
+            ref={overviewButtonRef}
+            alignSelf="start"
+            flexShrink={0}
+            size="2xs"
+            variant="ghost"
+            onClick={livePreview.showAll}
+          >
+            {t('widgets.preview.showAllActivePreviews')}
+          </Button>
+        ) : null}
         {shouldFollowLive && !pinnedSession && liveGalleryPlaceholders.length > 1 ? (
           <LivePreviewTiles
             placeholders={liveGalleryPlaceholders}
@@ -897,8 +904,8 @@ const SelectedMediaPreview = ({
  * The single-session live preview: the denoise stream rendered exactly like a
  * finished item — same scaffold, same frame chrome, no badge — so the moment
  * generation completes, only the pixels change. The footer stays up
- * throughout, fed by queue data: the slot's position in the same navigation
- * sequence the arrow keys walk, and its requested output size.
+ * throughout, showing generation status and requested output dimensions.
+ * Saved-image navigation remains in the filmstrip.
  */
 const LivePreview = ({
   boardItemCount,
