@@ -14,6 +14,29 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffectEvent } from 'react';
 
+export const createDeferredCallSavedWorkflowReconciler = (reconcile: () => void) => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  return {
+    dispose: () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+    schedule: () => {
+      if (timer !== null) {
+        return;
+      }
+
+      timer = setTimeout(() => {
+        timer = null;
+        reconcile();
+      }, 0);
+    },
+  };
+};
+
 const hasSameFieldType = (left: unknown, right: unknown): boolean => {
   if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
     return false;
@@ -144,13 +167,15 @@ export const CallSavedWorkflowSyncRuntime = () => {
 
   /* eslint-disable react-hooks/rules-of-hooks -- useMountEffect is the repository's explicit useEffect wrapper */
   useMountEffect(() => {
-    reconcile();
+    const reconciler = createDeferredCallSavedWorkflowReconciler(reconcile);
+    reconciler.schedule();
 
-    const unsubscribeProject = projectPort.subscribe(reconcile);
-    const unsubscribeTemplates = subscribeInvocationTemplates(reconcile);
-    const unsubscribeQueries = queryClient.getQueryCache().subscribe(reconcile);
+    const unsubscribeProject = projectPort.subscribe(reconciler.schedule);
+    const unsubscribeTemplates = subscribeInvocationTemplates(reconciler.schedule);
+    const unsubscribeQueries = queryClient.getQueryCache().subscribe(reconciler.schedule);
 
     return () => {
+      reconciler.dispose();
       unsubscribeProject();
       unsubscribeTemplates();
       unsubscribeQueries();
