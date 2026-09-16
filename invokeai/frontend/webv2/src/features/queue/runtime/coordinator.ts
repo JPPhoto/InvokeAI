@@ -381,9 +381,14 @@ export const createQueueCoordinator = (
     trackNodeForItem(nodeEvent.event.item_id, nodeEvent.event.invocation_source_id, nodeEvent.sequence);
 
     switch (nodeEvent.kind) {
-      case 'started':
+      case 'started': {
+        const wait = waits.get(nodeEvent.event.item_id);
+        if (wait) {
+          activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, nodeEvent.event.item_id));
+        }
         nodeExecution.started(nodeEvent.event);
         return;
+      }
       case 'completed':
         nodeExecution.completed(nodeEvent.event);
         return;
@@ -518,6 +523,15 @@ export const createQueueCoordinator = (
   };
 
   const settleFromQueueItem = (queueItem: QueueBackendItem): void => {
+    const wait = waits.get(queueItem.id);
+    if (wait) {
+      const target = getProgressImageTarget(wait.localQueueItemId, queueItem.id);
+      if (queueItem.status === 'in_progress') {
+        activeProgressTarget.set(target);
+      } else if (queueItem.status === 'pending' || queueItem.status === 'waiting') {
+        activeProgressTarget.clear(target);
+      }
+    }
     if (isTerminalBackendStatus(queueItem.status)) {
       settleWait(queueItem.id, toTerminalOutcome(queueItem.status, queueItem.errorMessage, queueItem.errorType));
     }
@@ -526,10 +540,10 @@ export const createQueueCoordinator = (
   const isTrackedEvent = (event: { item_id: number }): boolean => waits.has(event.item_id);
 
   const trackBackendItem = (localQueueItemId: string, backendItemId: number): Promise<TerminalOutcome> => {
-    replayNodeEvents(backendItemId);
     const bufferedOutcome = recentTerminalOutcomes.get(backendItemId);
 
     if (bufferedOutcome) {
+      replayNodeEvents(backendItemId);
       recentTerminalOutcomes.delete(backendItemId);
       settleNodes(backendItemId, bufferedOutcome.status);
 
@@ -538,6 +552,7 @@ export const createQueueCoordinator = (
 
     return new Promise<TerminalOutcome>((settle) => {
       waits.set(backendItemId, { localQueueItemId, settle });
+      replayNodeEvents(backendItemId);
     });
   };
 
@@ -546,12 +561,6 @@ export const createQueueCoordinator = (
       throw new QueueItemCancelledError(localQueueItemId);
     }
 
-    runs.set(localQueueItemId, {
-      backendBatchId,
-      backendItemIds,
-      outcomePromises: backendItemIds.map((backendItemId) => trackBackendItem(localQueueItemId, backendItemId)),
-    });
-
     runProgress.set(localQueueItemId, {
       backendItemIds,
       cancelledBackendItemIds: new Set(),
@@ -559,6 +568,12 @@ export const createQueueCoordinator = (
       message: '',
       percentage: null,
     });
+    runs.set(localQueueItemId, {
+      backendBatchId,
+      backendItemIds,
+      outcomePromises: backendItemIds.map((backendItemId) => trackBackendItem(localQueueItemId, backendItemId)),
+    });
+
     publishRunProgress(localQueueItemId);
   };
 
@@ -656,10 +671,17 @@ export const createQueueCoordinator = (
     }
 
     if (!isTerminalBackendStatus(event.status)) {
+      const wait = waits.get(event.item_id);
+      if (wait && event.status === 'in_progress') {
+        activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, event.item_id));
+      }
       // Back to the queue (a workflow-call parent waiting on its child, a retry):
       // whatever frames follow belong to a new leg, and after a backend restart
       // their revisions start over.
       if (event.status === 'pending' || event.status === 'waiting') {
+        if (wait) {
+          activeProgressTarget.clear(getProgressImageTarget(wait.localQueueItemId, event.item_id));
+        }
         latestFrameGates.delete(event.item_id);
       }
 
