@@ -52,7 +52,6 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     split_qkv_sidechannel,
     strip_layer_path_prefix,
@@ -603,13 +602,12 @@ class ZImageCheckpointModel(ModelLoader):
             layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
 
-            # Handle memory management and dtype conversion. A checkpoint that ships raw fp8 weights
-            # (fp8 tensors, no weight_scale) keeps them when the fp8 matmul is available — casting
-            # them here would discard both the VRAM saving and the tensor cores before the model is
-            # built.
-            keep_fp8 = should_keep_fp8_weights(self._torch_device)
+            # Handle memory management and dtype conversion. Casting fp8 weights here would discard
+            # both the VRAM saving and the tensor cores before the model is even built.
+            keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
             if fp8_layers and not keep_fp8:
-                # Legacy behavior, but now with the scale actually applied: fold it into the weight.
+                # Neither consumer asked for them, and dequantizing per forward would cost speed for
+                # memory nobody wanted saved: fold the scale into the weight.
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 

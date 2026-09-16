@@ -455,10 +455,10 @@ class Krea2CheckpointModel(ModelLoader):
 
             # ComfyUI 'scaled fp8' checkpoints (fp8 weight + .weight_scale, optionally .input_scale).
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-            keep_fp8 = should_keep_fp8_weights(target_device)
+            keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
             if fp8_layers and not keep_fp8:
-                # Legacy behavior: fold the scales into the weights. Keeping them quantized without the
-                # fp8 matmul would halve VRAM but run slower, so both are tied to the same setting.
+                # Neither consumer asked for them: keeping them quantized would halve VRAM but
+                # dequantize on every forward, so fold the scales into the weights.
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 

@@ -485,6 +485,23 @@ class ModelLoader(ModelLoaderBase):
 
         return False
 
+    def _keep_fp8_weights(self, config: AnyModelConfig, submodel_type: Optional[SubModelType] = None) -> bool:
+        """Whether a checkpoint's fp8 weights should stay packed rather than be folded into bf16.
+
+        Two consumers want them packed, and either is enough:
+
+        - the fp8 matmul (`fp8_compute`), which runs on them directly;
+        - FP8 Storage asked of this model, because the checkpoint's own per-tensor scale is exact
+          while the layerwise cast of a *folded* weight has no scale at all and rounds to unscaled
+          fp8 -- measured on FLUX.2 Klein 4B, that loses ~3% of the weights to underflow for the
+          same one byte per weight.
+
+        With neither, folding is right: staying packed would dequantize on every forward, spending
+        speed to save memory nobody asked to save. `_should_use_fp8` already requires the device to
+        support fp8 storage, so an unsupported device keeps the folding path.
+        """
+        return should_keep_fp8_weights(self._torch_device) or self._should_use_fp8(config, submodel_type)
+
     def _apply_fp8_layerwise_casting(
         self, model: AnyModel, config: AnyModelConfig, submodel_type: Optional[SubModelType] = None
     ) -> AnyModel:

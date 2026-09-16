@@ -29,7 +29,6 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
@@ -182,7 +181,7 @@ class AnimaCheckpointModel(ModelLoader):
         #
         # Anima keeps `q_proj`/`k_proj`/`v_proj` separate and the only key rewrite is a prefix strip,
         # so a sibling scale travels with its weight and nothing has to be split.
-        keep_fp8 = should_keep_fp8_weights(target_device)
+        keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
         header_hints = parse_quantization_metadata(read_safetensors_metadata(model_path, logger))
         # The header names layers in the checkpoint's own scheme -- `net.`-prefixed on every Anima
         # redistribution measured -- while the scales are read after `_strip_anima_bundle_prefix`

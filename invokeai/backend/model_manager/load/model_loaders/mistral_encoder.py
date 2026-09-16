@@ -27,7 +27,7 @@ from invokeai.backend.model_manager.configs.mistral_encoder import (
     MistralEncoder_Diffusers_Config,
     MistralEncoder_GGUF_Config,
 )
-from invokeai.backend.model_manager.load.load_default import ModelLoader
+from invokeai.backend.model_manager.load.load_default import ModelLoader, _device_supports_fp8_storage
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
@@ -952,7 +952,11 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         # Both key rewrites in this loader (`_strip_known_prefixes` above and
         # `_convert_for_bare_mistral_model` below) are plain prefix operations, so a sibling
         # `.weight_scale` travels with its weight automatically -- no fused projections to split.
-        keep_fp8 = should_keep_fp8_weights(target_device)
+        # Storage keeps them too, gated on the device alone: `_should_use_fp8` excludes text encoders
+        # by design (fp8 rounding costs text quality), so there is no per-model setting to read here.
+        # This mirrors the Qwen3-VL encoder in the Krea-2 loader. Folding stays the fallback only
+        # where fp8 cannot be held at all.
+        keep_fp8 = should_keep_fp8_weights(target_device) or _device_supports_fp8_storage(target_device, logger)
         fp8_layers: dict[str, Any] = {}
         if keep_fp8:
             # This loader strips its own wrapper prefixes on top of the generic ones, so the hints
