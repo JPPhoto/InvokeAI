@@ -75,7 +75,19 @@ export const isAnimaQwen3Encoder: GenerateComponentFilter = (model) =>
 export const isNonAnimaQwen3Encoder: GenerateComponentFilter = (model) =>
   model.type === 'qwen3_encoder' && model.variant !== 'qwen3_06b';
 
-export const isFlux2MistralEncoder: GenerateComponentFilter = (model) => model.type === 'mistral_encoder';
+/**
+ * ERNIE-Image's encoder is recorded as a `mistral_encoder` too, but it is a different architecture
+ * (Ministral 3B, hidden 3072) from the Mistral Small 3 encoders FLUX.2 was trained against. Offering
+ * either one to the other family produces a shape error deep in denoise, so the variant separates
+ * them on both sides.
+ */
+const MINISTRAL_3B_VARIANT = 'ministral3_3b';
+
+export const isFlux2MistralEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'mistral_encoder' && model.variant !== MINISTRAL_3B_VARIANT;
+
+export const isErnieImageMistralEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'mistral_encoder' && model.variant === MINISTRAL_3B_VARIANT;
 
 export const isFlux2Qwen3EncoderForModel = (selectedModel: GenerateModelConfig): GenerateComponentFilter => {
   if (selectedModel.variant === 'dev') {

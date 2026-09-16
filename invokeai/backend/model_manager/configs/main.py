@@ -3330,7 +3330,52 @@ class Main_Diffusers_ErnieImage_Config(Diffusers_Config_Base, Main_Config_Base, 
         )
 
 
-# NOTE: There is deliberately no `Main_Checkpoint_ErnieImage_Config`. Single-file ERNIE-Image
-# checkpoints cannot be loaded yet (only the full diffusers pipeline layout is supported), and a
-# config that matches on install but raises on first generate would leave a permanently broken
-# entry in the Model Manager. Add it together with the checkpoint loader.
+def _has_ernie_image_keys(state_dict: dict[str | int, Any]) -> bool:
+    """Check if state dict contains ERNIE-Image transformer keys.
+
+    The single-file release carries the same keys as the diffusers checkpoint. Four of them
+    together are the fingerprint: `x_embedder.proj` (the patch projection, a conv), `text_proj` (the
+    Mistral3 conditioning projection), the model-level `adaLN_modulation.1` and `final_norm.linear`,
+    the output modulation no sibling architecture spells that way. Anima also has an
+    `x_embedder`, but it is identified by its `llm_adapter`, which ERNIE-Image does not have; the
+    text projection keeps this clear of Wan (`text_embedding.0` / `condition_embedder`), Qwen Image
+    (`txt_in`/`img_in`) and Z-Image (`cap_embedder`).
+    """
+    keys = state_dict.keys()
+    return all(
+        key in keys
+        for key in (
+            "x_embedder.proj.weight",
+            "text_proj.weight",
+            "adaLN_modulation.1.weight",
+            "final_norm.linear.weight",
+        )
+    )
+
+
+class Main_Checkpoint_ErnieImage_Config(Checkpoint_Config_Base, Main_Config_Base, Config_Base):
+    """Model config for ERNIE-Image single-file checkpoint models (safetensors).
+
+    ERNIE-Image and ERNIE-Image-Turbo share an architecture and a key layout, so a single file
+    cannot be told apart from its weights. The architecture's default settings pick the Turbo
+    numbers from the model name, exactly as they do for the diffusers pipelines.
+    """
+
+    base: Literal[BaseModelType.ErnieImage] = Field(default=BaseModelType.ErnieImage)
+    format: Literal[ModelFormat.Checkpoint] = Field(default=ModelFormat.Checkpoint)
+
+    @classmethod
+    def from_model_on_disk(cls, mod: ModelOnDisk, override_fields: dict[str, Any]) -> Self:
+        raise_if_not_file(mod)
+
+        raise_for_override_fields(cls, override_fields)
+
+        state_dict = mod.load_state_dict()
+
+        if not _has_ernie_image_keys(state_dict):
+            raise NotAMatchError("state dict does not look like an ERNIE-Image model")
+
+        if _has_ggml_tensors(state_dict):
+            raise NotAMatchError("state dict looks like GGUF quantized")
+
+        return cls(**override_fields)

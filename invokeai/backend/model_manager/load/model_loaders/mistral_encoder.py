@@ -7,6 +7,11 @@ text encoder. The diffusers release wraps it in the multimodal
 (Comfy-Org bf16/fp8/fp4) and GGUF redistributions (gguf-org cow variants) ship
 only the text tower, which we load as an encoder-only ``MistralModel``.
 
+ERNIE-Image encodes its prompts with a different member of the family: Ministral
+3B (26 layers, hidden_size 3072, YaRN RoPE), which loads as ``Ministral3Model``.
+The variant recorded at install time decides which of the two a single file
+becomes — see ``MistralVariantType``.
+
 Both single-file packagings embed the canonical Tekken tokenizer as a U8 tensor
 named ``tekken_model`` (~19 MB). When ``mistral_common`` is installed we use
 that embedded tokenizer directly; otherwise we fall back to fetching the
@@ -15,11 +20,19 @@ tokenizer from ``black-forest-labs/FLUX.2-dev`` via HuggingFace.
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 import accelerate
 import torch
-from transformers import AutoProcessor, AutoTokenizer, MistralConfig, MistralModel
+from transformers import (
+    AutoProcessor,
+    AutoTokenizer,
+    Ministral3Config,
+    Ministral3Model,
+    MistralCommonBackend,
+    MistralConfig,
+    MistralModel,
+)
 
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.configs.mistral_encoder import (
@@ -75,11 +88,89 @@ _COW_MAX_POSITION_EMBEDDINGS = 131072
 _COW_ROPE_THETA = 1000000000.0  # 1e9 — matches BFL FLUX.2-dev/text_encoder/config.json
 _COW_RMS_NORM_EPS = 1e-5
 
+# Ministral 3B, ERNIE-Image's text encoder, from the ``text_config`` of
+# ``baidu/ERNIE-Image``'s ``text_encoder/config.json``. Only what the weights cannot reveal is
+# pinned here. The context length is simply the released value: transformers scales YaRN by the
+# explicit ``factor``, not by ``max_position_embeddings / original_max_position_embeddings``, so a
+# different number would not move the sigmas -- it would only make transformers warn that the two
+# disagree.
+_MINISTRAL_3B_HEAD_DIM = 128
+_MINISTRAL_3B_MAX_POSITION_EMBEDDINGS = 262144
+_MINISTRAL_3B_RMS_NORM_EPS = 1e-5
+
+# ERNIE-Image's released `tokenizer/tokenizer_config.json` truncates at this length. The
+# mistral-common backend we build from the embedded vocab carries no limit of its own, so a long
+# prompt would otherwise be encoded in full where the release would have cut it.
+_MINISTRAL_3B_MAX_PROMPT_TOKENS = 2048
+
 # HuggingFace fallback for the tokenizer when the model file doesn't embed
 # tekken_model (older cow GGUFs without the embedded blob, or a diffusers folder
 # without a sibling tokenizer/). We only need the BFL canonical source — upstream
 # Mistral tokenizers (3.1 / 3.2) don't match BFL's chat template exactly.
 _TOKENIZER_FALLBACK_SOURCE: tuple[str, str] = ("black-forest-labs/FLUX.2-dev", "tokenizer")
+
+# The same fallback for Ministral 3B. BFL's tokenizer is the wrong vocab for it, and ERNIE-Image
+# publishes its own. Only reached when the encoder file embeds no Tekken blob — the released one
+# does, so this is the path for repackaged files.
+_ERNIE_TOKENIZER_FALLBACK_SOURCE: tuple[str, str] = ("baidu/ERNIE-Image", "tokenizer")
+
+
+class _TokenizerPolicy(NamedTuple):
+    """How one encoder family's tokenizer is built, and where its fallback comes from.
+
+    ``flux2_template`` selects the *form*: the raw-text adapter that splices FLUX.2's structural
+    markers as single Tekken ids, or a plain HuggingFace tokenizer. The two are not
+    interchangeable -- the adapter is no ``PreTrainedTokenizerBase`` and returns padded tensors
+    rather than id lists -- so the choice is made once, here, per variant.
+    """
+
+    flux2_template: bool
+    fallback_source: tuple[str, str]
+
+
+# Exhaustive over `MistralVariantType` on purpose. Deriving this by exclusion (`is not Ministral3B`)
+# would hand every future variant the FLUX.2 path by default, which either fails in the conditioning
+# node or, on a FLUX.2-shaped one, conditions off-distribution with no error at all.
+_TOKENIZER_POLICIES: dict[MistralVariantType, _TokenizerPolicy] = {
+    MistralVariantType.Cow: _TokenizerPolicy(True, _TOKENIZER_FALLBACK_SOURCE),
+    MistralVariantType.Mistral24B: _TokenizerPolicy(True, _TOKENIZER_FALLBACK_SOURCE),
+    MistralVariantType.Ministral3B: _TokenizerPolicy(False, _ERNIE_TOKENIZER_FALLBACK_SOURCE),
+}
+
+
+def _tokenizer_policy(variant: MistralVariantType) -> _TokenizerPolicy:
+    """The tokenizer policy for a variant, refusing loudly when a new one has none."""
+    policy = _TOKENIZER_POLICIES.get(variant)
+    if policy is None:
+        raise NotImplementedError(
+            f"No tokenizer policy for Mistral variant '{variant.value}'. Add one to "
+            "_TOKENIZER_POLICIES: the FLUX.2 template adapter and a plain HuggingFace tokenizer "
+            "encode differently, and defaulting to either silently degrades conditioning."
+        )
+    return policy
+
+
+def _shape_of(tensor: Any) -> Any:
+    """Tensor shape, read through GGUF's quantized wrapper when there is one."""
+    return tensor.tensor_shape if isinstance(tensor, GGMLTensor) else tensor.shape
+
+
+def _mistral_layer_indices(state_dict: dict[str, Any]) -> set[int]:
+    """Layer indices present in a ``model.layers.N.*`` state dict.
+
+    Shared by both config builders so a fix to the scan cannot land in only one of them. What they
+    do when it comes back empty stays with each: a deliberate policy difference, not an accident.
+    """
+    indices: set[int] = set()
+    for key in state_dict:
+        if not isinstance(key, str) or not key.startswith("model.layers."):
+            continue
+        if ".self_attn.q_proj.weight" not in key:
+            continue
+        parts = key.split(".")
+        if len(parts) > 2 and parts[2].isdigit():
+            indices.add(int(parts[2]))
+    return indices
 
 
 def _build_mistral_config(
@@ -96,23 +187,13 @@ def _build_mistral_config(
     metadata); otherwise we fall back to cow defaults.
     """
     # Vocab and hidden_size come from embed_tokens.
-    embed_key = "model.embed_tokens.weight" if "model.embed_tokens.weight" in state_dict else None
-    if embed_key is None:
+    embed = state_dict.get("model.embed_tokens.weight")
+    if embed is None:
         raise ValueError("State dict does not contain model.embed_tokens.weight")
-    embed = state_dict[embed_key]
-    embed_shape = embed.tensor_shape if isinstance(embed, GGMLTensor) else embed.shape
+    embed_shape = _shape_of(embed)
     vocab_size, hidden_size = int(embed_shape[0]), int(embed_shape[1])
 
-    # Count layers by scanning self_attn.q_proj keys.
-    layer_indices: set[int] = set()
-    for key in state_dict.keys():
-        if not isinstance(key, str):
-            continue
-        if key.startswith("model.layers.") and ".self_attn.q_proj.weight" in key:
-            try:
-                layer_indices.add(int(key.split(".")[2]))
-            except (ValueError, IndexError):
-                pass
+    layer_indices = _mistral_layer_indices(state_dict)
     num_hidden_layers = (max(layer_indices) + 1) if layer_indices else _COW_NUM_HIDDEN_LAYERS
 
     # Derive head counts from the first layer's attention projections.
@@ -121,9 +202,9 @@ def _build_mistral_config(
     gate_proj = state_dict.get("model.layers.0.mlp.gate_proj.weight")
     head_dim = _COW_HEAD_DIM
     if q_proj is not None and k_proj is not None and gate_proj is not None:
-        q_shape = q_proj.tensor_shape if isinstance(q_proj, GGMLTensor) else q_proj.shape
-        k_shape = k_proj.tensor_shape if isinstance(k_proj, GGMLTensor) else k_proj.shape
-        gate_shape = gate_proj.tensor_shape if isinstance(gate_proj, GGMLTensor) else gate_proj.shape
+        q_shape = _shape_of(q_proj)
+        k_shape = _shape_of(k_proj)
+        gate_shape = _shape_of(gate_proj)
         num_attention_heads = int(q_shape[0]) // head_dim
         num_key_value_heads = int(k_shape[0]) // head_dim
         intermediate_size = int(gate_shape[0])
@@ -146,7 +227,54 @@ def _build_mistral_config(
         rope_theta=rope_theta or _COW_ROPE_THETA,
         attention_bias=False,
         attention_dropout=0.0,
-        torch_dtype=torch_dtype,
+        dtype=torch_dtype,
+    )
+
+
+def _build_ministral3_config(state_dict: dict[str, Any], torch_dtype: torch.dtype) -> Ministral3Config:
+    """Build a ``Ministral3Config`` for ERNIE-Image's encoder from its state dict.
+
+    The geometry is read from the weights. The RoPE settings are left to ``Ministral3Config``'s
+    own defaults, which reproduce the released ``text_encoder/config.json`` exactly -- YaRN,
+    theta 1e6, factor 16, original context 16384, ``llama_4_scaling_beta`` 0.1. Restating them
+    here would be a second copy, free to drift from the implementation that consumes it; a test
+    pins the defaults against the released values instead.
+
+    Unlike ``_build_mistral_config`` this refuses to substitute nominal geometry for shapes it
+    cannot find: that builder also serves GGUFs, whose projections it may legitimately miss,
+    whereas here a wrong guess yields a model that loads cleanly and encodes garbage. Tensors are
+    plain ``torch.Tensor``s -- this path never sees GGUF's quantized wrapper.
+    """
+    required = (
+        "model.embed_tokens.weight",
+        "model.layers.0.self_attn.q_proj.weight",
+        "model.layers.0.self_attn.k_proj.weight",
+        "model.layers.0.mlp.gate_proj.weight",
+    )
+    missing = [key for key in required if key not in state_dict]
+    if missing:
+        raise ValueError(f"Ministral 3B state dict is missing {', '.join(missing)}")
+    embed, q_proj, k_proj, gate_proj = (state_dict[key] for key in required)
+    layer_indices = _mistral_layer_indices(state_dict)
+
+    # hidden_size is 3072 while the 32 heads are 128 wide, so head_dim cannot be inferred from the
+    # width the way it can for the Mistral Small 3 encoders.
+    head_dim = _MINISTRAL_3B_HEAD_DIM
+    return Ministral3Config(
+        vocab_size=int(_shape_of(embed)[0]),
+        hidden_size=int(_shape_of(embed)[1]),
+        intermediate_size=int(_shape_of(gate_proj)[0]),
+        num_hidden_layers=max(layer_indices) + 1,
+        num_attention_heads=int(_shape_of(q_proj)[0]) // head_dim,
+        num_key_value_heads=int(_shape_of(k_proj)[0]) // head_dim,
+        head_dim=head_dim,
+        max_position_embeddings=_MINISTRAL_3B_MAX_POSITION_EMBEDDINGS,
+        rms_norm_eps=_MINISTRAL_3B_RMS_NORM_EPS,
+        # The released config ties them. The file ships no `lm_head` and the encoder-only model
+        # builds none, so this records the released intent rather than changing what loads.
+        tie_word_embeddings=True,
+        attention_dropout=0.0,
+        dtype=torch_dtype,
     )
 
 
@@ -575,8 +703,13 @@ def _extract_tekken_bytes(model_path: Path) -> Optional[bytes]:
     return None
 
 
-def _try_load_embedded_tekken(model_path: Path, logger: Any) -> Optional[AnyModel]:
-    """Extract the embedded Tekken tokenizer and wrap it in the HF-compatible adapter.
+def _try_load_embedded_tekken(model_path: Path, logger: Any, *, flux2_template: bool) -> Optional[AnyModel]:
+    """Extract the embedded Tekken tokenizer in the form this encoder family needs.
+
+    FLUX.2's encoders get the raw-text adapter, which splices the template's structural markers
+    as single Tekken ids. An encoder with no chat template gets transformers' own mistral-common
+    backend instead: the same ids, but a real ``PreTrainedTokenizerBase`` returning plain id
+    lists, which is what the conditioning nodes accept.
 
     Returns ``None`` (so callers fall through to HF) if:
     - the file isn't a single-file container, or
@@ -602,25 +735,26 @@ def _try_load_embedded_tekken(model_path: Path, logger: Any) -> Optional[AnyMode
         )
         return None
 
-    import os
+    import shutil
     import tempfile
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="invokeai-tekken-")
+    # `MistralCommonBackend.from_pretrained` reads a *directory*, so stage the blob under the
+    # name it looks for. Both routes parse the file before returning, so the copy does not have
+    # to outlive this call.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="invokeai-tekken-"))
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(tekken_bytes)
-        mistral_tok = MistralTokenizer.from_file(tmp_path)
+        (tmp_dir / _TEKKEN_FILENAME).write_bytes(tekken_bytes)
+        if not flux2_template:
+            return _tekken_backend_from_dir(tmp_dir, f"the blob embedded in {model_path.name}", logger)
+        mistral_tok = MistralTokenizer.from_file(str(tmp_dir / _TEKKEN_FILENAME))
     except Exception as e:
         logger.warning(
             f"Failed to load embedded Tekken tokenizer from {model_path.name}: {type(e).__name__}: {e}. "
-            "Falling back to the HuggingFace BFL tokenizer."
+            "Falling back to the HuggingFace tokenizer."
         )
         return None
     finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     logger.info(f"Loaded embedded Tekken tokenizer from {model_path.name}")
     return _TekkenRawTextAdapter(mistral_tok)
@@ -655,8 +789,32 @@ def _tekken_adapter_from_file(tekken_path: Path, description: str, logger: Any) 
     return _TekkenRawTextAdapter(mistral_tok)
 
 
-def _try_load_tekken_from_dir(path: Path, description: str, logger: Any) -> Optional[AnyModel]:
-    """Wrap a directory's standalone ``tekken.json`` in the raw-text adapter.
+def _tekken_backend_from_dir(path: Path, description: str, logger: Any) -> Optional[AnyModel]:
+    """Load a directory's ``tekken.json`` as transformers' mistral-common backend.
+
+    This is the non-FLUX.2 route. Without a chat template there are no structural markers to
+    splice, so the backend encodes correctly on its own -- checked id-for-id against
+    ERNIE-Image's released ``tokenizer.json`` -- while being a real ``PreTrainedTokenizerBase``
+    that returns id lists, which is what the conditioning nodes require. ``None`` on any failure,
+    so the caller keeps falling through the ladder.
+    """
+    try:
+        tokenizer = MistralCommonBackend.from_pretrained(
+            path, local_files_only=True, model_max_length=_MINISTRAL_3B_MAX_PROMPT_TOKENS
+        )
+    except Exception as e:  # noqa: BLE001 - a probe rung must never kill the load
+        logger.warning(
+            f"Failed to load the Tekken tokenizer from {description}: {type(e).__name__}: {e}. "
+            "Falling through to the next tokenizer source."
+        )
+        return None
+
+    logger.info(f"Loaded Tekken tokenizer from {description} as {type(tokenizer).__name__}")
+    return tokenizer
+
+
+def _try_load_tekken_from_dir(path: Path, description: str, logger: Any, *, flux2_template: bool) -> Optional[AnyModel]:
+    """Load a directory's standalone ``tekken.json`` in the form this encoder family needs.
 
     This rung must run *before* the `AutoProcessor` / `AutoTokenizer` probe. A directory holding
     `tekken.json` next to a `config.json` (`model_type: "mistral3"`) — the layout of an official
@@ -668,11 +826,16 @@ def _try_load_tekken_from_dir(path: Path, description: str, logger: Any) -> Opti
     tekken_path = path / _TEKKEN_FILENAME
     if not tekken_path.is_file():
         return None
+    if not flux2_template:
+        return _tekken_backend_from_dir(path, description, logger)
     return _tekken_adapter_from_file(tekken_path, description, logger)
 
 
-def _normalize_tokenizer(obj: AnyModel, description: str, logger: Any) -> Optional[AnyModel]:
+def _normalize_tokenizer(obj: AnyModel, description: str, logger: Any, *, flux2_template: bool) -> Optional[AnyModel]:
     """Return a tokenizer safe to use for FLUX.2 conditioning, or ``None`` to keep falling.
+
+    Only applies to the encoders that consume FLUX.2's template. For the others a
+    mistral-common-backed tokenizer is exactly what we want and is returned untouched.
 
     `AutoTokenizer` resolves a Tekken-carrying directory to a mistral-common-backed tokenizer
     (`MistralCommonBackend` on transformers 5.x, `MistralCommonTokenizer` on 4.5x). Its
@@ -681,6 +844,9 @@ def _normalize_tokenizer(obj: AnyModel, description: str, logger: Any) -> Option
     the underlying ``MistralTokenizer``, so re-wrap that in the same adapter the embedded-Tekken
     rung uses; only when it cannot be reached do we discard the result and keep falling.
     """
+    if not flux2_template:
+        return obj
+
     if not any(cls.__module__.endswith("tokenization_mistral_common") for cls in type(obj).__mro__):
         return obj
 
@@ -730,7 +896,7 @@ def _log_tokenizer_probe_failure(loader_cls: Any, description: str, exc: Excepti
         logger.warning(message)
 
 
-def _try_load_tokenizer_from_dir(path: Path, description: str, logger: Any) -> AnyModel | None:
+def _try_load_tokenizer_from_dir(path: Path, description: str, logger: Any, *, flux2_template: bool) -> AnyModel | None:
     """Try both loader classes against a local directory. Returns None if neither works."""
     for loader_cls in _TOKENIZER_LOADER_CLASSES:
         try:
@@ -738,7 +904,7 @@ def _try_load_tokenizer_from_dir(path: Path, description: str, logger: Any) -> A
         except Exception as e:  # noqa: BLE001 - a probe rung must never kill the load
             _log_tokenizer_probe_failure(loader_cls, description, e, logger)
             continue
-        normalized = _normalize_tokenizer(obj, description, logger)
+        normalized = _normalize_tokenizer(obj, description, logger, flux2_template=flux2_template)
         if normalized is None:
             continue
         logger.info(f"Loaded Mistral tokenizer from {description}: {type(normalized).__name__}")
@@ -746,9 +912,9 @@ def _try_load_tokenizer_from_dir(path: Path, description: str, logger: Any) -> A
     return None
 
 
-def _load_tokenizer_from_hf(logger: Any) -> AnyModel:
-    """Download / load the BFL canonical FLUX.2 tokenizer from HuggingFace."""
-    source, subfolder = _TOKENIZER_FALLBACK_SOURCE
+def _load_tokenizer_from_hf(logger: Any, *, policy: _TokenizerPolicy) -> AnyModel:
+    """Download / load the canonical tokenizer for this encoder family from HuggingFace."""
+    source, subfolder = policy.fallback_source
     attempts: list[str] = []
     for local_only in (True, False):
         for loader_cls in _TOKENIZER_LOADER_CLASSES:
@@ -759,7 +925,7 @@ def _load_tokenizer_from_hf(logger: Any) -> AnyModel:
                 _log_tokenizer_probe_failure(loader_cls, description, e, logger)
                 attempts.append(f"{loader_cls.__name__}(local_only={local_only}): {type(e).__name__}")
                 continue
-            normalized = _normalize_tokenizer(obj, description, logger)
+            normalized = _normalize_tokenizer(obj, description, logger, flux2_template=policy.flux2_template)
             if normalized is None:
                 attempts.append(f"{loader_cls.__name__}(local_only={local_only}): unusable {type(obj).__name__}")
                 continue
@@ -767,18 +933,22 @@ def _load_tokenizer_from_hf(logger: Any) -> AnyModel:
             return normalized
 
     raise RuntimeError(
-        f"Could not load FLUX.2 Mistral tokenizer from {source}:{subfolder}. "
-        "Workarounds: (1) install a Mistral encoder that embeds the Tekken tokenizer "
+        f"Could not load the Mistral tokenizer from {source}:{subfolder}. "
+        "Workarounds: (1) install an encoder that embeds the Tekken tokenizer "
         "(Comfy-Org safetensors or gguf-org cow GGUFs) and `pip install mistral-common`, "
         "(2) run once with internet access to populate the HF cache, or "
-        "(3) pre-cache the tokenizer: "
-        "`huggingface-cli download black-forest-labs/FLUX.2-dev --include 'tokenizer/*'`. "
+        f"(3) pre-cache the tokenizer: `huggingface-cli download {source} --include '{subfolder}/*'`. "
         f"Tried: {'; '.join(attempts)}"
     )
 
 
-def _load_tokenizer_for_model(model_path: Path, logger: Any) -> AnyModel:
+def _load_tokenizer_for_model(model_path: Path, logger: Any, variant: MistralVariantType) -> AnyModel:
     """Load a tokenizer matching the given Mistral encoder model path.
+
+    The variant decides the *form*, not just the source. FLUX.2's encoders consume a
+    pre-formatted template whose structural markers have to be spliced in as single Tekken ids,
+    which is what ``_TekkenRawTextAdapter`` exists for. Ministral 3B (ERNIE-Image) has no chat
+    template, so it takes a plain HuggingFace tokenizer over the same vocab instead.
 
     Strategy (first hit wins):
 
@@ -793,11 +963,14 @@ def _load_tokenizer_for_model(model_path: Path, logger: Any) -> AnyModel:
     4. **Root-directory processor / tokenizer files** — standalone downloads that
        ship them alongside the encoder weights at the folder root. BFL-style
        ``model_type: "mistral3"`` layouts resolve only via ``AutoTokenizer``.
-    5. **BFL HuggingFace fallback** — fetches the canonical tokenizer from
-       ``black-forest-labs/FLUX.2-dev/tokenizer``.
+    5. **HuggingFace fallback** — fetches the canonical tokenizer for the family, BFL's for
+       FLUX.2 and ERNIE-Image's for Ministral 3B.
     """
+    policy = _tokenizer_policy(variant)
+    flux2_template = policy.flux2_template
+
     # 1. Single-file with embedded Tekken
-    embedded = _try_load_embedded_tekken(model_path, logger)
+    embedded = _try_load_embedded_tekken(model_path, logger, flux2_template=flux2_template)
     if embedded is not None:
         return embedded
 
@@ -807,13 +980,15 @@ def _load_tokenizer_for_model(model_path: Path, logger: Any) -> AnyModel:
         # 2. A standalone tekken.json anywhere we would otherwise probe with transformers.
         for probe_dir, description in ((tokenizer_dir, "sibling tokenizer/"), (model_path, "model root")):
             if probe_dir.is_dir():
-                tekken = _try_load_tekken_from_dir(probe_dir, description, logger)
+                tekken = _try_load_tekken_from_dir(probe_dir, description, logger, flux2_template=flux2_template)
                 if tekken is not None:
                     return tekken
 
         # 3. Diffusers folder with sibling tokenizer/
         if tokenizer_dir.exists():
-            obj = _try_load_tokenizer_from_dir(tokenizer_dir, "sibling tokenizer/", logger)
+            obj = _try_load_tokenizer_from_dir(
+                tokenizer_dir, "sibling tokenizer/", logger, flux2_template=flux2_template
+            )
             if obj is not None:
                 return obj
         # Some diffusers folders ship the encoder weights as text_encoder/*.safetensors
@@ -821,16 +996,16 @@ def _load_tokenizer_for_model(model_path: Path, logger: Any) -> AnyModel:
         text_encoder_dir = model_path / "text_encoder"
         if text_encoder_dir.is_dir():
             for st in sorted(text_encoder_dir.glob("*.safetensors")):
-                embedded = _try_load_embedded_tekken(st, logger)
+                embedded = _try_load_embedded_tekken(st, logger, flux2_template=flux2_template)
                 if embedded is not None:
                     return embedded
         # 4. Processor / tokenizer files alongside the encoder weights at the folder root.
-        obj = _try_load_tokenizer_from_dir(model_path, "model root", logger)
+        obj = _try_load_tokenizer_from_dir(model_path, "model root", logger, flux2_template=flux2_template)
         if obj is not None:
             return obj
 
     # 5. HF fallback
-    return _load_tokenizer_from_hf(logger)
+    return _load_tokenizer_from_hf(logger, policy=policy)
 
 
 @ModelLoaderRegistry.register(
@@ -868,7 +1043,7 @@ class MistralEncoderDiffusersLoader(ModelLoader):
                 logger = InvokeAILogger.get_logger("MistralEncoderProcessor")
                 # Let the multi-strategy loader own the full ladder: embedded Tekken,
                 # sibling tokenizer/, root-level processor files, then the HF fallback.
-                return _load_tokenizer_for_model(model_path, logger)
+                return _load_tokenizer_for_model(model_path, logger, config.variant)
             case SubModelType.TextEncoder:
                 # Lazy import: transformers may load `Mistral3ForConditionalGeneration`
                 # only when the diffusers/transformers version supports it.
@@ -926,7 +1101,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
                 return self._load_text_encoder(config)
             case SubModelType.Tokenizer:
                 logger = InvokeAILogger.get_logger("MistralEncoderProcessor")
-                return _load_tokenizer_for_model(Path(config.path), logger)
+                return _load_tokenizer_for_model(Path(config.path), logger, config.variant)
 
         raise ValueError(
             "Only Tokenizer and TextEncoder submodels are supported. "
@@ -943,6 +1118,18 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         model_path = Path(config.path)
         sd = load_file(model_path)
         sd = _strip_known_prefixes(sd)
+
+        # Comfy-Org's Ministral 3B file ships the full multimodal stack: a Pixtral vision tower and
+        # its projector, 222 tensors and ~0.9 GB. Only the language tower encodes prompts and the
+        # encoder-only model has no slot for the rest, so drop them before the dequantize/cast pass
+        # pays to convert weights that would then be reported as unexpected keys.
+        vision_keys = [
+            key for key in sd if isinstance(key, str) and key.startswith(("vision_tower.", "multi_modal_projector."))
+        ]
+        for key in vision_keys:
+            del sd[key]
+        if vision_keys:
+            logger.info(f"Mistral encoder: dropped {len(vision_keys)} vision-tower tensor(s); prompts use the LM only")
 
         # These redistributions are ComfyUI 'scaled fp8': an fp8 weight plus a `weight_scale`.
         # Folding the scale doubles the encoder -- 16.8 GiB on disk becomes 32.3 GiB in bf16, which
@@ -976,11 +1163,22 @@ class MistralEncoderCheckpointLoader(ModelLoader):
             for k in [k for k in sd if isinstance(k, str) and (k.endswith(".scale") or k.startswith("scaled_fp8"))]:
                 del sd[k]
 
-        mistral_config = _build_mistral_config(sd, torch_dtype=model_dtype)
+        # Ministral 3B is a different architecture, not a smaller Mistral Small 3: YaRN RoPE and a
+        # position-dependent attention scale that only `Ministral3Model` applies. The variant was
+        # decided from the geometry at install time and is the single source of truth here.
+        encoder_config: MistralConfig | Ministral3Config
+        model_class: type[MistralModel] | type[Ministral3Model]
+        if config.variant is MistralVariantType.Ministral3B:
+            encoder_config = _build_ministral3_config(sd, torch_dtype=model_dtype)
+            model_class = Ministral3Model
+        else:
+            encoder_config = _build_mistral_config(sd, torch_dtype=model_dtype)
+            model_class = MistralModel
         logger.info(
-            f"Mistral encoder config (checkpoint): layers={mistral_config.num_hidden_layers}, "
-            f"hidden={mistral_config.hidden_size}, heads={mistral_config.num_attention_heads}, "
-            f"kv_heads={mistral_config.num_key_value_heads}, intermediate={mistral_config.intermediate_size}"
+            f"Mistral encoder config (checkpoint): variant={config.variant.value}, "
+            f"layers={encoder_config.num_hidden_layers}, hidden={encoder_config.hidden_size}, "
+            f"heads={encoder_config.num_attention_heads}, kv_heads={encoder_config.num_key_value_heads}, "
+            f"intermediate={encoder_config.intermediate_size}"
         )
 
         # Drop the LM head before casting: it's the single largest tensor (vocab × hidden),
@@ -998,7 +1196,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         }
 
         with accelerate.init_empty_weights():
-            model = MistralModel(mistral_config)
+            model = model_class(encoder_config)
 
         # Layers the cast would dequantize anyway are folded here, scale applied, so the cast never
         # strips a scale that can no longer be put back.
@@ -1026,7 +1224,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
                         continue
 
         # Re-init any remaining meta buffers (e.g. RoPE inv_freq is computed from config).
-        _reinit_inv_freq(model, mistral_config, model_dtype)
+        _reinit_inv_freq(model, encoder_config, model_dtype)
 
         _materialize_remaining_meta_tensors(model, model_dtype, logger)
         _strip_final_norm_for_cow(model, config.variant, logger)
@@ -1069,7 +1267,7 @@ class MistralEncoderGGUFLoader(ModelLoader):
                 return self._load_from_gguf(config)
             case SubModelType.Tokenizer:
                 logger = InvokeAILogger.get_logger("MistralEncoderProcessor")
-                return _load_tokenizer_for_model(Path(config.path), logger)
+                return _load_tokenizer_for_model(Path(config.path), logger, config.variant)
 
         raise ValueError(
             "Only Tokenizer and TextEncoder submodels are supported. "

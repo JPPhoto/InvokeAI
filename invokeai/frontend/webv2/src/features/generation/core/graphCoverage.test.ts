@@ -99,6 +99,7 @@ const CANDIDATE_VARIANTS = [
   'dev',
   'klein_4b',
   'klein_9b',
+  'ministral3_3b',
 ] as const;
 /** VAE widths. A served row can constrain the width as well as the base -- Wan ships 16 and 48. */
 const CANDIDATE_LATENT_CHANNELS = [undefined, 16, 48] as const;

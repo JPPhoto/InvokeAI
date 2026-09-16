@@ -844,9 +844,18 @@ const buildErnieImageGraph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
-  // No component slots: ernie_image_model_loader reads the transformer, VAE, text encoder and
-  // optional prompt enhancer out of one diffusers pipeline directory, so there is nothing for the
-  // user to supply separately and nothing to validate here.
+  // A diffusers pipeline directory carries every submodel, so the loader reads them out of it. A
+  // single-file transformer carries only itself: its Ministral encoder and FLUX.2 VAE are selected
+  // in the component section and sent here, the same shape Krea-2 uses.
+  const isDiffusers = model.format === 'diffusers';
+  const vaeModel = getCompatibleVae(settings, model);
+  const mistralEncoderModel = settings.mistralEncoderModel;
+
+  if (!isDiffusers) {
+    requireComponent(mistralEncoderModel, 'Mistral Encoder');
+    requireComponent(vaeModel, 'ERNIE-Image VAE');
+  }
+
   const graph: BackendGraphContract = { edges: [], id: createId('ernie_image_graph'), nodes: {} };
   const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
   const scheduler = coerceSchedulerForGraph(model, settings.scheduler);
@@ -854,10 +863,12 @@ const buildErnieImageGraph = (
   const modelLoader = addNode(graph, {
     id: 'model_loader',
     model,
+    text_encoder_model: mistralEncoderModel ?? undefined,
     type: 'ernie_image_model_loader',
     // The enhancer is a separate node with its own prompt rewriting and cannot be idle-offloaded;
     // Generate does not surface it, so the loader is told not to hold it resident.
     use_prompt_enhancer: false,
+    vae_model: vaeModel ?? undefined,
   });
   const posCond = addNode(graph, { id: 'pos_cond', type: 'ernie_image_text_encoder' });
   const negCond = useCfg ? addNode(graph, { id: 'neg_cond', type: 'ernie_image_text_encoder' }) : null;

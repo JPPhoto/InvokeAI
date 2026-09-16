@@ -271,7 +271,7 @@ class MiniMaxH3VariantType(str, Enum):
 
 
 class MistralVariantType(str, Enum):
-    """Mistral text encoder variants used by FLUX.2 [dev]."""
+    """Mistral text encoder variants used by FLUX.2 [dev] and ERNIE-Image."""
 
     Cow = "cow_mistral3_small"
     """The 30-layer BFL "cow-mistral3-small" distillation (hidden_size=5120).
@@ -288,6 +288,14 @@ class MistralVariantType(str, Enum):
     of those instead of BFL's release will load fine but produces visibly
     weaker prompt adherence than the cow distillation, so the cow variants
     remain the recommended default."""
+
+    Ministral3B = "ministral3_3b"
+    """The 26-layer Ministral 3B (hidden_size=3072) ERNIE-Image encodes its
+    prompts with. A different model family from the two above, not a smaller
+    build of them: it is loaded as ``Ministral3Model`` and uses YaRN RoPE
+    scaling, so the geometry alone decides the variant. The final RMSNorm is
+    kept — ERNIE reads the second-to-last hidden state, which the norm never
+    touches."""
 
 
 class PiDDecoderVariantType(str, Enum):
