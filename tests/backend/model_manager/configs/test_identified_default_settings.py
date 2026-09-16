@@ -1,8 +1,8 @@
 """The default settings a model is identified with.
 
-FP8 Storage is switched on for a checkpoint whose denoiser weights are stored in *unscaled* float8, read from the
-weights' dtypes and the scale keys beside them, never from the file name: a full-precision file somebody named
-"fp8_scaled" and a genuinely scaled fp8 checkpoint must both come out right. Settings passed along with an install land on top of what identification chose.
+FP8 Storage is switched on for a checkpoint whose denoiser weights are stored in float8, read from the weights'
+dtypes and never from the file name: a Comfy "fp8_scaled" file that nobody renamed and a full-precision file that
+somebody did must both come out right. Settings passed along with an install land on top of what identification chose.
 
 Single files are tiny Qwen-Image checkpoints, the smallest main model identification recognises from real keys. Folders
 are the installer's SDXL diffusers fixture, whose placeholder weight files have no readable header at all.
@@ -48,14 +48,13 @@ def test_float8_denoiser_weights_turn_fp8_storage_on_whatever_the_file_is_called
 
 
 @pytest.mark.parametrize("scale_key", ["img_in.weight_scale", "img_in.scale_weight"])
-def test_a_scaled_fp8_checkpoint_is_left_alone(tmp_path: Path, scale_key: str) -> None:
-    """Comfy's fp8_scaled weights mean nothing without the per-tensor scale stored beside them, and the storage cast
-    has none to apply: the loader folds the scale into the weight and the cast rounds that to *unscaled* fp8. Measured
-    on `flux-2-klein-4b-fp8`, that flushes 3.4% of the weights to exactly zero -- underflow, the scales being ~1e-3 --
-    for 2-4% relative L2 error per layer, and it saves nothing: the file already was one byte per weight.
+def test_a_scaled_fp8_checkpoint_gets_it_too(tmp_path: Path, scale_key: str) -> None:
+    """A Comfy "scaled fp8" file is float8 on disk like any other, and the loaders keep it in exactly that form when
+    the setting is on -- scale included -- so there is nothing to protect it from. It briefly was excluded, back when
+    storage folded the scale away and re-encoded the result unscaled.
 
-    Both spellings of the scale key are checked because matching only `.weight_scale` is the miss that keeps recurring
-    (see `iter_weight_scale_pairs`).
+    Both spellings of the scale key are exercised because matching only `.weight_scale` is the miss that keeps
+    recurring (see `iter_weight_scale_pairs`).
     """
     path = _qwen_image_checkpoint(
         tmp_path / "qwen_image.safetensors",
@@ -65,7 +64,8 @@ def test_a_scaled_fp8_checkpoint_is_left_alone(tmp_path: Path, scale_key: str) -
 
     config = _identify(path)
 
-    assert config.default_settings is None or config.default_settings.fp8_storage is None
+    assert config.default_settings is not None
+    assert config.default_settings.fp8_storage is True
 
 
 def test_a_full_precision_file_named_fp8_is_left_alone(tmp_path: Path) -> None:

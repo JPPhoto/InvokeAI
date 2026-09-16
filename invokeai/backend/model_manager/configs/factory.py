@@ -187,7 +187,6 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     variant_type_adapter,
 )
-from invokeai.backend.quantization.fp8_scaled import is_scale_metadata_key
 
 logger = logging.getLogger(__name__)
 
@@ -209,12 +208,10 @@ def _denoiser_stores_float8_weights(mod: ModelOnDisk) -> bool:
     Only headers are read, a few KB each. A header that cannot be read is no evidence of float8 weights: identification
     did not need that file, and picking a default setting is no reason to fail an install.
 
-    A *scaled* fp8 checkpoint is deliberately excluded. Its weights mean nothing without the per-tensor scale stored
-    beside them, and FP8 Storage has no scale to apply: the loader folds the scale into the weight and hands the cast
-    plain bf16, which then rounds to *unscaled* fp8. Measured on `flux-2-klein-4b-fp8`, that flushes 3.4% of the
-    weights to exactly zero -- by underflow, the scales being ~1e-3, not by saturation -- for 2-4% relative L2 error
-    per layer, and it buys nothing: the file already was one byte per weight. Keeping such a file in its own scaled
-    form is the lossless way to spend that byte, but that is a loader change rather than a default setting.
+    Scaled fp8 checkpoints count too. They briefly did not: FP8 Storage used to fold their per-tensor scales away and
+    let the layerwise cast re-encode the result as *unscaled* fp8, which on `flux-2-klein-4b-fp8` flushed 3.4% of the
+    weights to zero for the byte count the file already had. The loaders now keep such a file in its own scaled form
+    instead, so switching the setting on is lossless and worth doing by default.
     """
     if mod.path.is_file():
         candidates = [mod.path]
@@ -235,10 +232,6 @@ def _denoiser_stores_float8_weights(mod: ModelOnDisk) -> bool:
             logger.debug(f"Could not read the safetensors header of {path} to look for float8 weights: {e}")
             continue
         denoiser = {key: info for key, info in header.items() if not key.startswith(_BUNDLED_COMPONENT_KEY_PREFIXES)}
-        if any(is_scale_metadata_key(key) for key in denoiser):
-            return False
-        # No early return on a float8 hit: a sharded denoiser can keep its scales in a shard of its own, and finding
-        # them there still means the whole checkpoint is scaled.
         stores_float8 = stores_float8 or any(
             isinstance(info, dict) and info.get("dtype") in _FP8_SAFETENSORS_DTYPES for info in denoiser.values()
         )
