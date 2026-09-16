@@ -13,7 +13,9 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
+from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_ZImage_Config
+from invokeai.backend.model_manager.load import load_default
 from invokeai.backend.model_manager.load.model_loaders.z_image import ZImageCheckpointModel
 from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, Int8ConvrotLinear, build_regular_hadamard
 
@@ -183,3 +185,36 @@ def test_a_precision_sensitive_layer_is_not_left_int8(monkeypatch, tmp_path) -> 
     # And the reservation covers the widened layer at its post-split width, not at one byte.
     (reserved,), _ = loader._ram_cache.make_room.call_args
     assert reserved >= sensitive.nelement() * 4 + ordinary_q.nelement()
+
+
+def test_a_scaled_fp8_checkpoint_stays_packed_when_storage_is_on(monkeypatch, tmp_path) -> None:
+    """The keep decision has to reach the loader, not only the helper it was extracted into.
+
+    With FP8 Storage on, the checkpoint's own scaled fp8 weights are kept rather than folded into
+    bf16 and re-quantized by the layerwise cast, which has no scale to apply. A loader that goes
+    back to asking only about the fp8 matmul folds them again -- silently, and precisely on the
+    hardware most users have, since `fp8_compute` is off by default.
+    """
+    torch.manual_seed(3)
+    original = torch.randn(4, CONVROT_GROUP_SIZE)
+    scale = (original.abs().max() / 448.0).to(torch.float32)
+    packed = (original / scale).to(torch.float8_e4m3fn)
+    state_dict = {"layers.0.proj.weight": packed, "layers.0.proj.weight_scale": scale}
+
+    loader, driver_config = _driver(monkeypatch, tmp_path, state_dict)
+    config = Main_Checkpoint_ZImage_Config.model_construct(
+        path=driver_config.path,
+        name="z-image",
+        default_settings=MainModelDefaultSettings(fp8_storage=True),
+    )
+    # The configuration this path exists for: no fp8 matmul, but a device that can hold fp8.
+    monkeypatch.setattr(load_default, "should_keep_fp8_weights", lambda _device: False)
+    monkeypatch.setattr(load_default, "_device_supports_fp8_storage", lambda _device, _logger=None: True)
+
+    model = loader._load_from_singlefile(config)
+
+    proj = model.layers[0].proj
+    assert proj.weight.dtype is torch.float8_e4m3fn, "folded back to a float dtype"
+    assert getattr(proj, "weight_scale", None) is not None, "kept packed but without its scale"
+    dequantized = (proj.weight.float() * proj.weight_scale).flatten()
+    assert torch.corrcoef(torch.stack([dequantized, original.flatten()]))[0, 1] > 0.999

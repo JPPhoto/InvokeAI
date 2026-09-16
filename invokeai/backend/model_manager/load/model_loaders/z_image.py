@@ -603,7 +603,8 @@ class ZImageCheckpointModel(ModelLoader):
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
 
             # Handle memory management and dtype conversion. Casting fp8 weights here would discard
-            # both the VRAM saving and the tensor cores before the model is even built.
+            # the VRAM saving before the model is even built -- and the tensor cores too, where the
+            # fp8 matmul is what kept them.
             keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
             if fp8_layers and not keep_fp8:
                 # Neither consumer asked for them, and dequantizing per forward would cost speed for
@@ -654,7 +655,9 @@ class ZImageCheckpointModel(ModelLoader):
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            self._logger.info(f"Z-Image: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            self._logger.info(
+                f"Z-Image: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(self._logger, "Z-Image", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
             if marked and full_precision_hints_respected():
@@ -672,8 +675,9 @@ class ZImageCheckpointModel(ModelLoader):
         # FP8 *storage* on top. When nothing was kept quantized above, every param is uniform
         # `model_dtype` here, so the layerwise cast has one unambiguous compute dtype to restore to.
         # When weights *were* kept fp8, `_apply_fp8_layerwise_casting` bails out on its own (and
-        # says so in the log): its hooks would restore the compute dtype before every forward and
-        # silently disable the fp8 matmul, for no VRAM saving.
+        # says so in the log): its hooks would restore the compute dtype before every forward, which
+        # disables the fp8 matmul where there is one and drops the `weight_scale` where there is
+        # not -- and saves no VRAM either way.
         model = self._apply_fp8_layerwise_casting(model, config, SubModelType.Transformer)
         return model
 

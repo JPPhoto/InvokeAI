@@ -193,8 +193,8 @@ class AnimaCheckpointModel(ModelLoader):
         }
         fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
         if fp8_layers and not keep_fp8:
-            # Without the matmul, keeping them quantized would halve VRAM but dequantize on every
-            # forward. Fold the scale into the weight instead.
+            # Neither the matmul nor FP8 Storage asked for them, so keeping them quantized would
+            # dequantize on every forward to save memory nobody wanted saved. Fold the scale in.
             dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
             fp8_layers = {}
 
@@ -237,13 +237,17 @@ class AnimaCheckpointModel(ModelLoader):
                 f"(expected for inv_freq buffers). First 5: {load_result.missing_keys[:5]}"
             )
 
-        # Without this the `fp8_storage` toggle is shown for Anima models but does nothing. The
-        # state dict was cast to a single `model_dtype` above, so the layerwise cast has one
-        # unambiguous compute dtype to restore to. AnimaTransformer is a plain nn.Module, so this
-        # takes the hook-based path in `_apply_fp8_to_nn_module`.
+        # Without this the `fp8_storage` toggle is shown for Anima models but does nothing. When
+        # nothing stayed packed, the state dict was cast to a single `model_dtype` above, so the
+        # layerwise cast has one unambiguous compute dtype to restore to; when something did stay
+        # packed, the cast bails out on its own rather than upcast a scaled weight without applying
+        # its scale. AnimaTransformer is a plain nn.Module, so this takes the hook-based path in
+        # `_apply_fp8_to_nn_module`.
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            logger.info(f"Anima: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            logger.info(
+                f"Anima: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(logger, "Anima", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
             if marked and full_precision_hints_respected():
@@ -252,7 +256,7 @@ class AnimaCheckpointModel(ModelLoader):
                     "and will dequantize per forward."
                 )
         elif kept:
-            logger.info(f"Anima: kept {kept} raw fp8 weight(s) quantized for the fp8 tensor cores.")
+            logger.info(f"Anima: kept {kept} raw fp8 weight(s) quantized ({self._fp8_kept_reason()}).")
 
         model = self._apply_fp8_layerwise_casting(model, config, SubModelType.Transformer)
         return model
