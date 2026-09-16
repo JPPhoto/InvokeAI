@@ -417,6 +417,21 @@ describe('WorkflowFieldInput saved workflows', () => {
 });
 
 describe('WorkflowFieldInput media inputs', () => {
+  it('still renders media controls when the host does not provide a dnd context', async () => {
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <QueryClientProvider client={queryClient}>
+            <WorkflowFieldInput template={VIDEO_TEMPLATE} value={undefined} onChange={vi.fn()} />
+          </QueryClientProvider>
+        </ChakraProvider>
+      );
+    });
+
+    expect(host.textContent).not.toContain('Connection only');
+    expect(findButton('widgets.gallery.picker.chooseVideo').disabled).toBe(false);
+  });
+
   it('renders a direct-input widget for VideoField instead of falling back to connection-only', async () => {
     await renderField(VIDEO_TEMPLATE, undefined, vi.fn());
 

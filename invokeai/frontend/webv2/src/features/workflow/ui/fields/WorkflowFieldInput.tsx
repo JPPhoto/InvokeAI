@@ -94,6 +94,7 @@ import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-re
 import {
   lazy,
   Suspense,
+  Component,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -103,6 +104,7 @@ import {
   useState,
   type ChangeEvent,
   type MouseEvent,
+  type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -555,6 +557,28 @@ const MEDIA_FIELD_CONFIG = {
 >;
 
 const HIDDEN_FILE_INPUT_STYLE = { display: 'none' } as const;
+const DND_CONTEXT_ERROR = 'useDndMonitor must be used within a children of <DndContext>';
+
+/**
+ * Workflow fields are also rendered by isolated workflow surfaces and tests
+ * that do not own the workbench-wide dnd context. The media controls still
+ * work there; only gallery drag-to-field registration is unavailable.
+ */
+class OptionalDndMonitorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(error: unknown) {
+    if (error instanceof Error && error.message === DND_CONTEXT_ERROR) {
+      return { failed: true };
+    }
+
+    throw error;
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 const IMAGE_ONLY = ['image'] as const;
 const VIDEO_ONLY = ['video'] as const;
 const MEDIA_INPUT_FOCUS_PROPS = { outline: '2px solid {colors.accent.focusRing}', outlineOffset: '2px' } as const;
@@ -732,6 +756,50 @@ const ImageCollectionTile = ({
   );
 };
 
+const ImageCollectionDropMonitor = ({ dropId, onDrop }: { dropId: string; onDrop: (names: string[]) => void }) => {
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over?.id === dropId) {
+        onDrop(getWorkflowMediaFieldDropItems(event.active.data.current, 'image').map((item) => item.name));
+      }
+    },
+    [dropId, onDrop]
+  );
+
+  useDndMonitor({ onDragEnd });
+
+  return null;
+};
+
+const MediaDropMonitor = ({
+  dropId,
+  kind,
+  onDrop,
+}: {
+  dropId: string;
+  kind: WorkflowMediaKind;
+  onDrop: (item: { name: string }) => void;
+}) => {
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over?.id !== dropId) {
+        return;
+      }
+
+      const item = getWorkflowMediaFieldDropItem(event.active.data.current, kind);
+
+      if (item) {
+        onDrop(item);
+      }
+    },
+    [dropId, kind, onDrop]
+  );
+
+  useDndMonitor({ onDragEnd });
+
+  return null;
+};
+
 /**
  * Direct input for `ImageField` collections (Image Collection primitive, Image
  * Batch): a thumbnail grid with per-item removal, a multi-select gallery
@@ -769,17 +837,6 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
   const { active } = useDndContext();
   const acceptsActiveDrag = getWorkflowMediaFieldDropItems(active?.data.current, 'image').length > 0;
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: dropId });
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (event.over?.id === dropId) {
-        appendNames(getWorkflowMediaFieldDropItems(event.active.data.current, 'image').map((item) => item.name));
-      }
-    },
-    [appendNames, dropId]
-  );
-
-  useDndMonitor({ onDragEnd });
-
   const { fileInputRef, isUploading, onFileChange, onUploadClick } = useMediaUpload({
     kind: 'image',
     multiple: true,
@@ -798,6 +855,9 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
+      <OptionalDndMonitorBoundary>
+        <ImageCollectionDropMonitor dropId={dropId} onDrop={appendNames} />
+      </OptionalDndMonitorBoundary>
       <Box
         ref={setNodeRef}
         boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
@@ -914,23 +974,6 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
   const { active } = useDndContext();
   const acceptsActiveDrag = getWorkflowMediaFieldDropItem(active?.data.current, kind) !== null;
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: dropId });
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (event.over?.id !== dropId) {
-        return;
-      }
-
-      const item = getWorkflowMediaFieldDropItem(event.active.data.current, kind);
-
-      if (item) {
-        onChange({ [config.nameKey]: item.name });
-      }
-    },
-    [config.nameKey, dropId, kind, onChange]
-  );
-
-  useDndMonitor({ onDragEnd });
-
   const onUploaded = useCallback(
     (names: string[]) => onChange({ [config.nameKey]: names[0] }),
     [config.nameKey, onChange]
@@ -969,9 +1012,16 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
   const FallbackIcon = kind === 'video' ? FilmIcon : ImageIcon;
   const pickerAccept = kind === 'video' ? VIDEO_ONLY : IMAGE_ONLY;
   const pickerLabel = t(kind === 'video' ? 'widgets.gallery.picker.chooseVideo' : 'widgets.gallery.picker.chooseImage');
+  const onMediaDrop = useCallback(
+    (item: { name: string }) => onChange({ [config.nameKey]: item.name }),
+    [config.nameKey, onChange]
+  );
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
+      <OptionalDndMonitorBoundary>
+        <MediaDropMonitor dropId={dropId} kind={kind} onDrop={onMediaDrop} />
+      </OptionalDndMonitorBoundary>
       {/* The whole preview area is the drop target, like the legacy editor's widget. */}
       <Box
         ref={setNodeRef}
