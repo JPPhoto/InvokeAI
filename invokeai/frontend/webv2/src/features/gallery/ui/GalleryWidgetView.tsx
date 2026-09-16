@@ -76,12 +76,9 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     gallery: galleryCommands,
     galleryValues,
     generateValues,
-    liveFollowEnabled,
-    liveProgressTarget,
     notifications,
     projectId,
     projectName,
-    queueItems,
     ItemActionsProvider,
   } = useGalleryUi();
   const galleryView = getGalleryView(galleryValues);
@@ -125,17 +122,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
 
   const { loadMore, selectedBoardId, total } = data;
   const gallery = useMemo(
-    () =>
-      getGalleryStateView(
-        galleryValues,
-        data.boards,
-        data.items,
-        data.isLoadingItems,
-        queueItems,
-        liveFollowEnabled,
-        liveProgressTarget
-      ),
-    [data.boards, data.isLoadingItems, data.items, galleryValues, liveFollowEnabled, liveProgressTarget, queueItems]
+    () => getGalleryStateView(galleryValues, data.boards, data.items, data.isLoadingItems),
+    [data.boards, data.isLoadingItems, data.items, galleryValues]
   );
   // No strip under a ranked result (no starred filter applies), under the
   // starred-only listing (it would repeat the grid), or in a window anchored

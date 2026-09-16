@@ -1,11 +1,6 @@
 import type { GalleryItem } from '@features/gallery/core/items';
-import type { GalleryOrderDir } from '@features/gallery/core/types';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
-
-import type { GalleryQueuePlaceholder } from './galleryStateView';
-
-import { getGalleryPlaceholderInsertionIndex } from './galleryStateView';
 
 export const GALLERY_GRID_GAP_PX = 4;
 export const GALLERY_STARRED_HEADER_HEIGHT_PX = 24;
@@ -66,9 +61,7 @@ export const getGalleryColumnCount = ({
 export const getGalleryCellSizePx = ({ columnCount, widthPx }: { columnCount: number; widthPx: number }): number =>
   widthPx > 0 ? Math.max(1, (widthPx - GALLERY_GRID_GAP_PX * (columnCount - 1)) / columnCount) : 96;
 
-export type GalleryGridCell =
-  | { kind: 'item'; item: GalleryItem; itemIndex: number }
-  | { kind: 'placeholder'; placeholder: GalleryQueuePlaceholder };
+export type GalleryGridCell = { kind: 'item'; item: GalleryItem; itemIndex: number };
 
 export type GalleryGridSection = 'regular' | 'starred';
 
@@ -165,8 +158,7 @@ export const getGalleryGridNavigationStep = (
   return Math.min(lastIndex, regularStart + (targetRow - stripRowCount) * columnCount + column);
 };
 
-const getGalleryGridCellKey = (cell: GalleryGridCell): string =>
-  cell.kind === 'placeholder' ? `placeholder:${cell.placeholder.id}` : toGalleryItemKey(cell.item);
+const getGalleryGridCellKey = (cell: GalleryGridCell): string => toGalleryItemKey(cell.item);
 
 /**
  * Rows are keyed by their leading cell rather than their index so that
@@ -198,23 +190,19 @@ const chunkGalleryCellsIntoRows = (
 /**
  * The grid's row model in one pure pass: the bounded starred strip gets a
  * disclosure section above the listing, the listing chunks in order, and
- * placeholders slot in where their images will land. Cell indices follow
+ * only saved items participate in navigation. Cell indices follow
  * `buildGalleryGridNavigation`.
  */
 export const buildGalleryGridRows = ({
   columnCount,
-  imageOrderDir,
   isStarredOpen,
   items,
-  pendingPlaceholders,
   starredItems,
   starredTotal,
 }: {
   columnCount: number;
-  imageOrderDir: GalleryOrderDir;
   isStarredOpen: boolean;
   items: readonly GalleryItem[];
-  pendingPlaceholders: readonly GalleryQueuePlaceholder[];
   starredItems: readonly GalleryItem[];
   starredTotal: number;
 }): GalleryGridRow[] => {
@@ -226,16 +214,7 @@ export const buildGalleryGridRows = ({
     itemIndex: shownCount + index,
     kind: 'item',
   }));
-  const placeholderCells: GalleryGridCell[] = pendingPlaceholders.map((placeholder) => ({
-    kind: 'placeholder',
-    placeholder,
-  }));
-  const placeholderInsertionIndex = getGalleryPlaceholderInsertionIndex(items.length, imageOrderDir);
-  const regularCells = [
-    ...regularItemCells.slice(0, placeholderInsertionIndex),
-    ...placeholderCells,
-    ...regularItemCells.slice(placeholderInsertionIndex),
-  ];
+  const regularCells = regularItemCells;
   const rows: GalleryGridRow[] = [];
 
   if (stripItems.length > 0) {
