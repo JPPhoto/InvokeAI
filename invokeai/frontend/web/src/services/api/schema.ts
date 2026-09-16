@@ -11433,7 +11433,7 @@ export type components = {
             model: components["schemas"]["ModelIdentifierField"];
             /**
              * Text Encoder
-             * @description Standalone Mistral3 text encoder. Required when the model is a single-file transformer.
+             * @description Standalone Ministral 3B text encoder. Required when the model is a single-file transformer.
              * @default null
              */
             text_encoder_model?: components["schemas"]["ModelIdentifierField"] | null;

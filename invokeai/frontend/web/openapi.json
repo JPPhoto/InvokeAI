@@ -29688,7 +29688,7 @@
               }
             ],
             "default": null,
-            "description": "Standalone Mistral3 text encoder. Required when the model is a single-file transformer.",
+            "description": "Standalone Ministral 3B text encoder. Required when the model is a single-file transformer.",
             "field_kind": "input",
             "input": "direct",
             "orig_default": null,
@@ -29712,7 +29712,7 @@
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["ernie-image", "flux2"],
+            "ui_model_base": ["flux2"],
             "ui_model_type": ["vae"]
           },
           "use_prompt_enhancer": {
