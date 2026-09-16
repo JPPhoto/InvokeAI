@@ -5,7 +5,7 @@ import type { LucideIcon } from 'lucide-react';
 import { HStack, Icon, Menu, NumberInput, Portal, Stack, Text, useFieldContext } from '@chakra-ui/react';
 import { SEED_MAX, SEED_MODES } from '@platform/core/seed';
 import { ChevronDownIcon, DicesIcon, LocateFixedIcon, MinusIcon, PlusIcon, ShuffleIcon } from 'lucide-react';
-import { useId, useMemo } from 'react';
+import { useId, useMemo, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, IconButton } from './Button';
@@ -14,6 +14,8 @@ import { Tooltip } from './Tooltip';
 
 const SEED_MODE_MENU_POSITIONING = { placement: 'bottom-end' } as const;
 const TABULAR_NUMS = { fontVariantNumeric: 'tabular-nums' } as const;
+
+const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTarget.select();
 const SEED_MODE_ICONS: Record<SeedMode, LucideIcon> = {
   decrement: MinusIcon,
   fixed: LocateFixedIcon,
@@ -196,7 +198,12 @@ export const SeedInput = ({
           }}
         >
           <NumberInput.Control />
-          <NumberInput.Input aria-describedby={describedBy} aria-label={ariaLabel} css={TABULAR_NUMS} />
+          <NumberInput.Input
+            aria-describedby={describedBy}
+            aria-label={ariaLabel}
+            css={TABULAR_NUMS}
+            onDoubleClick={selectInputText}
+          />
         </NumberInput.Root>
         {/* The tooltip is the visible hint; the accessible name stays on the button because a
             tooltip only describes its trigger while open. */}

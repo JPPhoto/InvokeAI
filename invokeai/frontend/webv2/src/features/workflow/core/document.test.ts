@@ -169,6 +169,18 @@ describe('projectGraphReducer', () => {
     expect(next.edges[0]?.id).toBe('edge-replacement');
   });
 
+  it('reconnecting an edge replaces it in one step and ignores unknown edges', () => {
+    const { doc, nodeAId, nodeBId } = createDocWithNodes();
+    const original = createEdge(nodeAId, nodeBId);
+    const withEdge = projectGraphReducer(doc, { edge: original, type: 'addEdge' });
+    const moved = { ...createEdge(nodeAId, nodeBId), id: 'edge-moved', targetHandle: 'b' };
+
+    const next = projectGraphReducer(withEdge, { edge: moved, edgeId: original.id, type: 'reconnectEdge' });
+
+    expect(next.edges).toEqual([moved]);
+    expect(projectGraphReducer(withEdge, { edge: moved, edgeId: 'missing', type: 'reconnectEdge' })).toBe(withEdge);
+  });
+
   it('sets field values without disturbing other inputs', () => {
     const { doc, nodeAId } = createDocWithNodes();
     const next = projectGraphReducer(doc, { fieldName: 'a', nodeId: nodeAId, type: 'setFieldValue', value: 42 });
@@ -293,6 +305,16 @@ describe('projectGraphReducer', () => {
     const updatedField = next.form.elements[field?.id ?? ''];
 
     expect(updatedField?.type === 'node-field' && updatedField.data.showDescription).toBe(true);
+
+    next = projectGraphReducer(next, {
+      elementId: field?.id ?? '',
+      showShuffle: true,
+      type: 'setNodeFieldShowShuffle',
+    });
+
+    const shuffledField = next.form.elements[field?.id ?? ''];
+
+    expect(shuffledField?.type === 'node-field' && shuffledField.data.showShuffle).toBe(true);
   });
 
   it('updates metadata via patch', () => {

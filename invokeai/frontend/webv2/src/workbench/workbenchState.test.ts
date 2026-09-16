@@ -4066,6 +4066,29 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     });
   });
 
+  it('keeps the board a result image was saved to instead of the run destination board', () => {
+    let state = primeGenerate();
+
+    state = workbenchReducer(state, { boardId: 'board-1', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = submitGenerate(state);
+
+    const project = getActiveProject(state);
+    const queueItem = project.queue.items[0];
+    const image = { ...createImage('node-board-image.png', queueItem.id), boardId: 'board-b' };
+    state = workbenchReducer(state, {
+      images: [image],
+      projectId: project.id,
+      queueItemId: queueItem.id,
+      type: 'routeQueueItemResults',
+    });
+
+    const galleryValues = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect((galleryValues.recentImages as Array<{ boardId: string }>)[0]?.boardId).toBe('board-b');
+    expect(galleryValues.selectedImage).toMatchObject({ boardId: 'board-b', name: image.imageName });
+  });
+
   it('appends Gallery destination results for local fallback while backend owns boards', () => {
     let state = primeGenerate();
 
