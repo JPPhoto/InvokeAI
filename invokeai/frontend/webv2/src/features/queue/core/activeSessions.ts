@@ -86,17 +86,11 @@ export const getQueueProgressSessions = (
       });
     }
   }
-  const itemOrder = new Map(items.map((item, index) => [item.id, index]));
-  return sessions.sort((left, right) => {
-    if (left.backendItemId !== null && right.backendItemId !== null) {
-      return left.backendItemId - right.backendItemId;
-    }
-    if (left.backendItemId !== null) {
-      return -1;
-    }
-    if (right.backendItemId !== null) {
-      return 1;
-    }
-    return itemOrder.get(left.queueItemId)! - itemOrder.get(right.queueItemId)! || left.itemIndex - right.itemIndex;
-  });
+  const submittedAt = new Map(items.map((item) => [item.id, item.snapshot.submittedAt]));
+  return sessions.sort(
+    (left, right) =>
+      submittedAt.get(left.queueItemId)!.localeCompare(submittedAt.get(right.queueItemId)!) ||
+      left.queueItemId.localeCompare(right.queueItemId) ||
+      left.itemIndex - right.itemIndex
+  );
 };

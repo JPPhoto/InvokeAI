@@ -62,6 +62,25 @@ describe('active queue sessions', () => {
 });
 
 describe('gallery batch progress slots', () => {
+  it('keeps oldest-first order while newest-first batches acquire backend ids', () => {
+    const a = { ...run('a', []), backendItemIds: undefined };
+    const b = {
+      ...run('b', []),
+      backendItemIds: undefined,
+      snapshot: { ...a.snapshot, submittedAt: '2026-09-15T00:01:00Z' },
+    };
+    const ids = (items: QueueItem[]) => getQueueProgressSessions(items, []).map(({ id }) => id);
+    const expected = ['a:1', 'a:2', 'a:3', 'b:1', 'b:2', 'b:3'];
+    expect(ids([b, a])).toEqual(expected);
+    expect(ids([b, { ...a, backendItemIds: [10, 11, 12] }])).toEqual(expected);
+    expect(
+      ids([
+        { ...b, backendItemIds: [13, 14, 15] },
+        { ...a, backendItemIds: [10, 11, 12] },
+      ])
+    ).toEqual(expected);
+  });
+
   it('shows all three slots before submission and keeps their identities as execution starts', () => {
     const pending = { ...run('batch', []), backendItemIds: undefined, status: 'pending' as const };
     const queued = getQueueProgressSessions([pending], []);
