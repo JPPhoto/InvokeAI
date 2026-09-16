@@ -26,6 +26,7 @@ from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
     ModelFormat,
     ModelType,
+    Qwen3VLVariantType,
     SubModelType,
 )
 from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
@@ -734,16 +735,36 @@ def _reject_incomplete_load(model: Any, *, what: str) -> None:
     reject_incomplete_load(model, what=what)
 
 
+def _tokenizer_can_encode(tokenizer: Any) -> bool:
+    """Whether a tokenizer loaded from the HuggingFace cache is actually usable.
+
+    Not paranoia: when the cache holds the repo's `config.json` but none of its tokenizer files --
+    which is exactly the state `_load_text_encoder` leaves behind on a first run, because it fetches
+    the config first -- `AutoTokenizer.from_pretrained(..., local_files_only=True)` does not raise.
+    It returns a `Qwen2Tokenizer` with a one-token vocabulary and no chat template, which encodes
+    every prompt to an empty sequence. The generation then runs on no conditioning at all, and
+    nothing in the log says so. Probing the round trip is what tells the two apart.
+    """
+    try:
+        return bool(tokenizer("probe", add_special_tokens=False)["input_ids"])
+    except Exception:
+        return False
+
+
 @ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3VLEncoder, format=ModelFormat.Checkpoint)
 class Qwen3VLEncoderCheckpointLoader(ModelLoader):
     """Loads a single-file Qwen3-VL encoder checkpoint (e.g. ComfyUI ``qwen3vl_4b_bf16`` / ``_fp8_scaled``).
 
     The checkpoint bundles the language model + visual tower but no config/tokenizer; those are pulled
-    from HuggingFace (``Qwen/Qwen3-VL-4B-Instruct``) with offline-cache fallback. ComfyUI 'scaled fp8'
+    from HuggingFace with offline-cache fallback, from the repo the config's recorded variant names --
+    the file itself says nothing about which Qwen3-VL it is beyond its shapes. ComfyUI 'scaled fp8'
     weights are dequantized to the compute dtype on load.
     """
 
-    DEFAULT_HF_REPO = "Qwen/Qwen3-VL-4B-Instruct"
+    HF_REPO_BY_VARIANT = {
+        Qwen3VLVariantType.Qwen3VL_4B: "Qwen/Qwen3-VL-4B-Instruct",
+        Qwen3VLVariantType.Qwen3VL_8B: "Qwen/Qwen3-VL-8B-Instruct",
+    }
 
     def _load_model(
         self,
@@ -755,7 +776,7 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
 
         match submodel_type:
             case SubModelType.Tokenizer:
-                return self._load_tokenizer()
+                return self._load_tokenizer(config)
             case SubModelType.TextEncoder:
                 return self._load_text_encoder(config)
 
@@ -764,19 +785,27 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             f"Received: {submodel_type.value if submodel_type else 'None'}"
         )
 
-    def _load_tokenizer(self) -> AnyModel:
+    def _hf_repo(self, config: Qwen3VLEncoder_Checkpoint_Config) -> str:
+        return self.HF_REPO_BY_VARIANT[config.variant]
+
+    def _load_tokenizer(self, config: Qwen3VLEncoder_Checkpoint_Config) -> AnyModel:
+        repo = self._hf_repo(config)
         # A partial offline cache (e.g. config present but vocab/merges missing) raises something other
         # than OSError (e.g. TypeError) deep in the slow-tokenizer path, so catch broadly and re-fetch.
         try:
-            return AutoTokenizer.from_pretrained(self.DEFAULT_HF_REPO, local_files_only=True, extra_special_tokens={})
+            tokenizer = AutoTokenizer.from_pretrained(repo, local_files_only=True, extra_special_tokens={})
         except Exception:
-            return AutoTokenizer.from_pretrained(self.DEFAULT_HF_REPO, extra_special_tokens={})
+            tokenizer = None
+        if tokenizer is not None and _tokenizer_can_encode(tokenizer):
+            return tokenizer
+        return AutoTokenizer.from_pretrained(repo, extra_special_tokens={})
 
-    def _load_hf_config(self) -> Any:
+    def _load_hf_config(self, config: Qwen3VLEncoder_Checkpoint_Config) -> Any:
+        repo = self._hf_repo(config)
         try:
-            te_config = AutoConfig.from_pretrained(self.DEFAULT_HF_REPO, local_files_only=True)
+            te_config = AutoConfig.from_pretrained(repo, local_files_only=True)
         except Exception:
-            te_config = AutoConfig.from_pretrained(self.DEFAULT_HF_REPO)
+            te_config = AutoConfig.from_pretrained(repo)
         return _normalize_qwen3vl_rope_config(te_config)
 
     def _load_text_encoder(self, config: Qwen3VLEncoder_Checkpoint_Config) -> AnyModel:
@@ -843,7 +872,7 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 
-        te_config = self._load_hf_config()
+        te_config = self._load_hf_config(config)
         with accelerate.init_empty_weights():
             model = Qwen3VLModel._from_config(te_config)
 

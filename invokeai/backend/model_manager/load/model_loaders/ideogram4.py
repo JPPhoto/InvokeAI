@@ -21,8 +21,11 @@ import torch
 from safetensors.torch import load_file
 
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
-from invokeai.backend.model_manager.configs.main import Main_Diffusers_Ideogram4_Config
-from invokeai.backend.model_manager.load.load_default import ModelLoader
+from invokeai.backend.model_manager.configs.main import (
+    Main_Checkpoint_Ideogram4_Config,
+    Main_Diffusers_Ideogram4_Config,
+)
+from invokeai.backend.model_manager.load.load_default import ModelLoader, _model_declared_skip_patterns
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
@@ -30,6 +33,20 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelFormat,
     ModelType,
     SubModelType,
+)
+from invokeai.backend.quantization.fp8_scaled import (
+    attach_fp8_scales,
+    cast_state_dict,
+    dequantize_fp8_scaled,
+    extract_comfy_quant_hints,
+    extract_fp8_scaled_layers,
+    full_precision_hints_respected,
+    parse_quantization_metadata,
+    predict_cast_state_dict_size,
+    read_safetensors_metadata,
+    should_keep_fp8_weights,
+    split_fp8_scaled_layers,
+    warn_on_unattached_scales,
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, log_unexpected_keys
@@ -229,3 +246,122 @@ class Ideogram4DiffusersModel(ModelLoader):
         load_state_dict_ignoring_extras(ae, sd, source="Ideogram 4 VAE")
         ae.eval()
         return ae.to(model_dtype)
+
+
+@ModelLoaderRegistry.register(base=BaseModelType.Ideogram4, type=ModelType.Main, format=ModelFormat.Checkpoint)
+class Ideogram4CheckpointModel(ModelLoader):
+    """Loads ONE branch of Ideogram 4's dual-branch transformer from a single file.
+
+    Comfy-Org publishes the conditional and unconditional transformers as separate files
+    (``ideogram4_*.safetensors`` / ``ideogram4_unconditional_*.safetensors``) whose keys are
+    exactly this repository's ``Ideogram4Transformer`` state dict — no conversion. Each installs
+    as its own model and the loader node pairs them, which is why this returns a bare transformer
+    where the diffusers loader returns an ``Ideogram4TransformerPair``.
+
+    Handles plain bf16/fp16 and ComfyUI "scaled fp8" (fp8 weight + per-tensor ``.weight_scale``,
+    plus ``.comfy_quant`` markers). The fp8 weights are kept quantized when the device can run the
+    fp8 matmul and folded into the compute dtype otherwise -- the same trade every other
+    single-file loader here makes, and the reason a 8.6 GiB file needs ~17 GiB resident without
+    ``fp8_compute``.
+    """
+
+    def _load_model(
+        self,
+        config: AnyModelConfig,
+        submodel_type: Optional[SubModelType] = None,
+    ) -> AnyModel:
+        if not isinstance(config, Main_Checkpoint_Ideogram4_Config):
+            raise ValueError(f"Expected Main_Checkpoint_Ideogram4_Config, got {type(config).__name__}.")
+
+        if submodel_type is not SubModelType.Transformer:
+            raise ValueError(
+                "A single-file Ideogram 4 checkpoint holds only a transformer; "
+                f"'{submodel_type.value if submodel_type else 'None'}' is not in it. Select a standalone "
+                "Qwen3-VL encoder and VAE on the model loader node, or install the diffusers pipeline."
+            )
+
+        from invokeai.backend.ideogram4.modeling_ideogram4 import Ideogram4Config, Ideogram4Transformer
+
+        model_path = Path(config.path)
+        target_device = TorchDevice.choose_torch_device()
+        model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
+
+        sd: dict[str, torch.Tensor] = load_file(model_path)
+
+        # Per-layer `.comfy_quant` markers are popped out of `sd` here; the header carries the same
+        # flags on some repacks and wins where both are present. Read before anything consumes the
+        # weights: `extract_fp8_scaled_layers` drops what is left of the side channel.
+        layer_hints = {
+            **extract_comfy_quant_hints(sd),
+            **parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger)),
+        }
+
+        fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
+        keep_fp8 = should_keep_fp8_weights(target_device)
+        if fp8_layers and not keep_fp8:
+            # Fold the scales in. Staying quantized without the fp8 matmul would halve VRAM but
+            # dequantize on every forward, so both are tied to the same setting.
+            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+            fp8_layers = {}
+
+        with accelerate.init_empty_weights():
+            model: torch.nn.Module = Ideogram4Transformer(Ideogram4Config())
+
+        # `input_proj` and `t_embedding` must not stay fp8 -- the model derives its activation dtype
+        # from their weights (see `Ideogram4Transformer._skip_layerwise_casting_patterns`).
+        skip_patterns = _model_declared_skip_patterns(model)
+
+        # Reserve before the split: it dequantizes the layers it cannot keep through float32, and a
+        # reservation made afterwards lets that transient peak land on an unreserved cache.
+        self._ram_cache.make_room(
+            predict_cast_state_dict_size(
+                sd,
+                model_dtype,
+                keep_fp8=keep_fp8,
+                model=model,
+                skip_patterns=skip_patterns,
+                scaled_layers=fp8_layers,
+            )
+        )
+        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
+        kept = cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
+
+        # Strict: the released files are key-for-key this model, so a missing or extra key means a
+        # different checkpoint, not a benign naming difference.
+        model.load_state_dict(sd, strict=True, assign=True)
+        # `assign=True` aliases every parameter to its `sd` tensor; dropping the dict's references
+        # keeps the originals from staying reachable beside any fp8 copy made below.
+        sd.clear()
+
+        if kept and not fp8_layers:
+            self._logger.info(
+                f"Ideogram 4: kept {kept} raw fp8 weight(s) quantized (no weight_scale in the checkpoint); "
+                "they will run on the fp8 tensor cores with unit scaling."
+            )
+
+        if fp8_layers:
+            attached = attach_fp8_scales(model, fp8_layers)
+            self._logger.info(
+                f"Ideogram 4: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)"
+            )
+            warn_on_unattached_scales(self._logger, "Ideogram 4", attached, fp8_layers)
+            marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
+            if marked:
+                if full_precision_hints_respected():
+                    self._logger.info(
+                        f"Ideogram 4: {marked} of {len(fp8_layers)} layer(s) are marked "
+                        "full_precision_matrix_mult and will dequantize per forward. Set "
+                        "fp8_compute_full_precision_hints=false to run them on the fp8 tensor cores "
+                        "instead (faster, but overrides the checkpoint producer's instruction)."
+                    )
+                else:
+                    self._logger.info(
+                        f"Ideogram 4: ignoring the full_precision_matrix_mult marker on {marked} layer(s) "
+                        "(fp8_compute_full_precision_hints=false)."
+                    )
+            # The layerwise-casting path exists to *produce* fp8 weights from full-precision ones.
+            # These already are fp8, and its hooks would restore the compute dtype without applying
+            # `weight_scale` — a silently wrong weight — while also disabling the matmul.
+            return model
+
+        return self._apply_fp8_layerwise_casting(model, config, SubModelType.Transformer)

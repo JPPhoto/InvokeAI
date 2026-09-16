@@ -3,6 +3,7 @@ from abc import ABC
 from pathlib import Path
 from typing import Any, Literal, Self
 
+import torch
 from pydantic import BaseModel, Field
 
 from invokeai.backend.model_manager.configs.base import (
@@ -27,6 +28,7 @@ from invokeai.backend.model_manager.configs.flux2_variant import (
     flux2_variant_from_hidden_size,
 )
 from invokeai.backend.model_manager.configs.identification_utils import (
+    InvalidMatchError,
     NotAMatchError,
     common_config_paths,
     get_config_dict_or_raise,
@@ -1411,6 +1413,138 @@ class Main_Diffusers_Ideogram4_Config(Diffusers_Config_Base, Main_Config_Base, C
             **override_fields,
             repo_variant=repo_variant,
         )
+
+
+# Comfy-Org ships the two Ideogram 4 branches as separate single files whose tensors are
+# key-for-key and shape-for-shape identical. Which branch a file holds is recorded only in its
+# safetensors metadata, and the pair is not interchangeable: swapping them turns the guided
+# branch into the unguided one and vice versa, which produces images with no visible error.
+_IDEOGRAM4_METADATA_KEY = "model_type"
+_IDEOGRAM4_BRANCH_BY_METADATA = {
+    "ideogram4_cond": "conditional",
+    "ideogram4_uncond": "unconditional",
+}
+
+Ideogram4Branch = Literal["conditional", "unconditional"]
+
+
+def _has_ideogram4_keys(state_dict: dict[str | int, Any]) -> bool:
+    """Fingerprint for Ideogram 4 single-file transformers.
+
+    ``embed_image_indicator`` is the token-type embedding for Ideogram's packed ``[text][image]``
+    sequence and no other architecture probed here carries it; the two projections pin the layer
+    layout the loader builds (``input_proj`` is the 128-channel patch input, ``adaln_proj`` the
+    512-wide AdaLN conditioning trunk).
+    """
+    return all(
+        key in state_dict
+        for key in (
+            "embed_image_indicator.weight",
+            "input_proj.weight",
+            "adaln_proj.weight",
+            "final_layer.linear.weight",
+        )
+    )
+
+
+def _ideogram4_branch_from_filename(filename: str) -> Ideogram4Branch:
+    """Fallback for files whose metadata was stripped by a re-upload or a repack tool.
+
+    Only the unconditional file is named for its branch, so anything else is read as the conditional
+    branch — the same default direction as the released naming. Both spellings are accepted: the
+    filename says "unconditional" and the metadata this stands in for says "uncond", and a repack
+    that drops the metadata is exactly the kind of tool that would name the file after it.
+    """
+    lowered = filename.lower()
+    return "unconditional" if "unconditional" in lowered or "uncond" in lowered else "conditional"
+
+
+class Main_Checkpoint_Ideogram4_Config(Checkpoint_Config_Base, Main_Config_Base, Config_Base):
+    """Model config for Ideogram 4 single-file transformer checkpoints (safetensors).
+
+    One file holds ONE of the two dual-branch transformers. The Qwen3-VL 8B text encoder and the
+    FLUX.2 VAE are separate models, selected on the loader node; the diffusers pipeline folder
+    (``Main_Diffusers_Ideogram4_Config``) is the variant that bundles everything.
+
+    Quantization: plain bf16/fp16 and ComfyUI "scaled fp8" load. The ``int8_convrot`` and ``nvfp4``
+    repacks of the same files are recognised and rejected with `InvalidMatchError`, which keeps them
+    out of the database entirely -- `NotAMatchError` would let them fall through to `Unknown_Config`
+    and register a 9 GiB file that nothing can ever load.
+    """
+
+    base: Literal[BaseModelType.Ideogram4] = Field(default=BaseModelType.Ideogram4)
+    format: Literal[ModelFormat.Checkpoint] = Field(default=ModelFormat.Checkpoint)
+    branch: Ideogram4Branch = Field(
+        description="Which of Ideogram 4's two transformer branches this file holds. Read from the "
+        "file's `model_type` metadata, with the filename as the fallback for stripped re-uploads."
+    )
+
+    @classmethod
+    def from_model_on_disk(cls, mod: ModelOnDisk, override_fields: dict[str, Any]) -> Self:
+        raise_if_not_file(mod)
+
+        raise_for_override_fields(cls, override_fields)
+
+        state_dict = mod.load_state_dict()
+        if not _has_ideogram4_keys(state_dict):
+            raise NotAMatchError("state dict does not look like an Ideogram 4 transformer")
+
+        if _has_ggml_tensors(state_dict):
+            raise NotAMatchError("GGUF-quantized Ideogram 4 checkpoints are not supported yet")
+
+        cls._raise_for_unsupported_quantization(state_dict)
+
+        branch = override_fields.pop("branch", None) or cls._branch_or_raise(mod)
+
+        return cls(**override_fields, branch=branch)
+
+    @classmethod
+    def _branch_or_raise(cls, mod: ModelOnDisk) -> Ideogram4Branch:
+        """The branch, from the file's own declaration where it has one.
+
+        A declaration this does not recognise is refused rather than ignored. Falling back to the
+        filename there would quietly classify a future release (an `ideogram4_5_cond`, an edit
+        build) as one of *these* two branches, and the loader node trusts the recorded branch
+        precisely because it came from the file — which is how a wrong model would end up guiding
+        against a right one with nothing in the log.
+        """
+        declared = mod.metadata().get(_IDEOGRAM4_METADATA_KEY)
+        if not declared:
+            return _ideogram4_branch_from_filename(mod.path.name)
+        branch = _IDEOGRAM4_BRANCH_BY_METADATA.get(declared)
+        if branch is None:
+            raise InvalidMatchError(
+                f"this file declares model_type '{declared}', which is not one of Ideogram 4's two "
+                f"transformer branches ({', '.join(sorted(_IDEOGRAM4_BRANCH_BY_METADATA))}). It is most "
+                "likely a newer or different Ideogram model that this version cannot run."
+            )
+        return branch
+
+    @classmethod
+    def _raise_for_unsupported_quantization(cls, state_dict: dict[str | int, Any]) -> None:
+        """Refuse the quantization schemes this loader cannot yet build.
+
+        `InvalidMatchError`, not `NotAMatchError`: the file *is* an Ideogram 4 transformer, so the
+        right outcome is a refusal the installer shows, not a fall-through to `Unknown_Config` that
+        registers it as a model nothing can load.
+
+        Neither scheme is visible in one fixed tensor: the int8_convrot repack leaves the input
+        projection bf16 and quantizes the block linears, and nvfp4 packs two codes per byte, so a
+        uint8 weight is indistinguishable from the `comfy_quant` markers every repack carries --
+        including the supported fp8 one. The per-tensor `weight_scale_2` is what only nvfp4 writes,
+        and int8 is a dtype nothing else here uses.
+        """
+        if any(isinstance(key, str) and key.endswith(".weight_scale_2") for key in state_dict):
+            raise InvalidMatchError(
+                "this is an nvfp4-quantized Ideogram 4 transformer, which is not supported yet. "
+                "Install the fp8_scaled build instead (ideogram4_fp8_scaled.safetensors)."
+            )
+
+        if any(getattr(value, "dtype", None) is torch.int8 for value in state_dict.values()):
+            raise InvalidMatchError(
+                "this is an int8-quantized Ideogram 4 transformer, which is not supported yet. "
+                "Install the fp8_scaled build instead (ideogram4_fp8_scaled.safetensors)."
+            )
 
 
 class Main_Diffusers_Krea2_Config(Diffusers_Config_Base, Main_Config_Base, Config_Base):

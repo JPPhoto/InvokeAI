@@ -1,8 +1,10 @@
 """Ideogram 4 starter models."""
 
+from invokeai.backend.model_manager.starter_models.flux2 import flux2_vae
 from invokeai.backend.model_manager.starter_models.types import StarterModel
 from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
+    ModelFormat,
     ModelType,
 )
 
@@ -27,4 +29,40 @@ ideogram_4_fp8 = StarterModel(
     description="Ideogram 4 text-to-image in fp8-quantized Diffusers format (runs on any device, higher "
     "memory use). Non-commercial license — accept it on HuggingFace first. ~26GB",
     type=ModelType.Main,
+)
+
+# Comfy-Org's single-file release. Each file is ONE of the two branches, both of which run at every
+# step, so the conditional transformer pulls the unconditional one in as a dependency along with the
+# encoder and the VAE. The repo is ungated, unlike the diffusers pipelines above, but the same
+# non-commercial license applies.
+ideogram_4_unconditional_single_file = StarterModel(
+    name="Ideogram 4 Unconditional (single file)",
+    base=BaseModelType.Ideogram4,
+    source="https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_unconditional_fp8_scaled.safetensors",
+    description="The unconditional branch of Ideogram 4, in ComfyUI scaled fp8. Useless on its own — "
+    "Ideogram 4 guides its conditional branch against this one. ~8.6GB",
+    type=ModelType.Main,
+    format=ModelFormat.Checkpoint,
+)
+
+ideogram_4_qwen3_vl_encoder_8b = StarterModel(
+    name="Qwen3-VL 8B Encoder (Ideogram 4)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/text_encoders/qwen3vl_8b_fp8_scaled.safetensors",
+    description="Qwen3-VL 8B text encoder for Ideogram 4, in ComfyUI scaled fp8. Distinct from the 4B "
+    "encoder Krea-2 uses; Ideogram 4 taps 13 of its layers and the two are not interchangeable. ~9.9GB",
+    type=ModelType.Qwen3VLEncoder,
+    format=ModelFormat.Checkpoint,
+)
+
+ideogram_4_single_file = StarterModel(
+    name="Ideogram 4 (single file)",
+    base=BaseModelType.Ideogram4,
+    source="https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_fp8_scaled.safetensors",
+    description="Comfy-Org single-file Ideogram 4 in ComfyUI scaled fp8. Installs the unconditional "
+    "branch, the Qwen3-VL 8B encoder and the shared 32-channel VAE with it; both transformer branches "
+    "stay resident during generation. Non-commercial license. ~27GB total",
+    type=ModelType.Main,
+    format=ModelFormat.Checkpoint,
+    dependencies=[ideogram_4_unconditional_single_file, ideogram_4_qwen3_vl_encoder_8b, flux2_vae],
 )

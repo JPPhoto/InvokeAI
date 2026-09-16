@@ -57,12 +57,27 @@ Ideogram 4 is an open-weight text-to-image model with a distinctive **structured
 
 ### Installing Ideogram 4
 
-The weights are gated on HuggingFace under a **non-commercial license**. Open the model page, accept the terms, and make sure your HuggingFace token is [set up in the config file] before installing. Two builds are available:
+The weights are gated on HuggingFace under a **non-commercial license**. Open the model page, accept the terms, and make sure your HuggingFace token is [set up in the config file] before installing. Two bundled builds are available:
 
 - [`ideogram-ai/ideogram-4-nf4`](https://huggingface.co/ideogram-ai/ideogram-4-nf4) — nf4 quantized, **CUDA only**, fits in 24 GB VRAM. Recommended for NVIDIA GPUs.
 - [`ideogram-ai/ideogram-4-fp8`](https://huggingface.co/ideogram-ai/ideogram-4-fp8) — fp8 quantized, runs on **any device**, with higher memory use.
 
-Paste either repo ID into the Model Manager's HuggingFace / URL field to install.
+Paste either repo ID into the Model Manager's HuggingFace / URL field to install. Each folder carries everything Ideogram 4 needs.
+
+#### Single files
+
+Comfy-Org's [`Comfy-Org/Ideogram-4`](https://huggingface.co/Comfy-Org/Ideogram-4) repackage is ungated (the same non-commercial license still applies) and ships the parts separately. Ideogram 4 runs **two** transformers — a conditional branch and an unconditional one, both active at every step — so a single-file install is four models, and the **Ideogram 4 (single file)** starter installs all four together:
+
+- `diffusion_models/ideogram4_fp8_scaled.safetensors` — the conditional branch, selected as the model
+- `diffusion_models/ideogram4_unconditional_fp8_scaled.safetensors` — the unconditional branch
+- `text_encoders/qwen3vl_8b_fp8_scaled.safetensors` — the Qwen3-VL **8B** encoder (not the 4B one Krea-2 uses)
+- `vae/flux2-vae.safetensors` — the 32-channel VAE, shared with FLUX.2, which is why it installs under the FLUX.2 base
+
+Pick the unconditional branch, the encoder and the VAE in the **Components** section next to the model. The `int8_convrot` and `nvfp4` repackages in that repo are **not** supported yet and are refused at install.
+
+:::note[Memory]
+Both branches stay resident, so the fp8 pair needs roughly twice one file's size. Without `fp8_compute` the scaled fp8 weights are expanded to bf16 on load — about 35 GB for the pair — so on 24 GB cards the bundled nf4 build remains the smaller option.
+:::
 
 ### Prompting Ideogram 4
 

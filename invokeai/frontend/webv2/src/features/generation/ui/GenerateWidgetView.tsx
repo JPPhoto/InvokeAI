@@ -2,7 +2,7 @@ import type { GenerationModelCatalogItem as ModelConfig } from '@features/genera
 import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@features/generation/core/types';
 
 import { Box, HStack, Spinner, Stack, Text } from '@chakra-ui/react';
-import { getDefaultGenerateSettings, isSupportedGenerateModel } from '@features/generation/core/baseGenerationPolicies';
+import { getDefaultGenerateSettings, isGenerateModelSelectable } from '@features/generation/core/baseGenerationPolicies';
 import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generation/core/settings';
 import {
   ensureArchitectureCapabilitiesLoaded,
@@ -31,7 +31,7 @@ export const GenerateWidgetView = () => {
   const models = ui.models.catalog;
   const status = ui.models.status;
 
-  const supportedModels = useMemo<GenerateModelConfig[]>(() => models.filter(isSupportedGenerateModel), [models]);
+  const supportedModels = useMemo<GenerateModelConfig[]>(() => models.filter(isGenerateModelSelectable), [models]);
   const loraModels = useMemo(
     () => models.filter((model): model is ModelConfig & LoraModelConfig => isLoraModelConfig(model)),
     [models]

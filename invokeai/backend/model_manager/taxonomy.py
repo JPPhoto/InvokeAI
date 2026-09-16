@@ -257,6 +257,22 @@ class Qwen3VariantType(str, Enum):
     """Qwen3 0.6B text encoder (hidden_size=1024). Used by Anima."""
 
 
+class Qwen3VLVariantType(str, Enum):
+    """Qwen3-VL (vision-language) text encoder variants, by language-model width.
+
+    Separate from `Qwen3VariantType`: those are the text-only Qwen3 encoders (Z-Image, FLUX.2
+    Klein). The VL models carry a visual tower and are not interchangeable with them, and the two
+    families do not even share widths at the same parameter count.
+    """
+
+    Qwen3VL_4B = "qwen3_vl_4b"
+    """Qwen3-VL 4B (hidden_size=2560, 36 layers). The encoder Krea-2 conditions on."""
+
+    Qwen3VL_8B = "qwen3_vl_8b"
+    """Qwen3-VL 8B (hidden_size=4096, 36 layers). The encoder Ideogram 4 conditions on, tapping 13
+    of its layers for a 53248-wide feature vector."""
+
+
 class MiniMaxH3VariantType(str, Enum):
     """MiniMax H3 model variants (task-specific transformer checkpoints sharing every other component)."""
 
@@ -385,6 +401,7 @@ AnyVariant: TypeAlias = Union[
     WanVariantType,
     WanLoRAVariantType,
     Qwen3VariantType,
+    Qwen3VLVariantType,
     Krea2VariantType,
     MiniMaxH3VariantType,
     MistralVariantType,
@@ -400,6 +417,7 @@ variant_type_adapter = TypeAdapter[
     | WanVariantType
     | WanLoRAVariantType
     | Qwen3VariantType
+    | Qwen3VLVariantType
     | Krea2VariantType
     | MiniMaxH3VariantType
     | MistralVariantType
@@ -414,6 +432,7 @@ variant_type_adapter = TypeAdapter[
     | WanVariantType
     | WanLoRAVariantType
     | Qwen3VariantType
+    | Qwen3VLVariantType
     | Krea2VariantType
     | MiniMaxH3VariantType
     | MistralVariantType

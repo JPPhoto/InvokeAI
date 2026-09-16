@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 from typing import Literal, Optional
 
 import torch
@@ -15,8 +16,9 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.architectures import resolve_latent_space
 from invokeai.backend.ideogram4 import run_ideogram4_denoise
 from invokeai.backend.ideogram4.latent_norm import get_latent_norm
+from invokeai.backend.ideogram4.modeling_ideogram4 import Ideogram4Transformer
 from invokeai.backend.ideogram4.sampler_configs import PRESETS
-from invokeai.backend.ideogram4.sampling_utils import unpatchify_and_denormalize
+from invokeai.backend.ideogram4.sampling_utils import PIXELS_PER_IMAGE_TOKEN, unpatchify_and_denormalize
 from invokeai.backend.ideogram4.transformer_pair import Ideogram4TransformerPair
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Ideogram4ConditioningInfo
@@ -58,7 +60,7 @@ def _effective_guidance_schedule(
     title="Denoise - Ideogram 4",
     tags=["image", "ideogram4"],
     category="latents",
-    version="1.0.0",
+    version="1.1.0",
     classification=Classification.Prototype,
 )
 class Ideogram4DenoiseInvocation(BaseInvocation):
@@ -66,6 +68,13 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
 
     transformer: TransformerField = InputField(
         description=FieldDescriptions.transformer, input=Input.Connection, title="Transformer"
+    )
+    unconditional_transformer: Optional[TransformerField] = InputField(
+        default=None,
+        description="The unconditional branch when it is a separate single-file model. Leave "
+        "unconnected for a diffusers pipeline, whose Transformer submodel carries both branches.",
+        input=Input.Connection,
+        title="Transformer (Unconditional)",
     )
     positive_conditioning: Ideogram4ConditioningField = InputField(
         description=FieldDescriptions.positive_cond, input=Input.Connection
@@ -155,12 +164,13 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
             else:
                 context.util.signal_progress("Running Ideogram 4 denoising", step / total)
 
-        transformer_info = context.models.load(self.transformer.transformer)
-        with transformer_info.model_on_device() as (_, transformers):
-            assert isinstance(transformers, Ideogram4TransformerPair)
+        with ExitStack() as stack:
+            conditional, unconditional = self._load_branches(
+                context, stack, self._estimate_working_memory(int(llm_features.shape[0]))
+            )
             packed = run_ideogram4_denoise(
-                conditional_transformer=transformers.conditional,
-                unconditional_transformer=transformers.unconditional,
+                conditional_transformer=conditional,
+                unconditional_transformer=unconditional,
                 llm_features=llm_features,
                 height=self.height,
                 width=self.width,
@@ -176,3 +186,80 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
         packed = packed.detach().to("cpu")
         name = context.tensors.save(tensor=packed)
         return LatentsOutput.build(latents_name=name, latents=packed, seed=None)
+
+    def _estimate_working_memory(self, num_text_tokens: int) -> int:
+        """Activation headroom to reserve, in bytes, so the cache does not fill VRAM with weights.
+
+        Without a reservation the cache loads both branches up to the last free byte, and the
+        activations then evict the very weights being used: on a 24 GB card the single-file fp8
+        pair (17.5 GB resident) spent minutes per step at 94 W, i.e. copying rather than computing.
+
+        Two contributions, both linear in the sequence length:
+
+        * the transformer's own activations (residual stream at 4608 plus one block's attention and
+          SwiGLU intermediates) — Krea-2's estimator measures 0.5 MB/token for a comparable MMDiT and
+          this model is the same order;
+        * Ideogram's conditioning buffers, which are unusually large: `llm_features` is 53248 wide,
+          and the loop materializes one buffer over the full packed sequence plus a second over the
+          image tokens alone (2 x 53248 x 2 bytes ~ 0.2 MB/token).
+
+        The fixed base covers what does not scale with resolution (fp8 weight-cast transients, the
+        VAE-free denormalisation buffers, allocator slack).
+
+        Deliberately not clamped, and the consequence is worth stating. Ideogram 4 is the only
+        architecture here that keeps *two* transformers resident, so on a 24 GB card with the fp8
+        pair (~17.5 GB) the headroom runs out somewhere above 1300px: past that the cache cannot
+        satisfy the reservation, the second branch loses residency and streams. That is not the
+        estimate being wrong -- the memory genuinely is not there -- and reserving less would only
+        exchange a slow generation for an out-of-memory error. The fix for large images is smaller
+        weights (the int8 and nvfp4 builds), not a smaller number here.
+        """
+        image_tokens = (self.height // PIXELS_PER_IMAGE_TOKEN) * (self.width // PIXELS_PER_IMAGE_TOKEN)
+        per_token_bytes = 3 * 1024**2 // 4  # 0.75 MiB
+        base_bytes = 3 * 1024**3 // 2  # 1.5 GiB
+        return (image_tokens + num_text_tokens) * per_token_bytes + base_bytes
+
+    def _load_branches(
+        self, context: InvocationContext, stack: ExitStack, working_mem_bytes: int
+    ) -> tuple[Ideogram4Transformer, Ideogram4Transformer]:
+        """Put both transformer branches on the device and keep them there for the whole loop.
+
+        A diffusers pipeline yields both in one cache entity (`Ideogram4TransformerPair`); single
+        files are two models and are locked simultaneously, because every step runs both and
+        releasing one between steps would make the cache stream it back for the next.
+
+        Both are given the same `working_mem_bytes`: each `model_on_device` decides how much of its
+        own model fits, and a reservation passed to only the first would be spent by the second.
+        """
+        primary = stack.enter_context(
+            context.models.load(self.transformer.transformer).model_on_device(working_mem_bytes=working_mem_bytes)
+        )[1]
+
+        if self.unconditional_transformer is None:
+            if not isinstance(primary, Ideogram4TransformerPair):
+                raise ValueError(
+                    "This Ideogram 4 transformer holds only one branch, so 'Transformer (Unconditional)' "
+                    "must be connected as well. The Ideogram 4 model loader emits it when the model is a "
+                    "single-file checkpoint."
+                )
+            return primary.conditional, primary.unconditional
+
+        if isinstance(primary, Ideogram4TransformerPair):
+            raise ValueError(
+                "'Transformer' already carries both Ideogram 4 branches, so 'Transformer (Unconditional)' "
+                "must not be connected. Disconnect it, or select a single-file checkpoint as the model."
+            )
+        unconditional = stack.enter_context(
+            context.models.load(self.unconditional_transformer.transformer).model_on_device(
+                working_mem_bytes=working_mem_bytes
+            )
+        )[1]
+        # A real check, not an assert: a hand-built graph can wire any transformer here, and under
+        # `python -O` an assert would vanish and leave the mismatch to surface inside the loop.
+        for role, branch in (("Transformer", primary), ("Transformer (Unconditional)", unconditional)):
+            if not isinstance(branch, Ideogram4Transformer):
+                raise ValueError(
+                    f"'{role}' is a {type(branch).__name__}, not an Ideogram 4 transformer. Both inputs "
+                    "must come from the Ideogram 4 model loader."
+                )
+        return primary, unconditional

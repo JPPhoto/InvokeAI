@@ -122,6 +122,9 @@ from invokeai.backend.model_manager.starter_models.flux2 import (
 from invokeai.backend.model_manager.starter_models.ideogram_4 import (
     ideogram_4_fp8,
     ideogram_4_nf4,
+    ideogram_4_qwen3_vl_encoder_8b,
+    ideogram_4_single_file,
+    ideogram_4_unconditional_single_file,
 )
 from invokeai.backend.model_manager.starter_models.krea_2 import (
     krea2_raw,
@@ -263,6 +266,9 @@ STARTER_MODELS: list[StarterModel] = [
     sd35_large,
     ideogram_4_nf4,
     ideogram_4_fp8,
+    ideogram_4_single_file,
+    ideogram_4_unconditional_single_file,
+    ideogram_4_qwen3_vl_encoder_8b,
     cyberrealistic_sd1,
     rev_animated_sd1,
     dreamshaper_8_sd1,
