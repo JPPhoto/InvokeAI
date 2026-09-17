@@ -21,7 +21,7 @@ from invokeai.backend.ideogram4.sampler_configs import PRESETS
 from invokeai.backend.ideogram4.sampling_utils import PIXELS_PER_IMAGE_TOKEN, unpatchify_and_denormalize
 from invokeai.backend.ideogram4.transformer_pair import Ideogram4TransformerPair
 from invokeai.backend.model_manager.taxonomy import BaseModelType
-from invokeai.backend.quantization.int8_convrot import peak_int8_dequant_transient_bytes
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Ideogram4ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.fp8 import get_model_compute_dtype
@@ -235,7 +235,7 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
         """
         if not isinstance(model, torch.nn.Module):
             return 0
-        return peak_int8_dequant_transient_bytes(model, get_model_compute_dtype(model))
+        return peak_dequant_transient_bytes(model, get_model_compute_dtype(model))
 
     def _load_branches(
         self, context: InvocationContext, stack: ExitStack, working_mem_bytes: int
