@@ -40,13 +40,17 @@ from invokeai.backend.flux2.sampling_utils import (
 )
 from invokeai.backend.flux2.text_conditioning import Flux2TextConditioning
 from invokeai.backend.model_manager.configs.flux2_variant import flux2_hidden_size
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.flux_bfl_peft_lora_conversion_utils import (
     convert_bfl_lora_patch_to_diffusers,
 )
 from invokeai.backend.patches.lora_conversions.flux_lora_constants import FLUX_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import (
+    peak_dequant_transient_bytes,
+    requires_sidecar_patching,
+)
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import FLUXConditioningInfo
@@ -512,26 +516,26 @@ class Flux2DenoiseInvocation(BaseInvocation):
         )
 
         with ExitStack() as exit_stack:
+            transformer_info = context.models.load(self.transformer.transformer)
+
+            # An `int8_tensorwise` build materializes each linear's dequantized weight per forward.
+            # That transient is not part of the model's resident size, so it is added to the
+            # activation estimate -- the two are alive at the same time -- rather than taking its
+            # chances against whatever slack the estimate happens to have. Read from the unlocked
+            # model, before the VRAM lock the reservation applies to; zero for every other build.
+            int8_dequant_bytes = peak_dequant_transient_bytes(transformer_info.model, inference_dtype)
+
             # Load the transformer model
             (cached_weights, transformer) = exit_stack.enter_context(
-                context.models.load(self.transformer.transformer).model_on_device(
-                    working_mem_bytes=estimated_working_memory
-                )
+                transformer_info.model_on_device(working_mem_bytes=estimated_working_memory + int8_dequant_bytes)
             )
             config = transformer_config
 
-            # Determine if the model is quantized
-            if config.format in [ModelFormat.Diffusers]:
-                model_is_quantized = False
-            elif config.format in [
-                ModelFormat.BnbQuantizedLlmInt8b,
-                ModelFormat.BnbQuantizednf4b,
-                ModelFormat.GGUFQuantized,
-                ModelFormat.SDNQQuantized,
-            ]:
-                model_is_quantized = True
-            else:
-                model_is_quantized = False
+            # Whether LoRA has to be applied as a sidecar rather than patched into the weights.
+            # Asked of the *model*, not only the format: an `int8_tensorwise` checkpoint carries
+            # `ModelFormat.Checkpoint` like any other single file, but its `Int8ConvrotLinear`
+            # weights are int8 buffers that an in-place patch cannot touch.
+            model_is_quantized = requires_sidecar_patching(transformer, config.format)
 
             # Apply LoRA models to the transformer
             exit_stack.enter_context(

@@ -22,9 +22,12 @@ from safetensors.torch import save_file
 from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3AttnProcessor
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_MiniMaxH3_Config
 from invokeai.backend.model_manager.load.model_loaders.minimax_h3 import MiniMaxH3CheckpointModel
-from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import read_comfy_quant_markers
 from invokeai.backend.model_manager.taxonomy import MiniMaxH3VariantType
-from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear, build_regular_hadamard
+from invokeai.backend.quantization.int8_convrot import (
+    Int8ConvrotLinear,
+    build_regular_hadamard,
+    read_comfy_quant_markers,
+)
 
 
 @pytest.fixture(autouse=True)

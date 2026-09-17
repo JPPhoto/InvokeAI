@@ -35,6 +35,7 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelVariantType,
     PiDDecoderVariantType,
     Qwen3VariantType,
+    Qwen3VLVariantType,
     QwenImageVariantType,
     SchedulerPredictionType,
     WanLoRAVariantType,
@@ -143,6 +144,7 @@ class ModelRecordChanges(BaseModelExcludeNull):
         | WanVariantType
         | WanLoRAVariantType
         | Qwen3VariantType
+        | Qwen3VLVariantType
         | Krea2VariantType
         | MiniMaxH3VariantType
         | MistralVariantType

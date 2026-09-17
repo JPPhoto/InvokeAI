@@ -10,6 +10,7 @@ import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from '
 import {
   getCompatibleSelectedComponentKey,
   isAnimaQwen3Encoder,
+  isErnieImageMistralEncoder,
   isFlux2DiffusersSourceForModel,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
@@ -127,7 +128,7 @@ describe('Generate component compatibility', () => {
   it('uses Mistral components and dev Diffusers sources for FLUX.2 [dev]', () => {
     const model = flux2Model('dev');
 
-    expect(isFlux2MistralEncoder(candidate({ type: 'mistral_encoder' }))).toBe(true);
+    expect(isFlux2MistralEncoder(candidate({ type: 'mistral_encoder', variant: 'cow_mistral3_small' }))).toBe(true);
     expect(isFlux2MistralEncoder(candidate({ type: 'qwen3_encoder' }))).toBe(false);
     expect(isFlux2Qwen3EncoderForModel(model)(candidate({ variant: 'qwen3_8b' }))).toBe(false);
     expect(
@@ -140,6 +141,22 @@ describe('Generate component compatibility', () => {
         candidate({ base: 'flux2', format: 'diffusers', type: 'main', variant: 'klein_9b' })
       )
     ).toBe(false);
+  });
+
+  it('keeps each Mistral-family encoder out of the other family slot', () => {
+    // Both install as `mistral_encoder` and both load in the other's slot without complaint --
+    // Ministral 3B is a different architecture, so the wrong one conditions off-distribution with no
+    // error anywhere. The variant is the only thing separating them, on both sides.
+    const ministral = candidate({ type: 'mistral_encoder', variant: 'ministral3_3b' });
+    const mistralSmall3 = candidate({ type: 'mistral_encoder', variant: 'cow_mistral3_small' });
+    const mistral24b = candidate({ type: 'mistral_encoder', variant: 'mistral3_24b' });
+
+    expect(isFlux2MistralEncoder(ministral)).toBe(false);
+    expect([mistralSmall3, mistral24b].every(isFlux2MistralEncoder)).toBe(true);
+
+    expect(isErnieImageMistralEncoder(ministral)).toBe(true);
+    expect([mistralSmall3, mistral24b].some(isErnieImageMistralEncoder)).toBe(false);
+    expect(isErnieImageMistralEncoder(candidate({ type: 'qwen3_encoder', variant: 'ministral3_3b' }))).toBe(false);
   });
 
   it('allows only backend-supported Anima VAE families', () => {

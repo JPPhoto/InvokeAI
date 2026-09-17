@@ -12,15 +12,11 @@ const fieldKeys = (candidate: Pick<ModelConfig, 'base' | 'type'>): string[] =>
 
 describe('supportsFp8Storage', () => {
   it('offers the toggle for main models', () => {
-    for (const base of ['sdxl', 'flux', 'krea-2', 'qwen-image', 'wan', 'ideogram-4']) {
+    // Z-Image included: the backend casts it, and FP8 checkpoints get the setting when installed, so
+    // hiding the row would leave a setting nobody can see or turn off.
+    for (const base of ['sdxl', 'flux', 'krea-2', 'qwen-image', 'wan', 'ideogram-4', 'z-image']) {
       expect(supportsFp8Storage(model(base, 'main'))).toBe(true);
     }
-  });
-
-  it('hides it for Z-Image, which the backend refuses to cast', () => {
-    // _should_use_fp8 returns False for BaseModelType.ZImage: diffusers' layerwise casting hits
-    // a dtype mismatch there (skipped modules bf16, hooked modules fp16).
-    expect(supportsFp8Storage(model('z-image', 'main'))).toBe(false);
   });
 
   it('hides it for LoRA and ControlLoRA, which are patched rather than run', () => {
@@ -56,13 +52,6 @@ describe('getFieldsForModel', () => {
       'height',
       'vae_precision',
     ]);
-  });
-
-  it('omits fp8_storage for a Z-Image main but keeps every other default', () => {
-    const zImage = fieldKeys(model('z-image', 'main'));
-
-    expect(zImage).not.toContain('fp8_storage');
-    expect(zImage).toEqual(fieldKeys(model('sdxl', 'main')).filter((key) => key !== 'fp8_storage'));
   });
 
   it('gives LoRAs the weight and its slider bounds', () => {
