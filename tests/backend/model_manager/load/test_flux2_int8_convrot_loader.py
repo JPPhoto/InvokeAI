@@ -148,7 +148,12 @@ def _driver(monkeypatch, tmp_path, state_dict: dict, trace: dict | None = None, 
     loader._torch_dtype = torch.bfloat16
 
     monkeypatch.setattr(module, "load_file", lambda _path: state_dict)
-    monkeypatch.setattr(module, "should_keep_fp8_weights", lambda _device: False)
+    # Both spellings of the same decision: the module-level helper, and the loader method that
+    # supersedes it once FP8 Storage counts as a consumer too. Setting both keeps this fixture
+    # working either way -- an instance attribute shadows the method when it exists, and
+    # `raising=False` tolerates the module symbol being gone.
+    monkeypatch.setattr(module, "should_keep_fp8_weights", lambda _device: False, raising=False)
+    loader._keep_fp8_weights = lambda _config, _submodel=None: False
     monkeypatch.setattr(module, "read_safetensors_metadata", lambda _path, _logger: header)
     return loader, config
 
