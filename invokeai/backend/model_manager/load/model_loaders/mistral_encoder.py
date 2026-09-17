@@ -66,6 +66,7 @@ from invokeai.backend.quantization.nvfp4 import (
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.backend.util.state_dict_loading import log_unexpected_keys
 
 # Architecture constants for the 30-layer cow-mistral3-small distillation.
 # Sourced from BFL's FLUX.2-dev ``text_encoder/config.json`` (text-model side of
@@ -1054,8 +1055,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
             logger.info(f"Mistral encoder: kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
 
         missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
-        if unexpected:
-            logger.debug(f"Mistral encoder: ignored {len(unexpected)} unexpected keys")
+        log_unexpected_keys("Mistral encoder checkpoint", unexpected)
         if missing:
             # Re-initialize any RMSNorm weights that may have been pruned during repackaging.
             for name in missing:
@@ -1171,8 +1171,7 @@ class MistralEncoderGGUFLoader(ModelLoader):
             model = MistralModel(mistral_config)
 
         missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
-        if unexpected:
-            logger.debug(f"Mistral encoder (GGUF): ignored {len(unexpected)} unexpected keys")
+        log_unexpected_keys("Mistral GGUF encoder", unexpected)
         if missing:
             logger.debug(
                 f"Mistral encoder (GGUF): {len(missing)} keys missing from state dict (first 5: {missing[:5]})"
