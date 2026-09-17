@@ -35,6 +35,7 @@ from invokeai.backend.pid.state_dict_utils import PID_VERSION_BY_LQ_HIDDEN_DIM, 
 from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
 from invokeai.backend.quantization.int8_convrot import (
     extract_int8_convrot_markers,
+    reject_foreign_quantization_scales,
     reject_unmarked_int8_weights,
     split_int8_convrot_layers,
     swap_in_int8_linears,
@@ -339,6 +340,12 @@ def load_pid_decoder(state_dict: dict[Any, Tensor], backbone: BaseModelType) -> 
     int8_markers = extract_int8_convrot_markers(state_dict)
     reject_unmarked_int8_weights(state_dict, int8_markers, "PiD")
     if int8_markers:
+        # The rest of `install_int8_convrot_layers` does not apply here -- this path has no model
+        # cache to reserve against, and `load_state_dict` copies into float32 parameters rather than
+        # casting the dict -- but this check does: an fp8 scale from a mixed repack would otherwise
+        # have its weight copied in unscaled, off by `1/weight_scale`, and the orphan would vanish
+        # into the `strict=False` load below.
+        reject_foreign_quantization_scales(state_dict, int8_markers, "PiD", net)
         swap_in_int8_linears(
             net, state_dict, split_int8_convrot_layers(state_dict, int8_markers, torch.float32, model=net)
         )

@@ -405,14 +405,37 @@ def _has_flux2_diffusers_transformer_keys(state_dict: dict[str | int, Any]) -> b
     return False
 
 
-def _filename_suggests_base(name: str) -> bool:
-    """Check if a model name/filename suggests it is a Base (undistilled) variant.
+# Letters, not substrings: `_filename_suggests_base` used to test `"base" in name`, which fires on
+# "database" and "basement". Digits stay adjacent on purpose -- "base9b" is a name, "database" is
+# not a claim.
+_SUGGESTS_BASE = re.compile(r"(?<![a-z])base(?![a-z])")
+_SUGGESTS_DISTILLED = re.compile(r"(?<![a-z])distill")
+# "undistilled" and "non-distilled" are the Base claim spelled out, so they have to be read before
+# the word they contain. A lookbehind cannot do this: it has to span an optional separator.
+_DENIES_DISTILLED = re.compile(r"(?<![a-z])(?:non|not|un)[-_ ]?distill")
 
-    Klein 9B Base and Klein 9B have identical architectures and cannot be distinguished
-    from the state dict. We use the filename as a heuristic: filenames containing "base"
-    (e.g. "flux-2-klein-base-9b", "FLUX.2-klein-base-9B") indicate the undistilled model.
+
+def _filename_suggests_base(name: str) -> bool:
+    """Whether a model's name says it is the Base (undistilled) variant.
+
+    Klein 9B Base and Klein 9B have identical architectures and identical keys, so the name is the
+    only thing left to read. Getting it wrong is not cosmetic: the two ship different default step
+    counts (28 against 4), so a distilled model identified as Base generates at seven times the cost
+    and a Base model identified as distilled generates at four steps it was never trained for.
+
+    Read in order of how specific the claim is: a denial of distillation, then a claim of it, then
+    the bare word "base". A name carrying both "distilled" and "base" is naming its ancestry rather
+    than its variant, which is how the community repacks are named -- and which *source* the same
+    weights arrive from decides the name: installed by path
+    `Winnougan/Klein9b-Distilled-Base-INT8-Convrot` is `flux-2-klein-9b-int8-convrot` and identifies
+    correctly, installed by repo id it is the repo's name and used not to.
     """
-    return "base" in name.lower()
+    lowered = name.lower()
+    if _DENIES_DISTILLED.search(lowered):
+        return True
+    if _SUGGESTS_DISTILLED.search(lowered):
+        return False
+    return bool(_SUGGESTS_BASE.search(lowered))
 
 
 def _get_flux2_variant(state_dict: dict[str | int, Any]) -> Flux2VariantType | None:

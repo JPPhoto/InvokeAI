@@ -59,13 +59,10 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
 from invokeai.backend.quantization.int8_convrot import (
-    cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
-    predict_int8_cast_size,
+    install_int8_convrot_layers,
     reject_unmarked_int8_weights,
-    split_int8_convrot_layers,
-    swap_in_int8_linears,
 )
 from invokeai.backend.quantization.nvfp4 import (
     NVFP4Payload,
@@ -610,21 +607,25 @@ class ZImageCheckpointModel(ModelLoader):
             sd.update(kept_sd)
             del kept_sd
 
-            # Reserve before the split, not after: the split dequantizes the layers it widens, so
-            # reserving afterwards lets that transient land on an unreserved cache. The prediction
-            # is given the same inputs, so it charges those layers the compute dtype's width and
-            # the int8 payloads their actual one byte -- reserving two would ask the cache to free
-            # memory this load never uses.
-            self._ram_cache.make_room(
-                predict_int8_cast_size(sd, model_dtype, int8_markers, model=model, skip_patterns=skip_patterns)
-                + nvfp4_bytes
+            # The nvfp4 layers taken out above are held beside the int8 ones, so the single
+            # reservation has to cover both.
+            quantized = install_int8_convrot_layers(
+                model,
+                sd,
+                int8_markers,
+                model_dtype,
+                architecture="Z-Image",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
+                extra_reserved_bytes=nvfp4_bytes,
             )
-
-            quantized = split_int8_convrot_layers(
-                sd, int8_markers, model_dtype, model=model, skip_patterns=skip_patterns
+            # What did not stay int8 was widened to the compute dtype, so a load that kept far fewer
+            # layers than the file marked is the explanation for a resident size twice what the file
+            # suggests. Every other int8 loader reports this; this one did not.
+            self._logger.info(
+                f"Z-Image: kept {len(quantized)} of {len(int8_markers)} layer(s) in int8 "
+                "(int8_tensorwise checkpoint, dequantized per forward)"
             )
-            cast_unquantized(sd, model_dtype, quantized)
-            swap_in_int8_linears(model, sd, quantized)
             # The fp8 reporting below is keyed on these; an int8 checkpoint keeps neither.
             fp8_layers: dict[str, Any] = {}
             kept = 0
@@ -1229,6 +1230,27 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
         sd = load_file(model_path)
         original_key_count = len(sd)
 
+        # Three ComfyUI side channels reach this loader and a file carries one of them. int8 is
+        # decided first because it is the one the others cannot be told apart from by structure: an
+        # int8 layer ships a `.weight_scale` too, so the scaled-fp8 fold further down would pair
+        # every int8 code tensor with its scale and widen it, and the blanket cast after that would
+        # turn what survived into bf16 integers. Neither raises.
+        int8_markers = extract_int8_convrot_markers(sd)
+
+        # Outside the branch on purpose -- see the helper. An int8 weight whose marker is missing or
+        # unparseable is the case that has no structural signature at all.
+        reject_unmarked_int8_weights(sd, int8_markers, "Qwen3 encoder")
+
+        if "lm_head" in int8_markers:
+            # Same reason the nvfp4 payloads drop it below, but the int8 codes are still in `sd` and
+            # so the whole layer has to go: `tie_weights` assigns the embedding Parameter straight
+            # over an installed `Int8ConvrotLinear`'s buffers, leaving a module that derotates a
+            # bf16 embedding table. Dropping only the marker would instead leave the codes for the
+            # cast to widen into bf16 integers. Either way nothing raises.
+            del int8_markers["lm_head"]
+            for suffix in ("weight", "weight_scale"):
+                sd.pop(f"lm_head.{suffix}", None)
+
         # Comfy's fp4_mixed encoders keep most projections in nvfp4, beside scaled fp8. Take those out before
         # anything below reads the side channel: the fold pairs every `weight_scale` with its weight and would
         # stretch nvfp4's block scales over the packed codes, and the cast further down would widen them.
@@ -1237,6 +1259,15 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
         )
         # `lm_head` is tied to the embeddings below, which replaces the weight a packed module would hold.
         nvfp4_payloads.pop("lm_head", None)
+
+        if int8_markers:
+            # After the nvfp4 pop, not before it: this strips every remaining `.comfy_quant`, and a
+            # marker is one of the two things `pop_nvfp4_layers` accepts as naming an nvfp4 layer.
+            # Stripped first, a mixed file whose nvfp4 layers are named only by markers is refused
+            # as an unnamed-layout foreign file. What is left to drop here is `.input_scale` (W8A8
+            # activation scales, which this path has nothing to apply), which would otherwise be
+            # cast and charged to the reservation.
+            sd = drop_unconsumed_quantization_sidecars(sd)
 
         # Count the number of layers by looking at layer keys
         layer_count = 0
@@ -1340,41 +1371,59 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
             model = Qwen3ForCausalLM(qwen_config)
         skip_patterns = _model_declared_skip_patterns(model)
 
-        # Handle memory management before anything below widens a weight: the scaled-fp8 fold turns every quantized
-        # layer into the compute dtype, and the base loader reserved only the file size. One reservation for what
-        # the state dict ends up holding -- every tensor but the scale metadata at the compute dtype, plus the nvfp4
-        # layers as they will be held -- since `make_room` makes that much room rather than adding to an earlier one.
-        new_sd_size = sum(
-            tensor.nelement() * model_dtype.itemsize for key, tensor in sd.items() if not is_scale_metadata_key(key)
-        )
-        self._ram_cache.make_room(
-            new_sd_size + predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
-        )
+        nvfp4_bytes = predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
 
-        # Handle ComfyUI quantized checkpoints
-        # ComfyUI stores quantized weights with accompanying scale factors:
-        # - layer.weight: quantized data (FP8)
-        # - layer.weight_scale: scale factor (FP32 scalar)
-        # Dequantization formula: dequantized = weight.to(dtype) * weight_scale
-        # Reference: https://github.com/Comfy-Org/ComfyUI/blob/master/QUANTIZATION.md
-        dequantized_count = _fold_comfy_scaled_weights(sd, model_dtype)
+        if int8_markers:
+            # The projections stay int8-resident, which is the whole point of the build: 8.8 GiB on
+            # disk stays 8.8 GiB, against the 15.3 GiB the bf16 release occupies. The reservation,
+            # the split and the cast all have to agree on which layers those are, which is what the
+            # shared install is for.
+            kept = install_int8_convrot_layers(
+                model,
+                sd,
+                int8_markers,
+                model_dtype,
+                architecture="Qwen3 encoder",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
+                extra_reserved_bytes=nvfp4_bytes,
+            )
+            logger.info(f"Kept {len(kept)} of {len(int8_markers)} layer(s) in int8 (dequantized per forward)")
+        else:
+            # Handle memory management before anything below widens a weight: the scaled-fp8 fold turns every
+            # quantized layer into the compute dtype, and the base loader reserved only the file size. One
+            # reservation for what the state dict ends up holding -- every tensor but the scale metadata at the
+            # compute dtype, plus the nvfp4 layers as they will be held -- since `make_room` makes that much room
+            # rather than adding to an earlier one.
+            new_sd_size = sum(
+                tensor.nelement() * model_dtype.itemsize for key, tensor in sd.items() if not is_scale_metadata_key(key)
+            )
+            self._ram_cache.make_room(new_sd_size + nvfp4_bytes)
 
-        if dequantized_count > 0:
-            logger.info(f"Dequantized {dequantized_count} ComfyUI quantized weights")
+            # Handle ComfyUI quantized checkpoints
+            # ComfyUI stores quantized weights with accompanying scale factors:
+            # - layer.weight: quantized data (FP8)
+            # - layer.weight_scale: scale factor (FP32 scalar)
+            # Dequantization formula: dequantized = weight.to(dtype) * weight_scale
+            # Reference: https://github.com/Comfy-Org/ComfyUI/blob/master/QUANTIZATION.md
+            dequantized_count = _fold_comfy_scaled_weights(sd, model_dtype)
 
-        # Filter out ComfyUI quantization metadata keys (comfy_quant, weight_scale)
-        # These are no longer needed after dequantization
-        comfy_metadata_keys = [k for k in sd.keys() if is_scale_metadata_key(k)]
-        for k in comfy_metadata_keys:
-            del sd[k]
-        if comfy_metadata_keys:
-            logger.info(f"Filtered out {len(comfy_metadata_keys)} ComfyUI quantization metadata keys")
+            if dequantized_count > 0:
+                logger.info(f"Dequantized {dequantized_count} ComfyUI quantized weights")
+
+            # Filter out ComfyUI quantization metadata keys (comfy_quant, weight_scale)
+            # These are no longer needed after dequantization
+            comfy_metadata_keys = [k for k in sd.keys() if is_scale_metadata_key(k)]
+            for k in comfy_metadata_keys:
+                del sd[k]
+            if comfy_metadata_keys:
+                logger.info(f"Filtered out {len(comfy_metadata_keys)} ComfyUI quantization metadata keys")
+
+            # Convert to target dtype
+            for k in sd.keys():
+                sd[k] = sd[k].to(model_dtype)
 
         logger.info(f"Loaded state dict with {len(sd)} keys (originally {original_key_count})")
-
-        # Convert to target dtype
-        for k in sd.keys():
-            sd[k] = sd[k].to(model_dtype)
 
         if nvfp4_payloads:
             packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)

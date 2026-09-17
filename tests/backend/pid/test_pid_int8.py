@@ -8,6 +8,7 @@ the 4x4 seed), then symmetric per-row int8 — rather than with the code under t
 """
 
 import json
+import re
 
 import pytest
 import torch
@@ -121,6 +122,26 @@ def test_an_int8_checkpoint_keeps_its_block_linears_int8_and_decodes_like_the_de
         assert module.weight.dtype is torch.int8, layer
         assert module.group_size == group, layer
     torch.testing.assert_close(_forward(net), _forward(reference))
+
+
+def test_a_scale_from_another_scheme_is_refused_rather_than_loaded_unscaled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The int8 branch runs no fp8 pipeline, so a scaled-fp8 layer that came along in a mixed repack
+    would have its weight copied into a float32 parameter *without* its scale -- off by
+    `1/weight_scale` -- while the orphaned scale is swallowed by the `strict=False` load. This path
+    ran every other step of the int8 install and not this check."""
+    torch.manual_seed(0)
+    state_dict, _ = _int8_checkpoint(_tiny_net())
+    net = _tiny_net()
+    # A Linear the net really has, so the check can tell it from a bundled submodel's keys.
+    foreign = next(name for name in _quantized_layers(net) if f"{name}.comfy_quant" in state_dict)
+    del state_dict[f"{foreign}.comfy_quant"]
+    state_dict[f"{foreign}.weight"] = state_dict[f"{foreign}.weight"].float().to(torch.float8_e4m3fn)
+    monkeypatch.setattr(pid_decode_module, "build_pid_net", lambda backbone, version: net)
+
+    with pytest.raises(ValueError, match=rf"{re.escape(foreign)}\.weight_scale"):
+        load_pid_decoder(state_dict, BaseModelType.Flux)
 
 
 def test_an_int8_weight_no_marker_claims_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:

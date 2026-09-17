@@ -79,6 +79,41 @@ def _driver(monkeypatch, tmp_path, state_dict: dict) -> tuple[ZImageCheckpointMo
     return loader, config
 
 
+class _TinyMixedZImage(torch.nn.Module):
+    """Two blocks, so a checkpoint can be int8 in one and scaled fp8 in the other."""
+
+    def __init__(self, **_kwargs) -> None:
+        super().__init__()
+        self.layers = torch.nn.ModuleList([_TinyBlock(), _TinyBlock()])
+
+
+def test_a_mixed_int8_and_scaled_fp8_checkpoint_is_refused(monkeypatch, tmp_path) -> None:
+    """This branch skips the fp8 pipeline entirely, so an fp8 weight that came along would be cast
+    without its scale -- off by `1/weight_scale` -- while the orphaned scale disappears into the
+    load. Z-Image made exactly that mistake: it ran every other step of the int8 install and not
+    this check, and the result was a model that loaded cleanly and generated noise.
+    """
+    import diffusers
+
+    torch.manual_seed(0)
+    quantized, scale = _quantize_convrot(torch.randn(4, CONVROT_GROUP_SIZE))
+    state_dict = {
+        "layers.0.proj.weight": quantized,
+        "layers.0.proj.weight_scale": scale,
+        "layers.0.proj.comfy_quant": _marker_blob(MARKER),
+        "layers.1.proj.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.float8_e4m3fn),
+        "layers.1.proj.weight_scale": torch.ones(()),
+    }
+    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyMixedZImage, raising=False)
+
+    with pytest.raises(ValueError, match=r"layers\.1\.proj\.weight_scale"):
+        loader._load_from_singlefile(config)
+
+    # Refused before the cache was asked to evict anything for a load that cannot finish.
+    loader._ram_cache.make_room.assert_not_called()
+
+
 def test_an_int8_checkpoint_loads_int8_resident_and_un_rotated(monkeypatch, tmp_path) -> None:
     torch.manual_seed(0)
     original = torch.randn(4, CONVROT_GROUP_SIZE)
