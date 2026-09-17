@@ -47,8 +47,8 @@ from invokeai.backend.patches.lora_conversions.flux_bfl_peft_lora_conversion_uti
 )
 from invokeai.backend.patches.lora_conversions.flux_lora_constants import FLUX_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
-from invokeai.backend.quantization.int8_convrot import (
-    peak_int8_dequant_transient_bytes,
+from invokeai.backend.quantization.dequantizing_linear import (
+    peak_dequant_transient_bytes,
     requires_sidecar_patching,
 )
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
@@ -523,7 +523,7 @@ class Flux2DenoiseInvocation(BaseInvocation):
             # activation estimate -- the two are alive at the same time -- rather than taking its
             # chances against whatever slack the estimate happens to have. Read from the unlocked
             # model, before the VRAM lock the reservation applies to; zero for every other build.
-            int8_dequant_bytes = peak_int8_dequant_transient_bytes(transformer_info.model, inference_dtype)
+            int8_dequant_bytes = peak_dequant_transient_bytes(transformer_info.model, inference_dtype)
 
             # Load the transformer model
             (cached_weights, transformer) = exit_stack.enter_context(

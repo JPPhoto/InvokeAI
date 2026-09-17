@@ -32,7 +32,9 @@ from invokeai.backend.model_manager.starter_models.common import (
     flux2_dev_cow_mistral_q4,
     flux2_dev_cow_mistral_q8,
     flux2_klein_qwen3_4b_encoder,
+    flux2_klein_qwen3_4b_encoder_fp4,
     flux2_klein_qwen3_8b_encoder,
+    flux2_klein_qwen3_8b_encoder_fp4,
     gemma2_2b_encoder,
     llava_onevision,
     llava_onevision_7b,
@@ -41,6 +43,7 @@ from invokeai.backend.model_manager.starter_models.common import (
     qwen3_vl_encoder_4b,
     qwen_vl_encoder_diffusers,
     qwen_vl_encoder_fp8,
+    qwen_vl_encoder_nvfp4,
     realesrgan_x2,
     realesrgan_x4,
     siglip,
@@ -52,6 +55,7 @@ from invokeai.backend.model_manager.starter_models.common import (
     t5_gguf_q6_k_encoder,
     wan_22_t5_encoder,
     z_image_qwen3_encoder,
+    z_image_qwen3_encoder_fp4,
     z_image_qwen3_encoder_quantized,
 )
 from invokeai.backend.model_manager.starter_models.ernie_image import (
@@ -122,13 +126,19 @@ from invokeai.backend.model_manager.starter_models.flux2 import (
 )
 from invokeai.backend.model_manager.starter_models.ideogram_4 import (
     ideogram_4_fp8,
+    ideogram_4_int8,
     ideogram_4_nf4,
+    ideogram_4_qwen3_vl_encoder_8b,
+    ideogram_4_single_file,
+    ideogram_4_unconditional_int8,
+    ideogram_4_unconditional_single_file,
 )
 from invokeai.backend.model_manager.starter_models.krea_2 import (
     krea2_raw,
     krea2_turbo,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_components,
@@ -140,6 +150,8 @@ from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_turbo_lora,
 )
 from invokeai.backend.model_manager.starter_models.qwen_image import (
+    pid_1_5_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k_int8,
     pid_decoder_qwenimage_2kto4k,
     qwen_image,
     qwen_image_edit,
@@ -245,6 +257,7 @@ from invokeai.backend.model_manager.starter_models.z_image import (
     z_image_controlnet_tile,
     z_image_controlnet_union,
     z_image_turbo,
+    z_image_turbo_nvfp4,
     z_image_turbo_q8,
     z_image_turbo_quantized,
     z_image_turbo_sdnq,
@@ -264,6 +277,11 @@ STARTER_MODELS: list[StarterModel] = [
     sd35_large,
     ideogram_4_nf4,
     ideogram_4_fp8,
+    ideogram_4_single_file,
+    ideogram_4_unconditional_single_file,
+    ideogram_4_int8,
+    ideogram_4_unconditional_int8,
+    ideogram_4_qwen3_vl_encoder_8b,
     cyberrealistic_sd1,
     rev_animated_sd1,
     dreamshaper_8_sd1,
@@ -349,6 +367,8 @@ STARTER_MODELS: list[StarterModel] = [
     flux2_klein_9b_gguf_q8,
     flux2_klein_qwen3_4b_encoder,
     flux2_klein_qwen3_8b_encoder,
+    flux2_klein_qwen3_4b_encoder_fp4,
+    flux2_klein_qwen3_8b_encoder_fp4,
     flux2_dev_comfy_mistral_bf16,
     flux2_dev_comfy_mistral_fp4,
     flux2_dev_comfy_mistral_fp8,
@@ -365,6 +385,7 @@ STARTER_MODELS: list[StarterModel] = [
     cogview4,
     qwen_image_vae,
     qwen_vl_encoder_fp8,
+    qwen_vl_encoder_nvfp4,
     qwen_vl_encoder_diffusers,
     qwen_image_edit,
     qwen_image_edit_gguf_q2_k,
@@ -385,9 +406,11 @@ STARTER_MODELS: list[StarterModel] = [
     z_image_turbo,
     z_image_turbo_quantized,
     z_image_turbo_q8,
+    z_image_turbo_nvfp4,
     z_image_turbo_sdnq,
     z_image_qwen3_encoder,
     z_image_qwen3_encoder_quantized,
+    z_image_qwen3_encoder_fp4,
     z_image_controlnet_union,
     z_image_controlnet_tile,
     ernie_image,
@@ -396,6 +419,7 @@ STARTER_MODELS: list[StarterModel] = [
     krea2_raw,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
     qwen3_vl_encoder_4b,
     wan_22_t5_encoder,
     wan_22_a14b_vae,
@@ -459,6 +483,8 @@ STARTER_MODELS: list[StarterModel] = [
     pid_decoder_sd3_2kto4k,
     pid_decoder_sdxl_2kto4k,
     pid_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k_int8,
 ]
 
 sd1_bundle: list[StarterModel] = [
@@ -563,6 +589,7 @@ krea2_bundle: list[StarterModel] = [
     krea2_raw,
     krea2_turbo_gguf_q4_k_m,
     krea2_turbo_gguf_q8_0,
+    krea2_turbo_nvfp4,
 ]
 
 # Wan 2.2 starter bundles. Split into T2V and I2V so users only pay for the

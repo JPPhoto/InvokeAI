@@ -20,7 +20,7 @@ from invokeai.backend.model_manager.load.model_loaders.krea2 import (
     Qwen3VLEncoderCheckpointLoader,
     Qwen3VLEncoderLoader,
 )
-from invokeai.backend.model_manager.taxonomy import Krea2VariantType, SubModelType
+from invokeai.backend.model_manager.taxonomy import Krea2VariantType, Qwen3VLVariantType, SubModelType
 from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 
 
@@ -44,6 +44,9 @@ def test_single_file_loader_constructs_and_materializes_model(monkeypatch, tmp_p
     loader._ram_cache = ram_cache
     # ModelLoader.__init__ always sets a logger; this test bypasses __init__, so supply one.
     loader._logger = MagicMock()
+    # `ModelLoader.__init__` sets this on the real object; `_keep_fp8_weights` reads it to ask
+    # whether this device can hold fp8 at all.
+    loader._torch_device = torch.device("cpu")
     loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
 
     monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyKrea2Transformer, raising=False)
@@ -112,6 +115,7 @@ def test_single_file_loader_decodes_an_int8_convrot_checkpoint(monkeypatch, tmp_
     loader = object.__new__(Krea2CheckpointModel)
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     loader._logger = MagicMock()
+    loader._torch_device = torch.device("cpu")
     loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
 
     monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyInt8Krea2Transformer, raising=False)
@@ -258,7 +262,7 @@ def test_checkpoint_encoder_loader_decodes_int8_and_does_not_call_it_fp8(monkeyp
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     loader._torch_device = torch.device("cpu")
     loader._logger = MagicMock()
-    loader._load_hf_config = lambda: SimpleNamespace()
+    loader._load_hf_config = lambda _config: SimpleNamespace()
     loader._apply_fp8_to_nn_module = lambda *a, **k: fp8_calls.append(a)
 
     monkeypatch.setattr(transformers, "Qwen3VLModel", _TinyEncoder, raising=False)
@@ -528,7 +532,7 @@ def test_the_encoder_names_itself_when_refusing_an_unmarked_int8_weight(monkeypa
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     loader._torch_device = torch.device("cpu")
     loader._logger = MagicMock()
-    loader._load_hf_config = lambda: SimpleNamespace()
+    loader._load_hf_config = lambda _config: SimpleNamespace()
 
     monkeypatch.setattr(transformers, "Qwen3VLModel", _TinyEncoder, raising=False)
     monkeypatch.setattr(safetensors_torch, "load_file", lambda _path: state_dict)
@@ -601,7 +605,7 @@ def test_a_merged_encoder_checkpoint_is_not_mistaken_for_a_mixed_format_one(
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     loader._torch_device = torch.device("cpu")
     loader._logger = MagicMock()
-    loader._load_hf_config = lambda: SimpleNamespace()
+    loader._load_hf_config = lambda _config: SimpleNamespace()
     loader._apply_fp8_to_nn_module = lambda *a, **k: None
 
     monkeypatch.setattr(transformers, "Qwen3VLModel", _TinyEncoder, raising=False)
@@ -618,3 +622,77 @@ def test_a_merged_encoder_checkpoint_is_not_mistaken_for_a_mixed_format_one(
     model = loader._load_text_encoder(config)
 
     assert isinstance(model.language_model.proj, Int8ConvrotLinear)
+
+
+class _FakeTokenizer:
+    """Enough of a tokenizer to answer the loader's probe."""
+
+    def __init__(self, vocab: dict[str, int]) -> None:
+        self._vocab = vocab
+
+    def __call__(self, text: str, **_kwargs) -> dict[str, list[int]]:
+        return {"input_ids": [self._vocab[token] for token in text.split() if token in self._vocab]}
+
+
+def _tokenizer_loader(monkeypatch, cached: _FakeTokenizer | Exception):
+    """Stand in for the HuggingFace hub: `cached` is what the local-only attempt produces."""
+    import invokeai.backend.model_manager.load.model_loaders.krea2 as module
+
+    downloaded = _FakeTokenizer({"probe": 7})
+    calls: list[bool] = []
+
+    def from_pretrained(_repo: str, *, local_files_only: bool = False, **_kwargs):
+        calls.append(local_files_only)
+        if not local_files_only:
+            return downloaded
+        if isinstance(cached, Exception):
+            raise cached
+        return cached
+
+    monkeypatch.setattr(module, "AutoTokenizer", SimpleNamespace(from_pretrained=from_pretrained))
+    loader = object.__new__(Qwen3VLEncoderCheckpointLoader)
+    config = SimpleNamespace(variant=Qwen3VLVariantType.Qwen3VL_4B)
+    return loader, config, downloaded, calls
+
+
+def test_a_cached_tokenizer_that_cannot_encode_is_replaced(monkeypatch) -> None:
+    """The failure this guards is silent, not loud.
+
+    `_load_text_encoder` fetches the repo's `config.json` first, so on a first run the cache holds
+    the config and none of the tokenizer files. `from_pretrained(..., local_files_only=True)` then
+    returns a tokenizer with a one-token vocabulary instead of raising, every prompt encodes to an
+    empty sequence, and the image is generated from no conditioning at all.
+    """
+    empty = _FakeTokenizer({})
+    loader, config, downloaded, calls = _tokenizer_loader(monkeypatch, empty)
+
+    assert loader._load_tokenizer(config) is downloaded
+    assert calls == [True, False]
+
+
+def test_a_usable_cached_tokenizer_is_not_downloaded_again(monkeypatch) -> None:
+    cached = _FakeTokenizer({"probe": 3})
+    loader, config, _downloaded, calls = _tokenizer_loader(monkeypatch, cached)
+
+    assert loader._load_tokenizer(config) is cached
+    assert calls == [True]
+
+
+def test_a_missing_cache_falls_back_to_the_download(monkeypatch) -> None:
+    loader, config, downloaded, calls = _tokenizer_loader(monkeypatch, OSError("not cached"))
+
+    assert loader._load_tokenizer(config) is downloaded
+    assert calls == [True, False]
+
+
+def test_each_qwen3_vl_variant_names_its_own_hugging_face_repo() -> None:
+    """The variant's whole purpose: nothing in a single file says which Qwen3-VL it is.
+
+    Every other test here stubs `_load_hf_config` out, so a table that mapped both variants to the
+    4B repo would leave them all green while Ideogram 4 built a 4B architecture from an 8B
+    checkpoint — the mismatch `_variant_from_hidden_size` exists to prevent, one layer further on.
+    """
+    loader = object.__new__(Qwen3VLEncoderCheckpointLoader)
+
+    assert loader._hf_repo(SimpleNamespace(variant=Qwen3VLVariantType.Qwen3VL_4B)) == "Qwen/Qwen3-VL-4B-Instruct"
+    assert loader._hf_repo(SimpleNamespace(variant=Qwen3VLVariantType.Qwen3VL_8B)) == "Qwen/Qwen3-VL-8B-Instruct"

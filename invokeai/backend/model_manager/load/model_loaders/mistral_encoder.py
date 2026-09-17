@@ -14,6 +14,7 @@ tokenizer from ``black-forest-labs/FLUX.2-dev`` via HuggingFace.
 """
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,7 +28,11 @@ from invokeai.backend.model_manager.configs.mistral_encoder import (
     MistralEncoder_Diffusers_Config,
     MistralEncoder_GGUF_Config,
 )
-from invokeai.backend.model_manager.load.load_default import ModelLoader
+from invokeai.backend.model_manager.load.load_default import (
+    ModelLoader,
+    _device_supports_fp8_storage,
+    _model_declared_skip_patterns,
+)
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
@@ -48,6 +53,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     is_scale_metadata_key,
     iter_weight_scale_pairs,
     parse_quantization_metadata,
+    predict_cast_state_dict_size,
     read_safetensors_metadata,
     should_keep_fp8_weights,
     split_fp8_scaled_layers,
@@ -56,6 +62,12 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.nvfp4 import (
+    NVFP4Payload,
+    install_nvfp4_layers,
+    pop_nvfp4_layers,
+    predict_nvfp4_install_size,
+)
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
 from invokeai.backend.util.state_dict_loading import log_unexpected_keys
@@ -83,11 +95,15 @@ _COW_RMS_NORM_EPS = 1e-5
 _TOKENIZER_FALLBACK_SOURCE: tuple[str, str] = ("black-forest-labs/FLUX.2-dev", "tokenizer")
 
 
+_Q_PROJ_PATH = re.compile(r"model\.layers\.(\d+)\.self_attn\.q_proj")
+
+
 def _build_mistral_config(
     state_dict: dict[str, Any],
     torch_dtype: torch.dtype,
     rope_theta: float | None = None,
     max_position_embeddings: int | None = None,
+    packed_layers: Mapping[str, NVFP4Payload] | None = None,
 ) -> MistralConfig:
     """Build a transformers ``MistralConfig`` from a cow-mistral3-small state dict.
 
@@ -95,7 +111,21 @@ def _build_mistral_config(
     intermediate, layer count). ``rope_theta`` and ``max_position_embeddings`` can
     be passed explicitly when an out-of-band source is available (e.g. GGUF
     metadata); otherwise we fall back to cow defaults.
+
+    ``packed_layers`` are the nvfp4 layers a loader took out of the state dict to keep them packed. They count
+    as their weights would: read from the state dict alone, a packed encoder silently gets the cow layer count
+    and head counts.
     """
+    packed_layers = packed_layers or {}
+
+    def output_rows(path: str) -> int | None:
+        if path in packed_layers:
+            return packed_layers[path].out_features
+        weight = state_dict.get(f"{path}.weight")
+        if weight is None:
+            return None
+        return int((weight.tensor_shape if isinstance(weight, GGMLTensor) else weight.shape)[0])
+
     # Vocab and hidden_size come from embed_tokens.
     embed_key = "model.embed_tokens.weight" if "model.embed_tokens.weight" in state_dict else None
     if embed_key is None:
@@ -104,30 +134,20 @@ def _build_mistral_config(
     embed_shape = embed.tensor_shape if isinstance(embed, GGMLTensor) else embed.shape
     vocab_size, hidden_size = int(embed_shape[0]), int(embed_shape[1])
 
-    # Count layers by scanning self_attn.q_proj keys.
-    layer_indices: set[int] = set()
-    for key in state_dict.keys():
-        if not isinstance(key, str):
-            continue
-        if key.startswith("model.layers.") and ".self_attn.q_proj.weight" in key:
-            try:
-                layer_indices.add(int(key.split(".")[2]))
-            except (ValueError, IndexError):
-                pass
+    # Count layers by their attention query projections.
+    layer_paths = [*(key.removesuffix(".weight") for key in state_dict if isinstance(key, str)), *packed_layers]
+    layer_indices = {int(match.group(1)) for path in layer_paths if (match := _Q_PROJ_PATH.fullmatch(path))}
     num_hidden_layers = (max(layer_indices) + 1) if layer_indices else _COW_NUM_HIDDEN_LAYERS
 
     # Derive head counts from the first layer's attention projections.
-    q_proj = state_dict.get("model.layers.0.self_attn.q_proj.weight")
-    k_proj = state_dict.get("model.layers.0.self_attn.k_proj.weight")
-    gate_proj = state_dict.get("model.layers.0.mlp.gate_proj.weight")
+    q_rows = output_rows("model.layers.0.self_attn.q_proj")
+    k_rows = output_rows("model.layers.0.self_attn.k_proj")
+    gate_rows = output_rows("model.layers.0.mlp.gate_proj")
     head_dim = _COW_HEAD_DIM
-    if q_proj is not None and k_proj is not None and gate_proj is not None:
-        q_shape = q_proj.tensor_shape if isinstance(q_proj, GGMLTensor) else q_proj.shape
-        k_shape = k_proj.tensor_shape if isinstance(k_proj, GGMLTensor) else k_proj.shape
-        gate_shape = gate_proj.tensor_shape if isinstance(gate_proj, GGMLTensor) else gate_proj.shape
-        num_attention_heads = int(q_shape[0]) // head_dim
-        num_key_value_heads = int(k_shape[0]) // head_dim
-        intermediate_size = int(gate_shape[0])
+    if q_rows is not None and k_rows is not None and gate_rows is not None:
+        num_attention_heads = q_rows // head_dim
+        num_key_value_heads = k_rows // head_dim
+        intermediate_size = gate_rows
     else:
         num_attention_heads = _COW_NUM_ATTENTION_HEADS
         num_key_value_heads = _COW_NUM_KV_HEADS
@@ -235,6 +255,11 @@ def _strip_known_prefixes(sd: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _bare_mistral_path(path: str) -> str:
+    """A CausalLM layer path as bare ``MistralModel`` names it (see ``_convert_for_bare_mistral_model``)."""
+    return path.removeprefix("model.")
+
+
 def _convert_for_bare_mistral_model(sd: dict[str, Any]) -> dict[str, Any]:
     """Rewrite a `model.*` causal-LM state dict for direct loading into ``MistralModel``.
 
@@ -248,13 +273,8 @@ def _convert_for_bare_mistral_model(sd: dict[str, Any]) -> dict[str, Any]:
     for key, value in sd.items():
         if not isinstance(key, str):
             out[key] = value
-            continue
-        if key.startswith("lm_head."):
-            continue
-        if key.startswith("model."):
-            out[key[len("model.") :]] = value
-        else:
-            out[key] = value
+        elif not key.startswith("lm_head."):
+            out[_bare_mistral_path(key)] = value
     return out
 
 
@@ -370,7 +390,11 @@ def _warn_if_40_layer_mistral(variant: MistralVariantType, logger: Any) -> None:
 
 
 def _drop_quantization_metadata(sd: dict[str, Any], logger, target_dtype: torch.dtype | None = None) -> dict[str, Any]:
-    """Dequantize Comfy-Org-style FP8/FP4 weights and drop their metadata keys.
+    """Dequantize Comfy-Org-style scaled FP8 weights and drop their metadata keys.
+
+    nvfp4 layers must be taken out with ``pop_nvfp4_layers`` before this runs (see ``_load_text_encoder``): their
+    block scales pair with a ``.weight`` just like an fp8 scale, and the fold below would stretch them over the
+    packed weight.
 
     Comfy-Org's Mistral FLUX.2 redistributions store quantized weights alongside
     ``*.weight_scale`` (and occasionally ``*.input_scale``) tensors. We apply the
@@ -945,6 +969,21 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         sd = load_file(model_path)
         sd = _strip_known_prefixes(sd)
 
+        # The header names layers before this loader strips its own wrapper prefixes on top of the generic ones,
+        # so the names need both lists. With only the generic tuple, a `language_model.`-prefixed redistribution
+        # keeps its names while the sd keys lose the prefix: every `full_precision_matrix_mult` is silently
+        # ignored, and nvfp4 layers only the header names are refused as unnamed.
+        header_hints = strip_layer_path_prefix(
+            parse_quantization_metadata(read_safetensors_metadata(model_path, logger)),
+            prefixes=(*MISTRAL_KEY_PREFIXES, *TRANSFORMER_KEY_PREFIXES),
+        )
+
+        # Comfy's fp4_mixed build keeps most projections in nvfp4 beside scaled fp8. Take those out before
+        # anything below reads the side channel: the keep-fp8 branch pops every `weight_scale` and discards the
+        # ones whose weight is not float8, nvfp4's block scales included, and the dequantizing branch and the cast
+        # would widen the packed codes. `install_nvfp4_layers` puts them back, packed.
+        nvfp4_payloads = pop_nvfp4_layers(sd, header_layers=header_hints)
+
         # These redistributions are ComfyUI 'scaled fp8': an fp8 weight plus a `weight_scale`.
         # Folding the scale doubles the encoder -- 16.8 GiB on disk becomes 32.3 GiB in bf16, which
         # does not fit on a 24 GB card even on its own. Keeping the weights quantized is therefore
@@ -953,19 +992,59 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         # Both key rewrites in this loader (`_strip_known_prefixes` above and
         # `_convert_for_bare_mistral_model` below) are plain prefix operations, so a sibling
         # `.weight_scale` travels with its weight automatically -- no fused projections to split.
-        keep_fp8 = should_keep_fp8_weights(target_device)
+        # Storage keeps them too, gated on the device alone: `_should_use_fp8` excludes text encoders
+        # by design (fp8 rounding costs text quality), so there is no per-model setting to read here.
+        # Folding is the fallback only where fp8 cannot be held at all, and folding is what hurts
+        # here: 16.8 GiB on disk becomes 32.3 GiB resident. Note what that makes this -- on CUDA the
+        # device check is always true, so the choice is unconditional and has no user setting behind
+        # it. This loader never calls the layerwise cast (text encoders are excluded there), so the
+        # kept weights reach `CustomLinear` with their scales intact.
+        keep_fp8 = should_keep_fp8_weights(target_device) or _device_supports_fp8_storage(target_device, logger)
         fp8_layers: dict[str, Any] = {}
         if keep_fp8:
-            # This loader strips its own wrapper prefixes on top of the generic ones, so the hints
-            # need both lists. With only the generic tuple, a `language_model.`-prefixed
-            # redistribution keeps its hint names while the sd keys lose the prefix, and every
-            # `full_precision_matrix_mult` is silently ignored.
-            header_hints = strip_layer_path_prefix(
-                parse_quantization_metadata(read_safetensors_metadata(model_path, logger)),
-                prefixes=(*MISTRAL_KEY_PREFIXES, *TRANSFORMER_KEY_PREFIXES),
-            )
             layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
+
+        mistral_config = _build_mistral_config(sd, torch_dtype=model_dtype, packed_layers=nvfp4_payloads)
+        logger.info(
+            f"Mistral encoder config (checkpoint): layers={mistral_config.num_hidden_layers}, "
+            f"hidden={mistral_config.hidden_size}, heads={mistral_config.num_attention_heads}, "
+            f"kv_heads={mistral_config.num_key_value_heads}, intermediate={mistral_config.intermediate_size}"
+        )
+
+        # Built before the reservation, which depends on its modules: they decide which fp8 weights and which
+        # nvfp4 layers stay quantized.
+        with accelerate.init_empty_weights():
+            model = MistralModel(mistral_config)
+        skip_patterns = _model_declared_skip_patterns(model)
+
+        # Adapt CausalLM-prefixed keys for bare MistralModel -- a rename, nothing is widened -- which also drops the
+        # LM head, the single largest tensor (vocab × hidden). The recovered scales and the packed layers are keyed
+        # on the same CausalLM paths and need the same strip, or nothing resolves: every fp8 weight stays quantized
+        # but unscaled, and every packed layer names no module. Only the text tower has modules in the bare model,
+        # so packed layers outside it -- the LM head, a vision tower a multimodal export bundles -- are dropped,
+        # as their dense weights are dropped by the non-strict load.
+        sd = _convert_for_bare_mistral_model(sd)
+        nvfp4_payloads = {
+            _bare_mistral_path(path): payload for path, payload in nvfp4_payloads.items() if path.startswith("model.")
+        }
+        fp8_layers = {_bare_mistral_path(path): layer for path, layer in fp8_layers.items()}
+
+        # One reservation, before the dequantizing branch or the split widens a single weight -- `make_room` makes
+        # that much room rather than adding to an earlier one. The state dict is sized by the predicate the split and
+        # the cast below decide with, the nvfp4 layers as they will be held.
+        self._ram_cache.make_room(
+            predict_cast_state_dict_size(
+                sd,
+                model_dtype,
+                keep_fp8=bool(fp8_layers),
+                model=model,
+                skip_patterns=skip_patterns,
+                scaled_layers=fp8_layers,
+            )
+            + predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
+        )
+
         if not fp8_layers:
             # Dequantize straight to the compute dtype (per-tensor peak, not whole-dict fp32).
             sd = _drop_quantization_metadata(sd, logger, target_dtype=model_dtype)
@@ -977,34 +1056,14 @@ class MistralEncoderCheckpointLoader(ModelLoader):
             for k in [k for k in sd if isinstance(k, str) and (k.endswith(".scale") or k.startswith("scaled_fp8"))]:
                 del sd[k]
 
-        mistral_config = _build_mistral_config(sd, torch_dtype=model_dtype)
-        logger.info(
-            f"Mistral encoder config (checkpoint): layers={mistral_config.num_hidden_layers}, "
-            f"hidden={mistral_config.hidden_size}, heads={mistral_config.num_attention_heads}, "
-            f"kv_heads={mistral_config.num_key_value_heads}, intermediate={mistral_config.intermediate_size}"
-        )
-
-        # Drop the LM head before casting: it's the single largest tensor (vocab × hidden),
-        # bare MistralModel doesn't use it, and `_convert_for_bare_mistral_model` drops it
-        # anyway — casting it first would just waste memory and time.
-        for k in [k for k in sd.keys() if isinstance(k, str) and k.startswith("lm_head.")]:
-            del sd[k]
-
-        # Adapt CausalLM-prefixed keys for bare MistralModel. The recovered scales are keyed on the
-        # checkpoint's paths, so they need the same `model.` strip or `attach_fp8_scales` resolves
-        # nothing and every weight stays quantized but unscaled.
-        sd = _convert_for_bare_mistral_model(sd)
-        fp8_layers = {
-            (path[len("model.") :] if path.startswith("model.") else path): layer for path, layer in fp8_layers.items()
-        }
-
-        with accelerate.init_empty_weights():
-            model = MistralModel(mistral_config)
-
         # Layers the cast would dequantize anyway are folded here, scale applied, so the cast never
         # strips a scale that can no longer be put back.
-        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model)
-        cast_state_dict(sd, model_dtype, keep_fp8=bool(fp8_layers), model=model)
+        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
+        cast_state_dict(sd, model_dtype, keep_fp8=bool(fp8_layers), model=model, skip_patterns=skip_patterns)
+
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            logger.info(f"Mistral encoder: kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
 
         missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
         log_unexpected_keys("Mistral encoder checkpoint", unexpected)
@@ -1035,7 +1094,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
             logger.info(
-                f"Mistral encoder: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)"
+                f"Mistral encoder: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
             )
             warn_on_unattached_scales(logger, "Mistral encoder", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)

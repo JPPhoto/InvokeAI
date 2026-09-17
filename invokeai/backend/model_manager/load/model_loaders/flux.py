@@ -99,7 +99,6 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
@@ -778,14 +777,13 @@ class FluxCheckpointModel(ModelLoader):
         }
         fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
 
-        # A checkpoint that ships raw fp8 weights (fp8 tensors, no weight_scale) keeps them when the
-        # fp8 matmul is available; casting them to bf16 here would throw away both the VRAM saving
-        # and the tensor cores before the model is ever built.
-        keep_fp8 = should_keep_fp8_weights(self._torch_device)
+        # The `match` above admits only the transformer, so that is the submodel the cast will be
+        # asked about too -- keep and cast therefore decide on the same input.
+        keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
         if fp8_layers and not keep_fp8:
-            # Without the matmul, keeping them quantized would halve VRAM but dequantize on every
-            # forward. Fold the scale into the weight instead — the legacy result, except the scale
-            # is now actually applied rather than dropped.
+            # Neither consumer asked for them, and dequantizing per forward would cost speed for
+            # memory nobody wanted saved. Fold the scale into the weight instead — the legacy
+            # result, except the scale is now actually applied rather than dropped.
             dequantize_fp8_scaled(sd, fp8_layers, torch.bfloat16)
             fp8_layers = {}
 
@@ -815,7 +813,9 @@ class FluxCheckpointModel(ModelLoader):
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            self._logger.info(f"FLUX: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            self._logger.info(
+                f"FLUX: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(self._logger, "FLUX", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
             if marked and full_precision_hints_respected():
@@ -825,7 +825,7 @@ class FluxCheckpointModel(ModelLoader):
                     "them on the fp8 tensor cores instead."
                 )
         elif kept:
-            self._logger.info(f"FLUX: kept {kept} raw fp8 weight(s) quantized for the fp8 tensor cores.")
+            self._logger.info(f"FLUX: kept {kept} raw fp8 weight(s) quantized ({self._fp8_kept_reason()}).")
 
         return model
 
@@ -1093,7 +1093,9 @@ class Flux2CheckpointModel(ModelLoader):
         # Load state dict
         sd = load_file(model_path)
 
-        keep_fp8 = should_keep_fp8_weights(self._torch_device)
+        # The `match` above admits only the transformer, so that is the submodel the cast will be
+        # asked about too -- keep and cast therefore decide on the same input.
+        keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
 
         # Check if keys have ComfyUI-style prefix and strip if needed. This runs before anything
         # reads the quantization side-channel: the scales carry the same prefix as their weights.
@@ -1167,9 +1169,9 @@ class Flux2CheckpointModel(ModelLoader):
 
             fp8_layers = extract_fp8_scaled_layers(converted_sd, layer_hints=layer_hints)
             if fp8_layers and not keep_fp8:
-                # Without the matmul, keeping them quantized would halve VRAM but dequantize on
-                # every forward. Fold the scale into the weight instead -- the legacy result, except
-                # reached through the shared helper.
+                # Neither the matmul nor FP8 Storage asked for them, so keeping them quantized would
+                # dequantize on every forward to save memory nobody wanted saved. Fold the scale in
+                # -- the legacy result, except reached through the shared helper.
                 dequantize_fp8_scaled(converted_sd, fp8_layers, torch.bfloat16)
                 fp8_layers = {}
 
@@ -1332,7 +1334,9 @@ class Flux2CheckpointModel(ModelLoader):
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            self._logger.info(f"FLUX.2: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            self._logger.info(
+                f"FLUX.2: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(self._logger, "FLUX.2", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
             if marked and full_precision_hints_respected():
@@ -1342,7 +1346,7 @@ class Flux2CheckpointModel(ModelLoader):
                     "them on the fp8 tensor cores instead."
                 )
         elif kept:
-            self._logger.info(f"FLUX.2: kept {kept} raw fp8 weight(s) quantized for the fp8 tensor cores.")
+            self._logger.info(f"FLUX.2: kept {kept} raw fp8 weight(s) quantized ({self._fp8_kept_reason()}).")
 
         return model
 

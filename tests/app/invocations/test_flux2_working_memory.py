@@ -1298,7 +1298,7 @@ class TestTheSidecarDecisionReachesThePatcher:
 
     @staticmethod
     def _sidecar_flag_for(transformer: torch.nn.Module, model_format) -> bool:
-        from invokeai.backend.quantization.int8_convrot import requires_sidecar_patching
+        from invokeai.backend.quantization.dequantizing_linear import requires_sidecar_patching
 
         return requires_sidecar_patching(transformer, model_format)
 
