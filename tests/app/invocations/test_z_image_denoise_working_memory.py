@@ -9,8 +9,8 @@ The `MEASURED_*` tables are peak *reserved* memory on CUDA (RTX 4090) in bf16 wi
 `scripts/calibrate_z_image_working_memory.py`. Every estimate must stay an upper bound on them.
 
 MiniMax H3 and Krea-2 add the same dequant transient to their own estimates. Krea-2's wiring is pinned in
-`tests/app/invocations/test_krea2_denoise.py`; MiniMax H3's is not, since reaching its `model_on_device()` call needs a
-packed sequence.
+`tests/app/invocations/test_krea2_denoise.py` and FLUX.2's in `tests/app/invocations/test_flux2_working_memory.py`;
+MiniMax H3's is not, since reaching its `model_on_device()` call needs a packed sequence.
 """
 
 from contextlib import ExitStack, contextmanager, nullcontext
