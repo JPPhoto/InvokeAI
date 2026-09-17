@@ -44,6 +44,9 @@ def test_single_file_loader_constructs_and_materializes_model(monkeypatch, tmp_p
     loader._ram_cache = ram_cache
     # ModelLoader.__init__ always sets a logger; this test bypasses __init__, so supply one.
     loader._logger = MagicMock()
+    # `ModelLoader.__init__` sets this on the real object; `_keep_fp8_weights` reads it to ask
+    # whether this device can hold fp8 at all.
+    loader._torch_device = torch.device("cpu")
     loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
 
     monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyKrea2Transformer, raising=False)
@@ -112,6 +115,7 @@ def test_single_file_loader_decodes_an_int8_convrot_checkpoint(monkeypatch, tmp_
     loader = object.__new__(Krea2CheckpointModel)
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     loader._logger = MagicMock()
+    loader._torch_device = torch.device("cpu")
     loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
 
     monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyInt8Krea2Transformer, raising=False)

@@ -52,7 +52,6 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     split_qkv_sidechannel,
     strip_layer_path_prefix,
@@ -636,11 +635,15 @@ class ZImageCheckpointModel(ModelLoader):
             layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
 
-            # Handle memory management and dtype conversion. A checkpoint that ships raw fp8 weights
-            # (fp8 tensors, no weight_scale) keeps them when the fp8 matmul is available — casting
-            # them here would discard both the VRAM saving and the tensor cores before the model is
-            # built.
-            keep_fp8 = should_keep_fp8_weights(self._torch_device)
+            # Handle memory management and dtype conversion. Casting fp8 weights here would discard
+            # the VRAM saving before the model is even built -- and the tensor cores too, where the
+            # fp8 matmul is what kept them. FP8 Storage counts as a consumer alongside the matmul:
+            # the checkpoint's own scale is exact, where a layerwise cast of a folded weight has none.
+            #
+            # The fold itself stays below the reservation rather than moving up here: the prediction
+            # takes `scaled_layers=fp8_layers` and would see an empty mapping, charging the layers the
+            # split still widens 1 byte/element instead of 2.
+            keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
 
             # Reserve before anything below widens a weight, not after: without fp8 compute the fold right
             # after this widens every scaled layer, and `split_fp8_scaled_layers` dequantizes its unusable
@@ -700,7 +703,9 @@ class ZImageCheckpointModel(ModelLoader):
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            self._logger.info(f"Z-Image: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            self._logger.info(
+                f"Z-Image: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(self._logger, "Z-Image", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
             if marked and full_precision_hints_respected():
@@ -718,8 +723,9 @@ class ZImageCheckpointModel(ModelLoader):
         # FP8 *storage* on top. When nothing was kept quantized above, every param is uniform
         # `model_dtype` here, so the layerwise cast has one unambiguous compute dtype to restore to.
         # When weights *were* kept fp8, `_apply_fp8_layerwise_casting` bails out on its own (and
-        # says so in the log): its hooks would restore the compute dtype before every forward and
-        # silently disable the fp8 matmul, for no VRAM saving.
+        # says so in the log): its hooks would restore the compute dtype before every forward, which
+        # disables the fp8 matmul where there is one and drops the `weight_scale` where there is
+        # not -- and saves no VRAM either way.
         model = self._apply_fp8_layerwise_casting(model, config, SubModelType.Transformer)
         return model
 

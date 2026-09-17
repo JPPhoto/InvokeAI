@@ -798,10 +798,8 @@ class TestAlreadyFp8StorageGuard:
         Only the already-fp8 case is protected. A full-precision model still gets the storage cast,
         which is the entire point of the toggle on a card without the fp8 matmul.
 
-        (The mirror case -- an already-fp8 model with the matmul *off* -- is unreachable: every
-        loader either folds the scales or casts raw fp8 away when `should_keep_fp8_weights` is
-        False, so nothing fp8 survives to reach this method. `set_fp8_compute_dtype` refuses it
-        outright rather than recording float8 as a compute dtype.)
+        The mirror case -- an already-fp8 model with the matmul off -- is covered below. It used to
+        be unreachable, and is not any more: FP8 Storage keeps scaled weights packed too.
         """
         loader = _make_loader("cuda")
         model = torch.nn.Sequential(torch.nn.Linear(16, 32))
@@ -810,6 +808,33 @@ class TestAlreadyFp8StorageGuard:
             loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
 
         assert model[0].weight.dtype is torch.float8_e4m3fn
+
+    def test_already_fp8_weights_are_left_alone_when_the_matmul_is_off(self) -> None:
+        """The case FP8 Storage created: weights kept packed without the fp8 matmul.
+
+        The guard used to ask whether the matmul was available, which is a different question from
+        the one that matters -- whether the model already holds fp8 weights. With FP8 Storage on and
+        `fp8_compute` off the cast would run over packed weights and upcast them with their
+        `weight_scale` never applied, i.e. off by 1/weight_scale on every layer, or derive an fp8
+        compute dtype and refuse the load outright.
+        """
+        loader = _make_loader("cuda")
+        model = torch.nn.Sequential(torch.nn.Linear(16, 32))
+        scale = torch.tensor(0.0056)
+        model[0].weight = torch.nn.Parameter(
+            torch.full((32, 16), 0.5 / scale.item()).to(torch.float8_e4m3fn), requires_grad=False
+        )
+        model[0].register_buffer("weight_scale", scale)
+
+        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=False):
+            returned = loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
+
+        assert returned is model
+        assert model[0].weight.dtype is torch.float8_e4m3fn
+        assert torch.equal(model[0].weight_scale, scale)
+        # No hooks: an upcast before every forward is what would drop the scale.
+        assert not model[0]._forward_pre_hooks
+        assert getattr(model, FP8_COMPUTE_DTYPE_ATTR, None) is None
 
 
 class TestApplyFp8SkipCallback:

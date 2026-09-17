@@ -28,7 +28,11 @@ from invokeai.backend.model_manager.configs.mistral_encoder import (
     MistralEncoder_Diffusers_Config,
     MistralEncoder_GGUF_Config,
 )
-from invokeai.backend.model_manager.load.load_default import ModelLoader, _model_declared_skip_patterns
+from invokeai.backend.model_manager.load.load_default import (
+    ModelLoader,
+    _device_supports_fp8_storage,
+    _model_declared_skip_patterns,
+)
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
@@ -988,7 +992,14 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         # Both key rewrites in this loader (`_strip_known_prefixes` above and
         # `_convert_for_bare_mistral_model` below) are plain prefix operations, so a sibling
         # `.weight_scale` travels with its weight automatically -- no fused projections to split.
-        keep_fp8 = should_keep_fp8_weights(target_device)
+        # Storage keeps them too, gated on the device alone: `_should_use_fp8` excludes text encoders
+        # by design (fp8 rounding costs text quality), so there is no per-model setting to read here.
+        # Folding is the fallback only where fp8 cannot be held at all, and folding is what hurts
+        # here: 16.8 GiB on disk becomes 32.3 GiB resident. Note what that makes this -- on CUDA the
+        # device check is always true, so the choice is unconditional and has no user setting behind
+        # it. This loader never calls the layerwise cast (text encoders are excluded there), so the
+        # kept weights reach `CustomLinear` with their scales intact.
+        keep_fp8 = should_keep_fp8_weights(target_device) or _device_supports_fp8_storage(target_device, logger)
         fp8_layers: dict[str, Any] = {}
         if keep_fp8:
             layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
@@ -1083,7 +1094,7 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
             logger.info(
-                f"Mistral encoder: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)"
+                f"Mistral encoder: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
             )
             warn_on_unattached_scales(logger, "Mistral encoder", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
