@@ -30,6 +30,7 @@ from invokeai.backend.model_manager.taxonomy import (
 )
 from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
 from invokeai.backend.quantization.fp8_scaled import (
+    INPUT_SCALE_SUFFIXES,
     attach_fp8_scales,
     cast_state_dict,
     dequantize_fp8_scaled,
@@ -58,7 +59,14 @@ from invokeai.backend.quantization.int8_convrot import (
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
+from invokeai.backend.quantization.nvfp4 import (
+    WEIGHT_SCALE_2_SUFFIX,
+    install_nvfp4_layers,
+    pop_nvfp4_layers,
+    predict_nvfp4_install_size,
+)
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, reject_incomplete_load
 
 # Kept as a module-level alias: this helper moved to model_manager.util.qwen3_vl so the MiniMax H3
 # loader can share it without importing across family loaders.
@@ -149,11 +157,15 @@ DISCARDED_NATIVE_FINAL_KEYS = ("last.down", "last.up")
 
 
 def _drop_discarded_native_final_layers(sd: dict[str, Any]) -> dict[str, Any]:
-    """Remove the dropped final-block projections together with their quantization metadata."""
+    """Remove the dropped final-block projections together with their quantization metadata.
+
+    An nvfp4 layer's global scale and any activation scale go too: left behind without its weight, the nvfp4 pass
+    refuses a global scale as a malformed layer, and an activation scale would linger as an orphan.
+    """
     doomed = {
         f"{path}{suffix}"
         for path in DISCARDED_NATIVE_FINAL_KEYS
-        for suffix in (".weight", ".weight_scale", ".comfy_quant")
+        for suffix in (".weight", ".weight_scale", WEIGHT_SCALE_2_SUFFIX, ".comfy_quant", *INPUT_SCALE_SUFFIXES)
     }
     if not doomed & set(sd):
         return sd
@@ -364,7 +376,8 @@ class Krea2CheckpointModel(ModelLoader):
     The int8 build stays int8-resident: `swap_in_int8_linears` installs `Int8ConvrotLinear`, which
     holds the stored codes and dequantizes per forward, so a 12.0 GiB checkpoint stays 12.0 GiB.
     What it does not get is int8 *compute* -- that needs a kernel InvokeAI does not have yet -- so
-    the saving here is resident memory, not speed.
+    the saving here is resident memory, not speed. ComfyUI's 'nvfp4' build, whose layers the
+    safetensors header names, stays packed the same way as `NVFP4Linear`.
     """
 
     def _load_model(
@@ -400,6 +413,18 @@ class Krea2CheckpointModel(ModelLoader):
         # implement; refusing a tensor that is on its way to the bin would be an odd way to fail.
         sd = _drop_discarded_native_final_layers(sd)
 
+        # Comfy's nvfp4 build names its layers in the header, natively. Take them out before either side-channel
+        # format below reads a scale: both pair every `weight_scale` with its weight, and the key conversion would
+        # rename the packed codes without their global scale. `install_nvfp4_layers` puts them back, packed, under
+        # their diffusers paths once the model exists. The key scheme is read once, here, for the layers and for
+        # both branches below.
+        header_layers = strip_layer_path_prefix(parse_quantization_metadata(metadata))
+        native = _is_native_krea2_format(sd)
+        nvfp4_payloads = pop_nvfp4_layers(sd, header_layers=header_layers)
+        if nvfp4_payloads and native:
+            path_map = _remap_native_layer_paths(nvfp4_payloads)
+            nvfp4_payloads = {path_map.get(path, path): payload for path, payload in nvfp4_payloads.items()}
+
         # Two ComfyUI side-channel formats reach this loader and a checkpoint carries one or the
         # other, so the format is decided once here. `int8_tensorwise` has to be recognised before
         # the key conversion below: that conversion renames `.weight` by substring and so carries a
@@ -418,7 +443,7 @@ class Krea2CheckpointModel(ModelLoader):
             sd = drop_unconsumed_quantization_sidecars(sd)
             # Native/ComfyUI key naming → diffusers Krea2Transformer2DModel keys.
             key_map: dict[str, str] = {}
-            if _is_native_krea2_format(sd):
+            if native:
                 sd = _convert_krea2_native_to_diffusers(sd, key_map=key_map)
             quantized = resolve_quantized_module_paths(int8_markers, key_map)
         else:
@@ -428,11 +453,8 @@ class Krea2CheckpointModel(ModelLoader):
             # full_precision_matrix_mult layers silently multiplied in fp8. The header wins on the rare
             # checkpoint carrying both. Header names carry the prefix that was just stripped off the
             # state dict, so strip it from them too or they match nothing.
-            layer_hints = {
-                **extract_comfy_quant_hints(sd),
-                **strip_layer_path_prefix(parse_quantization_metadata(metadata)),
-            }
-            if _is_native_krea2_format(sd):
+            layer_hints = {**extract_comfy_quant_hints(sd), **header_layers}
+            if native:
                 # Take the quantization side channel out before renaming. The converter renames
                 # ".weight"-suffixed keys by substring and five more by whole-key equality, so a sibling
                 # ".scale_weight", ".input_scale", or any scale on one of the equality-renamed keys
@@ -464,14 +486,18 @@ class Krea2CheckpointModel(ModelLoader):
 
         with accelerate.init_empty_weights():
             model = Krea2Transformer2DModel(**KREA2_TRANSFORMER_CONFIG)
+        # Honor the model's own precision-sensitive list on every path below. Krea-2 declares `time_embed` and the
+        # `norm*` modules; `time_embed.linear_1/linear_2` are ordinary quantized Linears in a ComfyUI export, and a
+        # module that reads its own weight's dtype finds a quantized dtype on a module left quantized.
+        skip_patterns = _model_declared_skip_patterns(model)
+        # A merged file's bundled submodels are not this model's: their dense weights fall to `strict=False` below,
+        # and their packed layers go the same way instead of naming no module. The rest are added to either
+        # reservation below as they will be held, since a reservation makes that much room rather than adding to one.
+        modules = {name for name, _ in model.named_children()}
+        nvfp4_payloads = {path: payload for path, payload in nvfp4_payloads.items() if path.split(".", 1)[0] in modules}
+        nvfp4_bytes = predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
 
         if int8_markers:
-            # Honor the model's own precision-sensitive list here too, not only on the fp8 side.
-            # Krea-2 declares `time_embed` and the `norm*` modules; `time_embed.linear_1/linear_2`
-            # are ordinary quantized Linears in a ComfyUI export, and a module that reads its own
-            # weight's dtype finds `torch.int8` on an `Int8ConvrotLinear`.
-            skip_patterns = _model_declared_skip_patterns(model)
-
             # Before anything is cast: a scale left over from another scheme means its weight is
             # about to be cast without it, and the orphan disappears into `strict=False` below.
             # After the model exists, so a merged file's bundled submodels -- which this loader does
@@ -485,6 +511,7 @@ class Krea2CheckpointModel(ModelLoader):
             # ~12 GB that this load never uses.
             self._ram_cache.make_room(
                 predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
+                + nvfp4_bytes
             )
             quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
             cast_unquantized(sd, model_dtype, quantized)
@@ -493,7 +520,6 @@ class Krea2CheckpointModel(ModelLoader):
             fp8_layers = {}
             kept = 0
         else:
-            skip_patterns = _model_declared_skip_patterns(model)
             # Scaled layers the cast would dequantize anyway (skip patterns, non-Linear weights) are
             # folded here, with their scale applied. Left to `cast_state_dict` they would be cast
             # *without* it and `attach_fp8_scales` would then skip them for no longer being fp8 —
@@ -513,6 +539,7 @@ class Krea2CheckpointModel(ModelLoader):
                     skip_patterns=skip_patterns,
                     scaled_layers=fp8_layers,
                 )
+                + nvfp4_bytes
             )
 
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
@@ -527,7 +554,13 @@ class Krea2CheckpointModel(ModelLoader):
                 skip_patterns=skip_patterns,
             )
 
-        model.load_state_dict(sd, assign=True, strict=False)
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            self._logger.info(f"Krea-2: kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
+
+        load_state_dict_ignoring_extras(
+            model, sd, source="Krea-2 single-file checkpoint", assign=True, allow_missing=True
+        )
         _reject_incomplete_load(model, what="Krea-2 single-file checkpoint")
         # `assign=True` aliases every param to its `sd` tensor. Drop the dict's references before
         # the FP8 cast, or each param's `model_dtype` original stays reachable while its fp8 copy is
@@ -624,7 +657,7 @@ class Krea2GGUFCheckpointModel(ModelLoader):
         with accelerate.init_empty_weights():
             model = Krea2Transformer2DModel(**KREA2_TRANSFORMER_CONFIG)
 
-        model.load_state_dict(sd, assign=True, strict=False)
+        load_state_dict_ignoring_extras(model, sd, source="Krea-2 GGUF checkpoint", assign=True, allow_missing=True)
         # Reject GGUF layouts that don't fully populate the diffusers Krea2Transformer2DModel (city96/
         # ComfyUI GGUFs may use key names needing conversion). Failing here beats a confusing meta-tensor
         # crash mid-inference.
@@ -721,28 +754,14 @@ def _remap_qwen3vl_singlefile_keys(sd: dict[str, Any], *, key_map: dict[str, str
 
 
 def _reject_incomplete_load(model: Any, *, what: str) -> None:
-    """Raise if a ``load_state_dict(strict=False)`` left required tensors on the meta device.
+    """Krea-2's alias for the shared meta-device completeness sweep.
 
     ``strict=False`` is used to tolerate benign extra/renamed keys, but it also silently accepts a
     checkpoint that omits required weights — those tensors stay on the meta device and only fail much
     later during inference. Reject such loads here, naming the offending tensors, so an incomplete,
     misidentified, or differently-converted checkpoint fails at load time with an actionable message.
-
-    Both parameters *and persistent buffers* are checked: ``accelerate.init_empty_weights()`` places
-    buffers on the meta device too, so a native/GGUF checkpoint that omits a persistent buffer would
-    slip past a parameters-only guard and fail mid-inference instead of at load time.
     """
-    still_meta = [
-        name
-        for name, tensor in (*model.named_parameters(), *model.named_buffers())
-        if getattr(tensor, "is_meta", False)
-    ]
-    if still_meta:
-        raise RuntimeError(
-            f"{what} is incomplete: {len(still_meta)} tensor(s) were not provided by the checkpoint "
-            f"and remain uninitialized (meta device). First few: {still_meta[:8]}. The file is likely "
-            "incomplete, misidentified, or uses a key layout that needs conversion."
-        )
+    reject_incomplete_load(model, what=what)
 
 
 @ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3VLEncoder, format=ModelFormat.Checkpoint)
@@ -909,7 +928,9 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # dtype on the modules it skips, so the two lists are independent again.
             cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model)
 
-        model.load_state_dict(sd, assign=True, strict=False)
+        load_state_dict_ignoring_extras(
+            model, sd, source="Qwen3-VL encoder checkpoint", assign=True, allow_missing=True
+        )
         _reject_incomplete_load(model, what="Qwen3-VL encoder checkpoint")
 
         if fp8_layers:

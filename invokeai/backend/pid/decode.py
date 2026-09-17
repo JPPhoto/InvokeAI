@@ -32,14 +32,15 @@ from torch import Tensor
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.pid._src.networks.pid_net import PidNet
 from invokeai.backend.pid.state_dict_utils import PID_VERSION_BY_LQ_HIDDEN_DIM, PiDVersion
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
 from invokeai.backend.quantization.int8_convrot import (
     extract_int8_convrot_markers,
-    peak_int8_dequant_transient_bytes,
     reject_unmarked_int8_weights,
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.backend.util.state_dict_loading import log_unexpected_keys
 
 _PID_ACTIVATION_CHUNK_SIZE = 1024
 
@@ -197,7 +198,7 @@ def estimate_pid_decode_working_memory(
     activations = _estimate_pid_activation_memory(latent, backbone, pid_memory_optimization)
     if activations == 0 or pid_net is None:
         return activations
-    return activations + peak_int8_dequant_transient_bytes(pid_net, torch.float32)
+    return activations + peak_dequant_transient_bytes(pid_net, torch.float32)
 
 
 def _estimate_pid_activation_memory(
@@ -342,16 +343,13 @@ def load_pid_decoder(state_dict: dict[Any, Tensor], backbone: BaseModelType) -> 
             net, state_dict, split_int8_convrot_layers(state_dict, int8_markers, torch.float32, model=net)
         )
 
-    # strict=False so we can report missing and unexpected keys separately; both are fatal. The model
-    # cache builds loaders under `skip_torch_weight_init()`, which no-ops every `reset_parameters()`,
-    # so a key the checkpoint does not supply is left as uninitialised memory rather than a sane
-    # default — a partial checkpoint would decode to garbage / NaNs instead of failing.
+    # strict=False so we can report missing and unexpected keys separately. Missing keys are fatal:
+    # the model cache builds loaders under `skip_torch_weight_init()`, which no-ops every
+    # `reset_parameters()`, so a key the checkpoint does not supply is left as uninitialised memory
+    # rather than a sane default — a partial checkpoint would decode to garbage / NaNs instead of
+    # failing. Unexpected keys are exporter noise and are only logged (see `log_unexpected_keys`).
     missing, unexpected = net.load_state_dict(state_dict, strict=False)
-    if unexpected:
-        raise RuntimeError(
-            f"PiD checkpoint has unexpected keys not present in PidNet: {unexpected[:5]}"
-            + (f" (+ {len(unexpected) - 5} more)" if len(unexpected) > 5 else "")
-        )
+    log_unexpected_keys("PiD checkpoint", unexpected)
     if missing:
         lq = [k for k in missing if k.startswith("lq_proj.")]
         detail = (

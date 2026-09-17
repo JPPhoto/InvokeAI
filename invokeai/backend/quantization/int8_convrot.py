@@ -30,8 +30,8 @@ dequantized, derotated bf16 weight per forward call. The derotation is a
 ``[out, in/256, 256] @ [256, 256]`` matmul — a rounding error next to the
 transformer forward itself — and the transient bf16 weight (<= ~310 MB for H3's
 largest layer) has to fit inside the calling node's working-memory reservation:
-``peak_int8_dequant_transient_bytes`` is what a denoise node adds to its estimate
-for that, since the model's resident size does not account for it.
+``dequantizing_linear.peak_dequant_transient_bytes`` is what a denoise node adds to
+its estimate for that, since the model's resident size does not account for it.
 """
 
 import json
@@ -41,9 +41,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 
-from invokeai.backend.model_manager.taxonomy import ModelFormat
+from invokeai.backend.quantization.dequantizing_linear import DequantizingLinear
 from invokeai.backend.quantization.fp8_scaled import (
     COMFY_QUANT_SUFFIX,
     FP8_WEIGHT_DTYPES,
@@ -220,23 +219,22 @@ def dequantize_convrot_weight(
     return w.to(dtype)
 
 
-class Int8ConvrotLinear(torch.nn.Module):
+class Int8ConvrotLinear(DequantizingLinear):
     """A linear layer storing Comfy int8_tensorwise(+convrot) weights, dequantized per forward.
 
     The int8 weight and fp32 scale are registered as PERSISTENT buffers named ``weight`` and
     ``weight_scale`` — exactly the converted checkpoint's key names — so ``load_state_dict``
     consumes the quantized tensors directly and the model cache moves them between devices
     like any other weight. The Hadamard matrix is neither loaded nor held per module: it is a
-    constant of the scheme, so ``forward`` takes it from :func:`shared_regular_hadamard`, which
-    keeps one per ``(size, device, dtype)`` for every layer in the model.
+    constant of the scheme, so the dequantization takes it from :func:`shared_regular_hadamard`,
+    which keeps one per ``(size, device, dtype)`` for every layer in the model.
 
     The model cache wraps this module as ``CustomInt8ConvrotLinear`` (see
     ``AUTOCAST_MODULE_TYPE_MAPPING``), which enables sidecar LoRA patches and lets a partial
-    load leave some int8 buffers on the CPU — ``forward``'s per-call ``.to(device)`` then
-    streams them (at half the bf16 byte count) instead of failing outright. Fully-resident
-    operation remains the intended regime (~20 GiB free VRAM for H3's pruned transformer);
-    streamed layers pay a per-forward PCIe cost, and an unquantized model is still the better
-    citizen on small cards.
+    load leave some int8 buffers on the CPU — the per-call ``.to(device)`` then streams them
+    (at half the bf16 byte count) instead of failing outright. Fully-resident operation remains
+    the intended regime (~20 GiB free VRAM for H3's pruned transformer); streamed layers pay a
+    per-forward PCIe cost, and an unquantized model is still the better citizen on small cards.
     """
 
     def __init__(
@@ -284,10 +282,20 @@ class Int8ConvrotLinear(torch.nn.Module):
             ).view(self.out_features, self.in_features)
         return w
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        weight = self._dequantized_weight(x.device, x.dtype)
-        bias = self.bias.to(device=x.device, dtype=x.dtype) if self.bias is not None else None
-        return F.linear(x, weight, bias)
+    def dequant_transient_bytes(self, compute_dtype: torch.dtype) -> int:
+        """Two weight-sized tensors in the compute dtype.
+
+        Both halves of ``_dequantized_weight`` peak at two: the dtype cast of the int8 weight is alive
+        alongside the product it is multiplied into, and that product is then alive alongside the
+        derotation matmul's output. Each pair is freed before the next allocates.
+
+        Under partial load the int8 weight is additionally streamed to the device per call, adding up to
+        half a weight again; the resident-model regime this scheme targets pays nothing for that. Verified
+        against the real `z_image_turbo_int8_convrot` checkpoint: exact for most shapes, and 2 MiB under on
+        the two that make cuBLAS take a workspace (10240x3840 and 3840x10240), against a 3 GiB reservation
+        floor.
+        """
+        return 2 * self.out_features * self.in_features * compute_dtype.itemsize
 
     def extra_repr(self) -> str:
         return f"in_features={self.in_features}, out_features={self.out_features}, convrot={self.convrot}"
@@ -371,25 +379,6 @@ def reject_unmarked_int8_weights(sd: dict[str, Any], markers: Mapping[str, Any],
             f"{architecture} checkpoint has {len(orphans)} int8 weight(s) with no `comfy_quant` marker, "
             f"e.g. {orphans[:3]}. Loading them would produce a model that runs and generates noise."
         )
-
-
-def requires_sidecar_patching(transformer: Any, model_format: ModelFormat) -> bool:
-    """Whether LoRA has to be applied as a sidecar rather than written into the weights.
-
-    The format alone does not answer this. A plain ``checkpoint`` may still be an
-    ``int8_tensorwise`` build, whose Linears the loader replaced with :class:`Int8ConvrotLinear` --
-    those hold their weights as int8 *buffers*, which a direct patch cannot write into (and which
-    could not represent the patched values anyway, the rotation having mixed 256 of them). Worse,
-    the fallbacks that would otherwise catch this iterate ``module.parameters()``, and these modules
-    have none, so they answer "not quantized" and direct patching is chosen. So the loaded module
-    tree is consulted, not just the config.
-
-    Lives here rather than beside one denoise node because every architecture this scheme reaches
-    needs the same answer, and getting it from the config alone is wrong in the same way for each.
-    """
-    if model_format in (ModelFormat.GGUFQuantized, ModelFormat.SDNQQuantized):
-        return True
-    return any(isinstance(module, Int8ConvrotLinear) for module in transformer.modules())
 
 
 def drop_unconsumed_quantization_sidecars(sd: dict[str, Any]) -> dict[str, Any]:
@@ -699,31 +688,3 @@ def reject_foreign_quantization_scales(
             f"`int8_tensorwise` marker claims, e.g. {orphans[:3]}. A file mixing int8_tensorwise "
             "with scaled fp8 is not supported: the fp8 weights would load unscaled."
         )
-
-
-def peak_int8_dequant_transient_bytes(model: torch.nn.Module, compute_dtype: torch.dtype) -> int:
-    """Peak bytes one forward transiently needs to dequantize this model's int8 linears.
-
-    ``Int8ConvrotLinear`` keeps its weight int8 and materializes the dequantized, derotated weight
-    per forward, so that transient is *not* covered by the model's resident size and has to fit
-    inside the calling node's working-memory reservation. Zero when the model holds no such layer.
-
-    Two weight-sized tensors in the compute dtype, over the largest such layer. Both halves of
-    ``_dequantized_weight`` peak at two: the dtype cast of the int8 weight is alive alongside the
-    product it is multiplied into, and that product is then alive alongside the derotation matmul's
-    output. Each pair is freed before the next allocates, and the layers run one at a time.
-
-    Under partial load the int8 weight is additionally streamed to the device per call, adding up to
-    half a weight again; the resident-model regime this scheme targets pays nothing for that.
-
-    What it does not cover is the matmul's own cuBLAS workspace, which is not a property of this
-    scheme -- a dense Linear of the same shape allocates it too, and the node's activation estimate
-    is measured with it included. Verified against the real `z_image_turbo_int8_convrot` checkpoint:
-    exact for most shapes, and 2 MiB under on the two that make cuBLAS take a workspace
-    (10240x3840 and 3840x10240), against a 3 GiB reservation floor.
-    """
-    largest = 0
-    for module in model.modules():
-        if isinstance(module, Int8ConvrotLinear):
-            largest = max(largest, module.in_features * module.out_features)
-    return 2 * largest * compute_dtype.itemsize
