@@ -215,18 +215,12 @@ const CONTROL_ADAPTER_FIELDS: FieldSpec[] = [
 
 /**
  * Mirrors the backend's `_should_use_fp8` exclusions:
- * - Z-Image: diffusers' layerwise casting hits a dtype mismatch on skipped modules.
  * - LoRA / ControlLoRA: patched into a base model rather than run as their own forward pass, so
  *   the casting hooks would never fire.
  * VAEs are excluded too, but they have no default-settings section at all.
  */
-export const supportsFp8Storage = (model: Pick<ModelConfig, 'base' | 'type'>): boolean => {
-  if (model.base === 'z-image') {
-    return false;
-  }
-
-  return model.type === 'main' || model.type === 'controlnet' || model.type === 't2i_adapter';
-};
+export const supportsFp8Storage = (model: Pick<ModelConfig, 'base' | 'type'>): boolean =>
+  model.type === 'main' || model.type === 'controlnet' || model.type === 't2i_adapter';
 
 export const getFieldsForModel = (model: Pick<ModelConfig, 'base' | 'type'>): FieldSpec[] => {
   const fp8Fields = supportsFp8Storage(model) ? [FP8_STORAGE_FIELD] : [];

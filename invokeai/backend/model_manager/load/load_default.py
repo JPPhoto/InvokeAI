@@ -25,6 +25,7 @@ from invokeai.backend.model_manager.load.model_cache.model_cache import (
 from invokeai.backend.model_manager.load.model_util import calc_model_size_by_fs
 from invokeai.backend.model_manager.load.optimizations import skip_torch_weight_init
 from invokeai.backend.model_manager.taxonomy import (
+    QUANTIZED_MODEL_FORMATS,
     AnyModel,
     SubModelType,
 )
@@ -156,21 +157,6 @@ _FP8_DEFAULT_SKIP_PATTERNS: tuple[str, ...] = (
     "norm",
     r"^proj_in$",
     r"^proj_out$",
-)
-
-# Model formats whose weights are already quantized. FP8 storage is meaningless for them (the
-# payload is packed integers, not values we may re-encode) and actively harmful — see
-# `_should_use_fp8`. Declared as strings to keep this module free of a taxonomy import at module
-# scope; compared against `config.format`, which is a `ModelFormat` str-enum. Must list every
-# quantized member of `ModelFormat`; `test_quantized_format_set_matches_the_taxonomy` pins the
-# strings to the enum so a rename cannot silently disable the check.
-_QUANTIZED_MODEL_FORMATS: frozenset[str] = frozenset(
-    {
-        "gguf_quantized",
-        "bnb_quantized_nf4b",
-        "bnb_quantized_int8b",
-        "sdnq_quantized",
-    }
 )
 
 
@@ -438,7 +424,8 @@ class ModelLoader(ModelLoaderBase):
         # No quantized-format loader calls `_apply_fp8_layerwise_casting` today, so this is a guard
         # against the next loader that gets wired up (they are being added one model at a time)
         # rather than a fix for a live crash.
-        if hasattr(config, "format") and config.format in _QUANTIZED_MODEL_FORMATS:
+        # The payload is packed integers, not values FP8 storage may re-encode.
+        if hasattr(config, "format") and config.format in QUANTIZED_MODEL_FORMATS:
             return False
 
         # VAEs are excluded — fp8 storage causes noticeable quality degradation in decode.

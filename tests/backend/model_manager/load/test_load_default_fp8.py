@@ -23,7 +23,6 @@ import torch
 from invokeai.backend.model_manager.load.load_default import (
     _FP8_PROBE_FAILURE_REPORTED,
     _FP8_STORAGE_SUPPORTED,
-    _QUANTIZED_MODEL_FORMATS,
     ModelLoader,
     _device_supports_fp8_storage,
     _model_declared_skip_patterns,
@@ -430,23 +429,11 @@ def test_should_use_fp8_excludes_quantized_formats(fmt: ModelFormat):
     unexpectedly`, and bnb NF4 corrupts silently (`bnb.nn.LinearNF4` subclasses `nn.Linear`, so its
     packed uint8 payload is cast to float8 and inference then returns finite garbage).
 
-    Parametrized over `ModelFormat` members rather than raw strings: `_QUANTIZED_MODEL_FORMATS`
-    holds strings, so testing it with strings would pass even if the enum values drifted.
     """
     loader = _make_loader(device="cuda")
     config = _make_config(ModelType.Main, fp8=True)
     config.format = fmt
     assert loader._should_use_fp8(config) is False
-
-
-def test_quantized_format_set_matches_the_taxonomy():
-    """Every entry in `_QUANTIZED_MODEL_FORMATS` must still name a real `ModelFormat` value.
-
-    The set is declared as raw strings to keep `load_default` free of a taxonomy import at module
-    scope, so nothing else stops a rename in `ModelFormat` from silently disabling the check —
-    `config.format` would simply never match again, and FP8 would be re-enabled for that format.
-    """
-    assert _QUANTIZED_MODEL_FORMATS <= {fmt.value for fmt in ModelFormat}
 
 
 def test_apply_fp8_skips_quantized_params_regardless_of_format():
