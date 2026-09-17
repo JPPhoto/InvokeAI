@@ -1423,6 +1423,9 @@
                       "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
                     },
                     {
@@ -1857,6 +1860,9 @@
                       "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
                     },
                     {
@@ -2289,6 +2295,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
@@ -2768,6 +2777,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
@@ -3274,6 +3286,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
@@ -4634,6 +4649,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
@@ -17214,6 +17232,9 @@
           },
           {
             "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
+          },
+          {
+            "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
           },
           {
             "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
@@ -42614,6 +42635,23 @@
             "orig_required": true,
             "title": "Transformer"
           },
+          "unconditional_transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The unconditional branch when it is a separate single-file model. Leave unconnected for a diffusers pipeline, whose Transformer submodel carries both branches.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Transformer (Unconditional)"
+          },
           "positive_conditioning": {
             "anyOf": [
               {
@@ -42741,7 +42779,7 @@
         "tags": ["image", "ideogram4"],
         "title": "Denoise - Ideogram 4",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/LatentsOutput"
         }
@@ -42860,7 +42898,7 @@
         "category": "model",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Loads an Ideogram 4 model, outputting its submodels.\n\nIdeogram 4 is distributed as a single bundled diffusers folder, so the transformer\n(both branches), the Qwen3-VL text encoder + tokenizer, and the VAE are all loaded\nfrom the one selected model.",
+        "description": "Loads an Ideogram 4 model, outputting its submodels.\n\nTwo on-disk layouts are supported:\n\n* A diffusers pipeline bundles everything - both transformer branches, the Qwen3-VL encoder\n  + tokenizer, and the VAE - and needs nothing else selected.\n* Comfy-Org's single files hold ONE branch each, so the conditional file goes in `Model`, the\n  unconditional one in `Transformer (Unconditional)`, and the Qwen3-VL 8B encoder and the\n  32-channel VAE are selected here as well.\n\nBoth branches run at every denoising step, so the pair is not optional.",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -42889,13 +42927,71 @@
           },
           "model": {
             "$ref": "#/components/schemas/ModelIdentifierField",
-            "description": "The Ideogram 4 model to load.",
+            "description": "The Ideogram 4 model to load. A diffusers pipeline provides every submodel; a single-file checkpoint is the conditional transformer alone and needs the components below.",
             "field_kind": "input",
             "input": "direct",
             "orig_required": true,
             "title": "Model",
             "ui_model_base": ["ideogram-4"],
             "ui_model_type": ["main"]
+          },
+          "unconditional_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The unconditional branch as a single-file checkpoint. Required when Model is a single file; ignored for a diffusers pipeline, which bundles both branches.",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Transformer (Unconditional)",
+            "ui_model_base": ["ideogram-4"],
+            "ui_model_format": ["checkpoint"],
+            "ui_model_type": ["main"]
+          },
+          "qwen3_vl_encoder_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Standalone Qwen3-VL 8B encoder. Required when Model is a single-file checkpoint; otherwise an override for the encoder bundled in the diffusers pipeline.",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Qwen3-VL Encoder",
+            "ui_model_base": ["any"],
+            "ui_model_type": ["qwen3_vl_encoder"]
+          },
+          "vae_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Standalone VAE (the 32-channel one Ideogram 4 shares with FLUX.2). Required when Model is a single-file checkpoint; otherwise an override for the bundled VAE.",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "VAE",
+            "ui_model_base": ["flux2"],
+            "ui_model_type": ["vae"]
           },
           "type": {
             "const": "ideogram4_model_loader",
@@ -42909,7 +43005,7 @@
         "tags": ["model", "ideogram4"],
         "title": "Main Model - Ideogram 4",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/Ideogram4ModelLoaderOutput"
         }
@@ -42923,6 +43019,21 @@
             "description": "Transformer",
             "field_kind": "output",
             "title": "Transformer",
+            "ui_hidden": false
+          },
+          "unconditional_transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The unconditional branch, when it is a separate single-file model. None for a diffusers pipeline, which carries both branches in one submodel.",
+            "field_kind": "output",
+            "title": "Transformer (Unconditional)",
             "ui_hidden": false
           },
           "qwen3_encoder": {
@@ -42947,7 +43058,7 @@
             "type": "string"
           }
         },
-        "required": ["output_meta", "transformer", "qwen3_encoder", "vae", "type", "type"],
+        "required": ["output_meta", "transformer", "unconditional_transformer", "qwen3_encoder", "vae", "type", "type"],
         "title": "Ideogram4ModelLoaderOutput",
         "type": "object"
       },
@@ -62988,6 +63099,178 @@
         "title": "Main_Checkpoint_Flux2_Config",
         "description": "Model config for FLUX.2 checkpoint models (e.g. Klein)."
       },
+      "Main_Checkpoint_Ideogram4_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "type": {
+            "type": "string",
+            "const": "main",
+            "title": "Type",
+            "default": "main"
+          },
+          "trigger_phrases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Phrases",
+            "description": "Set of trigger phrases for this model"
+          },
+          "default_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainModelDefaultSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default settings for this model"
+          },
+          "config_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Path",
+            "description": "Path to the config for this model, if any."
+          },
+          "base": {
+            "type": "string",
+            "const": "ideogram-4",
+            "title": "Base",
+            "default": "ideogram-4"
+          },
+          "format": {
+            "type": "string",
+            "const": "checkpoint",
+            "title": "Format",
+            "default": "checkpoint"
+          },
+          "branch": {
+            "type": "string",
+            "enum": ["conditional", "unconditional"],
+            "title": "Branch",
+            "description": "Which of Ideogram 4's two transformer branches this file holds. Read from the file's `model_type` metadata where it has any, and from the filename otherwise \u2014 the released int8 build records no metadata at all, so keep those files under their published names. Rename and re-install to correct it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "type",
+          "trigger_phrases",
+          "default_settings",
+          "config_path",
+          "base",
+          "format",
+          "branch"
+        ],
+        "title": "Main_Checkpoint_Ideogram4_Config",
+        "description": "Model config for Ideogram 4 single-file transformer checkpoints (safetensors).\n\nOne file holds ONE of the two dual-branch transformers. The Qwen3-VL 8B text encoder and the\nFLUX.2 VAE are separate models, selected on the loader node; the diffusers pipeline folder\n(``Main_Diffusers_Ideogram4_Config``) is the variant that bundles everything.\n\nQuantization: plain bf16/fp16, ComfyUI \"scaled fp8\" and ComfyUI ``int8_tensorwise``(+convrot)\nall load. The ``nvfp4`` repack of the same files is recognised and rejected with\n`InvalidMatchError`, which keeps it out of the database entirely -- `NotAMatchError` would let\nit fall through to `Unknown_Config` and register a 5 GiB file that nothing can ever load."
+      },
       "Main_Checkpoint_Krea2_Config": {
         "properties": {
           "key": {
@@ -75731,6 +76014,9 @@
                 "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
               },
               {
+                "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
               },
               {
@@ -76411,6 +76697,9 @@
                     "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
                   },
                   {
+                    "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
+                  },
+                  {
                     "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
                   },
                   {
@@ -76976,6 +77265,9 @@
                 "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
               },
               {
+                "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
               },
               {
@@ -77395,6 +77687,9 @@
               },
               {
                 "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
               },
               {
                 "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
@@ -78040,6 +78335,9 @@
                 "$ref": "#/components/schemas/Qwen3VariantType"
               },
               {
+                "$ref": "#/components/schemas/Qwen3VLVariantType"
+              },
+              {
                 "$ref": "#/components/schemas/Krea2VariantType"
               },
               {
@@ -78289,6 +78587,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/Main_Checkpoint_ZImage_Config"
+                },
+                {
+                  "$ref": "#/components/schemas/Main_Checkpoint_Ideogram4_Config"
                 },
                 {
                   "$ref": "#/components/schemas/Main_Checkpoint_Krea2_Config"
@@ -83131,6 +83432,10 @@
             "title": "Format",
             "default": "checkpoint"
           },
+          "variant": {
+            "$ref": "#/components/schemas/Qwen3VLVariantType",
+            "description": "Which Qwen3-VL encoder this is. The consuming architecture is fixed: Krea-2 needs the 4B, Ideogram 4 the 8B, and the two are not interchangeable."
+          },
           "cpu_only": {
             "anyOf": [
               {
@@ -83161,10 +83466,11 @@
           "base",
           "type",
           "format",
+          "variant",
           "cpu_only"
         ],
         "title": "Qwen3VLEncoder_Checkpoint_Config",
-        "description": "Configuration for a single-file Qwen3-VL text encoder checkpoint (e.g. ComfyUI ``qwen3vl_4b_*``).\n\nDistinguished from the text-only ``Qwen3Encoder`` checkpoint (Z-Image) by the presence of the\nQwen3-VL visual tower. The tokenizer is not bundled in single-file checkpoints and is pulled from\nHuggingFace (``Qwen/Qwen3-VL-4B-Instruct``) by the loader."
+        "description": "Configuration for a single-file Qwen3-VL text encoder checkpoint (ComfyUI ``qwen3vl_4b_*`` /\n``qwen3vl_8b_*``).\n\nDistinguished from the text-only ``Qwen3Encoder`` checkpoint (Z-Image) by the presence of the\nQwen3-VL visual tower. Neither the config nor the tokenizer is bundled in a single-file\ncheckpoint; both are pulled from HuggingFace by the loader, from the repo the recorded variant\nnames."
       },
       "Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config": {
         "properties": {
@@ -83300,7 +83606,7 @@
           "format"
         ],
         "title": "Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config",
-        "description": "Configuration for MiniMax H3's truncated Qwen3-VL-32B conditioning encoder single files\n(Comfy-Org ``qwen3vl_32b_minimax_h3_*.safetensors`` and mirrors).\n\nThese are NOT complete Qwen3-VL-32B checkpoints: the language stack is truncated to the 50\nlayers H3 conditions on (the file's ``minimax_h3_te`` metadata records the contract:\n\"unnormalized_hidden_after_layer_50\"), the final norm and LM head are omitted, and the\nbf16/int8-convrot repacks quantize only the 50 language layers (vision tower stays bf16).\n\nIdentified primarily by the explicit ``minimax_h3_te`` safetensors metadata; a structural\nfallback covers metadata-stripped re-uploads. Krea-2's ``Qwen3VLEncoder_Checkpoint_Config``\nis locked to the 4B shape (hidden 2560), so neither config can claim the other's files.\n\nThe nvfp4 repacks share this layout and are accepted here, but the loader rejects their\nquantization format early (header-only check) with a clear error - mirroring how the H3\ntransformer checkpoint config treats fp8_scaled files."
+        "description": "Configuration for MiniMax H3's truncated Qwen3-VL-32B conditioning encoder single files\n(Comfy-Org ``qwen3vl_32b_minimax_h3_*.safetensors`` and mirrors).\n\nThese are NOT complete Qwen3-VL-32B checkpoints: the language stack is truncated to the 50\nlayers H3 conditions on (the file's ``minimax_h3_te`` metadata records the contract:\n\"unnormalized_hidden_after_layer_50\"), the final norm and LM head are omitted, and the\nbf16/int8-convrot repacks quantize only the 50 language layers (vision tower stays bf16).\n\nIdentified primarily by the explicit ``minimax_h3_te`` safetensors metadata; a structural\nfallback covers metadata-stripped re-uploads. ``Qwen3VLEncoder_Checkpoint_Config`` accepts only\nthe two widths it can build (2560 and 4096), so neither config can claim the other's files.\n\nThe nvfp4 repacks share this layout and are accepted here, but the loader rejects their\nquantization format early (header-only check) with a clear error - mirroring how the H3\ntransformer checkpoint config treats fp8_scaled files."
       },
       "Qwen3VLEncoder_Qwen3VLEncoder_Config": {
         "properties": {
@@ -83404,6 +83710,10 @@
             "title": "Format",
             "default": "qwen3_vl_encoder"
           },
+          "variant": {
+            "$ref": "#/components/schemas/Qwen3VLVariantType",
+            "description": "Which Qwen3-VL encoder this is. The consuming architecture is fixed: Krea-2 needs the 4B, Ideogram 4 the 8B, and the two are not interchangeable."
+          },
           "cpu_only": {
             "anyOf": [
               {
@@ -83433,10 +83743,17 @@
           "base",
           "type",
           "format",
+          "variant",
           "cpu_only"
         ],
         "title": "Qwen3VLEncoder_Qwen3VLEncoder_Config",
-        "description": "Configuration for standalone Qwen3-VL text encoder models (diffusers-like directory format).\n\nUsed by Krea-2, whose text conditioning comes from a Qwen3-VL model (``Qwen3VLModel``). The model\nweights are expected either in a ``text_encoder`` subfolder of the model directory or directly at the\nroot (standalone download). This is distinct from the text-only ``Qwen3Encoder`` (Z-Image / FLUX.2\nKlein) and the Qwen2.5-VL ``QwenVLEncoder`` (Qwen Image)."
+        "description": "Configuration for standalone Qwen3-VL text encoder models (diffusers-like directory format).\n\nUsed by Krea-2 (4B) and Ideogram 4 (8B), whose text conditioning comes from a Qwen3-VL model\n(``Qwen3VLModel``). The model weights are expected either in a ``text_encoder`` subfolder of the\nmodel directory or directly at the root (standalone download). This is distinct from the text-only\n``Qwen3Encoder`` (Z-Image / FLUX.2 Klein) and the Qwen2.5-VL ``QwenVLEncoder`` (Qwen Image)."
+      },
+      "Qwen3VLVariantType": {
+        "type": "string",
+        "enum": ["qwen3_vl_4b", "qwen3_vl_8b"],
+        "title": "Qwen3VLVariantType",
+        "description": "Qwen3-VL (vision-language) text encoder variants, by language-model width.\n\nSeparate from `Qwen3VariantType`: those are the text-only Qwen3 encoders (Z-Image, FLUX.2\nKlein). The VL models carry a visual tower and are not interchangeable with them, and the two\nfamilies do not even share widths at the same parameter count."
       },
       "Qwen3VariantType": {
         "type": "string",
@@ -90838,6 +91155,9 @@
                 "$ref": "#/components/schemas/Qwen3VariantType"
               },
               {
+                "$ref": "#/components/schemas/Qwen3VLVariantType"
+              },
+              {
                 "$ref": "#/components/schemas/Krea2VariantType"
               },
               {
@@ -91014,6 +91334,9 @@
               },
               {
                 "$ref": "#/components/schemas/Qwen3VariantType"
+              },
+              {
+                "$ref": "#/components/schemas/Qwen3VLVariantType"
               },
               {
                 "$ref": "#/components/schemas/Krea2VariantType"
@@ -92272,6 +92595,9 @@
               },
               {
                 "$ref": "#/components/schemas/Qwen3VariantType"
+              },
+              {
+                "$ref": "#/components/schemas/Qwen3VLVariantType"
               },
               {
                 "$ref": "#/components/schemas/Krea2VariantType"

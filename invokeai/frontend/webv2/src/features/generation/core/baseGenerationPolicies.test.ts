@@ -31,6 +31,7 @@ import {
   getPromptPolicy,
   getSettingsWithModelDefaults,
   isReferenceImageSupported,
+  isGenerateModelSelectable,
   isSupportedGenerateModel,
 } from './baseGenerationPolicies';
 import { SUPPORTED_GENERATE_BASES } from './supportedBases';
@@ -270,6 +271,59 @@ describe('architecture policy, read from the backend capability table', () => {
     // 'external' is the pseudo-base of external image generators; they are supported through
     // `type === 'external_image_generator'`, not by having an architecture row.
     expect(isSupportedGenerateModel(createModel('external'))).toBe(false);
+  });
+
+  // Read the way the architecture suite reads sources; `node:fs` is not typed for this project.
+  const SOURCES = import.meta.glob(
+    [
+      '../../../workbench/palette/paletteProviders.ts',
+      '../ui/GenerateWidgetView.tsx',
+      '../ui/GenerateModelCard.tsx',
+      './resolveGenerateWidgetValues.ts',
+    ],
+    { eager: true, import: 'default', query: '?raw' }
+  ) as Record<string, string>;
+
+  describe('isGenerateModelSelectable', () => {
+    const unconditional = createModel('ideogram-4', { branch: 'unconditional', format: 'checkpoint' });
+    const conditional = createModel('ideogram-4', { branch: 'conditional', format: 'checkpoint' });
+
+    it('keeps a model that cannot run on its own out of every picker', () => {
+      // Ideogram 4's unconditional branch is the thing the conditional one is guided against. It is
+      // a `main` model on a generatable base, so the loose predicate accepts it and the user can
+      // assemble a complete-looking selection that the backend refuses at enqueue.
+      expect(isSupportedGenerateModel(unconditional)).toBe(true);
+      expect(isGenerateModelSelectable(unconditional)).toBe(false);
+
+      expect(isGenerateModelSelectable(conditional)).toBe(true);
+      expect(isGenerateModelSelectable(createModel('ideogram-4', { format: 'diffusers' }))).toBe(true);
+      // Wan's low-noise expert is deliberately still selectable: without it the high-noise expert
+      // runs the whole schedule and still produces a video.
+      expect(isGenerateModelSelectable(createModel('wan', { variant: 'a14b' }))).toBe(true);
+    });
+
+    it('is what every path that offers or picks a model filters with', () => {
+      // The exclusion is only worth anything where models are *chosen*. `GenerateModelCard` had it
+      // and the palette, the widget fallback and the default resolver did not, so the same dead end
+      // stayed reachable — the resolver worst of all, since the user never picks that model.
+      //
+      // Asserted on the call, not on the identifier: an earlier version of this test looked for the
+      // name anywhere in the file and passed with the filter reverted, because the import line
+      // still mentioned it. The default resolver additionally has a behavioural test of its own.
+      const callSites = {
+        '../../../workbench/palette/paletteProviders.ts': '.filter(isGenerateModelSelectable)',
+        './resolveGenerateWidgetValues.ts': 'models.filter(isGenerateModelSelectable)',
+        '../ui/GenerateWidgetView.tsx': 'models.filter(isGenerateModelSelectable)',
+        '../ui/GenerateModelCard.tsx': 'isGenerateModelSelectable(model)',
+      };
+
+      for (const [path, call] of Object.entries(callSites)) {
+        const source = SOURCES[path];
+
+        expect(source, `${path} is not in the source glob`).toBeTypeOf('string');
+        expect(source, `${path} must select models with isGenerateModelSelectable`).toContain(call);
+      }
+    });
   });
 });
 
@@ -1060,6 +1114,7 @@ describe('Krea-2, Ideogram 4 and Wan policies', () => {
     key: 'qwen3-vl',
     name: 'Qwen3-VL',
     type: 'qwen3_vl_encoder',
+    variant: 'qwen3_vl_4b',
   };
   const wanVae: VaeModelConfig = { base: 'wan', key: 'wan-vae', latent_channels: 16, name: 'Wan VAE', type: 'vae' };
   const wanT5Encoder: ComponentModelConfig = { base: 'any', key: 'wan-t5', name: 'Wan T5', type: 'wan_t5_encoder' };
@@ -1082,7 +1137,9 @@ describe('Krea-2, Ideogram 4 and Wan policies', () => {
     // `steps` is ge=2 (the node keeps a polish step and a main step) and `mu` is ge=-4/le=4 -- the
     // mu control used to offer 0..10, so more than half its track was rejected at enqueue and the
     // whole negative half was unreachable.
-    const model = createModel('ideogram-4');
+    // Diffusers: this is about the numeric ranges, and a single-file main would also report its
+    // unfilled component slots.
+    const model = createModel('ideogram-4', { format: 'diffusers' });
 
     expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4Steps: 1 }))).toContain(
       'Ideogram 4 steps must be between 2 and 100.'

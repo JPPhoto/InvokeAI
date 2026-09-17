@@ -138,6 +138,8 @@ export const MODEL_VARIANT_LABELS: Record<string, string> = {
   qwen3_06b: 'Qwen3 0.6B',
   qwen3_4b: 'Qwen3 4B',
   qwen3_8b: 'Qwen3 8B',
+  qwen3_vl_4b: 'Qwen3-VL 4B (Krea-2)',
+  qwen3_vl_8b: 'Qwen3-VL 8B (Ideogram 4)',
   ref2va: 'MiniMax H3 Ref2VA',
   res2k_sr4x: 'PiD 2K (4x SR)',
   res2kto4k_sr4x: 'PiD 4K (4x SR Upscale)',
@@ -171,6 +173,10 @@ const VARIANTS_BY_TYPE: Record<string, readonly string[]> = {
   mistral_encoder: ['cow_mistral3_small', 'mistral3_24b'],
   pid_decoder: ['res2k_sr4x', 'res2kto4k_sr4x'],
   qwen3_encoder: ['qwen3_4b', 'qwen3_8b', 'qwen3_06b'],
+  // Required on the config, so the edit form must offer both: without an entry here it would show
+  // only "None" plus the current value, and saving "None" fails validation on the way into the
+  // database.
+  qwen3_vl_encoder: ['qwen3_vl_4b', 'qwen3_vl_8b'],
 };
 
 /**
@@ -184,6 +190,13 @@ export const getVariantOptionsFor = (base: string, type: string): readonly strin
 
   if (type === 'lora') {
     return base === 'wan' ? ['a14b', '5b'] : [];
+  }
+
+  if (type === 'qwen3_vl_encoder') {
+    // MiniMax H3's truncated Qwen3-VL-32B shares this model type under its own base and its config
+    // has no `variant` field at all, so offering the two sizes there would be offering a save that
+    // can only fail. The encoders that carry the field are base-agnostic components.
+    return base === 'any' ? (VARIANTS_BY_TYPE[type] ?? []) : [];
   }
 
   return VARIANTS_BY_TYPE[type] ?? [];
