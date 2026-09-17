@@ -268,6 +268,19 @@ flux2_klein_qwen3_8b_encoder_fp4 = StarterModel(
     type=ModelType.Qwen3Encoder,
 )
 
+# A community repack -- Comfy-Org publishes no int8 build of this encoder. Pinned to a commit rather
+# than `main` for the same reason the FLUX.1 and Klein 9B int8 entries are: the decode follows the
+# file's own `comfy_quant` marker, which says `convrot: true` at group size 256. A reupload at the
+# same path that changed or dropped that flag would be derotated wrongly, and the result loads
+# cleanly, logs "Kept 252 of 252" and encodes noise.
+flux2_klein_qwen3_8b_encoder_int8 = StarterModel(
+    name="FLUX.2 Klein Qwen3 8B Encoder (int8)",
+    base=BaseModelType.Any,
+    source="https://huggingface.co/supermind/int8_convrot_models/resolve/eb6682675836a42aa91fd4effcd77d68fe60ff42/text_encoders/qwen_3_8b_int8_convrot.safetensors",
+    description="Community int8_convrot Qwen3 8B text encoder for FLUX.2 Klein 9B. Its 252 projections stay int8 and dequantize per forward, so it occupies roughly what it downloads rather than the ~16GB of the BF16 release. ~9.4GB download",
+    type=ModelType.Qwen3Encoder,
+)
+
 # Comfy-Org safetensors (single-file, 30-layer cow, with embedded Tekken tokenizer).
 # Higher precision than the cow GGUFs and avoids the Tekken-via-HF-Hub fetch.
 flux2_dev_comfy_mistral_fp8 = StarterModel(

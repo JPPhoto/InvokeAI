@@ -14,10 +14,12 @@ from safetensors.torch import save_file
 
 from invokeai.backend.quantization.int8_convrot import (
     CONVROT_GROUP_SIZE,
+    Int8ConvrotLinear,
     cast_unquantized,
     check_int8_scale_layout,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
+    install_int8_convrot_layers,
     predict_int8_cast_size,
     read_comfy_quant_markers,
     reject_foreign_quantization_scales,
@@ -378,6 +380,111 @@ class TestTheForeignScaleCheck:
         }
 
         reject_foreign_quantization_scales(sd, {}, "Ideogram 4", self._model())
+
+
+class TestTheSharedInstall:
+    """`install_int8_convrot_layers` owns the order the five steps have to run in.
+
+    Each loader used to write the sequence out by hand, and two of them wrote it out incompletely:
+    Z-Image and the PiD decoder both skipped the foreign-scale check and would cast a mixed
+    checkpoint's fp8 weights without their scales. The order is what these pin -- every step is
+    individually covered above, and a partial sequence raises nothing at all.
+    """
+
+    @staticmethod
+    def _model() -> torch.nn.Module:
+        model = torch.nn.Module()
+        model.keeps = torch.nn.Linear(CONVROT_GROUP_SIZE, 4, bias=False)
+        model.widens = torch.nn.Linear(CONVROT_GROUP_SIZE, 4, bias=False)
+        return model
+
+    @staticmethod
+    def _int8_layer(path: str) -> dict[str, torch.Tensor]:
+        return {
+            f"{path}.weight": torch.ones(4, CONVROT_GROUP_SIZE, dtype=torch.int8),
+            f"{path}.weight_scale": torch.ones(4, 1),
+        }
+
+    def test_a_foreign_scale_is_refused_before_a_single_byte_is_reserved(self) -> None:
+        """The reservation is the expensive step -- it evicts other models to make room. A load that
+        is about to be refused must not first ask the cache to free memory for it."""
+        sd = {**self._int8_layer("keeps"), "widens.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn)}
+        sd["widens.weight_scale"] = torch.ones(())
+        reserved: list[int] = []
+
+        with pytest.raises(ValueError, match=r"widens\.weight_scale"):
+            install_int8_convrot_layers(
+                self._model(),
+                sd,
+                {"keeps": MARKER},
+                torch.float32,
+                architecture="Z-Image",
+                reserve=reserved.append,
+            )
+
+        assert reserved == []
+
+    def test_the_reservation_is_made_before_the_split_widens_anything(self) -> None:
+        """A locked model cannot be evicted, so the first reservation has to already cover the peak.
+        Reserving after the split lets its dequantized tensors land on an unreserved cache."""
+        sd = {**self._int8_layer("keeps"), **self._int8_layer("widens")}
+        widths: list[torch.dtype] = []
+
+        install_int8_convrot_layers(
+            self._model(),
+            sd,
+            {"keeps": MARKER, "widens": MARKER},
+            torch.float32,
+            architecture="Z-Image",
+            reserve=lambda _bytes: widths.append(sd["widens.weight"].dtype),
+            skip_patterns=("widens",),
+        )
+
+        assert widths == [torch.int8]
+        # And the split did run afterwards, or the assertion above would pass vacuously.
+        assert sd["widens.weight"].dtype is torch.float32
+
+    def test_only_the_surviving_layers_are_installed_and_returned(self) -> None:
+        """A marker on a layer the split widened must not reach the swap: it would install an
+        `Int8ConvrotLinear` over a weight that is no longer int8."""
+        model = self._model()
+        sd = {**self._int8_layer("keeps"), **self._int8_layer("widens")}
+
+        surviving = install_int8_convrot_layers(
+            model,
+            sd,
+            {"keeps": MARKER, "widens": MARKER},
+            torch.float32,
+            architecture="Z-Image",
+            reserve=lambda _bytes: None,
+            skip_patterns=("widens",),
+        )
+
+        assert set(surviving) == {"keeps"}
+        assert isinstance(model.keeps, Int8ConvrotLinear)
+        assert not isinstance(model.widens, Int8ConvrotLinear)
+
+    def test_the_reservation_charges_int8_its_byte_and_adds_the_caller_s_own_bytes(self) -> None:
+        """Krea-2 and Z-Image hold nvfp4 layers beside the int8 ones, so one reservation covers the
+        whole load. Spelled out rather than recomputed with `predict_int8_cast_size`: an expectation
+        derived from the implementation cannot notice the implementation charging the wrong width."""
+        reserved: list[int] = []
+
+        install_int8_convrot_layers(
+            self._model(),
+            self._int8_layer("keeps"),
+            {"keeps": MARKER},
+            torch.float32,
+            architecture="Z-Image",
+            reserve=reserved.append,
+            extra_reserved_bytes=4096,
+        )
+
+        # The layer stays int8, so it is charged one byte per code -- not float32's four -- plus its
+        # float32 scale column, plus what the caller asked for on top.
+        codes = 4 * CONVROT_GROUP_SIZE
+        scale = 4 * 4
+        assert reserved == [codes + scale + 4096]
 
 
 def test_read_comfy_quant_markers_reads_a_marker_off_a_file(tmp_path) -> None:

@@ -50,14 +50,10 @@ from invokeai.backend.quantization.fp8_scaled import (
     warn_on_unattached_scales,
 )
 from invokeai.backend.quantization.int8_convrot import (
-    cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
-    predict_int8_cast_size,
-    reject_foreign_quantization_scales,
+    install_int8_convrot_layers,
     reject_unmarked_int8_weights,
-    split_int8_convrot_layers,
-    swap_in_int8_linears,
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, log_unexpected_keys
@@ -354,19 +350,15 @@ class Ideogram4CheckpointModel(ModelLoader):
             # same dict `load_state_dict(assign=True)` aliased its parameters from.
             sd = drop_unconsumed_quantization_sidecars(sd)
 
-            quantized = int8_markers
-            # A scale left over from another scheme means its weight is about to be cast without
-            # one. After the model exists, so the check can tell a real module from a stray key.
-            reject_foreign_quantization_scales(sd, quantized, "Ideogram 4", model)
-
-            # Reserve before the split for the same reason as below, and charge the int8 payloads
-            # their actual one byte rather than the compute dtype's two.
-            self._ram_cache.make_room(
-                predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
+            quantized = install_int8_convrot_layers(
+                model,
+                sd,
+                int8_markers,
+                model_dtype,
+                architecture="Ideogram 4",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
             )
-            quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
-            cast_unquantized(sd, model_dtype, quantized)
-            swap_in_int8_linears(model, sd, quantized)
             kept = 0
         else:
             # Reserve before the split: it dequantizes the layers it cannot keep through float32,

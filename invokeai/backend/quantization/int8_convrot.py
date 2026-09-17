@@ -36,7 +36,7 @@ its estimate for that, since the model's resident size does not account for it.
 
 import json
 import struct
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -662,6 +662,53 @@ def cast_unquantized(sd: dict[str, Any], dtype: torch.dtype, quantized: dict[str
     for key in sd:
         if key not in pinned and is_castable_float(sd[key]):
             sd[key] = sd[key].to(dtype)
+
+
+def install_int8_convrot_layers(
+    model: torch.nn.Module,
+    sd: dict[str, Any],
+    quantized: dict[str, dict[str, Any]],
+    dtype: torch.dtype,
+    *,
+    architecture: str,
+    reserve: Callable[[int], None],
+    skip_patterns: Iterable[str] = (),
+    extra_reserved_bytes: int = 0,
+) -> dict[str, dict[str, Any]]:
+    """Take a marked int8 checkpoint from state dict to installed ``Int8ConvrotLinear`` modules.
+
+    Five steps whose order is the point, and which every loader that keeps int8 weights needs in
+    full. Each step depends on the one before it:
+
+    1. :func:`reject_foreign_quantization_scales` -- before anything is cast, because a scale from
+       another scheme means its weight is about to be cast without one, off by ``1/weight_scale``,
+       while the orphaned scale disappears into ``strict=False``. After the model exists, because
+       only a weight this model consumes can be corrupted that way.
+    2. ``reserve`` -- before the split, which dequantizes the layers it cannot keep. A reservation
+       made afterwards lets that transient land on an unreserved cache, and a locked model cannot be
+       evicted to make room for it.
+    3. :func:`split_int8_convrot_layers` -- widens what cannot stay int8 and returns what can.
+    4. :func:`cast_unquantized` -- the dense tensors only; the surviving payloads reach
+       ``load_state_dict`` exactly as stored.
+    5. :func:`swap_in_int8_linears` -- the surviving layers, never the full marker set: a marker on
+       a module the split widened would install an ``Int8ConvrotLinear`` where the model wants
+       something else.
+
+    Written down once because getting it partially right is silent: Z-Image and the PiD decoder each
+    skipped step 1 and loaded a mixed checkpoint's fp8 weights unscaled, with nothing in the log.
+
+    ``reserve`` is the cache's ``make_room``; ``extra_reserved_bytes`` is for a loader whose file
+    also holds layers of another scheme -- Krea-2 and Z-Image add what their nvfp4 layers will cost,
+    so the one reservation covers the whole load. Returns the layers that stayed int8.
+    """
+    reject_foreign_quantization_scales(sd, quantized, architecture, model)
+    reserve(
+        predict_int8_cast_size(sd, dtype, quantized, model=model, skip_patterns=skip_patterns) + extra_reserved_bytes
+    )
+    surviving = split_int8_convrot_layers(sd, quantized, dtype, model=model, skip_patterns=skip_patterns)
+    cast_unquantized(sd, dtype, surviving)
+    swap_in_int8_linears(model, sd, surviving)
+    return surviving
 
 
 def reject_foreign_quantization_scales(

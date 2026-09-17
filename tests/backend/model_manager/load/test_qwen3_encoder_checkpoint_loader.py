@@ -1,4 +1,4 @@
-"""Loader-level test for single-file Qwen3 encoders in Comfy's fp4_mixed layout.
+"""Loader-level tests for single-file Qwen3 encoders in the two quantized layouts that reach them.
 
 Drives `Qwen3EncoderCheckpointLoader._load_from_singlefile` on a real, tiny safetensors file laid out like
 `Comfy-Org/z_image`'s `qwen_3_4b_fp4_mixed`: nvfp4 projections named by `comfy_quant` markers -- or, as another
@@ -8,6 +8,11 @@ the nvfp4 layers leave the state dict before that fold, which would pair their b
 and come back only after the blanket cast, which would widen them; and an nvfp4 `lm_head` is dropped rather than
 packed, since the loader ties `lm_head` to the embeddings. And that the returned model encodes exactly like a dense
 Qwen3 holding the same weights.
+
+The second is `int8_convrot`, which `supermind/int8_convrot_models` publishes for both encoder sizes and
+Comfy-Org publishes for neither. Everything the fp4 path does wrong to an int8 file is silent: the scaled-fp8
+fold pairs each `weight_scale` with its weight and widens it, and the blanket cast turns what is left into bf16
+integers. So what is pinned there is that the loader commits to the int8 branch before either runs.
 """
 
 import json
@@ -24,6 +29,7 @@ from invokeai.backend.model_manager.configs.qwen3_encoder import Qwen3Encoder_Ch
 from invokeai.backend.model_manager.load.model_loaders import z_image
 from invokeai.backend.model_manager.load.model_loaders.z_image import Qwen3EncoderCheckpointLoader
 from invokeai.backend.model_manager.taxonomy import Qwen3VariantType
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear, build_regular_hadamard
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear
 
 # Not a known Qwen3 size, so the loader reads the head counts off the projections at its fixed head_dim of 128:
@@ -167,3 +173,108 @@ def test_an_fp4_mixed_encoder_loads_packed_and_encodes_like_its_dense_weights(
     loader._ram_cache.make_room.assert_called_once()
     (reserved,), _ = loader._ram_cache.make_room.call_args
     assert rest + packed <= reserved < rest + packed + 1024
+
+
+# The real repacks rotate over 256-wide groups, which this 128-wide toy encoder cannot hold. The marker
+# carries the group size for exactly this reason -- a repack derotated with the wrong width runs and
+# generates noise -- and 64-wide repacks exist, so reading it is what the loader has to do.
+_INT8_GROUP = 64
+_INT8_MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": _INT8_GROUP}
+
+
+def _quantize_convrot(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Mirror of comfy-quants: rotate along the input dim, then per-output-channel int8.
+
+    Returns the codes, the scale, and the weight the loader has to reconstruct -- which is the
+    *dequantized* one, not the original: rounding to 127 levels is lossy, and comparing against the
+    original would be comparing against something no correct loader produces.
+    """
+    out_features, in_features = weight.shape
+    hadamard = build_regular_hadamard(_INT8_GROUP, dtype=weight.dtype)
+    rotated = (weight.view(out_features, in_features // _INT8_GROUP, _INT8_GROUP) @ hadamard.T).view(
+        out_features, in_features
+    )
+    scale = rotated.abs().amax(dim=1, keepdim=True) / 127.0
+    codes = torch.clamp(torch.round(rotated / scale), -128, 127).to(torch.int8)
+    restored = (codes.float() * scale).view(out_features, in_features // _INT8_GROUP, _INT8_GROUP) @ hadamard
+    return codes, scale.float(), restored.view(out_features, in_features)
+
+
+def _write_int8_checkpoint(tmp_path: Path) -> tuple[Path, dict[str, torch.Tensor]]:
+    """The int8 layout: codes, a per-output-row scale, a marker. Norms and embeddings stay dense,
+    exactly as the 8B repack ships them."""
+    torch.manual_seed(0)
+    tensors: dict[str, torch.Tensor] = {}
+    dense: dict[str, torch.Tensor] = {}
+    projections = {**NVFP4_PROJECTIONS, "self_attn.v_proj": (HIDDEN, HIDDEN)}
+    for name, shape in projections.items():
+        path = f"model.layers.0.{name}"
+        codes, scale, restored = _quantize_convrot(torch.randn(shape) * 0.05)
+        tensors[f"{path}.weight"] = codes
+        tensors[f"{path}.weight_scale"] = scale
+        tensors[f"{path}.comfy_quant"] = _marker_blob(_INT8_MARKER)
+        # W8A8 activation scales. This path dequantizes the weight and computes in the compute
+        # dtype, so there is nothing to apply them to; one Qwen3-VL repack ships 337 of them.
+        tensors[f"{path}.input_scale"] = torch.ones(shape[1])
+        dense[f"{path}.weight"] = restored
+
+    for key, tensor in {
+        "model.embed_tokens.weight": torch.randn(VOCAB, HIDDEN),
+        "model.layers.0.input_layernorm.weight": torch.rand(HIDDEN) + 0.5,
+        "model.layers.0.post_attention_layernorm.weight": torch.rand(HIDDEN) + 0.5,
+        "model.layers.0.self_attn.q_norm.weight": torch.rand(128) + 0.5,
+        "model.layers.0.self_attn.k_norm.weight": torch.rand(128) + 0.5,
+        "model.norm.weight": torch.rand(HIDDEN) + 0.5,
+    }.items():
+        tensors[key] = tensor
+        dense[key] = tensor
+
+    checkpoint = tmp_path / "qwen_3_8b_int8_convrot.safetensors"
+    save_file(tensors, checkpoint)
+    return checkpoint, dense
+
+
+def test_an_int8_convrot_encoder_stays_int8_resident_and_encodes_like_its_dense_weights(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkpoint, dense = _write_int8_checkpoint(tmp_path)
+    monkeypatch.setattr(z_image.TorchDevice, "choose_torch_device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(z_image.TorchDevice, "choose_bfloat16_safe_dtype", lambda _device: torch.float32)
+    loader = object.__new__(Qwen3EncoderCheckpointLoader)
+    loader._ram_cache = SimpleNamespace(make_room=MagicMock())
+
+    def refuse(*_args, **_kwargs) -> int:
+        raise AssertionError("the scaled-fp8 fold must not see an int8 checkpoint")
+
+    monkeypatch.setattr(z_image, "_fold_comfy_scaled_weights", refuse)
+    config = Qwen3Encoder_Checkpoint_Config.model_construct(path=str(checkpoint), variant=Qwen3VariantType.Qwen3_8B)
+
+    model = loader._load_from_singlefile(config)
+
+    layer = model.model.layers[0]
+    for name in (*NVFP4_PROJECTIONS, "self_attn.v_proj"):
+        module = layer.get_submodule(name)
+        assert isinstance(module, Int8ConvrotLinear), name
+        # As stored. Cast to the compute dtype these would be bf16 integers, which loads and encodes noise.
+        assert module.weight.dtype is torch.int8, name
+    assert model.lm_head.weight is model.model.embed_tokens.weight
+
+    input_ids = torch.tensor([[1, 5, 7, 2, 30]])
+    with torch.no_grad():
+        encoded = model(input_ids=input_ids, output_hidden_states=True).hidden_states[-1]
+        expected = _dense_reference(dense)(input_ids=input_ids, output_hidden_states=True).hidden_states[-1]
+    assert torch.allclose(encoded, expected, atol=1e-4)
+
+    # One reservation, made before anything widened. Spelled out rather than bounded: the int8
+    # payloads charged one byte per code and their float32 scale column, the dense remainder charged
+    # float32, and the `.input_scale` activation scales charged nothing -- this path has nothing to
+    # apply them to, and left in the dict they would each cost `in_features` floats here. Reserving
+    # the decoded size instead would ask the cache to free four times what this load uses -- on the
+    # real 8B encoder, ~30GB for ~8.
+    shapes = [*NVFP4_PROJECTIONS.values(), (HIDDEN, HIDDEN)]
+    quantized_weights = {f"model.layers.0.{name}.weight" for name in (*NVFP4_PROJECTIONS, "self_attn.v_proj")}
+    codes_and_scales = sum(rows * columns + rows * 4 for rows, columns in shapes)
+    dense_bytes = sum(tensor.nelement() * 4 for key, tensor in dense.items() if key not in quantized_weights)
+    loader._ram_cache.make_room.assert_called_once()
+    (reserved,), _ = loader._ram_cache.make_room.call_args
+    assert reserved == codes_and_scales + dense_bytes
