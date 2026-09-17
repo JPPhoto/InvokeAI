@@ -108,6 +108,7 @@ from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.util.logging import InvokeAILogger
 from invokeai.backend.util.silence_warnings import SilenceWarnings
+from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras
 
 logger = InvokeAILogger.get_logger(__name__)
 
@@ -139,7 +140,7 @@ class FluxVAELoader(ModelLoader):
         with accelerate.init_empty_weights():
             model = AutoEncoder(get_flux_ae_params())
         sd = load_file(model_path)
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX VAE checkpoint", assign=True)
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
             try:
@@ -263,7 +264,7 @@ class Flux2VAELoader(ModelLoader):
         for k in sd.keys():
             sd[k] = sd[k].to(torch.bfloat16)
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX.2 VAE checkpoint", assign=True)
 
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
@@ -344,9 +345,13 @@ class BnbQuantizedLlmInt8bCheckpointModel(ModelLoader):
         # There is a shared reference to a single weight tensor in the model.
         # Both "encoder.embed_tokens.weight" and "shared.weight" refer to the same tensor, so only the latter should
         # be present in the state_dict.
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False, assign=True)
-        assert len(unexpected_keys) == 0
-        assert set(missing_keys) == {"encoder.embed_tokens.weight"}
+        load_state_dict_ignoring_extras(
+            model,
+            state_dict,
+            source="FLUX bnb-int8 T5 encoder",
+            assign=True,
+            allowed_missing={"encoder.embed_tokens.weight"},
+        )
         # Re-tie shared weights. In transformers 5.x, weight tying is implemented at the
         # parameter level (via _tie_weights / tie_weights) rather than as a Python object
         # alias.  load_state_dict(assign=True) replaces parameters in-place, which severs
@@ -489,7 +494,7 @@ class T5EncoderGGUFModel(ModelLoader):
             model = T5EncoderModel(t5_config)
 
         # Leave transformer Linear weights as GGMLTensors; the autocast cache handles them.
-        model.load_state_dict(sd, strict=False, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX GGUF T5 encoder", assign=True, allow_missing=True)
 
         # Embedding lookups can't run on quantized GGMLTensors, so dequantize the token embeddings and
         # re-tie the encoder's embed_tokens to the shared embedding.
@@ -791,7 +796,7 @@ class FluxCheckpointModel(ModelLoader):
         fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, torch.bfloat16, model=model, skip_patterns=skip_patterns)
         # Everything else is cast to bfloat16, the only dtype currently supported for inference.
         kept = cast_state_dict(sd, torch.bfloat16, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX transformer checkpoint", assign=True)
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
@@ -854,7 +859,7 @@ class FluxGGUFCheckpointModel(ModelLoader):
             img_in_weight.quantized_data = img_in_weight.quantized_data.view(expected_img_in_weight_shape)
             img_in_weight.tensor_shape = expected_img_in_weight_shape
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX GGUF transformer checkpoint", assign=True)
         return model
 
 
@@ -896,7 +901,7 @@ class FluxBnbQuantizednf4bCheckpointModel(ModelLoader):
             sd = load_file(model_path)
             if "model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale" in sd:
                 sd = convert_bundle_to_flux_transformer_checkpoint(sd)
-            model.load_state_dict(sd, assign=True)
+            load_state_dict_ignoring_extras(model, sd, source="FLUX nf4 transformer checkpoint", assign=True)
         return model
 
 
@@ -1202,7 +1207,7 @@ class Flux2CheckpointModel(ModelLoader):
         )
 
         # Load the state dict - guidance weights were already initialized above if missing
-        model.load_state_dict(converted_sd, assign=True)
+        load_state_dict_ignoring_extras(model, converted_sd, source="FLUX.2 transformer checkpoint", assign=True)
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
@@ -1380,11 +1385,9 @@ class Flux2SDNQCheckpointModel(ModelLoader):
             model = Qwen3ForCausalLM(te_config)
 
         sd = sdnq_sd_loader(te_dir, compute_dtype=torch.bfloat16)
-        missing, unexpected = model.load_state_dict(sd, assign=True, strict=False)
-        if unexpected:
-            raise ValueError(f"Unexpected keys loading SDNQ Qwen3 text encoder: {unexpected}")
-        if missing and missing != ["lm_head.weight"]:
-            raise ValueError(f"Unexpected missing keys loading SDNQ Qwen3 text encoder: {missing}")
+        missing = load_state_dict_ignoring_extras(
+            model, sd, source="SDNQ Qwen3 text encoder", assign=True, allowed_missing={"lm_head.weight"}
+        )
         if missing == ["lm_head.weight"]:
             model.lm_head.weight = model.model.embed_tokens.weight
         return model
@@ -1473,7 +1476,7 @@ class Flux2SDNQCheckpointModel(ModelLoader):
                         out2, in2, dtype=torch.bfloat16
                     )
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="SDNQ FLUX.2 transformer checkpoint", assign=True)
         return model
 
 
@@ -1620,7 +1623,7 @@ class Flux2GGUFCheckpointModel(ModelLoader):
                         out_features2, in_features2, dtype=torch.bfloat16
                     )
 
-        model.load_state_dict(converted_sd, assign=True)
+        load_state_dict_ignoring_extras(model, converted_sd, source="FLUX.2 GGUF transformer checkpoint", assign=True)
         return model
 
 
@@ -1657,7 +1660,7 @@ class FluxControlnetModel(ModelLoader):
             # HACK(ryand): Is it safe to assume dev here?
             model = XLabsControlNetFlux(get_flux_transformers_params(FluxVariantType.Dev))
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX XLabs ControlNet checkpoint", assign=True)
         return model
 
     def _load_instantx_controlnet(self, sd: dict[str, torch.Tensor]) -> AnyModel:
@@ -1668,7 +1671,7 @@ class FluxControlnetModel(ModelLoader):
         with accelerate.init_empty_weights():
             model = InstantXControlNetFlux(flux_params, num_control_modes)
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX InstantX ControlNet checkpoint", assign=True)
         return model
 
 
@@ -1712,7 +1715,7 @@ class FluxReduxModelLoader(ModelLoader):
         with accelerate.init_empty_weights():
             model = FluxReduxModel()
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="FLUX Redux checkpoint", assign=True)
         model.to(dtype=torch.bfloat16)
         return model
 
@@ -1792,7 +1795,7 @@ class FluxSDNQDiffusersModel(ModelLoader):
         if "model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale" in sd:
             sd = convert_bundle_to_flux_transformer_checkpoint(sd)
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="SDNQ FLUX transformer checkpoint", assign=True)
         return model
 
     def _load_sdnq_transformer(self, transformer_path: Path, config: Main_SDNQ_Diffusers_FLUX_Config) -> AnyModel:
@@ -1806,7 +1809,7 @@ class FluxSDNQDiffusersModel(ModelLoader):
         # Convert from diffusers format to BFL format
         sd = self._convert_diffusers_sd_to_bfl(sd)
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="SDNQ FLUX transformer", assign=True)
         return model
 
     def _convert_diffusers_sd_to_bfl(self, sd: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:

@@ -663,8 +663,12 @@ class ModelLoader(ModelLoaderBase):
         """Cast a skipped module's float8 params back to the dtype it is expected to compute in.
 
         Only float8 params are touched, and only the storage dtypes — a quantized param (GGUF, NF4,
-        bitsandbytes) is left to its own kernels.
+        bitsandbytes) is left to its own kernels. A scaled-fp8 layer (fp8 weight plus `weight_scale`)
+        is not raw codes either: `CustomLinear` dequantizes it with its scale, while a plain upcast
+        here would drop the scale.
         """
+        if getattr(module, "weight_scale", None) is not None:
+            return
         for param in module.parameters(recurse=False):
             if param.data.dtype in FP8_STORAGE_DTYPES and not _is_quantized_param(param):
                 param.data = param.data.to(compute_dtype)
