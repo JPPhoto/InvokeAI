@@ -126,6 +126,9 @@ def loaded(request, monkeypatch: pytest.MonkeyPatch, tmp_path) -> SimpleNamespac
     loader = object.__new__(Krea2CheckpointModel)
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     loader._logger = MagicMock()
+    # Supplied because the loader reads it when it decides whether to keep fp8 weights packed:
+    # a fixture built with `object.__new__` has to provide every attribute that path touches.
+    loader._torch_device = torch.device("cpu")
     loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
 
     monkeypatch.setattr(diffusers, "Krea2Transformer2DModel", _TinyKrea2, raising=False)

@@ -119,6 +119,9 @@ def _loader(monkeypatch: pytest.MonkeyPatch, keep_fp8: bool) -> tuple[MistralEnc
     monkeypatch.setattr(mistral_encoder, "should_keep_fp8_weights", lambda _device: keep_fp8)
     loader = object.__new__(MistralEncoderCheckpointLoader)
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
+    # Supplied because the loader reads it when it decides whether to keep fp8 weights packed:
+    # a fixture built with `object.__new__` has to provide every attribute that path touches.
+    loader._torch_device = torch.device("cpu")
 
     widening: list[str] = []
     for name in ("_drop_quantization_metadata", "split_fp8_scaled_layers"):
