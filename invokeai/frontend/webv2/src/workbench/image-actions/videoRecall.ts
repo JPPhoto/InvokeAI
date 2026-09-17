@@ -6,7 +6,7 @@ import type {
 } from '@features/generation/contracts';
 import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } from '@features/video';
 
-import { isLoraCompatibleWithModel, isLoraModelConfig, SEED_MAX } from '@features/generation/settings';
+import { isLoraCompatibleWithModel, isLoraModelConfig } from '@features/generation/settings';
 import {
   findAcceleratorLorasIn,
   getAcceleratorSteps,
@@ -20,6 +20,7 @@ import {
   MINIMAX_H3_HYBRID_BLOCK_RANGE,
   snapVideoNumFrames,
 } from '@features/video';
+import { SEED_MAX } from '@platform/core/seed';
 
 /**
  * Pure mapping from a video's recorded `core_metadata` to a Video-panel
@@ -445,7 +446,7 @@ export const buildVideoRecallSettings = ({
     const seed = getSeed(metadata);
 
     if (seed !== null) {
-      values = { ...values, seed, shouldRandomizeSeed: false };
+      values = { ...values, seed, seedMode: 'fixed' };
       fields.push('seed');
     }
   }
