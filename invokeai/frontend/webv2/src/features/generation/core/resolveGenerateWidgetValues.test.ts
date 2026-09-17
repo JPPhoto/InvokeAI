@@ -50,6 +50,28 @@ describe('resolveGenerateWidgetValues', () => {
     ).toBeNull();
   });
 
+  it('never defaults to a model that cannot run on its own', () => {
+    // Ideogram 4's unconditional branch is a `main` model on a generatable base, so it sorts into
+    // the catalog like any other. Landing on it here is the worst version of that: the user never
+    // picked it, and the component section it opens with can only ever be filled with itself.
+    const unconditional = createModel('ideogram4-uncond', {
+      base: 'ideogram-4',
+      branch: 'unconditional',
+      format: 'checkpoint',
+    });
+    const conditional = createModel('ideogram4-cond', {
+      base: 'ideogram-4',
+      branch: 'conditional',
+      format: 'checkpoint',
+    });
+
+    const result = resolveGenerateWidgetValues({ models: [unconditional, conditional], storedValues: {} });
+
+    expect(result?.values.model.key).toBe('ideogram4-cond');
+    // And with nothing else installed there is no default to fall back to at all.
+    expect(resolveGenerateWidgetValues({ models: [unconditional], storedValues: {} })).toBeNull();
+  });
+
   it('creates canonical defaults for the first supported model', () => {
     const unsupported = { base: 'sdxl', key: 'control', name: 'ControlNet', type: 'controlnet' };
     const first = createModel('first');

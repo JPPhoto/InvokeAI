@@ -35,8 +35,12 @@ import {
   isClipVariant,
   isDiffusersMainForBase,
   isFlux2DiffusersSourceForModel,
+  isErnieImageMistralEncoder,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
+  isIdeogram4Qwen3VlEncoder,
+  isIdeogram4UnconditionalBranch,
+  isKrea2Qwen3VlEncoder,
   isNonAnimaQwen3Encoder,
   isSelfContainedSDNQFlux1Pipeline,
   isSelfContainedSDNQPipeline,
@@ -461,7 +465,24 @@ export const isSupportedGenerateModel = <T extends { base: string; type: string 
   (model.type === 'main' && isSupportedGenerateBase(model.base)) ||
   (model.type === 'external_image_generator' && model.base === 'external');
 
-export const isGenerateModelSelectable = <T extends ModelConfig>(model: T): boolean => isSupportedGenerateModel(model);
+/**
+ * Whether a model can be picked as *the* model to generate with.
+ *
+ * Narrower than `isSupportedGenerateModel`, which answers whether Generate understands the base at
+ * all: Ideogram 4's unconditional branch is a `main` model of a supported base and can never run on
+ * its own -- it is the thing the conditional branch is guided against, and it fills a component
+ * slot. Offering it in the main picker would let a user assemble a complete-looking selection that
+ * the backend refuses at enqueue. (Wan's low-noise expert is deliberately not excluded here: it is
+ * a second expert of a model that still generates without it.)
+ *
+ * Every path that *offers or picks* a model uses this one: the picker, the command palette, and the
+ * resolver that chooses a default when a project has no usable stored model -- that last one being
+ * the worst place to land on an unrunnable model, since the user never chose it. Paths that merely
+ * *look up* a model already selected (recall, save, the presets popover) keep using
+ * `isSupportedGenerateModel`; narrowing those would make an already-chosen model unrenderable.
+ */
+export const isGenerateModelSelectable = <T extends ModelConfig>(model: T): model is T & GenerateModelConfig =>
+  isSupportedGenerateModel(model) && !isIdeogram4UnconditionalBranch(model);
 
 /** Pure prompt-history recall patch shared by keyboard and palette entry points. */
 export const getPromptHistoryRecallPatch = ({
@@ -568,6 +589,7 @@ export const getDefaultGenerateSettings = (model?: GenerateModelConfig): Generat
     qwenVLEncoderModel: null,
     qwen3VLEncoderModel: null,
     wanT5EncoderModel: null,
+    ideogram4UnconditionalModel: null,
     wanLowNoiseModel: null,
     wanGuidanceScaleLowNoise: null,
     ideogram4SamplerPreset: DEFAULT_IDEOGRAM4_SAMPLER_PRESET,
@@ -636,6 +658,7 @@ export type GenerateComponentValueKey =
   | 'qwen3VLEncoderModel'
   | 'wanT5EncoderModel'
   | 'wanLowNoiseModel'
+  | 'ideogram4UnconditionalModel'
   | 'componentSourceModel'
   | 'pidDecoderModel'
   | 'gemma2EncoderModel'
@@ -730,14 +753,14 @@ const qwenVlEncoderSlot = (helpText: string): ComponentSlotPolicy =>
     filter: (candidate) => candidate.type === 'qwen_vl_encoder',
   });
 
-const qwen3VlEncoderSlot = (helpText: string): ComponentSlotPolicy =>
+const qwen3VlEncoderSlot = (helpText: string, filter: GenerateComponentFilter): ComponentSlotPolicy =>
   slot({
     key: 'qwen3VLEncoderModel',
     label: 'Qwen3-VL Encoder',
     modelTypes: TYPE_QWEN3_VL,
     valueKind: 'component',
     helpText,
-    filter: (candidate) => candidate.type === 'qwen3_vl_encoder',
+    filter,
   });
 
 /**
@@ -800,6 +823,20 @@ const wanLowNoiseSlot = (helpText: string): ComponentSlotPolicy =>
     filter: (candidate) => candidate.type === 'main' && candidate.base === 'wan',
   });
 
+/**
+ * Ideogram 4's second transformer. Unlike Wan's low-noise expert this is not optional where it
+ * applies: both branches run at every step, so a single-file main cannot generate without it.
+ */
+const ideogram4UnconditionalSlot = (helpText: string): ComponentSlotPolicy =>
+  slot({
+    key: 'ideogram4UnconditionalModel',
+    label: 'Transformer (Unconditional)',
+    modelTypes: TYPE_MAIN,
+    valueKind: 'main',
+    helpText,
+    filter: isIdeogram4UnconditionalBranch,
+  });
+
 const qwen3EncoderSlot = (helpText: string, filter?: GenerateComponentFilter): ComponentSlotPolicy =>
   slot({
     key: 'qwen3EncoderModel',
@@ -812,14 +849,17 @@ const qwen3EncoderSlot = (helpText: string, filter?: GenerateComponentFilter): C
       : (candidate) => candidate.type === 'qwen3_encoder',
   });
 
-const mistralEncoderSlot = (helpText: string): ComponentSlotPolicy =>
+const mistralEncoderSlot = (
+  helpText: string,
+  filter: GenerateComponentFilter = isFlux2MistralEncoder
+): ComponentSlotPolicy =>
   slot({
     key: 'mistralEncoderModel',
     label: 'Mistral Encoder',
     modelTypes: TYPE_MISTRAL,
     valueKind: 'component',
     helpText,
-    filter: wrapFilter(isFlux2MistralEncoder),
+    filter: wrapFilter(filter),
   });
 
 const clipVariantSlot = (
@@ -1064,9 +1104,61 @@ const getBaseComponentSectionPolicy = (
           missingMessage: 'Generate needs a VAE for non-Diffusers Krea-2 models.',
         },
         {
-          ...qwen3VlEncoderSlot('Required for non-Diffusers Krea-2 models.'),
+          ...qwen3VlEncoderSlot('Required for non-Diffusers Krea-2 models.', isKrea2Qwen3VlEncoder),
           required: (ctx) => ctx.model.format !== 'diffusers',
           missingMessage: 'Generate needs a Qwen3-VL Encoder for non-Diffusers Krea-2 models.',
+        },
+      ]);
+    case 'ernie-image':
+      // A single-file ERNIE-Image transformer carries only itself, so its encoder and VAE are
+      // selected here; a diffusers pipeline directory bundles both and the loader reads them out.
+      return createPolicy(model.format !== 'diffusers', [
+        {
+          ...mistralEncoderSlot(
+            'ERNIE-Image conditions on Ministral 3B, a different architecture from the Mistral Small 3 encoder FLUX.2 uses. Required for non-Diffusers ERNIE-Image models.',
+            isErnieImageMistralEncoder
+          ),
+          required: (ctx) => ctx.model.format !== 'diffusers',
+          missingMessage: 'Generate needs a Ministral 3B encoder for non-Diffusers ERNIE-Image models.',
+        },
+        {
+          ...vaeSlot(
+            'ERNIE-Image decodes with the FLUX.2 32-channel VAE, which is the base it installs under. Required for non-Diffusers ERNIE-Image models.',
+            isAcceptedVae
+          ),
+          required: (ctx) => ctx.model.format !== 'diffusers',
+          missingMessage: 'Generate needs a VAE for non-Diffusers ERNIE-Image models.',
+        },
+      ]);
+    case 'ideogram-4':
+      // Comfy-Org's single files hold one transformer branch each, so a checkpoint main needs the
+      // other branch, the Qwen3-VL 8B encoder and the VAE. A diffusers pipeline bundles all three.
+      return createPolicy(model.format !== 'diffusers', [
+        {
+          ...ideogram4UnconditionalSlot(
+            'The second transformer branch. Required for single-file Ideogram 4 models, which hold ' +
+              'only the conditional branch.'
+          ),
+          required: (ctx) => ctx.model.format !== 'diffusers',
+          missingMessage: 'Generate needs the unconditional transformer for single-file Ideogram 4 models.',
+        },
+        {
+          ...qwen3VlEncoderSlot(
+            'Ideogram 4 conditions on the Qwen3-VL 8B encoder, not the 4B one Krea-2 uses. Required ' +
+              'for non-Diffusers Ideogram 4 models.',
+            isIdeogram4Qwen3VlEncoder
+          ),
+          required: (ctx) => ctx.model.format !== 'diffusers',
+          missingMessage: 'Generate needs a Qwen3-VL 8B Encoder for non-Diffusers Ideogram 4 models.',
+        },
+        {
+          ...vaeSlot(
+            'Ideogram 4 decodes with the 32-channel FLUX.2 VAE, which is the base it installs under. ' +
+              'Required for non-Diffusers Ideogram 4 models.',
+            isAcceptedVae
+          ),
+          required: (ctx) => ctx.model.format !== 'diffusers',
+          missingMessage: 'Generate needs a VAE for non-Diffusers Ideogram 4 models.',
         },
       ]);
     case 'wan':
@@ -1151,6 +1243,7 @@ const getComponentPolicyContext = (model: GenerateModelConfig, settings: Generat
     qwen3VLEncoderModel: settings.qwen3VLEncoderModel,
     wanT5EncoderModel: settings.wanT5EncoderModel,
     wanLowNoiseModel: settings.wanLowNoiseModel,
+    ideogram4UnconditionalModel: settings.ideogram4UnconditionalModel,
     t5EncoderModel: settings.t5EncoderModel,
     pidDecoderModel: settings.pidDecoderModel,
     gemma2EncoderModel: settings.gemma2EncoderModel,
@@ -1168,6 +1261,7 @@ const COMPONENT_SETTING_LABELS: Record<GenerateComponentValueKey, string> = {
   qwen3VLEncoderModel: 'Qwen3-VL Encoder',
   wanT5EncoderModel: 'Wan T5 Encoder',
   wanLowNoiseModel: 'Low-noise expert',
+  ideogram4UnconditionalModel: 'Transformer (Unconditional)',
   t5EncoderModel: 'T5 Encoder',
   pidDecoderModel: 'PiD Decoder',
   gemma2EncoderModel: 'Gemma-2 Encoder',

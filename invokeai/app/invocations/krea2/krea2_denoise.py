@@ -53,10 +53,7 @@ from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.krea2_lora_constants import KREA2_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
-from invokeai.backend.quantization.int8_convrot import (
-    peak_int8_dequant_transient_bytes,
-    requires_sidecar_patching,
-)
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Krea2ConditioningInfo
@@ -507,7 +504,7 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
         # derotated weight per forward call. That transient is alive alongside the activations above,
         # so it is added rather than compared -- and it is invisible to an activation estimate, which
         # is how a model that loaded comfortably OOMs in its first step. Zero for any other format.
-        estimated_working_memory += peak_int8_dequant_transient_bytes(transformer_info.model, inference_dtype)
+        estimated_working_memory += peak_dequant_transient_bytes(transformer_info.model, inference_dtype)
 
         # Once per device per process, and from here rather than from startup: the probe allocates,
         # so on the boot path it would create a CUDA context on an idle server -- and on `cuda:0`,

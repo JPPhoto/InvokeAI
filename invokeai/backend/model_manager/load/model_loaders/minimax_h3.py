@@ -187,10 +187,10 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         )
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_checkpoint_to_diffusers,
-            read_comfy_quant_markers,
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
+            read_comfy_quant_markers,
             swap_in_int8_linears,
         )
 
@@ -297,8 +297,6 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
     Like the H3 transformer checkpoints, quantized layers are not autocast-wrapped, so
     residency is all-or-nothing: the int8 file needs ~26 GiB free VRAM while encoding (it
     idle-offloads afterwards); graceful partial-load degradation is the folder encoder's job.
-    If partial load does engage, the tied lm_head/embed_tokens alias additionally splits into
-    two device tensors (~1.56 GB overhead) - see the tie_weights() note in the load path.
     """
 
     def _load_model(
@@ -333,10 +331,10 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         from invokeai.backend.minimax_h3.text_conditioning import MINIMAX_H3_TEXT_ENCODER_LAYER
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_text_encoder_checkpoint,
-            read_comfy_quant_markers,
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
+            read_comfy_quant_markers,
             swap_in_int8_linears,
         )
 
@@ -413,10 +411,8 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
             )
         # Re-tie now that embed_tokens holds the loaded tensor (assign=True replaced the meta
         # parameter the original tie pointed at). The head is never run; tying keeps the module
-        # free of meta tensors and adds no RAM (aliased storage). Caveat: the model cache's
-        # partial-load path moves state-dict keys independently (no data_ptr dedupe), so on that
-        # path the tied pair splits into two device tensors (~1.56 GB extra VRAM, double-counted
-        # in the cache's accounting). Fully-resident loads - the intended regime - keep the alias.
+        # free of meta tensors and adds no RAM (aliased storage), and the model cache keeps the
+        # alias on the compute device too (see `tensor_aliases`).
         model.tie_weights()
 
         return model
