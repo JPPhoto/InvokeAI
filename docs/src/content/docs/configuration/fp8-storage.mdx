@@ -31,7 +31,7 @@ The toggle works as advertised: the UNet / transformer drops by roughly 50% on t
 
 ### RTX 40-series, RTX 50-series, and Hopper — VRAM win, plus a compute win via a separate setting
 
-These GPUs have native FP8 tensor cores. FP8 *Storage* on its own still only buys the ~50% VRAM reduction, because the forward pass runs in BF16 — the hook casts weights back up to compute precision before each layer. To actually use the tensor cores you need the separate [FP8 Compute](#fp8-compute) setting, which applies to checkpoints that ship pre-quantized ("scaled fp8") rather than to full-precision ones.
+These GPUs have native FP8 tensor cores. FP8 *Storage* on its own still only buys the ~50% VRAM reduction, because the forward pass runs in BF16 — the hook casts weights back up to compute precision before each layer. To actually use the tensor cores you need the separate [FP8 Compute](#fp8-compute) setting. Note that on a checkpoint which already ships FP8 weights, FP8 Storage does something different from what this section describes — see [Checkpoints that are already FP8](#checkpoints-that-are-already-fp8).
 
 ### Older CUDA cards — still a VRAM win
 
@@ -95,6 +95,7 @@ FP8 Storage is **near-lossless** for most workloads because:
 
 - Norms and embeddings (the precision-sensitive layers) are skipped.
 - The actual matmul still happens in FP16/BF16 — FP8 is only the on-GPU storage format.
+- On a checkpoint that is already FP8, the weights are not re-encoded at all: they stay exactly as published and are unpacked with their own scale before each layer, so there is no added rounding, and no re-quantization to undo.
 
 That said, some artifacts have been reported on:
 
@@ -115,7 +116,11 @@ If you see unexpected quality regressions, disable FP8 Storage on the affected m
 
 Everything above describes FP8 *Storage*, which changes how weights are **stored** while the math still runs in BF16. `fp8_compute` is a separate, global setting in `invokeai.yaml` that also does the **math** in FP8, on GPUs that have hardware for it. That makes generation faster, not just smaller.
 
-It is for models that were **already saved in FP8** by whoever published them — you'll often see these labelled "fp8" or "fp8_scaled" in the filename. Normally InvokeAI unpacks them back to BF16 while loading; with `fp8_compute` on, they stay as they are and run directly on the GPU's FP8 hardware. FP8 Storage is the toggle for the other case: a full-precision model you want to shrink yourself.
+It is for models that were **already saved in FP8** by whoever published them — you'll often see these labelled "fp8" or "fp8_scaled" in the filename. Without either setting InvokeAI unpacks them back to BF16 while loading. With `fp8_compute` on they stay as they are and run directly on the GPU's FP8 hardware; with FP8 Storage on they also stay as they are, but are unpacked layer by layer during the forward pass instead.
+
+### Checkpoints that are already FP8
+
+For these, FP8 Storage does not re-encode anything — it simply stops InvokeAI from unpacking them. That matters because the file stores a per-tensor scale alongside each weight, and re-encoding the unpacked result would throw that scale away: on FLUX.2 Klein 4B roughly 3% of the weights would round to zero, for a file that was already one byte per weight. What it costs instead is a little speed, since each layer is unpacked on use. The log says `FP8 storage skipped ... already fp8` for such a model, which is the intended outcome, not a failure.
 
 Not every part of a model stays in FP8 — the small, precision-sensitive pieces are always unpacked. Those are a tiny share of the weights, so you still get nearly the full VRAM saving.
 
@@ -147,7 +152,7 @@ The cache eviction is immediate for idle models, but **deferred until the next u
 
 If VRAM still hasn't dropped:
 
-- Check the InvokeAI log for `FP8 layerwise casting enabled for <model name>`. If the line isn't there, the model is on the exclusion list, or its loader does not apply FP8 yet (VAE, text encoder, LoRA, Wan — see table above).
+- Check the InvokeAI log for `FP8 layerwise casting enabled for <model name>`. If the line isn't there, the model is on the exclusion list, or its loader does not apply FP8 yet (VAE, text encoder, LoRA, Wan — see table above). For a checkpoint that is already FP8 the expected line is `FP8 storage skipped ... already fp8` instead: nothing needed re-encoding.
 - Confirm you are on CUDA. FP8 Storage is silently disabled on CPU and MPS.
 
 ### Quality regression on a specific model
