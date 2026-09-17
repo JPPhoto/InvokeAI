@@ -35,6 +35,7 @@ import {
   isClipVariant,
   isDiffusersMainForBase,
   isFlux2DiffusersSourceForModel,
+  isErnieImageMistralEncoder,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
   isIdeogram4Qwen3VlEncoder,
@@ -848,14 +849,17 @@ const qwen3EncoderSlot = (helpText: string, filter?: GenerateComponentFilter): C
       : (candidate) => candidate.type === 'qwen3_encoder',
   });
 
-const mistralEncoderSlot = (helpText: string): ComponentSlotPolicy =>
+const mistralEncoderSlot = (
+  helpText: string,
+  filter: GenerateComponentFilter = isFlux2MistralEncoder
+): ComponentSlotPolicy =>
   slot({
     key: 'mistralEncoderModel',
     label: 'Mistral Encoder',
     modelTypes: TYPE_MISTRAL,
     valueKind: 'component',
     helpText,
-    filter: wrapFilter(isFlux2MistralEncoder),
+    filter: wrapFilter(filter),
   });
 
 const clipVariantSlot = (
@@ -1103,6 +1107,27 @@ const getBaseComponentSectionPolicy = (
           ...qwen3VlEncoderSlot('Required for non-Diffusers Krea-2 models.', isKrea2Qwen3VlEncoder),
           required: (ctx) => ctx.model.format !== 'diffusers',
           missingMessage: 'Generate needs a Qwen3-VL Encoder for non-Diffusers Krea-2 models.',
+        },
+      ]);
+    case 'ernie-image':
+      // A single-file ERNIE-Image transformer carries only itself, so its encoder and VAE are
+      // selected here; a diffusers pipeline directory bundles both and the loader reads them out.
+      return createPolicy(model.format !== 'diffusers', [
+        {
+          ...mistralEncoderSlot(
+            'ERNIE-Image conditions on Ministral 3B, a different architecture from the Mistral Small 3 encoder FLUX.2 uses. Required for non-Diffusers ERNIE-Image models.',
+            isErnieImageMistralEncoder
+          ),
+          required: (ctx) => ctx.model.format !== 'diffusers',
+          missingMessage: 'Generate needs a Ministral 3B encoder for non-Diffusers ERNIE-Image models.',
+        },
+        {
+          ...vaeSlot(
+            'ERNIE-Image decodes with the FLUX.2 32-channel VAE, which is the base it installs under. Required for non-Diffusers ERNIE-Image models.',
+            isAcceptedVae
+          ),
+          required: (ctx) => ctx.model.format !== 'diffusers',
+          missingMessage: 'Generate needs a VAE for non-Diffusers ERNIE-Image models.',
         },
       ]);
     case 'ideogram-4':

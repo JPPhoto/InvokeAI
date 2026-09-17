@@ -78,6 +78,20 @@ export const isNonAnimaQwen3Encoder: GenerateComponentFilter = (model) =>
   model.type === 'qwen3_encoder' && model.variant !== 'qwen3_06b';
 
 /**
+ * ERNIE-Image's encoder is recorded as a `mistral_encoder` too, but it is a different architecture
+ * (Ministral 3B, hidden 3072) from the Mistral Small 3 encoders FLUX.2 was trained against. Offering
+ * either one to the other family produces a shape error deep in denoise, so the variant separates
+ * them on both sides.
+ */
+const MINISTRAL_3B_VARIANT = 'ministral3_3b';
+
+export const isFlux2MistralEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'mistral_encoder' && model.variant !== MINISTRAL_3B_VARIANT;
+
+export const isErnieImageMistralEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'mistral_encoder' && model.variant === MINISTRAL_3B_VARIANT;
+
+/**
  * The two Qwen3-VL encoders install under one model type and are not interchangeable: Krea-2 needs
  * the 4B (hidden 2560), Ideogram 4 the 8B, whose 13 tapped layers make a 53248-wide feature vector.
  * Offering the wrong one produces a shape mismatch inside the first denoising step.
@@ -97,8 +111,6 @@ export const isIdeogram4UnconditionalBranch: GenerateComponentFilter = (model) =
   model.base === 'ideogram-4' &&
   model.format === 'checkpoint' &&
   model.branch === 'unconditional';
-
-export const isFlux2MistralEncoder: GenerateComponentFilter = (model) => model.type === 'mistral_encoder';
 
 export const isFlux2Qwen3EncoderForModel = (selectedModel: GenerateModelConfig): GenerateComponentFilter => {
   if (selectedModel.variant === 'dev') {

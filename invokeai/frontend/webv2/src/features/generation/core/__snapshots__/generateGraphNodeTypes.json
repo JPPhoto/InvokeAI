@@ -136,7 +136,10 @@
     "ernie-image": {
       "componentsFilled": {
         "diffusers": [],
-        "standalone-components": []
+        "standalone-components": [
+          "mistralEncoderModel",
+          "vae"
+        ]
       },
       "nodeTypes": [
         "core_metadata",
@@ -717,12 +720,14 @@
           true
         ],
         "model": [],
+        "text_encoder_model": [],
         "use_cache": [
           true
         ],
         "use_prompt_enhancer": [
           false
-        ]
+        ],
+        "vae_model": []
       },
       "outputs": [
         "text_encoder",

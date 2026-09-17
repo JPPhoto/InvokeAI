@@ -60,7 +60,10 @@ from invokeai.backend.model_manager.starter_models.common import (
 )
 from invokeai.backend.model_manager.starter_models.ernie_image import (
     ernie_image,
+    ernie_image_mistral_encoder,
+    ernie_image_single_file,
     ernie_image_turbo,
+    ernie_image_turbo_single_file,
 )
 from invokeai.backend.model_manager.starter_models.external import (
     alibabacloud_qwen_image_2,
@@ -417,6 +420,9 @@ STARTER_MODELS: list[StarterModel] = [
     z_image_controlnet_tile,
     ernie_image,
     ernie_image_turbo,
+    ernie_image_single_file,
+    ernie_image_turbo_single_file,
+    ernie_image_mistral_encoder,
     krea2_turbo,
     krea2_raw,
     krea2_turbo_gguf_q4_k_m,

@@ -105,6 +105,7 @@ const CANDIDATE_VARIANTS = [
   'dev',
   'klein_4b',
   'klein_9b',
+  'ministral3_3b',
   'qwen3_vl_4b',
   'qwen3_vl_8b',
 ] as const;

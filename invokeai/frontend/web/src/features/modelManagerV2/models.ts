@@ -318,6 +318,7 @@ export const MODEL_VARIANT_TO_LONG_NAME: Record<AnyModelVariant, string> = {
   qwen3_vl_4b: 'Qwen3-VL 4B (Krea-2)',
   qwen3_vl_8b: 'Qwen3-VL 8B (Ideogram 4)',
   cow_mistral3_small: 'cow-mistral3-small (FLUX.2)',
+  ministral3_3b: 'Ministral 3B (ERNIE-Image)',
   mistral3_24b: 'Mistral Small 3 (24B, FLUX.2)',
   res2k_sr4x: 'PiD 2K (4x SR)',
   res2kto4k_sr4x: 'PiD 4K (4x SR Upscale)',

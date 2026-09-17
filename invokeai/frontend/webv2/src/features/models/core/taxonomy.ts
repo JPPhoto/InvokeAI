@@ -133,6 +133,7 @@ export const MODEL_VARIANT_LABELS: Record<string, string> = {
   krea2_base: 'Krea-2 Raw',
   krea2_turbo: 'Krea-2 Turbo',
   large: 'CLIP L',
+  ministral3_3b: 'Ministral 3B (ERNIE-Image)',
   mistral3_24b: 'Mistral Small 3 (24B, FLUX.2)',
   normal: 'Normal',
   qwen3_06b: 'Qwen3 0.6B',
@@ -170,7 +171,7 @@ const MAIN_VARIANTS_BY_BASE: Record<string, readonly string[]> = {
 
 const VARIANTS_BY_TYPE: Record<string, readonly string[]> = {
   clip_embed: ['large', 'gigantic'],
-  mistral_encoder: ['cow_mistral3_small', 'mistral3_24b'],
+  mistral_encoder: ['cow_mistral3_small', 'mistral3_24b', 'ministral3_3b'],
   pid_decoder: ['res2k_sr4x', 'res2kto4k_sr4x'],
   qwen3_encoder: ['qwen3_4b', 'qwen3_8b', 'qwen3_06b'],
   // Required on the config, so the edit form must offer both: without an entry here it would show

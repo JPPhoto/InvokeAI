@@ -127,6 +127,13 @@ const mistralEncoder: ComponentModelConfig = {
   name: 'Mistral Encoder',
   type: 'mistral_encoder',
 };
+const ministralEncoder: ComponentModelConfig = {
+  base: 'any',
+  key: 'ministral',
+  name: 'Ministral 3B Encoder',
+  type: 'mistral_encoder',
+  variant: 'ministral3_3b',
+};
 const qwen3Encoder: ComponentModelConfig = {
   base: 'any',
   key: 'qwen3',
@@ -1065,6 +1072,29 @@ describe('ERNIE-Image graphs', () => {
     expect(withoutCfg.nodes.neg_cond).toBeUndefined();
     expect(getEdge(withoutCfg, 'denoise_latents', 'negative_conditioning')).toBeUndefined();
     expect(withoutCfg.nodes.denoise_latents?.guidance_scale).toBe(1);
+  });
+
+  it('wires a single-file transformer to the encoder and VAE it was given', () => {
+    // A single-file ERNIE transformer carries only itself. Nothing downstream would notice the two
+    // component fields being swapped -- both are model identifiers -- so the wiring is pinned here.
+    const singleFile: MainModelConfig = { ...ernieModel, format: 'checkpoint', key: 'ernie-image-single' };
+
+    const graph = compile(singleFile, { mistralEncoderModel: ministralEncoder, vae: flux2Vae });
+
+    expect(graph.nodes.model_loader).toMatchObject({
+      text_encoder_model: { key: 'ministral' },
+      vae_model: { key: 'flux2-vae' },
+    });
+  });
+
+  it('keeps a FLUX.2 Mistral encoder its picker would hide out of the graph', () => {
+    // For a bundled pipeline the slot is optional, so validation never looks at it and only the
+    // picker hides the stale selection. Mistral Small 3 and Ministral 3B both install as
+    // `mistral_encoder` and each loads in the other's slot without error, so forwarding one here
+    // would degrade conditioning silently rather than fail.
+    const graph = compile(ernieModel, { mistralEncoderModel: mistralEncoder });
+
+    expect(graph.nodes.model_loader?.text_encoder_model).toBeUndefined();
   });
 
   it('builds the rest of the graph out of the one bundled pipeline', () => {
