@@ -2,7 +2,10 @@ import type { GenerationModelCatalogItem as ModelConfig } from '@features/genera
 import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@features/generation/core/types';
 
 import { Box, HStack, Spinner, Stack, Text } from '@chakra-ui/react';
-import { getDefaultGenerateSettings, isGenerateModelSelectable } from '@features/generation/core/baseGenerationPolicies';
+import {
+  getDefaultGenerateSettings,
+  isGenerateModelSelectable,
+} from '@features/generation/core/baseGenerationPolicies';
 import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generation/core/settings';
 import {
   ensureArchitectureCapabilitiesLoaded,
