@@ -33930,7 +33930,7 @@ export type components = {
         };
         /**
          * PiDDecoder_Checkpoint_Flux2_Config
-         * @description PiD decoder for the FLUX.2 backbone (128-channel latent).
+         * @description PiD decoder for the FLUX.2 backbone (128-channel latent; PiD v1.5 projects it unpatchified to 32).
          */
         PiDDecoder_Checkpoint_Flux2_Config: {
             /**
