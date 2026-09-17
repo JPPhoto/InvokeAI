@@ -144,6 +144,8 @@ from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_turbo_lora,
 )
 from invokeai.backend.model_manager.starter_models.qwen_image import (
+    pid_1_5_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k_int8,
     pid_decoder_qwenimage_2kto4k,
     qwen_image,
     qwen_image_edit,
@@ -469,6 +471,8 @@ STARTER_MODELS: list[StarterModel] = [
     pid_decoder_sd3_2kto4k,
     pid_decoder_sdxl_2kto4k,
     pid_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k,
+    pid_1_5_decoder_qwenimage_2kto4k_int8,
 ]
 
 sd1_bundle: list[StarterModel] = [

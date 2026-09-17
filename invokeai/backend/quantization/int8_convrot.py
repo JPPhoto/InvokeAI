@@ -35,7 +35,9 @@ its estimate for that, since the model's resident size does not account for it.
 """
 
 import json
+import struct
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -149,6 +151,33 @@ def parse_comfy_quant_marker(blob: torch.Tensor) -> dict:
     except Exception:
         return {}
     return parse_comfy_quant_bytes(raw)
+
+
+def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
+    """Read every ``<layer>.comfy_quant`` marker from a safetensors file WITHOUT loading tensor
+    data - header parse plus a seek per marker blob. Keys are the raw (un-renamed) layer names.
+
+    Lets a loader reject unsupported quantization formats (e.g. the fp8_scaled repacks, which
+    share this key layout) before committing to a ~20 GiB read, and model identification -- which
+    sees only a header's dtypes and shapes -- check what a marker declares.
+
+    Marker bytes go through the same tolerant parser the state-dict readers use. This reader runs
+    FIRST, so a strict parse here is what a NUL-padded marker -- which Comfy writes, and which that
+    parser exists to absorb -- would actually hit: a `JSONDecodeError` out of the middle of a load,
+    naming neither the file nor the key.
+    """
+    markers: dict[str, dict[str, Any]] = {}
+    with open(path, "rb") as f:
+        header_len = struct.unpack("<Q", f.read(8))[0]
+        header = json.loads(f.read(header_len))
+        header.pop("__metadata__", None)
+        for key, entry in header.items():
+            if not key.endswith(COMFY_QUANT_SUFFIX):
+                continue
+            start, end = entry["data_offsets"]
+            f.seek(8 + header_len + start)
+            markers[key[: -len(COMFY_QUANT_SUFFIX)]] = parse_comfy_quant_bytes(f.read(end - start))
+    return markers
 
 
 def as_column_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
