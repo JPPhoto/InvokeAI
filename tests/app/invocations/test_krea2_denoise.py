@@ -13,7 +13,8 @@ from invokeai.app.invocations.krea2.krea2_denoise import (
 )
 from invokeai.app.invocations.model import ModelIdentifierField, TransformerField
 from invokeai.backend.model_manager.taxonomy import BaseModelType, Krea2VariantType, ModelFormat, ModelType
-from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear, peak_int8_dequant_transient_bytes
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData, Krea2ConditioningInfo
 
 
@@ -839,6 +840,6 @@ class TestTheInt8DequantTransientReachesTheReservation:
         quantized_bytes = self._reservation_for(monkeypatch, tmp_path, quantized)
 
         # `_patch_runtime` pins the compute dtype to float32, which is what the node passes on.
-        transient = peak_int8_dequant_transient_bytes(quantized, torch.float32)
+        transient = peak_dequant_transient_bytes(quantized, torch.float32)
         assert transient > 0
         assert quantized_bytes == dense_bytes + transient

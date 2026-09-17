@@ -854,6 +854,24 @@ class TestSkippedModulesNeverKeepCheckpointFp8:
         assert model.proj_out.weight.dtype is torch.bfloat16, "skipped module left computing on fp8 codes"
         assert model.attn.weight.dtype is torch.float8_e4m3fn
 
+    def test_a_pattern_skipped_scaled_layer_keeps_its_fp8_weight(self) -> None:
+        """A scaled-fp8 `proj_out` is computed with its `weight_scale`; upcasting its codes without the
+        scale would make the final projection wrong by that factor, silently."""
+        model = self._model()
+        codes = torch.full((32, 16), 3.0).to(torch.float8_e4m3fn)
+        model.proj_out.weight = torch.nn.Parameter(codes, requires_grad=False)
+        model.proj_out.weight_scale = torch.tensor(2.0)
+
+        ModelLoader._apply_fp8_to_nn_module(
+            model,
+            storage_dtype=torch.float8_e4m3fn,
+            compute_dtype=torch.bfloat16,
+            skip=lambda _name, module: getattr(module, "weight_scale", None) is not None,
+        )
+
+        assert model.proj_out.weight.dtype is torch.float8_e4m3fn
+        assert torch.equal(model.proj_out.weight.float(), codes.float())
+
     def test_an_extra_skip_pattern_gets_the_same_treatment(self) -> None:
         model = self._model()
         model.attn.weight = torch.nn.Parameter(
