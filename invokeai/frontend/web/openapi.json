@@ -63244,7 +63244,7 @@
             "type": "string",
             "enum": ["conditional", "unconditional"],
             "title": "Branch",
-            "description": "Which of Ideogram 4's two transformer branches this file holds. Read from the file's `model_type` metadata, with the filename as the fallback for stripped re-uploads."
+            "description": "Which of Ideogram 4's two transformer branches this file holds. Read from the file's `model_type` metadata where it has any, and from the filename otherwise \u2014 the released int8 build records no metadata at all, so keep those files under their published names. Rename and re-install to correct it."
           }
         },
         "type": "object",
@@ -63269,7 +63269,7 @@
           "branch"
         ],
         "title": "Main_Checkpoint_Ideogram4_Config",
-        "description": "Model config for Ideogram 4 single-file transformer checkpoints (safetensors).\n\nOne file holds ONE of the two dual-branch transformers. The Qwen3-VL 8B text encoder and the\nFLUX.2 VAE are separate models, selected on the loader node; the diffusers pipeline folder\n(``Main_Diffusers_Ideogram4_Config``) is the variant that bundles everything.\n\nQuantization: plain bf16/fp16 and ComfyUI \"scaled fp8\" load. The ``int8_convrot`` and ``nvfp4``\nrepacks of the same files are recognised and rejected with `InvalidMatchError`, which keeps them\nout of the database entirely -- `NotAMatchError` would let them fall through to `Unknown_Config`\nand register a 9 GiB file that nothing can ever load."
+        "description": "Model config for Ideogram 4 single-file transformer checkpoints (safetensors).\n\nOne file holds ONE of the two dual-branch transformers. The Qwen3-VL 8B text encoder and the\nFLUX.2 VAE are separate models, selected on the loader node; the diffusers pipeline folder\n(``Main_Diffusers_Ideogram4_Config``) is the variant that bundles everything.\n\nQuantization: plain bf16/fp16, ComfyUI \"scaled fp8\" and ComfyUI ``int8_tensorwise``(+convrot)\nall load. The ``nvfp4`` repack of the same files is recognised and rejected with\n`InvalidMatchError`, which keeps it out of the database entirely -- `NotAMatchError` would let\nit fall through to `Unknown_Config` and register a 5 GiB file that nothing can ever load."
       },
       "Main_Checkpoint_Krea2_Config": {
         "properties": {

@@ -25806,10 +25806,10 @@ export type components = {
          *     FLUX.2 VAE are separate models, selected on the loader node; the diffusers pipeline folder
          *     (``Main_Diffusers_Ideogram4_Config``) is the variant that bundles everything.
          *
-         *     Quantization: plain bf16/fp16 and ComfyUI "scaled fp8" load. The ``int8_convrot`` and ``nvfp4``
-         *     repacks of the same files are recognised and rejected with `InvalidMatchError`, which keeps them
-         *     out of the database entirely -- `NotAMatchError` would let them fall through to `Unknown_Config`
-         *     and register a 9 GiB file that nothing can ever load.
+         *     Quantization: plain bf16/fp16, ComfyUI "scaled fp8" and ComfyUI ``int8_tensorwise``(+convrot)
+         *     all load. The ``nvfp4`` repack of the same files is recognised and rejected with
+         *     `InvalidMatchError`, which keeps it out of the database entirely -- `NotAMatchError` would let
+         *     it fall through to `Unknown_Config` and register a 5 GiB file that nothing can ever load.
          */
         Main_Checkpoint_Ideogram4_Config: {
             /**
@@ -25896,7 +25896,7 @@ export type components = {
             format: "checkpoint";
             /**
              * Branch
-             * @description Which of Ideogram 4's two transformer branches this file holds. Read from the file's `model_type` metadata, with the filename as the fallback for stripped re-uploads.
+             * @description Which of Ideogram 4's two transformer branches this file holds. Read from the file's `model_type` metadata where it has any, and from the filename otherwise — the released int8 build records no metadata at all, so keep those files under their published names. Rename and re-install to correct it.
              * @enum {string}
              */
             branch: "conditional" | "unconditional";

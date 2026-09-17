@@ -66,17 +66,32 @@ Paste either repo ID into the Model Manager's HuggingFace / URL field to install
 
 #### Single files
 
-Comfy-Org's [`Comfy-Org/Ideogram-4`](https://huggingface.co/Comfy-Org/Ideogram-4) repackage is ungated (the same non-commercial license still applies) and ships the parts separately. Ideogram 4 runs **two** transformers — a conditional branch and an unconditional one, both active at every step — so a single-file install is four models, and the **Ideogram 4 (single file)** starter installs all four together:
+Comfy-Org's [`Comfy-Org/Ideogram-4`](https://huggingface.co/Comfy-Org/Ideogram-4) repackage is ungated (the same non-commercial license still applies) and ships the parts separately. Ideogram 4 runs **two** transformers — a conditional branch and an unconditional one, both active at every step — so a single-file install is four models, and each starter installs all four together:
 
-- `diffusion_models/ideogram4_fp8_scaled.safetensors` — the conditional branch, selected as the model
-- `diffusion_models/ideogram4_unconditional_fp8_scaled.safetensors` — the unconditional branch
+- `diffusion_models/ideogram4_<build>.safetensors` — the conditional branch, selected as the model
+- `diffusion_models/ideogram4_unconditional_<build>.safetensors` — the unconditional branch
 - `text_encoders/qwen3vl_8b_fp8_scaled.safetensors` — the Qwen3-VL **8B** encoder (not the 4B one Krea-2 uses)
 - `vae/flux2-vae.safetensors` — the 32-channel VAE, shared with FLUX.2, which is why it installs under the FLUX.2 base
 
-Pick the unconditional branch, the encoder and the VAE in the **Components** section next to the model. The `int8_convrot` and `nvfp4` repackages in that repo are **not** supported yet and are refused at install.
+Pick the unconditional branch, the encoder and the VAE in the **Components** section next to the model — and pick the unconditional branch of the *same* build as the model. The `nvfp4` repackage in that repo is **not** supported yet and is refused at install.
 
-:::note[Memory]
-Both branches stay resident, so the fp8 pair needs roughly twice one file's size. Without `fp8_compute` the scaled fp8 weights are expanded to bf16 on load — about 35 GB for the pair — so on 24 GB cards the bundled nf4 build remains the smaller option.
+Which branch a file holds is read from the file itself, and from the filename for a build that does not record it, so keep these names as published.
+
+Two builds of the transformers are supported, and they behave differently in memory:
+
+| | download, per branch | resident, per branch |
+|---|---|---|
+| **Ideogram 4 (single file, int8)** — `int8_convrot` | 8.9 GB | **8.9 GB**, on every device |
+| **Ideogram 4 (single file, fp8)** — `fp8_scaled` | 8.6 GB | 8.7 GB with `fp8_compute`, ~17 GB without |
+
+Both branches are resident at once, so double those figures for the pair.
+
+:::note[Which to pick]
+**On an NVIDIA Ada card (RTX 40-series) or newer, with `fp8_compute` enabled**, take the fp8 build: the two are a wash on memory, and fp8 is the faster one because its weights stay quantized *and* run on the fp8 tensor cores. Measured at 1024px on a 4090, 12 steps: **35.6 s** for the fp8 pair against **45.7 s** for the int8 pair.
+
+**Everywhere else, use int8.** Without `fp8_compute` the fp8 weights are expanded to bf16 on load — about 35 GB for the pair, which does not fit a 24 GB card — while int8 keeps its stored codes and dequantizes them per forward, on any device and with no setting to turn on. Those ~10 s are what the dequantization costs, and they buy the difference between the model fitting and not fitting.
+
+On a 24 GB NVIDIA card without the fp8 matmul (RTX 30-series), the int8 pair plus the 8B encoder still adds up to more than the card holds, so the bundled [nf4 build](#installing-ideogram-4) remains the smaller option there.
 :::
 
 ### Prompting Ideogram 4

@@ -21,8 +21,10 @@ from invokeai.backend.ideogram4.sampler_configs import PRESETS
 from invokeai.backend.ideogram4.sampling_utils import PIXELS_PER_IMAGE_TOKEN, unpatchify_and_denormalize
 from invokeai.backend.ideogram4.transformer_pair import Ideogram4TransformerPair
 from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Ideogram4ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.fp8 import get_model_compute_dtype
 
 # Named sampler presets bundle step count, guidance schedule (with polish tail), and the
 # logit-normal schedule mean/std. V4_QUALITY_48 is the reference default.
@@ -211,13 +213,29 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
         pair (~17.5 GB) the headroom runs out somewhere above 1300px: past that the cache cannot
         satisfy the reservation, the second branch loses residency and streams. That is not the
         estimate being wrong -- the memory genuinely is not there -- and reserving less would only
-        exchange a slow generation for an out-of-memory error. The fix for large images is smaller
-        weights (the int8 and nvfp4 builds), not a smaller number here.
+        exchange a slow generation for an out-of-memory error, and the remedy is fewer resident
+        bytes rather than a smaller number here. The int8 build does not supply them: it is the same
+        ~8.9 GiB per branch as fp8 with `fp8_compute`. What it buys is that this holds on *every*
+        device, where the fp8 pair doubles to ~35 GiB without the fp8 matmul.
         """
         image_tokens = (self.height // PIXELS_PER_IMAGE_TOKEN) * (self.width // PIXELS_PER_IMAGE_TOKEN)
         per_token_bytes = 3 * 1024**2 // 4  # 0.75 MiB
         base_bytes = 3 * 1024**3 // 2  # 1.5 GiB
         return (image_tokens + num_text_tokens) * per_token_bytes + base_bytes
+
+    @staticmethod
+    def _dequant_transient(model: object) -> int:
+        """What an int8 build transiently needs to dequantize its largest layer, per forward.
+
+        `Int8ConvrotLinear` keeps the stored codes and materializes the dequantized, derotated
+        weight inside `forward`, so that peak is not part of the model's resident size and has to
+        fit inside the caller's reservation. Zero for a bf16 or fp8 build -- which is why it is
+        measured from the model rather than from the resolution: the two branches are separate
+        models and may be different builds.
+        """
+        if not isinstance(model, torch.nn.Module):
+            return 0
+        return peak_dequant_transient_bytes(model, get_model_compute_dtype(model))
 
     def _load_branches(
         self, context: InvocationContext, stack: ExitStack, working_mem_bytes: int
@@ -228,34 +246,55 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
         files are two models and are locked simultaneously, because every step runs both and
         releasing one between steps would make the cache stream it back for the next.
 
-        Both are given the same `working_mem_bytes`: each `model_on_device` decides how much of its
-        own model fits, and a reservation passed to only the first would be spent by the second.
+        Both locks get the *same* reservation even though the dequantization transient is per branch
+        and the two branches can be different builds. The cache computes free VRAM as
+        `capacity - working_mem - in_use` at each lock, and the second lock cannot claw space back
+        from the first, which is already locked: a first branch that reserved less has taken
+        headroom the second one still needs, and with the second branch already resident from an
+        earlier run there is nothing left to evict.
+
+        Taking the maximum up front costs reading `LoadedModel.model` -- documented as returning the
+        model unlocked, and it is already constructed by then -- and loading the second branch into
+        RAM before the first is locked. Under the default `keep_ram_copy_of_weights` that is not a
+        new peak, since both branches hold their RAM copies through the loop anyway; with RAM copies
+        off it is one cold load's worth, which the cache absorbs the same way it absorbs any
+        overshoot. Neither branch can be evicted meanwhile: `LoadedModel` takes a first-use hold the
+        moment it is constructed, and `make_room` skips a record that has one.
         """
-        primary = stack.enter_context(
-            context.models.load(self.transformer.transformer).model_on_device(working_mem_bytes=working_mem_bytes)
-        )[1]
+        conditional_info = context.models.load(self.transformer.transformer)
+        both_in_one = isinstance(conditional_info.model, Ideogram4TransformerPair)
 
-        if self.unconditional_transformer is None:
-            if not isinstance(primary, Ideogram4TransformerPair):
-                raise ValueError(
-                    "This Ideogram 4 transformer holds only one branch, so 'Transformer (Unconditional)' "
-                    "must be connected as well. The Ideogram 4 model loader emits it when the model is a "
-                    "single-file checkpoint."
-                )
-            return primary.conditional, primary.unconditional
-
-        if isinstance(primary, Ideogram4TransformerPair):
+        # Checked before the second model is loaded, so a mis-wired graph costs an error rather than
+        # a ~9 GiB read. Real checks, not asserts: a hand-built graph can wire anything here, and
+        # under `python -O` an assert would vanish and leave the mismatch to surface inside the loop.
+        if both_in_one and self.unconditional_transformer is not None:
             raise ValueError(
                 "'Transformer' already carries both Ideogram 4 branches, so 'Transformer (Unconditional)' "
                 "must not be connected. Disconnect it, or select a single-file checkpoint as the model."
             )
-        unconditional = stack.enter_context(
-            context.models.load(self.unconditional_transformer.transformer).model_on_device(
-                working_mem_bytes=working_mem_bytes
+        if not both_in_one and self.unconditional_transformer is None:
+            raise ValueError(
+                "This Ideogram 4 transformer holds only one branch, so 'Transformer (Unconditional)' "
+                "must be connected as well. The Ideogram 4 model loader emits it when the model is a "
+                "single-file checkpoint."
             )
-        )[1]
-        # A real check, not an assert: a hand-built graph can wire any transformer here, and under
-        # `python -O` an assert would vanish and leave the mismatch to surface inside the loop.
+
+        second = self.unconditional_transformer
+        unconditional_info = None if second is None else context.models.load(second.transformer)
+        reservation = working_mem_bytes + max(
+            self._dequant_transient(conditional_info.model),
+            0 if unconditional_info is None else self._dequant_transient(unconditional_info.model),
+        )
+
+        primary = stack.enter_context(conditional_info.model_on_device(working_mem_bytes=reservation))[1]
+        if unconditional_info is None:
+            # Narrowing, not validation: `both_in_one` was decided from this same object above, and
+            # locking it does not change what it is. The user-facing refusals are the two checks
+            # further up, which is why they are `raise` and this is not.
+            assert isinstance(primary, Ideogram4TransformerPair)
+            return primary.conditional, primary.unconditional
+
+        unconditional = stack.enter_context(unconditional_info.model_on_device(working_mem_bytes=reservation))[1]
         for role, branch in (("Transformer", primary), ("Transformer (Unconditional)", unconditional)):
             if not isinstance(branch, Ideogram4Transformer):
                 raise ValueError(

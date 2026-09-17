@@ -777,7 +777,7 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     branch: 'conditional',
     format: 'checkpoint',
     key: 'ideogram4-cond',
-    name: 'Ideogram 4 (single file)',
+    name: 'Ideogram 4 (single file, fp8)',
     type: 'main',
   };
   const ideogram4Unconditional: MainModelConfig = {
@@ -785,7 +785,7 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     branch: 'unconditional',
     format: 'checkpoint',
     key: 'ideogram4-uncond',
-    name: 'Ideogram 4 Unconditional (single file)',
+    name: 'Ideogram 4 Unconditional (single file, fp8)',
     type: 'main',
   };
   const ideogram4Vae: VaeModelConfig = { base: 'flux2', key: 'flux2-vae', name: 'FLUX.2 VAE', type: 'vae' };
