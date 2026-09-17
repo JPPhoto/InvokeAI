@@ -25961,10 +25961,10 @@ export type components = {
          * Main_Checkpoint_QwenImage_Config
          * @description Model config for Qwen Image single-file checkpoint models (safetensors, etc).
          *
-         *     Covers both raw bf16/fp16 checkpoints and ComfyUI-style fp8_scaled checkpoints.
-         *     The loader dequantizes fp8 weights back to bf16 at load time; the
-         *     `default_settings.fp8_storage` toggle can then optionally re-cast to fp8 for
-         *     VRAM savings.
+         *     Covers raw bf16/fp16 checkpoints and ComfyUI-style fp8_scaled and nvfp4 checkpoints.
+         *     The loader keeps scaled fp8 weights when fp8 compute is available or the
+         *     `default_settings.fp8_storage` toggle is on (which also re-casts the rest to fp8),
+         *     and dequantizes them to bf16 at load time otherwise.
          */
         Main_Checkpoint_QwenImage_Config: {
             /**
