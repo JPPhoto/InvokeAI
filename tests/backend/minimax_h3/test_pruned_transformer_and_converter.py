@@ -217,9 +217,7 @@ def test_converted_keys_match_full_model_exactly() -> None:
 def test_read_comfy_quant_markers_from_header_only(tmp_path) -> None:
     from safetensors.torch import save_file
 
-    from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
-        read_comfy_quant_markers,
-    )
+    from invokeai.backend.quantization.int8_convrot import read_comfy_quant_markers
 
     marker_json = b'{"format": "fp8_scaled", "convrot": false}'
     path = tmp_path / "tiny.safetensors"
