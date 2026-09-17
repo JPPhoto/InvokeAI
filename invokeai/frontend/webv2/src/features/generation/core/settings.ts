@@ -486,6 +486,7 @@ export const cloneGenerateWidgetValues = (
   qwen3VLEncoderModel: values.qwen3VLEncoderModel ? { ...values.qwen3VLEncoderModel } : null,
   wanT5EncoderModel: values.wanT5EncoderModel ? { ...values.wanT5EncoderModel } : null,
   wanLowNoiseModel: values.wanLowNoiseModel ? { ...values.wanLowNoiseModel } : null,
+  ideogram4UnconditionalModel: values.ideogram4UnconditionalModel ? { ...values.ideogram4UnconditionalModel } : null,
   ideogram4ColorPalette: [...values.ideogram4ColorPalette],
   referenceImages: cloneReferenceImages(values.referenceImages),
   t5EncoderModel: values.t5EncoderModel ? { ...values.t5EncoderModel } : null,
@@ -787,6 +788,7 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     qwen3VLEncoderModel: getModelIdentifierOrNull(values.qwen3VLEncoderModel),
     wanT5EncoderModel: getModelIdentifierOrNull(values.wanT5EncoderModel),
     wanLowNoiseModel: getMainModelOrNull(values.wanLowNoiseModel),
+    ideogram4UnconditionalModel: getMainModelOrNull(values.ideogram4UnconditionalModel),
     componentSourceModel: getMainModelOrNull(values.componentSourceModel),
     wanGuidanceScaleLowNoise: getOptionalNumber(values.wanGuidanceScaleLowNoise),
     ideogram4SamplerPreset: isIdeogram4SamplerPreset(values.ideogram4SamplerPreset)

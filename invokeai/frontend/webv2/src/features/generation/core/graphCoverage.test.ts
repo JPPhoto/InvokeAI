@@ -69,6 +69,12 @@ const DEFAULT_SHAPES: readonly ModelShape[] = [
  * `SUPPORTED_GENERATE_BASES` below, so a renamed or removed base cannot leave a stale entry here.
  */
 const SHAPE_OVERRIDES: Partial<Record<SupportedGenerateBase, readonly ModelShape[]>> = {
+  // Ideogram 4 has no GGUF build: its standalone shape is Comfy-Org's single-file checkpoint, and
+  // the main model is always the conditional branch -- the other one fills a component slot.
+  'ideogram-4': [
+    { label: 'diffusers', overrides: { format: 'diffusers' } },
+    { label: 'standalone-components', overrides: { branch: 'conditional', format: 'checkpoint' } },
+  ],
   // The two FLUX.2 lines take different encoders: [dev] wants Mistral, Klein wants a Qwen3 whose
   // variant is pinned to the Klein size by KLEIN_TO_QWEN3_VARIANT.
   flux2: [
@@ -99,7 +105,11 @@ const CANDIDATE_VARIANTS = [
   'dev',
   'klein_4b',
   'klein_9b',
+  'qwen3_vl_4b',
+  'qwen3_vl_8b',
 ] as const;
+/** Ideogram 4's two transformer branches; every other main leaves the field unset. */
+const CANDIDATE_BRANCHES = [undefined, 'conditional', 'unconditional'] as const;
 /** VAE widths. A served row can constrain the width as well as the base -- Wan ships 16 and 48. */
 const CANDIDATE_LATENT_CHANNELS = [undefined, 16, 48] as const;
 
@@ -110,17 +120,22 @@ const candidatesForSlot = (slot: ComponentSlotPolicy): ModelIdentifierConfig[] =
     for (const base of CANDIDATE_BASES) {
       for (const variant of CANDIDATE_VARIANTS) {
         for (const latentChannels of type === 'vae' ? CANDIDATE_LATENT_CHANNELS : [undefined]) {
-          candidates.push({
-            base,
-            // A component source is a main model, and only a bundled one can stand in for the slots
-            // it satisfies — `isDiffusersMainForBase` and `isBundledMainForBase` both demand it.
-            format: slot.valueKind === 'main' ? 'diffusers' : undefined,
-            key: `${base}-${type}-${variant ?? 'novariant'}${latentChannels ? `-${latentChannels}` : ''}`,
-            name: `${base} ${type} ${variant ?? ''}`.trim(),
-            type,
-            variant: variant ?? null,
-            ...(latentChannels ? { latent_channels: latentChannels } : {}),
-          });
+          for (const branch of type === 'main' ? CANDIDATE_BRANCHES : [undefined]) {
+            candidates.push({
+              base,
+              // A component source is a main model, and only a bundled one can stand in for the
+              // slots it satisfies — `isDiffusersMainForBase` and `isBundledMainForBase` both
+              // demand it. A branch, on the other hand, only exists on a single file, and its
+              // slot's filter says so, so the two main-model slots need different formats.
+              format: slot.valueKind === 'main' ? (branch ? 'checkpoint' : 'diffusers') : undefined,
+              key: `${base}-${type}-${variant ?? 'novariant'}${latentChannels ? `-${latentChannels}` : ''}${branch ? `-${branch}` : ''}`,
+              name: `${base} ${type} ${variant ?? ''} ${branch ?? ''}`.trim(),
+              type,
+              variant: variant ?? null,
+              ...(branch ? { branch } : {}),
+              ...(latentChannels ? { latent_channels: latentChannels } : {}),
+            });
+          }
         }
       }
     }

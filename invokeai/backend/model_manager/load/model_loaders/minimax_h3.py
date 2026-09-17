@@ -187,10 +187,10 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         )
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_checkpoint_to_diffusers,
-            read_comfy_quant_markers,
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
+            read_comfy_quant_markers,
             swap_in_int8_linears,
         )
 
@@ -331,10 +331,10 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         from invokeai.backend.minimax_h3.text_conditioning import MINIMAX_H3_TEXT_ENCODER_LAYER
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_text_encoder_checkpoint,
-            read_comfy_quant_markers,
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
+            read_comfy_quant_markers,
             swap_in_int8_linears,
         )
 
