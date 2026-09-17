@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from PIL import Image
 
 from invokeai.app.services.video_files.video_files_common import VideoFileSaveException
 from invokeai.app.services.video_files.video_files_disk import DiskVideoFileStorage
@@ -43,6 +44,25 @@ def test_save_writes_video_and_sidecar(storage: DiskVideoFileStorage, tmp_path: 
     assert storage.get_path(VIDEO_NAME).exists()
     assert not source.exists()
     assert storage.get_workflow(VIDEO_NAME) is None  # sidecar readable, workflow not set
+
+
+def test_save_uses_a_passed_first_frame_instead_of_running_the_ladder(
+    storage: DiskVideoFileStorage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The upload path decodes a frame to prove decodability and hands it over; running the
+    seek ladder again would cost up to four more decode-worker spawns inside the request."""
+    source = _make_source(tmp_path)
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        "invokeai.app.services.video_files.video_files_disk.extract_representative_video_frame",
+        lambda path, *args, **kwargs: calls.append(path),
+    )
+
+    storage.save(source_path=source, video_name=VIDEO_NAME, first_frame=Image.new("RGB", (48, 32), (200, 90, 40)))
+
+    assert calls == []
+    with Image.open(storage.get_path(VIDEO_NAME.replace(".mp4", ".webp"), thumbnail=True)) as thumbnail:
+        assert thumbnail.size == (48, 32)
 
 
 def test_save_with_move_source_false_leaves_the_source_intact(storage: DiskVideoFileStorage, tmp_path: Path):
