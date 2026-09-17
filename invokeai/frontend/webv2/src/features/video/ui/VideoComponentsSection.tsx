@@ -20,7 +20,7 @@ import {
 } from '@features/video/core/videoPolicies';
 import { Field } from '@platform/ui';
 import { Button } from '@platform/ui/Button';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { Fragment, memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -107,17 +107,20 @@ const HybridStartBlockRow = memo(function HybridStartBlockRow({
   const { t } = useTranslation();
   const handleChange = useCallback((h3HybridStartBlock: number) => onPatch({ h3HybridStartBlock }), [onPatch]);
 
+  // ScrubberField, like the panel's other sliders: SliderNumberField's only other
+  // user is the Generate widget, and importing it here too split it into a shared
+  // chunk — one more request on every editor route.
   return (
-    <Field helpText={t('widgets.video.hybridStartBlockHelp')} label={t('widgets.video.hybridStartBlock')}>
-      <SliderNumberField
-        ariaLabel={t('widgets.video.hybridStartBlock')}
-        max={MINIMAX_H3_HYBRID_BLOCK_RANGE.max}
-        min={MINIMAX_H3_HYBRID_BLOCK_RANGE.min}
-        step={1}
-        value={value}
-        onChange={handleChange}
-      />
-    </Field>
+    <ScrubberField
+      defaultValue={MINIMAX_H3_HYBRID_BLOCK_RANGE.defaultStart}
+      helpText={t('widgets.video.hybridStartBlockHelp')}
+      label={t('widgets.video.hybridStartBlock')}
+      max={MINIMAX_H3_HYBRID_BLOCK_RANGE.max}
+      min={MINIMAX_H3_HYBRID_BLOCK_RANGE.min}
+      step={1}
+      value={value}
+      onChange={handleChange}
+    />
   );
 });
 
