@@ -102,7 +102,7 @@ const Probe = ({
   const currentGalleryLocationRef = useRef({ galleryView, selectedBoardId });
 
   // Match GalleryWidgetView's render-assigned live-read port.
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   currentGalleryLocationRef.current = { galleryView, selectedBoardId };
   const getCurrentGalleryLocation = useCallback(() => currentGalleryLocationRef.current, []);
   const actions = useGalleryActions({
@@ -146,7 +146,6 @@ const noop = vi.fn();
 const adapter: GalleryUiAdapter = {
   ItemActionsProvider: NoopProvider,
   ImageContextMenu: NoopContextMenu,
-  account: { enableLiveFollow: noop },
   antialiasProgressImages: false,
   exportProject: vi.fn(),
   gallery: {
@@ -169,14 +168,15 @@ const adapter: GalleryUiAdapter = {
   galleryValues: {},
   generateValues: {},
   liveFollowEnabled: false,
-  liveProgressTarget: null,
+  progressSessions: [],
+  pinnedProgressSessionId: null,
+  followProgressSession: vi.fn(),
   notifications: {
     add: (...args: unknown[]) => mocks.notificationsAdd(...args),
     reportError: (...args: unknown[]) => mocks.notificationsReportError(...args),
   },
   projectId: 'project-1',
   projectName: 'Project',
-  queueItems: [],
   widgets: { openGallery: () => true, patchGalleryValues },
 };
 
