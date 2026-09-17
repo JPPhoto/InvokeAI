@@ -10,6 +10,7 @@ import json
 
 import pytest
 import torch
+from safetensors.torch import save_file
 
 from invokeai.backend.quantization.int8_convrot import (
     CONVROT_GROUP_SIZE,
@@ -18,6 +19,8 @@ from invokeai.backend.quantization.int8_convrot import (
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
     predict_int8_cast_size,
+    read_comfy_quant_markers,
+    reject_foreign_quantization_scales,
     reject_unmarked_int8_weights,
     split_int8_convrot_layers,
     swap_in_int8_linears,
@@ -330,3 +333,70 @@ class TestTheKeysTheOrphanCheckAndTheSidecarDropActOn:
         }
 
         assert set(drop_unconsumed_quantization_sidecars(sd)) == {"blocks.0.input_scaler.weight"}
+
+
+class TestTheForeignScaleCheck:
+    """`reject_foreign_quantization_scales` decides which unclaimed `weight_scale` is fatal.
+
+    Inside the int8 branch the fp8 pipeline is skipped, so a scaled-fp8 layer that came along would
+    be cast without its scale -- off by `1/weight_scale`, silently. Both filters below exist because
+    the failure is fatal and a false positive costs a user a checkpoint that worked.
+    """
+
+    @staticmethod
+    def _model() -> torch.nn.Module:
+        model = torch.nn.Module()
+        model.proj = torch.nn.Linear(4, 4)
+        model.other = torch.nn.Linear(4, 4)
+        return model
+
+    def test_an_fp8_weight_this_model_consumes_is_fatal(self) -> None:
+        sd = {
+            "proj.weight": torch.zeros(4, 4, dtype=torch.int8),
+            "proj.weight_scale": torch.ones(4, 1),
+            "other.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn),
+            "other.weight_scale": torch.ones(()),
+        }
+
+        with pytest.raises(ValueError, match=r"other\.weight_scale"):
+            reject_foreign_quantization_scales(sd, {"proj": MARKER}, "Ideogram 4", self._model())
+
+    def test_a_scale_on_a_dense_weight_is_not(self) -> None:
+        """A merged single file carries a bundled encoder too, and these loaders do not prefix-filter
+        it out. The weight's dtype is what tells a foreign *quantized* layer from a foreign dense
+        one; a dense weight loads correctly whatever sits beside it."""
+        sd = {"other.weight": torch.zeros(4, 4), "other.weight_scale": torch.ones(())}
+
+        reject_foreign_quantization_scales(sd, {}, "Ideogram 4", self._model())
+
+    def test_a_scale_on_a_module_this_model_does_not_have_is_not(self) -> None:
+        """An all-in-one export bundles a scaled-fp8 *submodel* beside the int8 transformer. Those
+        keys are discarded by the load rather than cast, so they cannot load unscaled."""
+        sd = {
+            "text_encoder.fc.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn),
+            "text_encoder.fc.weight_scale": torch.ones(()),
+        }
+
+        reject_foreign_quantization_scales(sd, {}, "Ideogram 4", self._model())
+
+
+def test_read_comfy_quant_markers_reads_a_marker_off_a_file(tmp_path) -> None:
+    """The scheme, from the file rather than from a state dict.
+
+    Two callers need it that way: a loader deciding whether to commit to a ~20 GiB read, and model
+    identification, whose state dict is on the meta device and therefore has no bytes to parse.
+    Unrelated tensors are not reported, and a weight without a marker contributes nothing.
+    """
+    marker_json = b'{"format": "fp8_scaled", "convrot": false}'
+    path = tmp_path / "tiny.safetensors"
+    save_file(
+        {
+            "blocks.0.mlp.fc2.weight": torch.zeros(2, 2),
+            "blocks.0.mlp.fc2.comfy_quant": torch.frombuffer(marker_json, dtype=torch.uint8).clone(),
+            "unrelated.weight": torch.zeros(1),
+        },
+        str(path),
+    )
+
+    markers = read_comfy_quant_markers(path)
+    assert markers == {"blocks.0.mlp.fc2": {"format": "fp8_scaled", "convrot": False}}

@@ -3,6 +3,7 @@ from abc import ABC
 from pathlib import Path
 from typing import Any, Literal, Self
 
+import torch
 from pydantic import BaseModel, Field
 
 from invokeai.backend.model_manager.configs.base import (
@@ -27,6 +28,7 @@ from invokeai.backend.model_manager.configs.flux2_variant import (
     flux2_variant_from_hidden_size,
 )
 from invokeai.backend.model_manager.configs.identification_utils import (
+    InvalidMatchError,
     NotAMatchError,
     common_config_paths,
     get_config_dict_or_raise,
@@ -55,6 +57,7 @@ from invokeai.backend.model_manager.taxonomy import (
     ZImageVariantType,
 )
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
+from invokeai.backend.quantization.int8_convrot import INT8_TENSORWISE_FORMAT, read_comfy_quant_markers
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.sdnq_tensor import SDNQTensor
 
@@ -1413,6 +1416,172 @@ class Main_Diffusers_Ideogram4_Config(Diffusers_Config_Base, Main_Config_Base, C
         )
 
 
+# Comfy-Org ships the two Ideogram 4 branches as separate single files whose tensors are
+# key-for-key and shape-for-shape identical. Which branch a file holds is recorded only in its
+# safetensors metadata, and the pair is not interchangeable: swapping them turns the guided
+# branch into the unguided one and vice versa, which produces images with no visible error.
+_IDEOGRAM4_METADATA_KEY = "model_type"
+_IDEOGRAM4_BRANCH_BY_METADATA = {
+    "ideogram4_cond": "conditional",
+    "ideogram4_uncond": "unconditional",
+}
+
+Ideogram4Branch = Literal["conditional", "unconditional"]
+
+
+def _has_ideogram4_keys(state_dict: dict[str | int, Any]) -> bool:
+    """Fingerprint for Ideogram 4 single-file transformers.
+
+    ``embed_image_indicator`` is the token-type embedding for Ideogram's packed ``[text][image]``
+    sequence and no other architecture probed here carries it; the two projections pin the layer
+    layout the loader builds (``input_proj`` is the 128-channel patch input, ``adaln_proj`` the
+    512-wide AdaLN conditioning trunk).
+    """
+    return all(
+        key in state_dict
+        for key in (
+            "embed_image_indicator.weight",
+            "input_proj.weight",
+            "adaln_proj.weight",
+            "final_layer.linear.weight",
+        )
+    )
+
+
+def _ideogram4_branch_from_filename(filename: str) -> Ideogram4Branch:
+    """The branch for a file that declares none.
+
+    Not only a fallback for a stripped re-upload: the released `int8_convrot` pair carries no
+    `model_type` at all, so this is the sole path for that build.
+
+    Only the unconditional file is named for its branch, so anything else is read as the conditional
+    branch — the same default direction as the released naming. Both spellings are accepted: the
+    filename says "unconditional" and the metadata this stands in for says "uncond", and a repack
+    that drops the metadata is exactly the kind of tool that would name the file after it.
+    """
+    lowered = filename.lower()
+    return "unconditional" if "unconditional" in lowered or "uncond" in lowered else "conditional"
+
+
+class Main_Checkpoint_Ideogram4_Config(Checkpoint_Config_Base, Main_Config_Base, Config_Base):
+    """Model config for Ideogram 4 single-file transformer checkpoints (safetensors).
+
+    One file holds ONE of the two dual-branch transformers. The Qwen3-VL 8B text encoder and the
+    FLUX.2 VAE are separate models, selected on the loader node; the diffusers pipeline folder
+    (``Main_Diffusers_Ideogram4_Config``) is the variant that bundles everything.
+
+    Quantization: plain bf16/fp16, ComfyUI "scaled fp8" and ComfyUI ``int8_tensorwise``(+convrot)
+    all load. The ``nvfp4`` repack of the same files is recognised and rejected with
+    `InvalidMatchError`, which keeps it out of the database entirely -- `NotAMatchError` would let
+    it fall through to `Unknown_Config` and register a 5 GiB file that nothing can ever load.
+    """
+
+    base: Literal[BaseModelType.Ideogram4] = Field(default=BaseModelType.Ideogram4)
+    format: Literal[ModelFormat.Checkpoint] = Field(default=ModelFormat.Checkpoint)
+    branch: Ideogram4Branch = Field(
+        description="Which of Ideogram 4's two transformer branches this file holds. Read from the "
+        "file's `model_type` metadata where it has any, and from the filename otherwise — the "
+        "released int8 build records no metadata at all, so keep those files under their published "
+        "names. Rename and re-install to correct it."
+    )
+
+    @classmethod
+    def from_model_on_disk(cls, mod: ModelOnDisk, override_fields: dict[str, Any]) -> Self:
+        raise_if_not_file(mod)
+
+        raise_for_override_fields(cls, override_fields)
+
+        state_dict = mod.load_state_dict()
+        if not _has_ideogram4_keys(state_dict):
+            raise NotAMatchError("state dict does not look like an Ideogram 4 transformer")
+
+        if _has_ggml_tensors(state_dict):
+            raise NotAMatchError("GGUF-quantized Ideogram 4 checkpoints are not supported yet")
+
+        cls._raise_for_unsupported_quantization(mod, state_dict)
+
+        branch = override_fields.pop("branch", None) or cls._branch_or_raise(mod)
+
+        return cls(**override_fields, branch=branch)
+
+    @classmethod
+    def _branch_or_raise(cls, mod: ModelOnDisk) -> Ideogram4Branch:
+        """The branch, from the file's own declaration where it has one.
+
+        A declaration this does not recognise is refused rather than ignored. Falling back to the
+        filename there would quietly classify a future release (an `ideogram4_5_cond`, an edit
+        build) as one of *these* two branches, and the loader node trusts the recorded branch
+        precisely because it came from the file — which is how a wrong model would end up guiding
+        against a right one with nothing in the log.
+        """
+        declared = mod.metadata().get(_IDEOGRAM4_METADATA_KEY)
+        if not declared:
+            return _ideogram4_branch_from_filename(mod.path.name)
+        branch = _IDEOGRAM4_BRANCH_BY_METADATA.get(declared)
+        if branch is None:
+            raise InvalidMatchError(
+                f"this file declares model_type '{declared}', which is not one of Ideogram 4's two "
+                f"transformer branches ({', '.join(sorted(_IDEOGRAM4_BRANCH_BY_METADATA))}). It is most "
+                "likely a newer or different Ideogram model that this version cannot run."
+            )
+        return branch
+
+    @classmethod
+    def _raise_for_unsupported_quantization(cls, mod: ModelOnDisk, state_dict: dict[str | int, Any]) -> None:
+        """Refuse the quantization schemes this loader cannot build.
+
+        `InvalidMatchError`, not `NotAMatchError`: the file *is* an Ideogram 4 transformer, so the
+        right outcome is a refusal the installer shows, not a fall-through to `Unknown_Config` that
+        registers it as a model nothing can load.
+
+        Two of them. nvfp4 packs two codes per byte, so its uint8 weights are indistinguishable from
+        the `comfy_quant` markers every repack carries -- including the two supported ones; the
+        per-tensor `weight_scale_2` is what only nvfp4 writes.
+
+        And int8 weights *without* a readable `int8_tensorwise` marker: the loader refuses those
+        (`reject_unmarked_int8_weights`), because a rotated weight loaded as if it were not one
+        generates noise. Refusing them here too is what keeps that refusal at install time -- a
+        torchao or `int8_dynamic` repack of this architecture would otherwise register as a 9 GiB
+        model, pull in its three starter dependencies, and fail at the first render.
+
+        The markers come from the file's header rather than from `state_dict`: identification loads
+        tensors on the meta device, so it has every dtype and shape but no bytes to parse. That read
+        is a header parse plus one seek per marker, and it only happens for a file that has int8
+        weights to explain in the first place.
+        """
+        if any(isinstance(key, str) and key.endswith(".weight_scale_2") for key in state_dict):
+            raise InvalidMatchError(
+                "this is an nvfp4-quantized Ideogram 4 transformer, which is not supported yet. "
+                "Install the fp8_scaled or int8_convrot build instead."
+            )
+
+        int8_weights = sorted(
+            key
+            for key, value in state_dict.items()
+            if isinstance(key, str) and key.endswith(".weight") and getattr(value, "dtype", None) is torch.int8
+        )
+        if not int8_weights:
+            return
+
+        try:
+            markers = read_comfy_quant_markers(mod.path)
+        except Exception:
+            # Not readable safetensors, so there are no markers to find and nothing explains the
+            # int8 weights. The refusal below is the right answer for that file too.
+            markers = {}
+        unmarked = [
+            key
+            for key in int8_weights
+            if markers.get(key[: -len(".weight")], {}).get("format") != INT8_TENSORWISE_FORMAT
+        ]
+        if unmarked:
+            raise InvalidMatchError(
+                f"{len(unmarked)} int8 weight(s) in this Ideogram 4 transformer carry no readable "
+                f"'{INT8_TENSORWISE_FORMAT}' marker (e.g. '{unmarked[0]}'), so the quantization scheme "
+                "cannot be identified. Only Comfy-Org's int8_convrot build is supported."
+            )
+
+
 class Main_Diffusers_Krea2_Config(Diffusers_Config_Base, Main_Config_Base, Config_Base):
     """Model config for Krea-2 diffusers models (Krea-2-Turbo)."""
 
@@ -1771,10 +1940,10 @@ def _infer_qwen_image_variant(sd: dict[str | int, Any], path: Path) -> QwenImage
 class Main_Checkpoint_QwenImage_Config(Checkpoint_Config_Base, Main_Config_Base, Config_Base):
     """Model config for Qwen Image single-file checkpoint models (safetensors, etc).
 
-    Covers both raw bf16/fp16 checkpoints and ComfyUI-style fp8_scaled checkpoints.
-    The loader dequantizes fp8 weights back to bf16 at load time; the
-    `default_settings.fp8_storage` toggle can then optionally re-cast to fp8 for
-    VRAM savings.
+    Covers raw bf16/fp16 checkpoints and ComfyUI-style fp8_scaled and nvfp4 checkpoints.
+    The loader keeps scaled fp8 weights when fp8 compute is available or the
+    `default_settings.fp8_storage` toggle is on (which also re-casts the rest to fp8),
+    and dequantizes them to bf16 at load time otherwise.
     """
 
     base: Literal[BaseModelType.QwenImage] = Field(default=BaseModelType.QwenImage)

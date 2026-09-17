@@ -8,6 +8,8 @@ safetensors files, and check what comes out the other end.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -77,6 +79,9 @@ def _write_checkpoint(path: Path, reference: torch.nn.Module, *, with_vision: bo
 def _load(path: Path, variant: MistralVariantType) -> torch.nn.Module:
     config = MistralEncoder_Checkpoint_Config.model_construct(path=str(path), name=path.stem, variant=variant)
     loader = object.__new__(MistralEncoderCheckpointLoader)
+    # The loader reserves before it folds or casts. Nothing here is about the size it asks for, but the
+    # reservation is sized from the model it just built, so a variant the prediction cannot walk fails here.
+    loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     return loader._load_text_encoder(config)
 
 

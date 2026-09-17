@@ -25,6 +25,7 @@ from invokeai.backend.model_manager.load.model_cache.model_cache import (
 from invokeai.backend.model_manager.load.model_util import calc_model_size_by_fs
 from invokeai.backend.model_manager.load.optimizations import skip_torch_weight_init
 from invokeai.backend.model_manager.taxonomy import (
+    QUANTIZED_MODEL_FORMATS,
     AnyModel,
     SubModelType,
 )
@@ -156,21 +157,6 @@ _FP8_DEFAULT_SKIP_PATTERNS: tuple[str, ...] = (
     "norm",
     r"^proj_in$",
     r"^proj_out$",
-)
-
-# Model formats whose weights are already quantized. FP8 storage is meaningless for them (the
-# payload is packed integers, not values we may re-encode) and actively harmful — see
-# `_should_use_fp8`. Declared as strings to keep this module free of a taxonomy import at module
-# scope; compared against `config.format`, which is a `ModelFormat` str-enum. Must list every
-# quantized member of `ModelFormat`; `test_quantized_format_set_matches_the_taxonomy` pins the
-# strings to the enum so a rename cannot silently disable the check.
-_QUANTIZED_MODEL_FORMATS: frozenset[str] = frozenset(
-    {
-        "gguf_quantized",
-        "bnb_quantized_nf4b",
-        "bnb_quantized_int8b",
-        "sdnq_quantized",
-    }
 )
 
 
@@ -438,7 +424,8 @@ class ModelLoader(ModelLoaderBase):
         # No quantized-format loader calls `_apply_fp8_layerwise_casting` today, so this is a guard
         # against the next loader that gets wired up (they are being added one model at a time)
         # rather than a fix for a live crash.
-        if hasattr(config, "format") and config.format in _QUANTIZED_MODEL_FORMATS:
+        # The payload is packed integers, not values FP8 storage may re-encode.
+        if hasattr(config, "format") and config.format in QUANTIZED_MODEL_FORMATS:
             return False
 
         # VAEs are excluded — fp8 storage causes noticeable quality degradation in decode.
@@ -485,6 +472,38 @@ class ModelLoader(ModelLoaderBase):
 
         return False
 
+    def _keep_fp8_weights(self, config: AnyModelConfig, submodel_type: Optional[SubModelType] = None) -> bool:
+        """Whether a checkpoint's fp8 weights should stay packed rather than be folded into bf16.
+
+        Two consumers want them packed, and either is enough:
+
+        - the fp8 matmul (`fp8_compute`), which runs on them directly;
+        - FP8 Storage asked of this model, because the checkpoint's own per-tensor scale is exact
+          while the layerwise cast of a *folded* weight has no scale at all and rounds to unscaled
+          fp8 -- measured on FLUX.2 Klein 4B, that loses ~3% of the weights to underflow for the
+          same one byte per weight.
+
+        Kept weights are dequantized with their scale on each forward (`CustomLinear`), so the
+        storage branch trades a little speed for half the VRAM -- the cost is not measured here, but
+        it replaces the upcast the storage cast used to perform per forward anyway. With neither
+        consumer asking, folding is right: packed weights would pay that per-forward work to save
+        memory nobody asked to save. `_should_use_fp8` already requires the device to support fp8
+        storage, so an unsupported device keeps the folding path.
+        """
+        return should_keep_fp8_weights(self._torch_device) or self._should_use_fp8(config, submodel_type)
+
+    def _fp8_kept_reason(self) -> str:
+        """Which consumer kept a checkpoint's fp8 weights packed, for the line that reports it.
+
+        Worth naming rather than assuming: the log used to say "fp8_compute enabled" for both, and
+        that is now false exactly when FP8 Storage is the reason -- the matmul is off there, which
+        is the case a reader would most want to tell apart. The storage path also dequantizes on
+        each forward instead of running on the tensor cores, so the line says so.
+        """
+        if should_keep_fp8_weights(self._torch_device):
+            return "fp8_compute, on the fp8 tensor cores"
+        return "FP8 Storage, dequantized per forward"
+
     def _apply_fp8_layerwise_casting(
         self, model: AnyModel, config: AnyModelConfig, submodel_type: Optional[SubModelType] = None
     ) -> AnyModel:
@@ -498,19 +517,23 @@ class ModelLoader(ModelLoaderBase):
         if isinstance(model, torch.nn.Module) and getattr(model, FP8_COMPUTE_DTYPE_ATTR, None) is not None:
             return model
 
-        # A checkpoint that already ships fp8 weights is running (or is about to run) on the fp8
-        # tensor cores. Layerwise casting would install hooks that restore the compute dtype before
-        # every forward, so `CustomLinear._can_use_fp8_matmul` would no longer see an fp8 weight and
-        # would silently fall back to the dequantized path — the VRAM toggle would make the model
-        # *slower* with no indication why. Storage has nothing to add here anyway: the weights are
-        # already 1 byte per parameter.
-        if isinstance(model, torch.nn.Module) and should_keep_fp8_weights(self._torch_device):
+        # A checkpoint that already ships fp8 weights has nothing to gain from this cast -- they are
+        # already one byte per parameter -- and everything to lose. The cast installs hooks that
+        # restore the compute dtype before every forward, so:
+        #   - with the fp8 matmul, `CustomLinear._can_use_fp8_matmul` no longer sees an fp8 weight
+        #     and silently falls back to the dequantized path, making the VRAM toggle *slower*;
+        #   - without it, a scaled-fp8 weight is upcast with its `weight_scale` never applied, i.e.
+        #     off by 1/weight_scale on every kept layer, and a model whose first parameter is fp8
+        #     derives an fp8 `compute_dtype`, which `set_fp8_compute_dtype` refuses outright.
+        # It therefore keys on the weights the model actually holds, not on which consumer kept
+        # them: FP8 Storage keeps scaled weights packed too, so the matmul is no longer the only
+        # way to arrive here.
+        if isinstance(model, torch.nn.Module):
             already_fp8 = count_fp8_weights(model)
             if already_fp8:
                 self._logger.info(
-                    f"FP8 storage skipped for {config.name}: {already_fp8} weight(s) are already fp8 and "
-                    "are being run on the fp8 tensor cores (fp8_compute). Layerwise casting would "
-                    "disable that matmul without saving any further VRAM."
+                    f"FP8 storage skipped for {config.name}: {already_fp8} weight(s) are already fp8, so there is "
+                    "no further VRAM to save and casting them would drop the scales they are stored with."
                 )
                 return model
 
@@ -627,8 +650,12 @@ class ModelLoader(ModelLoaderBase):
         """Cast a skipped module's float8 params back to the dtype it is expected to compute in.
 
         Only float8 params are touched, and only the storage dtypes — a quantized param (GGUF, NF4,
-        bitsandbytes) is left to its own kernels.
+        bitsandbytes) is left to its own kernels. A scaled-fp8 layer (fp8 weight plus `weight_scale`)
+        is not raw codes either: `CustomLinear` dequantizes it with its scale, while a plain upcast
+        here would drop the scale.
         """
+        if getattr(module, "weight_scale", None) is not None:
+            return
         for param in module.parameters(recurse=False):
             if param.data.dtype in FP8_STORAGE_DTYPES and not _is_quantized_param(param):
                 param.data = param.data.to(compute_dtype)

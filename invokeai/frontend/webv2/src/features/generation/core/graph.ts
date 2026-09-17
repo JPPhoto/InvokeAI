@@ -31,11 +31,15 @@ import {
   getCompatibleDiffusersComponentSource,
   isAnimaQwen3Encoder,
   isBundledMainForBase,
+  isErnieImageMistralEncoder,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
+  isIdeogram4Qwen3VlEncoder,
+  isKrea2Qwen3VlEncoder,
   isNonAnimaQwen3Encoder,
   isSelfContainedSDNQFlux1Pipeline,
   isVaeCompatibleWithGenerateModel,
+  type GenerateComponentFilter,
 } from './componentCompatibility';
 import {
   addEdge,
@@ -58,6 +62,19 @@ const getCompatibleComponentSource = (
 // The picker's rule, not a copy of it: a base list here once dropped a VAE the picker offered.
 const getCompatibleVae = (settings: GenerateSettings, model: MainModelConfig) =>
   settings.vae && isVaeCompatibleWithGenerateModel(model, settings.vae) ? settings.vae : null;
+
+/**
+ * A component selection is only sent when it suits the model that is about to run.
+ *
+ * Component settings survive a main-model switch, and an optional slot is not validated at all
+ * (`validateSlots` returns early for one), so a selection made for another architecture would
+ * otherwise be forwarded as an override and rejected by the loader node — turning a bundled
+ * pipeline that needs no components into a failed enqueue.
+ */
+const getCompatibleComponent = (
+  component: ComponentModelConfig | null,
+  filter: GenerateComponentFilter
+): ComponentModelConfig | null => (component && filter(component) ? component : null);
 
 const toImageField = (image: GenerateReferenceImageAsset) => ({
   image_name: getEffectiveReferenceImage(image).image_name,
@@ -849,10 +866,10 @@ const buildErnieImageGraph = (
   // in the component section and sent here, the same shape Krea-2 uses.
   const isDiffusers = model.format === 'diffusers';
   const vaeModel = getCompatibleVae(settings, model);
-  const mistralEncoderModel = settings.mistralEncoderModel;
+  const mistralEncoderModel = getCompatibleComponent(settings.mistralEncoderModel, isErnieImageMistralEncoder);
 
   if (!isDiffusers) {
-    requireComponent(mistralEncoderModel, 'Mistral Encoder');
+    requireComponent(mistralEncoderModel, 'Ministral 3B Encoder');
     requireComponent(vaeModel, 'ERNIE-Image VAE');
   }
 
@@ -1199,7 +1216,7 @@ const buildKrea2Graph = (
   // carries them, and the loader extracts them when these are omitted.
   const isDiffusers = model.format === 'diffusers';
   const vaeModel = getCompatibleVae(settings, model);
-  const qwen3VlEncoderModel = settings.qwen3VLEncoderModel;
+  const qwen3VlEncoderModel = getCompatibleComponent(settings.qwen3VLEncoderModel, isKrea2Qwen3VlEncoder);
 
   if (!isDiffusers) {
     requireComponent(vaeModel, 'Krea-2 VAE');
@@ -1281,10 +1298,30 @@ const buildIdeogram4Graph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
+  // A single-file Ideogram 4 main is one of two transformer branches and carries neither encoder
+  // nor VAE, so all three are selected as components. A diffusers pipeline bundles them.
+  const isDiffusers = model.format === 'diffusers';
+  const unconditionalModel = settings.ideogram4UnconditionalModel;
+  const qwen3VlEncoderModel = getCompatibleComponent(settings.qwen3VLEncoderModel, isIdeogram4Qwen3VlEncoder);
+  const vaeModel = getCompatibleVae(settings, model);
+
+  if (!isDiffusers) {
+    requireComponent(unconditionalModel, 'Ideogram 4 unconditional transformer');
+    requireComponent(qwen3VlEncoderModel, 'Qwen3-VL Encoder');
+    requireComponent(vaeModel, 'Ideogram 4 VAE');
+  }
+
   const graph: BackendGraphContract = { edges: [], id: createId('ideogram4_graph'), nodes: {} };
   // Ideogram 4 is positive-only: there is no negative conditioning input on its denoise node.
   const { positivePrompt, seed } = addPromptAndSeedNodes(graph);
-  const modelLoader = addNode(graph, { id: 'model_loader', model, type: 'ideogram4_model_loader' });
+  const modelLoader = addNode(graph, {
+    id: 'model_loader',
+    model,
+    qwen3_vl_encoder_model: qwen3VlEncoderModel ?? undefined,
+    type: 'ideogram4_model_loader',
+    unconditional_model: isDiffusers ? undefined : (unconditionalModel ?? undefined),
+    vae_model: vaeModel ?? undefined,
+  });
   // The caption builder turns the prompt (plus optional colour terms) into Ideogram's own
   // caption format before encoding.
   const captionBuilder = addNode(graph, {
@@ -1308,6 +1345,11 @@ const buildIdeogram4Graph = (
   const output = addImageOutputNode(graph, 'ideogram4_l2i', outputIsIntermediate);
 
   addEdge(graph, modelLoader, 'transformer', denoise, 'transformer');
+  if (!isDiffusers) {
+    // Only a single-file main emits a second branch; connecting it for a bundled pipeline is an
+    // error on the node, because that pipeline's Transformer submodel already holds both.
+    addEdge(graph, modelLoader, 'unconditional_transformer', denoise, 'unconditional_transformer');
+  }
   addEdge(graph, modelLoader, 'qwen3_encoder', posCond, 'qwen3_encoder');
   addEdge(graph, modelLoader, 'vae', output, 'vae');
   addEdge(graph, positivePrompt, 'value', captionBuilder, 'prompt');
@@ -1321,6 +1363,11 @@ const buildIdeogram4Graph = (
     ideogram4_mu: settings.ideogram4Mu ?? undefined,
     ideogram4_sampler_preset: settings.ideogram4SamplerPreset,
     ideogram4_steps: settings.ideogram4Steps ?? undefined,
+    // Two files made this image, so recording only the main model would not identify what ran —
+    // the same reason `minimax_h3_transformer_model` exists.
+    ideogram4_unconditional_model: isDiffusers ? undefined : (unconditionalModel ?? undefined),
+    qwen3_vl_encoder: qwen3VlEncoderModel ?? undefined,
+    vae: vaeModel ?? undefined,
   });
 
   return graph;

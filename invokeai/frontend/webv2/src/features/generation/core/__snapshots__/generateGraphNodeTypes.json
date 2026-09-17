@@ -191,7 +191,11 @@
     "ideogram-4": {
       "componentsFilled": {
         "diffusers": [],
-        "standalone-components": []
+        "standalone-components": [
+          "ideogram4UnconditionalModel",
+          "qwen3VLEncoderModel",
+          "vae"
+        ]
       },
       "nodeTypes": [
         "core_metadata",
@@ -553,6 +557,7 @@
         "ideogram4_sampler_preset": [
           "V4_QUALITY_48"
         ],
+        "ideogram4_unconditional_model": [],
         "is_intermediate": [
           true
         ],
@@ -1018,7 +1023,8 @@
       "inputs": [
         "positive_conditioning",
         "seed",
-        "transformer"
+        "transformer",
+        "unconditional_transformer"
       ],
       "literalInputs": {
         "height": [
@@ -1064,13 +1070,17 @@
           true
         ],
         "model": [],
+        "qwen3_vl_encoder_model": [],
+        "unconditional_model": [],
         "use_cache": [
           true
-        ]
+        ],
+        "vae_model": []
       },
       "outputs": [
         "qwen3_encoder",
         "transformer",
+        "unconditional_transformer",
         "vae"
       ]
     },

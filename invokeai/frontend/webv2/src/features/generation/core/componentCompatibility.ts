@@ -4,6 +4,8 @@ import { getArchitectureCapabilityRow } from './architectureCapabilities';
 
 export type GenerateComponentCandidate = {
   base: string;
+  /** Which Ideogram 4 transformer branch a single file holds. Only `ideogram-4` mains carry it. */
+  branch?: unknown;
   format?: string;
   key?: string;
   /** VAE latent width. Only `wan` ships more than one, and its two are different decoders. */
@@ -88,6 +90,27 @@ export const isFlux2MistralEncoder: GenerateComponentFilter = (model) =>
 
 export const isErnieImageMistralEncoder: GenerateComponentFilter = (model) =>
   model.type === 'mistral_encoder' && model.variant === MINISTRAL_3B_VARIANT;
+
+/**
+ * The two Qwen3-VL encoders install under one model type and are not interchangeable: Krea-2 needs
+ * the 4B (hidden 2560), Ideogram 4 the 8B, whose 13 tapped layers make a 53248-wide feature vector.
+ * Offering the wrong one produces a shape mismatch inside the first denoising step.
+ */
+export const isKrea2Qwen3VlEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'qwen3_vl_encoder' && model.variant === 'qwen3_vl_4b';
+
+export const isIdeogram4Qwen3VlEncoder: GenerateComponentFilter = (model) =>
+  model.type === 'qwen3_vl_encoder' && model.variant === 'qwen3_vl_8b';
+
+/**
+ * Ideogram 4's unconditional branch. Only a single file can be one: a diffusers pipeline holds both
+ * branches, and the conditional file is the one selected as the main model.
+ */
+export const isIdeogram4UnconditionalBranch: GenerateComponentFilter = (model) =>
+  model.type === 'main' &&
+  model.base === 'ideogram-4' &&
+  model.format === 'checkpoint' &&
+  model.branch === 'unconditional';
 
 export const isFlux2Qwen3EncoderForModel = (selectedModel: GenerateModelConfig): GenerateComponentFilter => {
   if (selectedModel.variant === 'dev') {

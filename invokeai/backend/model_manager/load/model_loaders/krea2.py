@@ -26,10 +26,12 @@ from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
     ModelFormat,
     ModelType,
+    Qwen3VLVariantType,
     SubModelType,
 )
 from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
 from invokeai.backend.quantization.fp8_scaled import (
+    INPUT_SCALE_SUFFIXES,
     attach_fp8_scales,
     cast_state_dict,
     dequantize_fp8_scaled,
@@ -58,7 +60,14 @@ from invokeai.backend.quantization.int8_convrot import (
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
+from invokeai.backend.quantization.nvfp4 import (
+    WEIGHT_SCALE_2_SUFFIX,
+    install_nvfp4_layers,
+    pop_nvfp4_layers,
+    predict_nvfp4_install_size,
+)
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, reject_incomplete_load
 
 # Kept as a module-level alias: this helper moved to model_manager.util.qwen3_vl so the MiniMax H3
 # loader can share it without importing across family loaders.
@@ -149,11 +158,15 @@ DISCARDED_NATIVE_FINAL_KEYS = ("last.down", "last.up")
 
 
 def _drop_discarded_native_final_layers(sd: dict[str, Any]) -> dict[str, Any]:
-    """Remove the dropped final-block projections together with their quantization metadata."""
+    """Remove the dropped final-block projections together with their quantization metadata.
+
+    An nvfp4 layer's global scale and any activation scale go too: left behind without its weight, the nvfp4 pass
+    refuses a global scale as a malformed layer, and an activation scale would linger as an orphan.
+    """
     doomed = {
         f"{path}{suffix}"
         for path in DISCARDED_NATIVE_FINAL_KEYS
-        for suffix in (".weight", ".weight_scale", ".comfy_quant")
+        for suffix in (".weight", ".weight_scale", WEIGHT_SCALE_2_SUFFIX, ".comfy_quant", *INPUT_SCALE_SUFFIXES)
     }
     if not doomed & set(sd):
         return sd
@@ -364,7 +377,8 @@ class Krea2CheckpointModel(ModelLoader):
     The int8 build stays int8-resident: `swap_in_int8_linears` installs `Int8ConvrotLinear`, which
     holds the stored codes and dequantizes per forward, so a 12.0 GiB checkpoint stays 12.0 GiB.
     What it does not get is int8 *compute* -- that needs a kernel InvokeAI does not have yet -- so
-    the saving here is resident memory, not speed.
+    the saving here is resident memory, not speed. ComfyUI's 'nvfp4' build, whose layers the
+    safetensors header names, stays packed the same way as `NVFP4Linear`.
     """
 
     def _load_model(
@@ -400,6 +414,18 @@ class Krea2CheckpointModel(ModelLoader):
         # implement; refusing a tensor that is on its way to the bin would be an odd way to fail.
         sd = _drop_discarded_native_final_layers(sd)
 
+        # Comfy's nvfp4 build names its layers in the header, natively. Take them out before either side-channel
+        # format below reads a scale: both pair every `weight_scale` with its weight, and the key conversion would
+        # rename the packed codes without their global scale. `install_nvfp4_layers` puts them back, packed, under
+        # their diffusers paths once the model exists. The key scheme is read once, here, for the layers and for
+        # both branches below.
+        header_layers = strip_layer_path_prefix(parse_quantization_metadata(metadata))
+        native = _is_native_krea2_format(sd)
+        nvfp4_payloads = pop_nvfp4_layers(sd, header_layers=header_layers)
+        if nvfp4_payloads and native:
+            path_map = _remap_native_layer_paths(nvfp4_payloads)
+            nvfp4_payloads = {path_map.get(path, path): payload for path, payload in nvfp4_payloads.items()}
+
         # Two ComfyUI side-channel formats reach this loader and a checkpoint carries one or the
         # other, so the format is decided once here. `int8_tensorwise` has to be recognised before
         # the key conversion below: that conversion renames `.weight` by substring and so carries a
@@ -418,7 +444,7 @@ class Krea2CheckpointModel(ModelLoader):
             sd = drop_unconsumed_quantization_sidecars(sd)
             # Native/ComfyUI key naming → diffusers Krea2Transformer2DModel keys.
             key_map: dict[str, str] = {}
-            if _is_native_krea2_format(sd):
+            if native:
                 sd = _convert_krea2_native_to_diffusers(sd, key_map=key_map)
             quantized = resolve_quantized_module_paths(int8_markers, key_map)
         else:
@@ -428,11 +454,8 @@ class Krea2CheckpointModel(ModelLoader):
             # full_precision_matrix_mult layers silently multiplied in fp8. The header wins on the rare
             # checkpoint carrying both. Header names carry the prefix that was just stripped off the
             # state dict, so strip it from them too or they match nothing.
-            layer_hints = {
-                **extract_comfy_quant_hints(sd),
-                **strip_layer_path_prefix(parse_quantization_metadata(metadata)),
-            }
-            if _is_native_krea2_format(sd):
+            layer_hints = {**extract_comfy_quant_hints(sd), **header_layers}
+            if native:
                 # Take the quantization side channel out before renaming. The converter renames
                 # ".weight"-suffixed keys by substring and five more by whole-key equality, so a sibling
                 # ".scale_weight", ".input_scale", or any scale on one of the equality-renamed keys
@@ -455,23 +478,27 @@ class Krea2CheckpointModel(ModelLoader):
 
             # ComfyUI 'scaled fp8' checkpoints (fp8 weight + .weight_scale, optionally .input_scale).
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-            keep_fp8 = should_keep_fp8_weights(target_device)
+            keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
             if fp8_layers and not keep_fp8:
-                # Legacy behavior: fold the scales into the weights. Keeping them quantized without the
-                # fp8 matmul would halve VRAM but run slower, so both are tied to the same setting.
+                # Neither consumer asked for them: keeping them quantized would halve VRAM but
+                # dequantize on every forward, so fold the scales into the weights.
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 
         with accelerate.init_empty_weights():
             model = Krea2Transformer2DModel(**KREA2_TRANSFORMER_CONFIG)
+        # Honor the model's own precision-sensitive list on every path below. Krea-2 declares `time_embed` and the
+        # `norm*` modules; `time_embed.linear_1/linear_2` are ordinary quantized Linears in a ComfyUI export, and a
+        # module that reads its own weight's dtype finds a quantized dtype on a module left quantized.
+        skip_patterns = _model_declared_skip_patterns(model)
+        # A merged file's bundled submodels are not this model's: their dense weights fall to `strict=False` below,
+        # and their packed layers go the same way instead of naming no module. The rest are added to either
+        # reservation below as they will be held, since a reservation makes that much room rather than adding to one.
+        modules = {name for name, _ in model.named_children()}
+        nvfp4_payloads = {path: payload for path, payload in nvfp4_payloads.items() if path.split(".", 1)[0] in modules}
+        nvfp4_bytes = predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
 
         if int8_markers:
-            # Honor the model's own precision-sensitive list here too, not only on the fp8 side.
-            # Krea-2 declares `time_embed` and the `norm*` modules; `time_embed.linear_1/linear_2`
-            # are ordinary quantized Linears in a ComfyUI export, and a module that reads its own
-            # weight's dtype finds `torch.int8` on an `Int8ConvrotLinear`.
-            skip_patterns = _model_declared_skip_patterns(model)
-
             # Before anything is cast: a scale left over from another scheme means its weight is
             # about to be cast without it, and the orphan disappears into `strict=False` below.
             # After the model exists, so a merged file's bundled submodels -- which this loader does
@@ -485,6 +512,7 @@ class Krea2CheckpointModel(ModelLoader):
             # ~12 GB that this load never uses.
             self._ram_cache.make_room(
                 predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
+                + nvfp4_bytes
             )
             quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
             cast_unquantized(sd, model_dtype, quantized)
@@ -493,7 +521,6 @@ class Krea2CheckpointModel(ModelLoader):
             fp8_layers = {}
             kept = 0
         else:
-            skip_patterns = _model_declared_skip_patterns(model)
             # Scaled layers the cast would dequantize anyway (skip patterns, non-Linear weights) are
             # folded here, with their scale applied. Left to `cast_state_dict` they would be cast
             # *without* it and `attach_fp8_scales` would then skip them for no longer being fp8 —
@@ -513,6 +540,7 @@ class Krea2CheckpointModel(ModelLoader):
                     skip_patterns=skip_patterns,
                     scaled_layers=fp8_layers,
                 )
+                + nvfp4_bytes
             )
 
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
@@ -527,7 +555,13 @@ class Krea2CheckpointModel(ModelLoader):
                 skip_patterns=skip_patterns,
             )
 
-        model.load_state_dict(sd, assign=True, strict=False)
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            self._logger.info(f"Krea-2: kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
+
+        load_state_dict_ignoring_extras(
+            model, sd, source="Krea-2 single-file checkpoint", assign=True, allow_missing=True
+        )
         _reject_incomplete_load(model, what="Krea-2 single-file checkpoint")
         # `assign=True` aliases every param to its `sd` tensor. Drop the dict's references before
         # the FP8 cast, or each param's `model_dtype` original stays reachable while its fp8 copy is
@@ -544,7 +578,9 @@ class Krea2CheckpointModel(ModelLoader):
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            self._logger.info(f"Krea-2: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            self._logger.info(
+                f"Krea-2: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(self._logger, "Krea-2", attached, fp8_layers)
             # Marked layers dequantize on every forward instead of using the tensor cores, which is
             # the single biggest lever on how much fp8_compute actually buys for a given checkpoint.
@@ -563,14 +599,14 @@ class Krea2CheckpointModel(ModelLoader):
                         f"Krea-2: ignoring the full_precision_matrix_mult marker on {marked} layer(s) "
                         "(fp8_compute_full_precision_hints=false)."
                     )
-            # fp8_storage exists to *create* fp8 weights from full-precision ones; here they already
-            # are fp8, so it is bypassed entirely. Say so, otherwise a user who enabled it is left
-            # wondering whether it took effect.
+            # `fp8_storage` exists to *create* fp8 weights from full-precision ones. Here they are
+            # already fp8 -- kept either by the matmul or by that setting itself -- so the cast has
+            # nothing to add. Say so, otherwise a user who enabled it cannot tell whether it took.
             default_settings = getattr(config, "default_settings", None)
             if default_settings is not None and getattr(default_settings, "fp8_storage", None):
                 self._logger.info(
-                    "Krea-2: the model's fp8_storage setting is redundant here and was skipped - the "
-                    "checkpoint already ships fp8 weights."
+                    "Krea-2: fp8_storage is satisfied by the checkpoint itself - its weights are already "
+                    "fp8 and are kept that way, so the layerwise cast is skipped."
                 )
             # The layerwise-casting path exists to *produce* fp8 weights from full-precision ones. The
             # checkpoint already is fp8, and its hooks would cast back to the compute dtype without
@@ -624,7 +660,7 @@ class Krea2GGUFCheckpointModel(ModelLoader):
         with accelerate.init_empty_weights():
             model = Krea2Transformer2DModel(**KREA2_TRANSFORMER_CONFIG)
 
-        model.load_state_dict(sd, assign=True, strict=False)
+        load_state_dict_ignoring_extras(model, sd, source="Krea-2 GGUF checkpoint", assign=True, allow_missing=True)
         # Reject GGUF layouts that don't fully populate the diffusers Krea2Transformer2DModel (city96/
         # ComfyUI GGUFs may use key names needing conversion). Failing here beats a confusing meta-tensor
         # crash mid-inference.
@@ -721,28 +757,30 @@ def _remap_qwen3vl_singlefile_keys(sd: dict[str, Any], *, key_map: dict[str, str
 
 
 def _reject_incomplete_load(model: Any, *, what: str) -> None:
-    """Raise if a ``load_state_dict(strict=False)`` left required tensors on the meta device.
+    """Krea-2's alias for the shared meta-device completeness sweep.
 
     ``strict=False`` is used to tolerate benign extra/renamed keys, but it also silently accepts a
     checkpoint that omits required weights — those tensors stay on the meta device and only fail much
     later during inference. Reject such loads here, naming the offending tensors, so an incomplete,
     misidentified, or differently-converted checkpoint fails at load time with an actionable message.
-
-    Both parameters *and persistent buffers* are checked: ``accelerate.init_empty_weights()`` places
-    buffers on the meta device too, so a native/GGUF checkpoint that omits a persistent buffer would
-    slip past a parameters-only guard and fail mid-inference instead of at load time.
     """
-    still_meta = [
-        name
-        for name, tensor in (*model.named_parameters(), *model.named_buffers())
-        if getattr(tensor, "is_meta", False)
-    ]
-    if still_meta:
-        raise RuntimeError(
-            f"{what} is incomplete: {len(still_meta)} tensor(s) were not provided by the checkpoint "
-            f"and remain uninitialized (meta device). First few: {still_meta[:8]}. The file is likely "
-            "incomplete, misidentified, or uses a key layout that needs conversion."
-        )
+    reject_incomplete_load(model, what=what)
+
+
+def _tokenizer_can_encode(tokenizer: Any) -> bool:
+    """Whether a tokenizer loaded from the HuggingFace cache is actually usable.
+
+    Not paranoia: when the cache holds the repo's `config.json` but none of its tokenizer files --
+    which is exactly the state `_load_text_encoder` leaves behind on a first run, because it fetches
+    the config first -- `AutoTokenizer.from_pretrained(..., local_files_only=True)` does not raise.
+    It returns a `Qwen2Tokenizer` with a one-token vocabulary and no chat template, which encodes
+    every prompt to an empty sequence. The generation then runs on no conditioning at all, and
+    nothing in the log says so. Probing the round trip is what tells the two apart.
+    """
+    try:
+        return bool(tokenizer("probe", add_special_tokens=False)["input_ids"])
+    except Exception:
+        return False
 
 
 @ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3VLEncoder, format=ModelFormat.Checkpoint)
@@ -750,11 +788,15 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
     """Loads a single-file Qwen3-VL encoder checkpoint (e.g. ComfyUI ``qwen3vl_4b_bf16`` / ``_fp8_scaled``).
 
     The checkpoint bundles the language model + visual tower but no config/tokenizer; those are pulled
-    from HuggingFace (``Qwen/Qwen3-VL-4B-Instruct``) with offline-cache fallback. ComfyUI 'scaled fp8'
+    from HuggingFace with offline-cache fallback, from the repo the config's recorded variant names --
+    the file itself says nothing about which Qwen3-VL it is beyond its shapes. ComfyUI 'scaled fp8'
     weights are dequantized to the compute dtype on load.
     """
 
-    DEFAULT_HF_REPO = "Qwen/Qwen3-VL-4B-Instruct"
+    HF_REPO_BY_VARIANT = {
+        Qwen3VLVariantType.Qwen3VL_4B: "Qwen/Qwen3-VL-4B-Instruct",
+        Qwen3VLVariantType.Qwen3VL_8B: "Qwen/Qwen3-VL-8B-Instruct",
+    }
 
     def _load_model(
         self,
@@ -766,7 +808,7 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
 
         match submodel_type:
             case SubModelType.Tokenizer:
-                return self._load_tokenizer()
+                return self._load_tokenizer(config)
             case SubModelType.TextEncoder:
                 return self._load_text_encoder(config)
 
@@ -775,19 +817,27 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             f"Received: {submodel_type.value if submodel_type else 'None'}"
         )
 
-    def _load_tokenizer(self) -> AnyModel:
+    def _hf_repo(self, config: Qwen3VLEncoder_Checkpoint_Config) -> str:
+        return self.HF_REPO_BY_VARIANT[config.variant]
+
+    def _load_tokenizer(self, config: Qwen3VLEncoder_Checkpoint_Config) -> AnyModel:
+        repo = self._hf_repo(config)
         # A partial offline cache (e.g. config present but vocab/merges missing) raises something other
         # than OSError (e.g. TypeError) deep in the slow-tokenizer path, so catch broadly and re-fetch.
         try:
-            return AutoTokenizer.from_pretrained(self.DEFAULT_HF_REPO, local_files_only=True, extra_special_tokens={})
+            tokenizer = AutoTokenizer.from_pretrained(repo, local_files_only=True, extra_special_tokens={})
         except Exception:
-            return AutoTokenizer.from_pretrained(self.DEFAULT_HF_REPO, extra_special_tokens={})
+            tokenizer = None
+        if tokenizer is not None and _tokenizer_can_encode(tokenizer):
+            return tokenizer
+        return AutoTokenizer.from_pretrained(repo, extra_special_tokens={})
 
-    def _load_hf_config(self) -> Any:
+    def _load_hf_config(self, config: Qwen3VLEncoder_Checkpoint_Config) -> Any:
+        repo = self._hf_repo(config)
         try:
-            te_config = AutoConfig.from_pretrained(self.DEFAULT_HF_REPO, local_files_only=True)
+            te_config = AutoConfig.from_pretrained(repo, local_files_only=True)
         except Exception:
-            te_config = AutoConfig.from_pretrained(self.DEFAULT_HF_REPO)
+            te_config = AutoConfig.from_pretrained(repo)
         return _normalize_qwen3vl_rope_config(te_config)
 
     def _load_text_encoder(self, config: Qwen3VLEncoder_Checkpoint_Config) -> AnyModel:
@@ -848,13 +898,18 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # would leave the scales already folded while the raw Linears stay quantized, i.e. the
             # encoder silently on the storage path with the matmul log line never printed.
             keep_matmul_fp8 = should_keep_fp8_weights(target_device)
-            if fp8_layers and not keep_matmul_fp8:
-                # Legacy behavior: fold the scales into the weights. Without the fp8 matmul, staying
-                # quantized would save VRAM but cost speed, so the two are tied to the same setting.
+            # Resolved here, next to the matmul probe and for the same reason: the fold below is
+            # irreversible, so both consumers have to be known before it runs. Asking only about the
+            # matmul folded the scales away and then let the storage cast re-quantize the result to
+            # *unscaled* fp8 -- on a scaled checkpoint that is ~3% of the weights lost to underflow,
+            # for the byte count the file already had.
+            use_fp8_storage = source_is_fp8 and _device_supports_fp8_storage(self._torch_device, self._logger)
+            if fp8_layers and not keep_matmul_fp8 and not use_fp8_storage:
+                # Neither consumer wants them packed: fold the scales into the weights.
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 
-        te_config = self._load_hf_config()
+        te_config = self._load_hf_config(config)
         with accelerate.init_empty_weights():
             model = Qwen3VLModel._from_config(te_config)
 
@@ -893,7 +948,6 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # `model_dtype` here would double both this reservation and the host-RAM peak (~4.4 -> ~8.9
             # GiB on the 4B encoder) for a round trip that ends where it started -- e4m3fn is a subset
             # of bf16, so it is value-exact. Keep them for either consumer.
-            use_fp8_storage = source_is_fp8 and _device_supports_fp8_storage(self._torch_device, self._logger)
             keep_fp8 = keep_matmul_fp8 or use_fp8_storage
             # Reserve before the split: it dequantizes its unusable subset through fp32, so reserving
             # afterwards lets that transient peak land on an unreserved cache. `scaled_layers` keeps the
@@ -909,7 +963,9 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # dtype on the modules it skips, so the two lists are independent again.
             cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model)
 
-        model.load_state_dict(sd, assign=True, strict=False)
+        load_state_dict_ignoring_extras(
+            model, sd, source="Qwen3-VL encoder checkpoint", assign=True, allow_missing=True
+        )
         _reject_incomplete_load(model, what="Qwen3-VL encoder checkpoint")
 
         if fp8_layers:
@@ -938,8 +994,8 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
                 or isinstance(module, torch.nn.Embedding),
             )
             self._logger.info(
-                f"FP8 compute enabled for Qwen3-VL encoder '{config.name}': kept {attached} layer(s) "
-                f"quantized (storage=float8_e4m3fn, matmul=torch._scaled_mm, compute={model_dtype}); "
+                f"Qwen3-VL encoder '{config.name}': kept {attached} scaled layer(s) quantized "
+                f"({self._fp8_kept_reason()}, storage=float8_e4m3fn, compute={model_dtype}); "
                 "remaining layers cast to fp8 storage."
             )
             # The layerwise-casting path below exists to *produce* fp8 weights from full-precision

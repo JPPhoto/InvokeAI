@@ -29,13 +29,13 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.backend.util.state_dict_loading import log_unexpected_keys, reject_incomplete_load
 
 logger = InvokeAILogger.get_logger(__name__)
 
@@ -182,7 +182,7 @@ class AnimaCheckpointModel(ModelLoader):
         #
         # Anima keeps `q_proj`/`k_proj`/`v_proj` separate and the only key rewrite is a prefix strip,
         # so a sibling scale travels with its weight and nothing has to be split.
-        keep_fp8 = should_keep_fp8_weights(target_device)
+        keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
         header_hints = parse_quantization_metadata(read_safetensors_metadata(model_path, logger))
         # The header names layers in the checkpoint's own scheme -- `net.`-prefixed on every Anima
         # redistribution measured -- while the scales are read after `_strip_anima_bundle_prefix`
@@ -194,8 +194,8 @@ class AnimaCheckpointModel(ModelLoader):
         }
         fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
         if fp8_layers and not keep_fp8:
-            # Without the matmul, keeping them quantized would halve VRAM but dequantize on every
-            # forward. Fold the scale into the weight instead.
+            # Neither the matmul nor FP8 Storage asked for them, so keeping them quantized would
+            # dequantize on every forward to save memory nobody wanted saved. Fold the scale in.
             dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
             fp8_layers = {}
 
@@ -226,25 +226,25 @@ class AnimaCheckpointModel(ModelLoader):
         kept = cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
 
         load_result = model.load_state_dict(sd, assign=True, strict=False)
-        if load_result.unexpected_keys:
-            raise RuntimeError(
-                f"Checkpoint contains {len(load_result.unexpected_keys)} unexpected keys. "
-                f"This may indicate a corrupted or incompatible checkpoint. "
-                f"First 5 unexpected keys: {load_result.unexpected_keys[:5]}"
-            )
-        if load_result.missing_keys:
-            logger.warning(
-                f"Checkpoint is missing {len(load_result.missing_keys)} keys "
-                f"(expected for inv_freq buffers). First 5: {load_result.missing_keys[:5]}"
-            )
+        log_unexpected_keys("Anima transformer checkpoint", load_result.unexpected_keys)
+        # `missing_keys` alone cannot police completeness here: AnimaTransformer's only three buffers
+        # are registered `persistent=False`, so they never appear in it (the old warning claiming
+        # otherwise was misleading). Sweep for tensors the checkpoint left on the meta device instead
+        # — that is the failure worth catching, and it is what the removed unexpected-key
+        # `RuntimeError` was really standing in for.
+        reject_incomplete_load(model, what="Anima transformer checkpoint")
 
-        # Without this the `fp8_storage` toggle is shown for Anima models but does nothing. The
-        # state dict was cast to a single `model_dtype` above, so the layerwise cast has one
-        # unambiguous compute dtype to restore to. AnimaTransformer is a plain nn.Module, so this
-        # takes the hook-based path in `_apply_fp8_to_nn_module`.
+        # Without this the `fp8_storage` toggle is shown for Anima models but does nothing. When
+        # nothing stayed packed, the state dict was cast to a single `model_dtype` above, so the
+        # layerwise cast has one unambiguous compute dtype to restore to; when something did stay
+        # packed, the cast bails out on its own rather than upcast a scaled weight without applying
+        # its scale. AnimaTransformer is a plain nn.Module, so this takes the hook-based path in
+        # `_apply_fp8_to_nn_module`.
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            logger.info(f"Anima: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            logger.info(
+                f"Anima: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(logger, "Anima", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
             if marked and full_precision_hints_respected():
@@ -253,7 +253,7 @@ class AnimaCheckpointModel(ModelLoader):
                     "and will dequantize per forward."
                 )
         elif kept:
-            logger.info(f"Anima: kept {kept} raw fp8 weight(s) quantized for the fp8 tensor cores.")
+            logger.info(f"Anima: kept {kept} raw fp8 weight(s) quantized ({self._fp8_kept_reason()}).")
 
         model = self._apply_fp8_layerwise_casting(model, config, SubModelType.Transformer)
         return model

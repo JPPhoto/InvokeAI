@@ -52,7 +52,6 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    should_keep_fp8_weights,
     split_fp8_scaled_layers,
     split_qkv_sidechannel,
     strip_layer_path_prefix,
@@ -68,10 +67,18 @@ from invokeai.backend.quantization.int8_convrot import (
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
+from invokeai.backend.quantization.nvfp4 import (
+    NVFP4Payload,
+    install_nvfp4_layers,
+    pop_nvfp4_layers,
+    predict_nvfp4_install_size,
+    split_nvfp4_rows,
+)
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.qwen3.qwen3_tokenizer import load_bundled_qwen3_tokenizer
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, log_unexpected_keys
 
 
 def _remap_z_image_layer_paths(layer_names: Any) -> dict[str, list[str]]:
@@ -96,6 +103,17 @@ def _remap_z_image_layer_paths(layer_names: Any) -> dict[str, list[str]]:
         if targets:
             mapping[name] = targets
     return mapping
+
+
+def _remap_nvfp4_payloads(payloads: dict[str, NVFP4Payload]) -> dict[str, NVFP4Payload]:
+    """Move packed nvfp4 layers to their diffusers paths, splitting a fused QKV's tensors the way the converter
+    splits its weight: into equal thirds by rows, which the block scales only survive on whole tile rows."""
+    path_map = _remap_z_image_layer_paths(payloads.keys())
+    remapped: dict[str, NVFP4Payload] = {}
+    for name, payload in payloads.items():
+        targets = path_map.get(name, [name])
+        remapped.update(zip(targets, split_nvfp4_rows(name, payload, len(targets)), strict=True))
+    return remapped
 
 
 def _convert_z_image_gguf_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
@@ -423,7 +441,7 @@ class ZImageDiffusersModel(GenericDiffusersLoader):
                 axes_lens=[1024, 512, 512],
             )
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="Z-Image transformer", assign=True)
         return model
 
 
@@ -481,13 +499,23 @@ class ZImageCheckpointModel(ModelLoader):
                     stripped_sd[key] = value
             sd = stripped_sd
 
-        # Per-layer `full_precision_matrix_mult` hints, from the safetensors header and/or the
-        # per-tensor `.comfy_quant` markers. The header names layers in the checkpoint's own scheme,
-        # so it is remapped below; the markers ride along through the key conversion instead.
-        # The names in the header still carry the checkpoint prefix stripped off `sd` above.
+        # Determine safe dtype based on target device capabilities
+        target_device = TorchDevice.choose_torch_device()
+        model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
+
+        # Per-layer hints from the safetensors header and/or the per-tensor `.comfy_quant` markers:
+        # `full_precision_matrix_mult` for scaled fp8, and for nvfp4 the evidence that a layer follows
+        # ComfyUI's conventions. The header names layers in the checkpoint's own scheme, so it is remapped
+        # below; the markers ride along through the key conversion instead. The names in the header still
+        # carry the checkpoint prefix stripped off `sd` above.
         header_hints = strip_layer_path_prefix(
             parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger))
         )
+
+        # Out of the state dict before anything below reads the quantization side channel: the scaled-fp8
+        # extraction pops every `weight_scale` and drops the ones whose weight is not float8, nvfp4's block
+        # scales included, and the casts would widen the packed payload.
+        nvfp4_payloads = pop_nvfp4_layers(sd, header_layers=header_hints)
 
         # Check if the state dict is in original format (not diffusers format)
         # Original format has keys like "x_embedder.weight" instead of "all_x_embedder.2-1.weight"
@@ -500,6 +528,7 @@ class ZImageCheckpointModel(ModelLoader):
             header_hints = {
                 target: hints for name, hints in header_hints.items() for target in path_map.get(name, [name])
             }
+            nvfp4_payloads = _remap_nvfp4_payloads(nvfp4_payloads)
 
         # Create an empty model with the default Z-Image config
         # Z-Image-Turbo uses these default parameters from diffusers
@@ -522,10 +551,6 @@ class ZImageCheckpointModel(ModelLoader):
                 axes_lens=[1024, 512, 512],
             )
 
-        # Determine safe dtype based on target device capabilities
-        target_device = TorchDevice.choose_torch_device()
-        model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
-
         # Filter out keys that don't belong to the ZImageTransformer2DModel.
         # Merged checkpoints (e.g. LoRA-baked models) may bundle text encoder weights
         # (text_encoders.*) or other non-transformer keys alongside the transformer weights.
@@ -545,6 +570,20 @@ class ZImageCheckpointModel(ModelLoader):
         keys_to_remove = [k for k in sd.keys() if not (k.startswith(valid_prefixes) or k in valid_exact)]
         for k in keys_to_remove:
             del sd[k]
+        # A bundled encoder's nvfp4 layers go the same way.
+        nvfp4_payloads = {path: payload for path, payload in nvfp4_payloads.items() if path.startswith(valid_prefixes)}
+
+        # Honor the model's own precision-sensitive list on every path below. Z-Image declares
+        # ["t_embedder", "cap_embedder"] because `ZImageTimestepEmbedder.forward` reads
+        # `self.mlp[0].weight.dtype` to pick the dtype it casts its activations to, and a quantized
+        # weight there breaks that branch whichever scheme it comes from: an fp8 weight turns the
+        # activations fp8 and the forward dies in `x.abs()`; an `Int8ConvrotLinear` or `NVFP4Linear`
+        # reports an integer dtype, the forward falls through to a `compute_dtype` attribute these
+        # modules do not have, and the timestep branch silently runs in float32 into a bf16 model.
+        skip_patterns = _model_declared_skip_patterns(model)
+        # What the nvfp4 layers will occupy, packed or decoded. Both branches reserve it together with the
+        # rest of the state dict: a reservation makes that much room, it does not add to an earlier one.
+        nvfp4_bytes = predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
 
         # Two ComfyUI side-channel formats reach this loader, and a checkpoint carries one or the
         # other: `comfy_quant` names its format per layer, and `int8_tensorwise` never appears in a
@@ -571,14 +610,6 @@ class ZImageCheckpointModel(ModelLoader):
             sd.update(kept_sd)
             del kept_sd
 
-            # Honor the model's own precision-sensitive list here too, not only on the fp8 side.
-            # Z-Image declares ["t_embedder", "cap_embedder"] because
-            # `ZImageTimestepEmbedder.forward` reads `self.mlp[0].weight.dtype` to pick the dtype
-            # it casts its activations to; on an `Int8ConvrotLinear` that reads `torch.int8`, the
-            # forward falls through to a `compute_dtype` attribute these modules do not have, and
-            # the timestep branch silently runs in float32 into a bf16 model.
-            skip_patterns = _model_declared_skip_patterns(model)
-
             # Reserve before the split, not after: the split dequantizes the layers it widens, so
             # reserving afterwards lets that transient land on an unreserved cache. The prediction
             # is given the same inputs, so it charges those layers the compute dtype's width and
@@ -586,6 +617,7 @@ class ZImageCheckpointModel(ModelLoader):
             # memory this load never uses.
             self._ram_cache.make_room(
                 predict_int8_cast_size(sd, model_dtype, int8_markers, model=model, skip_patterns=skip_patterns)
+                + nvfp4_bytes
             )
 
             quantized = split_int8_convrot_layers(
@@ -603,29 +635,23 @@ class ZImageCheckpointModel(ModelLoader):
             layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
 
-            # Handle memory management and dtype conversion. A checkpoint that ships raw fp8 weights
-            # (fp8 tensors, no weight_scale) keeps them when the fp8 matmul is available — casting
-            # them here would discard both the VRAM saving and the tensor cores before the model is
-            # built.
-            keep_fp8 = should_keep_fp8_weights(self._torch_device)
-            if fp8_layers and not keep_fp8:
-                # Legacy behavior, but now with the scale actually applied: fold it into the weight.
-                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-                fp8_layers = {}
+            # Handle memory management and dtype conversion. Casting fp8 weights here would discard
+            # the VRAM saving before the model is even built -- and the tensor cores too, where the
+            # fp8 matmul is what kept them. FP8 Storage counts as a consumer alongside the matmul:
+            # the checkpoint's own scale is exact, where a layerwise cast of a folded weight has none.
+            #
+            # The fold itself stays below the reservation rather than moving up here: the prediction
+            # takes `scaled_layers=fp8_layers` and would see an empty mapping, charging the layers the
+            # split still widens 1 byte/element instead of 2.
+            keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
 
-            # Honor the model's own precision-sensitive list. Z-Image declares
-            # ["t_embedder", "cap_embedder"], and `TimestepEmbedder.forward` casts its activations to
-            # `self.mlp[0].weight.dtype` — an fp8 weight there turns the activations fp8 and the
-            # forward dies in `x.abs()`. Those layers must be dequantized even though the rest stays
-            # quantized.
-            skip_patterns = _model_declared_skip_patterns(model)
-            # Scaled layers that the cast would dequantize anyway are folded here, scale applied, so
-            # `cast_state_dict` never strips a scale it cannot put back.
-            # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
-            # subset through fp32, so reserving afterwards lets that transient peak land on an
-            # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens
-            # layers whose scale layout `scaled_mm` cannot apply, and without the mapping the
-            # prediction would charge those 1 byte/element and arrive at 2.
+            # Reserve before anything below widens a weight, not after: without fp8 compute the fold right
+            # after this widens every scaled layer, and `split_fp8_scaled_layers` dequantizes its unusable
+            # subset through fp32 -- reserving afterwards lets either peak land on an unreserved cache.
+            # Without fp8 compute the prediction charges every float at `model_dtype`, folded yet or not.
+            # With it, `scaled_layers` is what keeps the prediction honest: the split also widens layers
+            # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
+            # charge those 1 byte/element and arrive at 2.
             self._ram_cache.make_room(
                 predict_cast_state_dict_size(
                     sd,
@@ -635,7 +661,16 @@ class ZImageCheckpointModel(ModelLoader):
                     skip_patterns=skip_patterns,
                     scaled_layers=fp8_layers,
                 )
+                + nvfp4_bytes
             )
+
+            if fp8_layers and not keep_fp8:
+                # Legacy behavior, but now with the scale actually applied: fold it into the weight.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
+
+            # Scaled layers that the cast would dequantize anyway are folded here, scale applied, so
+            # `cast_state_dict` never strips a scale it cannot put back.
 
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
             kept = cast_state_dict(
@@ -646,7 +681,19 @@ class ZImageCheckpointModel(ModelLoader):
                 skip_patterns=skip_patterns,
             )
 
-        model.load_state_dict(sd, assign=True)
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            decoded = len(nvfp4_payloads) - packed
+            self._logger.info(
+                f"Z-Image: kept {packed} nvfp4 layer(s) packed"
+                + (
+                    f" and decoded {decoded} to {model_dtype} (precision-sensitive or not a Linear)."
+                    if decoded
+                    else "."
+                )
+            )
+
+        load_state_dict_ignoring_extras(model, sd, source="Z-Image transformer checkpoint", assign=True)
         # `assign=True` aliases every param to its `sd` tensor, so the dict keeps the whole model
         # alive a second time. The FP8 cast below allocates the fp8 copy per param while the
         # `model_dtype` original is still reachable through `sd`, pushing peak RAM to ~1.5x what
@@ -656,7 +703,9 @@ class ZImageCheckpointModel(ModelLoader):
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            self._logger.info(f"Z-Image: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            self._logger.info(
+                f"Z-Image: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(self._logger, "Z-Image", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
             if marked and full_precision_hints_respected():
@@ -674,8 +723,9 @@ class ZImageCheckpointModel(ModelLoader):
         # FP8 *storage* on top. When nothing was kept quantized above, every param is uniform
         # `model_dtype` here, so the layerwise cast has one unambiguous compute dtype to restore to.
         # When weights *were* kept fp8, `_apply_fp8_layerwise_casting` bails out on its own (and
-        # says so in the log): its hooks would restore the compute dtype before every forward and
-        # silently disable the fp8 matmul, for no VRAM saving.
+        # says so in the log): its hooks would restore the compute dtype before every forward, which
+        # disables the fp8 matmul where there is one and drops the `weight_scale` where there is
+        # not -- and saves no VRAM either way.
         model = self._apply_fp8_layerwise_casting(model, config, SubModelType.Transformer)
         return model
 
@@ -760,7 +810,7 @@ class ZImageGGUFCheckpointModel(ModelLoader):
                 axes_lens=[1024, 512, 512],
             )
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="Z-Image GGUF transformer checkpoint", assign=True)
         return model
 
 
@@ -823,11 +873,9 @@ class ZImageSDNQCheckpointModel(ModelLoader):
         sd = sdnq_sd_loader(te_dir, compute_dtype=compute_dtype)
         # Qwen3ForCausalLM may share lm_head.weight with model.embed_tokens.weight; missing keys
         # for that tie are expected and handled by re-sharing post-load.
-        missing, unexpected = model.load_state_dict(sd, assign=True, strict=False)
-        if unexpected:
-            raise ValueError(f"Unexpected keys loading SDNQ Qwen3 text encoder: {unexpected}")
-        if missing and missing != ["lm_head.weight"]:
-            raise ValueError(f"Unexpected missing keys loading SDNQ Qwen3 text encoder: {missing}")
+        missing = load_state_dict_ignoring_extras(
+            model, sd, source="SDNQ Qwen3 text encoder", assign=True, allowed_missing={"lm_head.weight"}
+        )
         if missing == ["lm_head.weight"]:
             model.lm_head.weight = model.model.embed_tokens.weight
         return model
@@ -897,7 +945,7 @@ class ZImageSDNQCheckpointModel(ModelLoader):
                 axes_lens=[1024, 512, 512],
             )
 
-        model.load_state_dict(sd, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="SDNQ Z-Image transformer checkpoint", assign=True)
         return model
 
     def _load_from_diffusers_folder(
@@ -1079,6 +1127,7 @@ class ZImageControlCheckpointModel(ModelLoader):
         # Load state dict with strict=False to handle missing keys like x_pad_token
         # Some control adapters may not include x_pad_token in their checkpoint
         missing_keys, unexpected_keys = model.load_state_dict(sd, assign=True, strict=False)
+        log_unexpected_keys("Z-Image ControlNet checkpoint", unexpected_keys)
 
         # Initialize x_pad_token if it was missing from the checkpoint
         if "x_pad_token" in missing_keys:
@@ -1178,28 +1227,16 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
 
         # Load the state dict from safetensors file
         sd = load_file(model_path)
-
-        # Handle ComfyUI quantized checkpoints
-        # ComfyUI stores quantized weights with accompanying scale factors:
-        # - layer.weight: quantized data (FP8)
-        # - layer.weight_scale: scale factor (FP32 scalar)
-        # Dequantization formula: dequantized = weight.to(dtype) * weight_scale
-        # Reference: https://github.com/Comfy-Org/ComfyUI/blob/master/QUANTIZATION.md
         original_key_count = len(sd)
-        dequantized_count = _fold_comfy_scaled_weights(sd, model_dtype)
 
-        if dequantized_count > 0:
-            logger.info(f"Dequantized {dequantized_count} ComfyUI quantized weights")
-
-        # Filter out ComfyUI quantization metadata keys (comfy_quant, weight_scale)
-        # These are no longer needed after dequantization
-        comfy_metadata_keys = [k for k in sd.keys() if is_scale_metadata_key(k)]
-        for k in comfy_metadata_keys:
-            del sd[k]
-        if comfy_metadata_keys:
-            logger.info(f"Filtered out {len(comfy_metadata_keys)} ComfyUI quantization metadata keys")
-
-        logger.info(f"Loaded state dict with {len(sd)} keys (originally {original_key_count})")
+        # Comfy's fp4_mixed encoders keep most projections in nvfp4, beside scaled fp8. Take those out before
+        # anything below reads the side channel: the fold pairs every `weight_scale` with its weight and would
+        # stretch nvfp4's block scales over the packed codes, and the cast further down would widen them.
+        nvfp4_payloads = pop_nvfp4_layers(
+            sd, header_layers=parse_quantization_metadata(read_safetensors_metadata(model_path, logger))
+        )
+        # `lm_head` is tied to the embeddings below, which replaces the weight a packed module would hold.
+        nvfp4_payloads.pop("lm_head", None)
 
         # Count the number of layers by looking at layer keys
         layer_count = 0
@@ -1250,18 +1287,26 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
                 f"Unknown Qwen3 variant: embed_hidden_size={embed_hidden_size}, layers={layer_count}. "
                 "Attempting to detect configuration from weights..."
             )
-            q_proj_weight = sd.get("model.layers.0.self_attn.q_proj.weight")
-            k_proj_weight = sd.get("model.layers.0.self_attn.k_proj.weight")
-            gate_proj_weight = sd.get("model.layers.0.mlp.gate_proj.weight")
 
-            if q_proj_weight is None or k_proj_weight is None or gate_proj_weight is None:
+            def output_rows(path: str) -> int | None:
+                # A packed layer's weight has left `sd`; its payload knows the rows.
+                if path in nvfp4_payloads:
+                    return nvfp4_payloads[path].out_features
+                weight = sd.get(f"{path}.weight")
+                return None if weight is None else weight.shape[0]
+
+            q_rows = output_rows("model.layers.0.self_attn.q_proj")
+            k_rows = output_rows("model.layers.0.self_attn.k_proj")
+            gate_rows = output_rows("model.layers.0.mlp.gate_proj")
+
+            if q_rows is None or k_rows is None or gate_rows is None:
                 raise ValueError("Could not find attention/mlp weights to determine configuration")
 
             hidden_size = embed_hidden_size
             head_dim = 128
-            num_attention_heads = q_proj_weight.shape[0] // head_dim
-            num_kv_heads = k_proj_weight.shape[0] // head_dim
-            intermediate_size = gate_proj_weight.shape[0]
+            num_attention_heads = q_rows // head_dim
+            num_kv_heads = k_rows // head_dim
+            intermediate_size = gate_rows
             max_position_embeddings = 40960
 
         logger.info(
@@ -1288,22 +1333,58 @@ class Qwen3EncoderCheckpointLoader(ModelLoader):
             torch_dtype=model_dtype,
         )
 
-        # Handle memory management
-        new_sd_size = sum([ten.nelement() * model_dtype.itemsize for ten in sd.values()])
-        self._ram_cache.make_room(new_sd_size)
+        # Use Qwen3ForCausalLM - the correct model class for Z-Image text encoder
+        # Use init_empty_weights for fast model creation, then load weights with assign=True. Built before the
+        # reservation, which depends on its modules: they decide which nvfp4 layers stay packed.
+        with accelerate.init_empty_weights():
+            model = Qwen3ForCausalLM(qwen_config)
+        skip_patterns = _model_declared_skip_patterns(model)
+
+        # Handle memory management before anything below widens a weight: the scaled-fp8 fold turns every quantized
+        # layer into the compute dtype, and the base loader reserved only the file size. One reservation for what
+        # the state dict ends up holding -- every tensor but the scale metadata at the compute dtype, plus the nvfp4
+        # layers as they will be held -- since `make_room` makes that much room rather than adding to an earlier one.
+        new_sd_size = sum(
+            tensor.nelement() * model_dtype.itemsize for key, tensor in sd.items() if not is_scale_metadata_key(key)
+        )
+        self._ram_cache.make_room(
+            new_sd_size + predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
+        )
+
+        # Handle ComfyUI quantized checkpoints
+        # ComfyUI stores quantized weights with accompanying scale factors:
+        # - layer.weight: quantized data (FP8)
+        # - layer.weight_scale: scale factor (FP32 scalar)
+        # Dequantization formula: dequantized = weight.to(dtype) * weight_scale
+        # Reference: https://github.com/Comfy-Org/ComfyUI/blob/master/QUANTIZATION.md
+        dequantized_count = _fold_comfy_scaled_weights(sd, model_dtype)
+
+        if dequantized_count > 0:
+            logger.info(f"Dequantized {dequantized_count} ComfyUI quantized weights")
+
+        # Filter out ComfyUI quantization metadata keys (comfy_quant, weight_scale)
+        # These are no longer needed after dequantization
+        comfy_metadata_keys = [k for k in sd.keys() if is_scale_metadata_key(k)]
+        for k in comfy_metadata_keys:
+            del sd[k]
+        if comfy_metadata_keys:
+            logger.info(f"Filtered out {len(comfy_metadata_keys)} ComfyUI quantization metadata keys")
+
+        logger.info(f"Loaded state dict with {len(sd)} keys (originally {original_key_count})")
 
         # Convert to target dtype
         for k in sd.keys():
             sd[k] = sd[k].to(model_dtype)
 
-        # Use Qwen3ForCausalLM - the correct model class for Z-Image text encoder
-        # Use init_empty_weights for fast model creation, then load weights with assign=True
-        with accelerate.init_empty_weights():
-            model = Qwen3ForCausalLM(qwen_config)
+        if nvfp4_payloads:
+            packed = install_nvfp4_layers(model, sd, nvfp4_payloads, model_dtype, skip_patterns)
+            logger.info(f"Kept {packed} of {len(nvfp4_payloads)} nvfp4 layer(s) packed.")
 
         # Load the text model weights from checkpoint
         # assign=True replaces meta tensors with real ones from state dict
-        model.load_state_dict(sd, strict=False, assign=True)
+        load_state_dict_ignoring_extras(
+            model, sd, source="Qwen3 text encoder checkpoint", assign=True, allow_missing=True
+        )
 
         # Handle tied weights: lm_head shares weight with embed_tokens when tie_word_embeddings=True
         # This doesn't work automatically with init_empty_weights, so we need to manually tie them
@@ -1503,7 +1584,7 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
 
         # Load the GGUF weights with assign=True
         # GGMLTensor wrappers will be dequantized on-the-fly during inference
-        model.load_state_dict(sd, strict=False, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="Qwen3 GGUF text encoder", assign=True, allow_missing=True)
 
         # Dequantize embed_tokens weight - embedding lookups require indexed access
         # which quantized GGMLTensors can't efficiently provide (no __torch_dispatch__ for embedding)
@@ -1769,9 +1850,9 @@ class Qwen3EncoderSDNQLoader(ModelLoader):
             model = Qwen3ForCausalLM(qwen_config)
 
         # Load the SDNQ weights with assign=True. lm_head is tied to embed_tokens (re-shared below),
-        # so it is expected to be missing; any other missing key or any unexpected key (e.g. from an
-        # incompatible or contaminated export) must fail here. The later meta-parameter guard only
-        # catches missing required params, not unexpected ones.
+        # so it is expected to be missing; any other missing key (e.g. from a partial or incompatible
+        # export) must fail here. Unexpected keys are exporter noise and are only logged at DEBUG
+        # (see `raise_on_incomplete_sdnq_load`).
         missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
         raise_on_incomplete_sdnq_load("SDNQ Qwen3 encoder", missing, unexpected, allowed_missing={"lm_head.weight"})
 
