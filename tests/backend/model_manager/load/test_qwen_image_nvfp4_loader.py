@@ -26,22 +26,17 @@ from invokeai.backend.model_manager.load.model_loaders.qwen_image import (
     QwenVLEncoderCheckpointLoader,
 )
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear
+from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_signed_tensors
 
 COMPUTE_DTYPE = torch.bfloat16
 
 
 def _nvfp4_tensors(path: str, shape: tuple[int, int]) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-    """Codes 2 and 10 are +1.0 and -1.0; with a block scale of 2 and a global scale of 0.25 the weight is +-0.5. Comfy
-    ships an activation scale beside each layer, which the loader has no use for."""
-    positive = torch.randint(0, 2, shape, dtype=torch.bool)
-    codes = torch.where(positive, 2, 10).to(torch.uint8)
-    tensors = {
-        f"{path}.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
-        f"{path}.weight_scale": torch.full((shape[0], shape[1] // 16), 2.0).to(torch.float8_e4m3fn),
-        f"{path}.weight_scale_2": torch.tensor(0.25),
-        f"{path}.input_scale": torch.tensor(1.0),
-    }
-    return tensors, torch.where(positive, 0.5, -0.5)
+    """Comfy ships an activation scale beside each layer, which the loader has no use for -- so it has
+    to be dropped rather than reach `load_state_dict`, and it is here for that reason alone."""
+    tensors, expected = nvfp4_signed_tensors(path, torch.randint(0, 2, shape, dtype=torch.bool))
+    tensors[f"{path}.input_scale"] = torch.tensor(1.0)
+    return tensors, expected
 
 
 def _packed_bytes(rows: int, columns: int) -> int:
@@ -49,7 +44,7 @@ def _packed_bytes(rows: int, columns: int) -> int:
 
 
 def _marker(fmt: str) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps({"format": fmt}).encode("utf-8")), dtype=torch.uint8).clone()
+    return comfy_quant_marker({"format": fmt})
 
 
 def _patch_common(monkeypatch: pytest.MonkeyPatch, state_dict: dict, metadata: dict) -> list[bool]:
