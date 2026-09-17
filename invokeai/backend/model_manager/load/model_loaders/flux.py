@@ -108,14 +108,10 @@ from invokeai.backend.quantization.gguf.utils import TORCH_COMPATIBLE_QTYPES
 from invokeai.backend.quantization.int8_convrot import (
     INT8_TENSORWISE_FORMAT,
     Int8ConvrotLinear,
-    cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
-    predict_int8_cast_size,
-    reject_foreign_quantization_scales,
+    install_int8_convrot_layers,
     reject_unmarked_int8_weights,
-    split_int8_convrot_layers,
-    swap_in_int8_linears,
 )
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
@@ -844,21 +840,15 @@ class FluxCheckpointModel(ModelLoader):
             # which dequantizes the weight and computes in bf16.
             sd = drop_unconsumed_quantization_sidecars(sd)
 
-            quantized = int8_markers
-            # A scale left over from another scheme means its weight is about to be cast without
-            # one. After the model exists, so the check can tell a real module from a stray key.
-            reject_foreign_quantization_scales(sd, quantized, "FLUX", model)
-
-            # Reserve before the split, which dequantizes what it cannot keep, and charge the int8
-            # payloads their actual one byte rather than bf16's two.
-            self._ram_cache.make_room(
-                predict_int8_cast_size(sd, torch.bfloat16, quantized, model=model, skip_patterns=skip_patterns)
+            quantized = install_int8_convrot_layers(
+                model,
+                sd,
+                int8_markers,
+                torch.bfloat16,
+                architecture="FLUX",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
             )
-            quantized = split_int8_convrot_layers(
-                sd, quantized, torch.bfloat16, model=model, skip_patterns=skip_patterns
-            )
-            cast_unquantized(sd, torch.bfloat16, quantized)
-            swap_in_int8_linears(model, sd, quantized)
             load_state_dict_ignoring_extras(model, sd, source="FLUX transformer checkpoint", assign=True)
 
             # No setting behind this one and nothing to fall back to: `Int8ConvrotLinear` holds the
@@ -1352,23 +1342,15 @@ class Flux2CheckpointModel(ModelLoader):
             # because they would otherwise be cast and counted against the reservation for nothing.
             converted_sd = drop_unconsumed_quantization_sidecars(converted_sd)
 
-            quantized = int8_markers
-            # A scale left over from another scheme means its weight is about to be cast without
-            # one. After the model exists, so the check can tell a real module from a stray key.
-            reject_foreign_quantization_scales(converted_sd, quantized, "FLUX.2", model)
-
-            # Reserve before the split, which dequantizes what it cannot keep, and charge the int8
-            # payloads their actual one byte rather than bf16's two.
-            self._ram_cache.make_room(
-                predict_int8_cast_size(
-                    converted_sd, torch.bfloat16, quantized, model=model, skip_patterns=skip_patterns
-                )
+            quantized = install_int8_convrot_layers(
+                model,
+                converted_sd,
+                int8_markers,
+                torch.bfloat16,
+                architecture="FLUX.2",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
             )
-            quantized = split_int8_convrot_layers(
-                converted_sd, quantized, torch.bfloat16, model=model, skip_patterns=skip_patterns
-            )
-            cast_unquantized(converted_sd, torch.bfloat16, quantized)
-            swap_in_int8_linears(model, converted_sd, quantized)
         else:
             # The same reservation FLUX.1 makes above, and for the same reason: the split
             # dequantizes its unusable subset through fp32, so reserving afterwards lets that

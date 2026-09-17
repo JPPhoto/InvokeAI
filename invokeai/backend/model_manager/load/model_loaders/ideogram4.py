@@ -50,14 +50,10 @@ from invokeai.backend.quantization.fp8_scaled import (
     warn_on_unattached_scales,
 )
 from invokeai.backend.quantization.int8_convrot import (
-    cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
-    predict_int8_cast_size,
-    reject_foreign_quantization_scales,
+    install_int8_convrot_layers,
     reject_unmarked_int8_weights,
-    split_int8_convrot_layers,
-    swap_in_int8_linears,
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, log_unexpected_keys
@@ -273,9 +269,10 @@ class Ideogram4CheckpointModel(ModelLoader):
 
     - plain bf16/fp16 -- loaded verbatim;
     - ComfyUI "scaled fp8" (fp8 weight + per-tensor ``.weight_scale``, plus ``.comfy_quant``
-      markers), kept quantized when the device can run the fp8 matmul and folded into the compute
-      dtype otherwise -- the same trade every other single-file loader here makes, and the reason an
-      8.6 GiB file needs ~17 GiB resident without ``fp8_compute``;
+      markers), kept quantized when either consumer wants it -- the fp8 matmul, or FP8 Storage asked
+      of this model, which identification switches on for such a file by itself -- and folded into
+      the compute dtype only when neither does. Kept, the 8.6 GiB file is 8.7 GiB resident; folded,
+      it is 17.3 GiB. The same trade every other single-file loader here makes;
     - ComfyUI ``int8_tensorwise`` + ``convrot`` (int8 weight + per-output-channel ``.weight_scale``),
       kept in ``Int8ConvrotLinear`` and dequantized per forward, so the file's size is the resident
       size with no setting to enable and no dependence on the device.
@@ -328,10 +325,17 @@ class Ideogram4CheckpointModel(ModelLoader):
             }
 
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-            keep_fp8 = should_keep_fp8_weights(target_device)
+            # Two consumers want these packed and either is enough: the fp8 matmul, which runs on
+            # them directly, and FP8 Storage asked of this model. Asking only the matmul -- which is
+            # what this did -- makes the storage path *lossy* on a scaled checkpoint: the fold below
+            # widens the weights to the compute dtype and drops their scales, and the layerwise cast
+            # at the end of this method then re-encodes that result as *unscaled* fp8, for the byte
+            # count the file already had. Measured on FLUX.2 Klein 4B, ~3% of the weights flush to
+            # zero that way.
+            keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
             if fp8_layers and not keep_fp8:
-                # Fold the scales in. Staying quantized without the fp8 matmul would halve VRAM but
-                # dequantize on every forward, so both are tied to the same setting.
+                # Neither consumer asked. Fold the scales in: staying quantized would halve VRAM but
+                # dequantize on every forward, which is a cost nobody asked to pay.
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 
@@ -354,19 +358,15 @@ class Ideogram4CheckpointModel(ModelLoader):
             # same dict `load_state_dict(assign=True)` aliased its parameters from.
             sd = drop_unconsumed_quantization_sidecars(sd)
 
-            quantized = int8_markers
-            # A scale left over from another scheme means its weight is about to be cast without
-            # one. After the model exists, so the check can tell a real module from a stray key.
-            reject_foreign_quantization_scales(sd, quantized, "Ideogram 4", model)
-
-            # Reserve before the split for the same reason as below, and charge the int8 payloads
-            # their actual one byte rather than the compute dtype's two.
-            self._ram_cache.make_room(
-                predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
+            quantized = install_int8_convrot_layers(
+                model,
+                sd,
+                int8_markers,
+                model_dtype,
+                architecture="Ideogram 4",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
             )
-            quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
-            cast_unquantized(sd, model_dtype, quantized)
-            swap_in_int8_linears(model, sd, quantized)
             kept = 0
         else:
             # Reserve before the split: it dequantizes the layers it cannot keep through float32,
@@ -403,18 +403,21 @@ class Ideogram4CheckpointModel(ModelLoader):
 
         if kept and not fp8_layers:
             self._logger.info(
-                f"Ideogram 4: kept {kept} raw fp8 weight(s) quantized (no weight_scale in the checkpoint); "
-                "they will run on the fp8 tensor cores with unit scaling."
+                f"Ideogram 4: kept {kept} raw fp8 weight(s) quantized (no weight_scale in the checkpoint), "
+                f"kept for {self._fp8_kept_reason()}"
             )
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
             self._logger.info(
-                f"Ideogram 4: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)"
+                f"Ideogram 4: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
             )
             warn_on_unattached_scales(self._logger, "Ideogram 4", attached, fp8_layers)
             marked = sum(1 for layer in fp8_layers.values() if layer.full_precision_matmul)
-            if marked:
+            # Only where the matmul is what runs. Kept for FP8 Storage alone, *every* layer
+            # dequantizes per forward, so the hint decides nothing and the advice below would send a
+            # user to override the checkpoint producer for a speedup that cannot happen.
+            if marked and should_keep_fp8_weights(self._torch_device):
                 if full_precision_hints_respected():
                     self._logger.info(
                         f"Ideogram 4: {marked} of {len(fp8_layers)} layer(s) are marked "

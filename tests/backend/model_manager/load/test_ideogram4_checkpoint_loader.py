@@ -18,7 +18,9 @@ import pytest
 import torch
 
 from invokeai.backend.ideogram4.modeling_ideogram4 import Ideogram4Config, Ideogram4Transformer
+from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_Ideogram4_Config
+from invokeai.backend.model_manager.load import load_default
 from invokeai.backend.model_manager.load.model_loaders.ideogram4 import Ideogram4CheckpointModel
 from invokeai.backend.model_manager.taxonomy import SubModelType
 from invokeai.backend.quantization.int8_convrot import (
@@ -89,6 +91,7 @@ def _driver(
     state_dict: dict,
     *,
     keep_fp8: bool,
+    fp8_storage: bool = False,
     trace: dict | None = None,
     geometry: Ideogram4Config = TINY_CONFIG,
 ):
@@ -109,7 +112,10 @@ def _driver(
     checkpoint = tmp_path / "ideogram4_fp8_scaled.safetensors"
     checkpoint.touch()
     config = Main_Checkpoint_Ideogram4_Config.model_construct(
-        path=str(checkpoint), name="ideogram4", branch="conditional"
+        path=str(checkpoint),
+        name="ideogram4",
+        branch="conditional",
+        default_settings=MainModelDefaultSettings(fp8_storage=fp8_storage),
     )
 
     def make_room(reserved: int) -> None:
@@ -128,7 +134,11 @@ def _driver(
     loader._apply_fp8_layerwise_casting = apply_casting
 
     monkeypatch.setattr(module, "load_file", lambda _path: state_dict)
-    monkeypatch.setattr(module, "should_keep_fp8_weights", lambda _device: keep_fp8)
+    # The two inputs of the loader's decision, not the decision itself: `_keep_fp8_weights` asks the
+    # fp8 matmul and this model's FP8 Storage setting, and either alone is enough. Stubbing the
+    # answer would let a loader that consults only one of them stay green.
+    monkeypatch.setattr(load_default, "should_keep_fp8_weights", lambda _device: keep_fp8)
+    monkeypatch.setattr(load_default, "_device_supports_fp8_storage", lambda _device, _logger=None: True)
     monkeypatch.setattr(module, "read_safetensors_metadata", lambda _path, _logger: None)
     monkeypatch.setattr(module.TorchDevice, "choose_torch_device", staticmethod(lambda: torch.device("cpu")))
     monkeypatch.setattr(module.TorchDevice, "choose_bfloat16_safe_dtype", staticmethod(lambda _device: torch.float32))
@@ -142,14 +152,25 @@ def _load(
     state_dict,
     *,
     keep_fp8: bool,
+    fp8_storage: bool = False,
     trace: dict | None = None,
     geometry: Ideogram4Config = TINY_CONFIG,
 ) -> torch.nn.Module:
-    loader, model_config = _driver(monkeypatch, tmp_path, state_dict, keep_fp8=keep_fp8, trace=trace, geometry=geometry)
+    loader, model_config = _driver(
+        monkeypatch,
+        tmp_path,
+        state_dict,
+        keep_fp8=keep_fp8,
+        fp8_storage=fp8_storage,
+        trace=trace,
+        geometry=geometry,
+    )
     return loader._load_model(model_config, SubModelType.Transformer)
 
 
-def test_without_the_fp8_matmul_the_scales_are_folded_into_full_precision_weights(monkeypatch, tmp_path) -> None:
+def test_with_neither_consumer_the_scales_are_folded_into_full_precision_weights(monkeypatch, tmp_path) -> None:
+    """Neither the fp8 matmul nor FP8 Storage wants these packed, so folding is right: keeping them
+    would dequantize on every forward to save memory nobody asked to save."""
     state_dict, originals = _checkpoint((KEPT, *SKIPPED))
 
     model = _load(monkeypatch, tmp_path, state_dict, keep_fp8=False)
@@ -161,6 +182,44 @@ def test_without_the_fp8_matmul_the_scales_are_folded_into_full_precision_weight
         # a dropped scale would be off by 1/scale, which is orders of magnitude.
         assert torch.allclose(weight, original, rtol=0.1, atol=0.02)
     assert not any(hasattr(module, "weight_scale") for module in model.modules())
+
+
+def test_fp8_storage_alone_keeps_the_checkpoint_in_its_own_scaled_form(monkeypatch, tmp_path) -> None:
+    """FP8 Storage is the second consumer, and asking only the matmul made this path *lossy*.
+
+    Folded, the weights reach the layerwise cast as full precision and it re-encodes them as
+    *unscaled* fp8 -- for the byte count the file already had, and losing the layers whose scale was
+    what kept them representable (~3% flushed to zero, measured on FLUX.2 Klein 4B). Kept, the
+    checkpoint's own per-tensor scale stays exact and the cast is skipped as having nothing to do.
+    """
+    state_dict, _ = _checkpoint((KEPT,))
+    before = {key: value.clone() for key, value in state_dict.items()}
+    trace: dict = {}
+
+    model = _load(monkeypatch, tmp_path, state_dict, keep_fp8=False, fp8_storage=True, trace=trace)
+
+    kept = model.get_submodule(KEPT)
+    assert kept.weight.dtype is FP8
+    assert kept.weight_scale.shape == ()
+    assert trace["casting_calls"] == 0
+    # Byte for byte what the file holds -- that is the whole argument for keeping them. A fold
+    # followed by the storage cast re-encodes without the scale, which on a checkpoint whose scales
+    # are not powers of two silently flushes the smallest weights to zero.
+    assert torch.equal(kept.weight.view(torch.uint8), before[f"{KEPT}.weight"].view(torch.uint8))
+    assert kept.weight_scale == before[f"{KEPT}.weight_scale"]
+
+    # And the reservation is sized for what is actually held. This is the number the fix moves --
+    # measured on the released checkpoint, 17.28 GiB down to 8.68 -- and it is what a loader that
+    # decided the prediction's flag separately from the fold's would get wrong while every
+    # end-state assertion above still passed. The scale is popped out of the dict before this
+    # point, so only the codes and the dense remainder are charged.
+    kept_codes = before[f"{KEPT}.weight"].numel()
+    dense = sum(
+        tensor.numel() * torch.float32.itemsize
+        for key, tensor in before.items()
+        if key != f"{KEPT}.weight" and not key.endswith(".weight_scale")
+    )
+    assert trace["reserved"] == kept_codes + dense
 
 
 def test_with_the_fp8_matmul_the_codes_stay_and_the_scales_are_attached(monkeypatch, tmp_path) -> None:
@@ -192,14 +251,19 @@ def test_room_is_reserved_before_the_scales_are_folded(monkeypatch, tmp_path) ->
 
 
 @pytest.mark.parametrize("path", SKIPPED)
-def test_the_two_dtype_deriving_layers_never_stay_quantized(monkeypatch, tmp_path, path: str) -> None:
+@pytest.mark.parametrize(
+    ("keep_fp8", "fp8_storage"), [(True, False), (False, True)], ids=["fp8_compute", "fp8_storage"]
+)
+def test_the_two_dtype_deriving_layers_never_stay_quantized(
+    monkeypatch, tmp_path, path: str, keep_fp8: bool, fp8_storage: bool
+) -> None:
     # The regression this guards: both forwards read `<layer>.weight.dtype` (or its `compute_dtype`)
     # and cast x, t and the conditioning to it. With an fp8 weight there, the first matmul dies with
     # "addmm_cpu" not implemented for 'Float8_e4m3fn' -- and on a device where it does not die, it
     # computes in a dtype the model never intended.
     state_dict, originals = _checkpoint((KEPT, path))
 
-    model = _load(monkeypatch, tmp_path, state_dict, keep_fp8=True)
+    model = _load(monkeypatch, tmp_path, state_dict, keep_fp8=keep_fp8, fp8_storage=fp8_storage)
 
     skipped = model.get_submodule(path)
     assert skipped.weight.dtype is torch.float32
@@ -214,12 +278,14 @@ def test_a_plain_checkpoint_loads_verbatim_and_is_offered_to_the_storage_pass(mo
     expected = {key: value.clone() for key, value in state_dict.items()}
     trace: dict = {}
 
-    model = _load(monkeypatch, tmp_path, state_dict, keep_fp8=False, trace=trace)
+    model = _load(monkeypatch, tmp_path, state_dict, keep_fp8=False, fp8_storage=True, trace=trace)
 
     for key, value in expected.items():
         assert torch.equal(model.get_parameter(key), value), key
     # Nothing here is fp8, so the model's own FP8 Storage setting is the only thing that could make
-    # it so -- this is the one path that must reach `_apply_fp8_layerwise_casting`.
+    # it so -- this is the one path that must reach `_apply_fp8_layerwise_casting`. The setting is on
+    # for realism rather than because the assertion needs it: the casting pass is stubbed out by a
+    # counter here, so what is pinned is that the loader offers the model to it at all.
     assert trace["casting_calls"] == 1
 
 

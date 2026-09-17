@@ -210,13 +210,16 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
 
         Deliberately not clamped, and the consequence is worth stating. Ideogram 4 is the only
         architecture here that keeps *two* transformers resident, so on a 24 GB card with the fp8
-        pair (~17.5 GB) the headroom runs out somewhere above 1300px: past that the cache cannot
+        pair (~17.4 GiB) the headroom runs out somewhere above 1300px: past that the cache cannot
         satisfy the reservation, the second branch loses residency and streams. That is not the
         estimate being wrong -- the memory genuinely is not there -- and reserving less would only
         exchange a slow generation for an out-of-memory error, and the remedy is fewer resident
-        bytes rather than a smaller number here. The int8 build does not supply them: it is the same
-        ~8.9 GiB per branch as fp8 with `fp8_compute`. What it buys is that this holds on *every*
-        device, where the fp8 pair doubles to ~35 GiB without the fp8 matmul.
+        bytes rather than a smaller number here. The int8 build does not supply them: 8.9 GiB per
+        branch against fp8's 8.7, and fp8 reaches that with `fp8_compute` *or* with FP8 Storage,
+        which installation switches on for such a file and which keeps the same weights without the
+        matmul. What int8 buys is that this holds on *every* device: with neither of those two the
+        fp8 pair expands to 17.3 GiB per branch, and a 24 GB card then runs out of memory during the
+        first step.
         """
         image_tokens = (self.height // PIXELS_PER_IMAGE_TOKEN) * (self.width // PIXELS_PER_IMAGE_TOKEN)
         per_token_bytes = 3 * 1024**2 // 4  # 0.75 MiB

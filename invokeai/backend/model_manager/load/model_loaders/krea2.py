@@ -50,15 +50,11 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
 from invokeai.backend.quantization.int8_convrot import (
-    cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
-    predict_int8_cast_size,
-    reject_foreign_quantization_scales,
+    install_int8_convrot_layers,
     reject_unmarked_int8_weights,
     resolve_quantized_module_paths,
-    split_int8_convrot_layers,
-    swap_in_int8_linears,
 )
 from invokeai.backend.quantization.nvfp4 import (
     WEIGHT_SCALE_2_SUFFIX,
@@ -499,24 +495,23 @@ class Krea2CheckpointModel(ModelLoader):
         nvfp4_bytes = predict_nvfp4_install_size(model, nvfp4_payloads, model_dtype, skip_patterns)
 
         if int8_markers:
-            # Before anything is cast: a scale left over from another scheme means its weight is
-            # about to be cast without it, and the orphan disappears into `strict=False` below.
-            # After the model exists, so a merged file's bundled submodels -- which this loader does
-            # not prefix-filter out and never loads -- cannot fail a checkpoint that works.
-            reject_foreign_quantization_scales(sd, quantized, "Krea-2", model)
-
-            # Reserve before the split, not after: the split dequantizes the layers it widens, so
-            # reserving afterwards lets that transient land on an unreserved cache. The prediction
-            # is given the same inputs, so it charges those layers the compute dtype's width and
-            # the int8 payloads their actual one byte -- reserving two would ask the cache to free
-            # ~12 GB that this load never uses.
-            self._ram_cache.make_room(
-                predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
-                + nvfp4_bytes
+            # A merged file's bundled submodels are in `sd` too -- this loader does not
+            # prefix-filter them out and never loads them -- so the scale check inside is the one
+            # that asks the model, not the dict.
+            quantized = install_int8_convrot_layers(
+                model,
+                sd,
+                quantized,
+                model_dtype,
+                architecture="Krea-2",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
+                extra_reserved_bytes=nvfp4_bytes,
             )
-            quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
-            cast_unquantized(sd, model_dtype, quantized)
-            swap_in_int8_linears(model, sd, quantized)
+            self._logger.info(
+                f"Krea-2: kept {len(quantized)} of {len(int8_markers)} layer(s) in int8 "
+                "(int8_tensorwise checkpoint, dequantized per forward)"
+            )
             # The fp8 reporting below is keyed on these; an int8 checkpoint keeps neither.
             fp8_layers = {}
             kept = 0
@@ -919,18 +914,19 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # everything" repack's 1-D norms) out of `swap_in_int8_linears`.
             skip_patterns = _model_declared_skip_patterns(model)
 
-            # Before anything is cast: a scale left over from another scheme means its weight is
-            # about to be cast without it, and the orphan disappears into `strict=False` below.
-            reject_foreign_quantization_scales(sd, quantized, "Qwen3-VL encoder", model)
-
-            # Reserve before the split -- it dequantizes the layers it widens -- and charge the int8
-            # payloads their actual one byte rather than the compute dtype's two.
-            self._ram_cache.make_room(
-                predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
+            quantized = install_int8_convrot_layers(
+                model,
+                sd,
+                quantized,
+                model_dtype,
+                architecture="Qwen3-VL encoder",
+                reserve=self._ram_cache.make_room,
+                skip_patterns=skip_patterns,
             )
-            quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
-            cast_unquantized(sd, model_dtype, quantized)
-            swap_in_int8_linears(model, sd, quantized)
+            self._logger.info(
+                f"Qwen3-VL encoder: kept {len(quantized)} of {len(int8_markers)} layer(s) in int8 "
+                "(int8_tensorwise checkpoint, dequantized per forward)"
+            )
         else:
             # Same ordering contract as every other loader in this series: split *before* the cast.
             # A per-key `if dtype is not FP8_DTYPE` cast looks equivalent and is not — it keeps every
