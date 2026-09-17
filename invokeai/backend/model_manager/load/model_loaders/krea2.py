@@ -477,10 +477,10 @@ class Krea2CheckpointModel(ModelLoader):
 
             # ComfyUI 'scaled fp8' checkpoints (fp8 weight + .weight_scale, optionally .input_scale).
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-            keep_fp8 = should_keep_fp8_weights(target_device)
+            keep_fp8 = self._keep_fp8_weights(config, SubModelType.Transformer)
             if fp8_layers and not keep_fp8:
-                # Legacy behavior: fold the scales into the weights. Keeping them quantized without the
-                # fp8 matmul would halve VRAM but run slower, so both are tied to the same setting.
+                # Neither consumer asked for them: keeping them quantized would halve VRAM but
+                # dequantize on every forward, so fold the scales into the weights.
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 
@@ -577,7 +577,9 @@ class Krea2CheckpointModel(ModelLoader):
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)
-            self._logger.info(f"Krea-2: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, fp8_compute enabled)")
+            self._logger.info(
+                f"Krea-2: kept {attached} layer(s) in fp8 (scaled fp8 checkpoint, kept for {self._fp8_kept_reason()})"
+            )
             warn_on_unattached_scales(self._logger, "Krea-2", attached, fp8_layers)
             # Marked layers dequantize on every forward instead of using the tensor cores, which is
             # the single biggest lever on how much fp8_compute actually buys for a given checkpoint.
@@ -596,14 +598,14 @@ class Krea2CheckpointModel(ModelLoader):
                         f"Krea-2: ignoring the full_precision_matrix_mult marker on {marked} layer(s) "
                         "(fp8_compute_full_precision_hints=false)."
                     )
-            # fp8_storage exists to *create* fp8 weights from full-precision ones; here they already
-            # are fp8, so it is bypassed entirely. Say so, otherwise a user who enabled it is left
-            # wondering whether it took effect.
+            # `fp8_storage` exists to *create* fp8 weights from full-precision ones. Here they are
+            # already fp8 -- kept either by the matmul or by that setting itself -- so the cast has
+            # nothing to add. Say so, otherwise a user who enabled it cannot tell whether it took.
             default_settings = getattr(config, "default_settings", None)
             if default_settings is not None and getattr(default_settings, "fp8_storage", None):
                 self._logger.info(
-                    "Krea-2: the model's fp8_storage setting is redundant here and was skipped - the "
-                    "checkpoint already ships fp8 weights."
+                    "Krea-2: fp8_storage is satisfied by the checkpoint itself - its weights are already "
+                    "fp8 and are kept that way, so the layerwise cast is skipped."
                 )
             # The layerwise-casting path exists to *produce* fp8 weights from full-precision ones. The
             # checkpoint already is fp8, and its hooks would cast back to the compute dtype without
@@ -867,9 +869,14 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # would leave the scales already folded while the raw Linears stay quantized, i.e. the
             # encoder silently on the storage path with the matmul log line never printed.
             keep_matmul_fp8 = should_keep_fp8_weights(target_device)
-            if fp8_layers and not keep_matmul_fp8:
-                # Legacy behavior: fold the scales into the weights. Without the fp8 matmul, staying
-                # quantized would save VRAM but cost speed, so the two are tied to the same setting.
+            # Resolved here, next to the matmul probe and for the same reason: the fold below is
+            # irreversible, so both consumers have to be known before it runs. Asking only about the
+            # matmul folded the scales away and then let the storage cast re-quantize the result to
+            # *unscaled* fp8 -- on a scaled checkpoint that is ~3% of the weights lost to underflow,
+            # for the byte count the file already had.
+            use_fp8_storage = source_is_fp8 and _device_supports_fp8_storage(self._torch_device, self._logger)
+            if fp8_layers and not keep_matmul_fp8 and not use_fp8_storage:
+                # Neither consumer wants them packed: fold the scales into the weights.
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 
@@ -912,7 +919,6 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # `model_dtype` here would double both this reservation and the host-RAM peak (~4.4 -> ~8.9
             # GiB on the 4B encoder) for a round trip that ends where it started -- e4m3fn is a subset
             # of bf16, so it is value-exact. Keep them for either consumer.
-            use_fp8_storage = source_is_fp8 and _device_supports_fp8_storage(self._torch_device, self._logger)
             keep_fp8 = keep_matmul_fp8 or use_fp8_storage
             # Reserve before the split: it dequantizes its unusable subset through fp32, so reserving
             # afterwards lets that transient peak land on an unreserved cache. `scaled_layers` keeps the
@@ -959,8 +965,8 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
                 or isinstance(module, torch.nn.Embedding),
             )
             self._logger.info(
-                f"FP8 compute enabled for Qwen3-VL encoder '{config.name}': kept {attached} layer(s) "
-                f"quantized (storage=float8_e4m3fn, matmul=torch._scaled_mm, compute={model_dtype}); "
+                f"Qwen3-VL encoder '{config.name}': kept {attached} scaled layer(s) quantized "
+                f"({self._fp8_kept_reason()}, storage=float8_e4m3fn, compute={model_dtype}); "
                 "remaining layers cast to fp8 storage."
             )
             # The layerwise-casting path below exists to *produce* fp8 weights from full-precision
