@@ -1115,7 +1115,7 @@ describe('GalleryImageGrid upload drop zone', () => {
   });
 
   it('offers every container and audio format the upload route ingests', async () => {
-    await renderGallery(createGallery({ items: [], pendingPlaceholders: [] }));
+    await renderGallery(createGallery({ items: [] }));
 
     const accept = host?.querySelector<HTMLInputElement>('input[type="file"]')?.accept.split(',');
 
@@ -1129,7 +1129,7 @@ describe('GalleryImageGrid upload drop zone', () => {
   // filtering here by the picker's list would re-hide exactly what the picker just stopped
   // hiding, and the classifier downstream is the single place that decides.
   it('hands a dropped audio file to the upload action', async () => {
-    await renderGallery(createGallery({ items: [], pendingPlaceholders: [] }));
+    await renderGallery(createGallery({ items: [] }));
 
     const dropTarget = host?.querySelector('[role="button"]');
     const dataTransfer = new DataTransfer();
