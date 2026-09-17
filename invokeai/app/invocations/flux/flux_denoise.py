@@ -61,8 +61,8 @@ from invokeai.backend.model_manager.taxonomy import BaseModelType, FluxVariantTy
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.flux_lora_constants import FLUX_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
-from invokeai.backend.quantization.int8_convrot import (
-    peak_int8_dequant_transient_bytes,
+from invokeai.backend.quantization.dequantizing_linear import (
+    peak_dequant_transient_bytes,
     requires_sidecar_patching,
 )
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
@@ -439,7 +439,7 @@ class FluxDenoiseInvocation(BaseInvocation):
             # FLUX.1's largest quantized layer needs 252 MiB. It binds only where that floor was
             # lowered, and it is what keeps the term honest if this node ever grows a real estimate
             # (the transient is alive alongside the activations, as it is for FLUX.2 and Krea-2).
-            int8_dequant_bytes = peak_int8_dequant_transient_bytes(transformer_info.model, inference_dtype)
+            int8_dequant_bytes = peak_dequant_transient_bytes(transformer_info.model, inference_dtype)
 
             # Load the transformer model.
             (cached_weights, transformer) = exit_stack.enter_context(
