@@ -349,7 +349,9 @@ def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor
     )
 
 
-def reject_unmarked_int8_weights(sd: dict[str, Any], markers: Mapping[str, Any], architecture: str) -> None:
+def reject_unmarked_int8_weights(
+    sd: dict[str, Any], markers: Mapping[str, Any], architecture: str, model: torch.nn.Module | None = None
+) -> None:
     """Refuse a checkpoint holding an int8 weight that no ``int8_tensorwise`` marker claims.
 
     Call this *outside* the "did we find markers" branch. An int8 weight whose marker is missing --
@@ -367,12 +369,21 @@ def reject_unmarked_int8_weights(sd: dict[str, Any], markers: Mapping[str, Any],
     marker on the *weight* at ``foo.qkv`` exempted a packed sidecar the decode never places, and a
     key shorter than the suffix collapses to the empty string. An int8 tensor under any name but a
     marked ``.weight`` is a payload this decode cannot place, and saying so is the whole point.
+
+    Pass ``model`` where the caller has already built it, and the check narrows to weights this
+    model actually consumes -- the same filter :func:`reject_foreign_quantization_scales` applies,
+    for the same reason. A merged single file may bundle a quantized *submodel* beside the
+    transformer; a non-strict load discards those keys rather than casting them, so they cannot
+    become noise and are not this loader's business. Without ``model`` every int8 key in ``sd`` is
+    in scope, which is right for a caller that has not built the module tree yet.
     """
+    consumed = None if model is None else {name for name, _ in model.named_modules()}
     orphans = sorted(
         k
         for k, v in sd.items()
         if v.dtype is torch.int8
         and not (isinstance(k, str) and k.endswith(".weight") and k[: -len(".weight")] in markers)
+        and (consumed is None or (isinstance(k, str) and k.rsplit(".", 1)[0] in consumed))
     )
     if orphans:
         raise ValueError(
