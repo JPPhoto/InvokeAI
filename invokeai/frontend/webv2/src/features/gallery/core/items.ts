@@ -231,33 +231,14 @@ const GALLERY_UPLOAD_FORMATS: Record<GalleryItemKind, { extensions: readonly str
   },
 };
 
-const GALLERY_UPLOAD_ENTRIES = (Object.keys(GALLERY_UPLOAD_FORMATS) as GalleryItemKind[]).flatMap((kind) =>
-  [...GALLERY_UPLOAD_FORMATS[kind].mimes, ...GALLERY_UPLOAD_FORMATS[kind].extensions].map(
-    (value) => [value, kind] as const
-  )
-);
-
-const isWildcard = (mime: string): boolean => mime.endsWith('/*');
-
-/** Exact MIME matches, for types no wildcard covers. */
-const GALLERY_UPLOAD_KIND_BY_MIME = new Map<string, GalleryItemKind>([
-  ...GALLERY_UPLOAD_ENTRIES.filter(([value]) => value.includes('/') && !isWildcard(value)),
-  // The legacy alias some Windows tools emit; the image route accepts it, but no picker
-  // needs to advertise it, so it is classified without being offered.
-  ['image/jpg', 'image'],
-]);
-
 /**
- * Wildcard prefixes, derived from the table's own `*`-suffixed MIMEs rather than restated, so a
- * kind that gains a wildcard cannot be offered in `accept` while the classifier still rejects
- * it. These mirror `ACCEPTED_*_MIME_PREFIXES` on the upload routes.
+ * Ordered so a kind added later classifies after the existing ones. Kept as a literal
+ * rather than `Object.keys`: everything at this module's top level must stay a plain
+ * declaration the bundler can drop, or the barrels that re-export `items.ts` are retained
+ * in the editor's initial chunks. That is also why nothing here is precomputed into a Map —
+ * classification runs once per picked file, so a scan of ~30 entries costs nothing.
  */
-const GALLERY_UPLOAD_KIND_BY_MIME_PREFIX = GALLERY_UPLOAD_ENTRIES.filter(([value]) => isWildcard(value)).map(
-  ([mime, kind]) => [mime.slice(0, -1), kind] as const
-);
-
-// Matched with `endsWith`, never keyed, so a pair list rather than a Map.
-const GALLERY_UPLOAD_KIND_BY_EXTENSION = GALLERY_UPLOAD_ENTRIES.filter(([value]) => value.startsWith('.'));
+const GALLERY_UPLOAD_KINDS = ['image', 'video'] as const;
 
 /**
  * The file input `accept` list for the given kinds. Advisory only — every browser offers an
@@ -268,25 +249,37 @@ export const getGalleryUploadAccept = (kinds: readonly GalleryItemKind[]): strin
     .flatMap((kind) => [...GALLERY_UPLOAD_FORMATS[kind].mimes, ...GALLERY_UPLOAD_FORMATS[kind].extensions])
     .join(',');
 
-/** Which upload route a picked file belongs to, or null when no route takes it. */
+/**
+ * Which upload route a picked file belongs to, or null when no route takes it. An exact MIME
+ * match wins over a wildcard, and both win over the filename, so a file the OS typed is never
+ * routed by its extension.
+ */
 export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind: GalleryItemKind } | null => {
   const mimeType = file.type.toLowerCase();
-  const mimeKind = GALLERY_UPLOAD_KIND_BY_MIME.get(mimeType);
 
-  if (mimeKind) {
-    return { kind: mimeKind };
+  // The legacy alias some Windows tools emit; the image route accepts it, but no picker
+  // needs to advertise it, so it is classified without being offered.
+  if (mimeType === 'image/jpg') {
+    return { kind: 'image' };
   }
-
-  for (const [prefix, kind] of GALLERY_UPLOAD_KIND_BY_MIME_PREFIX) {
-    if (mimeType.startsWith(prefix)) {
+  for (const kind of GALLERY_UPLOAD_KINDS) {
+    if (GALLERY_UPLOAD_FORMATS[kind].mimes.includes(mimeType)) {
+      return { kind };
+    }
+  }
+  for (const kind of GALLERY_UPLOAD_KINDS) {
+    // `video/*` matches any `video/` type, mirroring ACCEPTED_*_MIME_PREFIXES on the routes.
+    if (
+      GALLERY_UPLOAD_FORMATS[kind].mimes.some((mime) => mime.endsWith('/*') && mimeType.startsWith(mime.slice(0, -1)))
+    ) {
       return { kind };
     }
   }
 
   const lowerName = file.name.toLowerCase();
 
-  for (const [extension, kind] of GALLERY_UPLOAD_KIND_BY_EXTENSION) {
-    if (lowerName.endsWith(extension)) {
+  for (const kind of GALLERY_UPLOAD_KINDS) {
+    if (GALLERY_UPLOAD_FORMATS[kind].extensions.some((extension) => lowerName.endsWith(extension))) {
       return { kind };
     }
   }

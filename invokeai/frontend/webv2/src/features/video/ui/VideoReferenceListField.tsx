@@ -10,9 +10,9 @@ import type { ChangeEvent } from 'react';
 
 import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryItems, galleryTransfers, getGalleryUploadAccept, toGalleryItemKey } from '@features/gallery';
+import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
 import { FindInGalleryThumbnailButton } from '@features/gallery/mediaSlot';
-import { GalleryPickerPopover } from '@features/gallery/picker';
+import { getGalleryUploadAccept, GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
 import {

@@ -15,7 +15,6 @@ export {
   compareGalleryItems,
   formatGalleryVideoDuration,
   galleryImageItemToGalleryImage,
-  getGalleryUploadAccept,
   isGalleryImageItem,
   legacyGeneratedImageToGalleryItem,
   parseGalleryItemKey,
