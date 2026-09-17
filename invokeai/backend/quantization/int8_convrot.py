@@ -144,36 +144,6 @@ def parse_comfy_quant_bytes(raw: bytes) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
-    """Every ``<layer>.comfy_quant`` marker in a safetensors file, read from the header alone.
-
-    A header parse plus one seek per marker blob -- no tensor data. Two callers need the scheme
-    before they have the weights: a loader deciding whether to commit to a ~20 GiB read, and model
-    identification, whose state dict is on the meta device and therefore carries shapes and dtypes
-    but no bytes to parse. Keys are the raw (un-renamed) layer names.
-
-    Marker bytes go through the same tolerant parser the state-dict readers use. This reader runs
-    FIRST, so a strict parse here is what a NUL-padded marker -- which Comfy writes, and which that
-    parser exists to absorb -- would actually hit: a `JSONDecodeError` out of the middle of a load,
-    naming neither the file nor the key.
-
-    Raises whatever the file does (`OSError`, `struct.error`, `json.JSONDecodeError`) for a path
-    that is not readable safetensors; callers that reach this with an unvalidated file catch it.
-    """
-    markers: dict[str, dict[str, Any]] = {}
-    with open(path, "rb") as f:
-        header_len = struct.unpack("<Q", f.read(8))[0]
-        header = json.loads(f.read(header_len))
-        header.pop("__metadata__", None)
-        for key, entry in header.items():
-            if not key.endswith(".comfy_quant"):
-                continue
-            start, end = entry["data_offsets"]
-            f.seek(8 + header_len + start)
-            markers[key[: -len(".comfy_quant")]] = parse_comfy_quant_bytes(f.read(end - start))
-    return markers
-
-
 def parse_comfy_quant_marker(blob: torch.Tensor) -> dict:
     """Decode a ``<layer>.comfy_quant`` uint8 tensor into its JSON dict, or ``{}``."""
     try:
