@@ -8,7 +8,8 @@ default working memory and the first forward competes with what it just placed.
 `peak_int8_dequant_transient_bytes` is unit-tested next to the module it belongs to. What is
 pinned here is the wire: deleting the `working_mem_bytes=` argument from the node leaves every
 other test green. Z-Image only -- MiniMax H3 adds the same term; reaching its `model_on_device()` call needs a packed sequence.
-Krea-2's wiring is pinned separately, in `tests/app/invocations/test_krea2_denoise.py`.
+Krea-2's wiring is pinned in `tests/app/invocations/test_krea2_denoise.py` and FLUX.2's in
+`tests/app/invocations/test_flux2_working_memory.py`.
 """
 
 from types import SimpleNamespace

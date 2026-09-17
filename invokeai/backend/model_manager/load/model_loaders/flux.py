@@ -86,6 +86,7 @@ from invokeai.backend.model_manager.util.model_util import (
     convert_bundle_to_flux_transformer_checkpoint,
 )
 from invokeai.backend.quantization.fp8_scaled import (
+    Fp8ScaledLayer,
     attach_fp8_scales,
     can_stay_quantized,
     cast_state_dict,
@@ -105,6 +106,18 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
 from invokeai.backend.quantization.gguf.utils import TORCH_COMPATIBLE_QTYPES
+from invokeai.backend.quantization.int8_convrot import (
+    INT8_TENSORWISE_FORMAT,
+    Int8ConvrotLinear,
+    cast_unquantized,
+    drop_unconsumed_quantization_sidecars,
+    extract_int8_convrot_markers,
+    predict_int8_cast_size,
+    reject_foreign_quantization_scales,
+    reject_unmarked_int8_weights,
+    split_int8_convrot_layers,
+    swap_in_int8_linears,
+)
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.util.logging import InvokeAILogger
@@ -1039,6 +1052,24 @@ class Flux2CheckpointModel(ModelLoader):
         match submodel_type:
             case SubModelType.Transformer:
                 model = self._load_from_singlefile(config)
+                if isinstance(model, torch.nn.Module) and any(
+                    isinstance(module, Int8ConvrotLinear) for module in model.modules()
+                ):
+                    # The storage pass cannot reach an int8 weight: it casts only
+                    # `_FP8_SUPPORTED_PYTORCH_LAYERS`, and `Int8ConvrotLinear` is neither one of
+                    # them nor an owner of parameters. What it *could* still cast is the dense
+                    # remainder -- the modulation projections feeding AdaLN shift/scale/gate, the
+                    # embedders and the final layer, ~285M parameters. Those are precisely what the
+                    # repack chose to leave bf16, and the model's own skip patterns
+                    # (`pos_embed`, `norm`) do not protect them, so the pass is skipped rather than
+                    # allowed to undo that choice for ~140 MB. Krea-2's Qwen3-VL encoder loader
+                    # makes the same call for the same reason.
+                    if getattr(getattr(config, "default_settings", None), "fp8_storage", None):
+                        self._logger.info(
+                            "FLUX.2: the model's fp8_storage setting was skipped - this is an "
+                            "int8_tensorwise checkpoint, already one byte per quantized weight."
+                        )
+                    return model
                 model = self._apply_fp8_layerwise_casting(model, config, submodel_type)
                 return model
 
@@ -1078,38 +1109,74 @@ class Flux2CheckpointModel(ModelLoader):
                 for k, v in sd.items()
             }
 
-        # ComfyUI 'scaled fp8' (fp8 weight + .weight_scale, optionally an input scale). Until now
-        # these were folded into bf16 at load, so a FLUX.2 checkpoint that ships them ran as fp8
-        # *storage* at best and never reached the tensor cores.
-        #
-        # Hints ship in the safetensors header or as per-layer `.comfy_quant` markers, and both name
-        # layers in the checkpoint's BFL scheme. The scales are read after the rename, so the hints
-        # have to be renamed too -- a fused `qkv` becomes three diffusers layers.
-        header_hints = strip_layer_path_prefix(
-            parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger))
+        # Which of the two ComfyUI side channels this file carries is decided once, and int8 first:
+        # an int8 layer ships a `.weight_scale` too, so probing for scales without ruling int8 out
+        # would take the whole checkpoint down the fp8 path -- scaled, never dequantized to a dtype
+        # torch computes in, and for a `convrot` repack never un-rotated either.
+        has_int8_weights = any(
+            isinstance(key, str) and key.endswith(".weight") and getattr(value, "dtype", None) is torch.int8
+            for key, value in sd.items()
         )
-        layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
-        path_map = remap_flux2_layer_paths(layer_hints.keys())
-        layer_hints = {
-            renamed: hints for name, hints in layer_hints.items() for renamed in (path_map.get(name) or [name])
-        }
 
-        # Convert BFL format state dict to diffusers format. Scales and markers are carried to
-        # wherever their weight landed, including across the fused-qkv split.
-        converted_sd = convert_flux2_bfl_to_diffusers(sd)
+        int8_markers: dict[str, dict[str, Any]] = {}
+        fp8_layers: dict[str, Fp8ScaledLayer] = {}
 
-        fp8_layers = extract_fp8_scaled_layers(converted_sd, layer_hints=layer_hints)
-        if fp8_layers and not keep_fp8:
-            # Without the matmul, keeping them quantized would halve VRAM but dequantize on every
-            # forward. Fold the scale into the weight instead -- the legacy result, except reached
-            # through the shared helper.
-            dequantize_fp8_scaled(converted_sd, fp8_layers, torch.bfloat16)
-            fp8_layers = {}
+        if has_int8_weights:
+            # The converter carries `.comfy_quant` and `.weight_scale` to wherever their weight
+            # landed, so the markers are read *after* the rename and already name diffusers modules
+            # -- including the three a fused `qkv` becomes, which each inherit the fused layer's
+            # per-tensor scale and marker.
+            converted_sd = convert_flux2_bfl_to_diffusers(sd)
+            int8_markers = extract_int8_convrot_markers(converted_sd)
+            # The header is the other place a repack declares its scheme, and for FLUX.2 that is
+            # not hypothetical: Comfy-Org's own fp8 build of this model carries *no* per-layer
+            # markers and names every layer in `_quantization_metadata`. A build from that tooling
+            # would otherwise be refused for a marker it never had to write. Header entries name
+            # layers in the BFL scheme, so they need the same one-to-many rename the fp8 branch
+            # applies, and a per-layer marker wins where both are present -- only that one can
+            # carry `convrot` and the group size.
+            header_markers = {
+                renamed: marker
+                for name, marker in strip_layer_path_prefix(
+                    parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger))
+                ).items()
+                if marker.get("format") == INT8_TENSORWISE_FORMAT
+                for renamed in (remap_flux2_layer_paths([name]).get(name) or [name])
+            }
+            int8_markers = {**header_markers, **int8_markers}
+        else:
+            # ComfyUI 'scaled fp8' (fp8 weight + .weight_scale, optionally an input scale). Until
+            # now these were folded into bf16 at load, so a FLUX.2 checkpoint that ships them ran as
+            # fp8 *storage* at best and never reached the tensor cores.
+            #
+            # Hints ship in the safetensors header or as per-layer `.comfy_quant` markers, and both
+            # name layers in the checkpoint's BFL scheme. The scales are read after the rename, so
+            # the hints have to be renamed too -- a fused `qkv` becomes three diffusers layers.
+            header_hints = strip_layer_path_prefix(
+                parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger))
+            )
+            layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
+            path_map = remap_flux2_layer_paths(layer_hints.keys())
+            layer_hints = {
+                renamed: hints for name, hints in layer_hints.items() for renamed in (path_map.get(name) or [name])
+            }
 
-        # Safety net for scale layouts the shared extractor does not model (block-wise scales whose
-        # shape has to be expanded to the weight's). It is a no-op on every checkpoint measured so
-        # far, because extraction has already taken the scales it understood.
-        converted_sd = self._dequantize_fp8_weights(converted_sd, keep_fp8=keep_fp8)
+            # Convert BFL format state dict to diffusers format. Scales and markers are carried to
+            # wherever their weight landed, including across the fused-qkv split.
+            converted_sd = convert_flux2_bfl_to_diffusers(sd)
+
+            fp8_layers = extract_fp8_scaled_layers(converted_sd, layer_hints=layer_hints)
+            if fp8_layers and not keep_fp8:
+                # Without the matmul, keeping them quantized would halve VRAM but dequantize on
+                # every forward. Fold the scale into the weight instead -- the legacy result, except
+                # reached through the shared helper.
+                dequantize_fp8_scaled(converted_sd, fp8_layers, torch.bfloat16)
+                fp8_layers = {}
+
+            # Safety net for scale layouts the shared extractor does not model (block-wise scales
+            # whose shape has to be expanded to the weight's). It is a no-op on every checkpoint
+            # measured so far, because extraction has already taken the scales it understood.
+            converted_sd = self._dequantize_fp8_weights(converted_sd, keep_fp8=keep_fp8)
 
         # Detect architecture from checkpoint keys
         double_block_indices = [
@@ -1152,6 +1219,12 @@ class Flux2CheckpointModel(ModelLoader):
         # Klein models don't have guidance embeddings - check if they're in the checkpoint
         has_guidance = "time_guidance_embed.guidance_embedder.linear_1.weight" in converted_sd
 
+        # Outside the branch on purpose (see the helper): an int8 weight that neither a marker nor
+        # the header claims would otherwise be cast to bf16 as raw codes and load silently. In the
+        # fp8 branch `int8_markers` is empty, so this also catches an int8 payload that arrived
+        # down that path.
+        reject_unmarked_int8_weights(converted_sd, int8_markers, "FLUX.2")
+
         # Create model with detected configuration
         with SilenceWarnings():
             with accelerate.init_empty_weights():
@@ -1190,22 +1263,72 @@ class Flux2CheckpointModel(ModelLoader):
         # model's own precision-sensitive list is honored — see the Z-Image loader for why that is
         # a correctness requirement and not just a quality nicety.
         skip_patterns = _model_declared_skip_patterns(model)
-        # Scaled layers the cast would dequantize anyway are folded here, scale applied, so
-        # `cast_state_dict` never strips a scale that can no longer be put back.
-        fp8_layers = split_fp8_scaled_layers(
-            converted_sd, fp8_layers, torch.bfloat16, model=model, skip_patterns=skip_patterns
-        )
 
-        kept = cast_state_dict(
-            converted_sd,
-            torch.bfloat16,
-            keep_fp8=keep_fp8,
-            model=model,
-            skip_patterns=skip_patterns,
-        )
+        if int8_markers:
+            # W8A8 activation scales and any marker of another format: meaningless on this path,
+            # which dequantizes the weight and computes in bf16. Dropped rather than tolerated
+            # because they would otherwise be cast and counted against the reservation for nothing.
+            converted_sd = drop_unconsumed_quantization_sidecars(converted_sd)
+
+            quantized = int8_markers
+            # A scale left over from another scheme means its weight is about to be cast without
+            # one. After the model exists, so the check can tell a real module from a stray key.
+            reject_foreign_quantization_scales(converted_sd, quantized, "FLUX.2", model)
+
+            # Reserve before the split, which dequantizes what it cannot keep, and charge the int8
+            # payloads their actual one byte rather than bf16's two.
+            self._ram_cache.make_room(
+                predict_int8_cast_size(
+                    converted_sd, torch.bfloat16, quantized, model=model, skip_patterns=skip_patterns
+                )
+            )
+            quantized = split_int8_convrot_layers(
+                converted_sd, quantized, torch.bfloat16, model=model, skip_patterns=skip_patterns
+            )
+            cast_unquantized(converted_sd, torch.bfloat16, quantized)
+            swap_in_int8_linears(model, converted_sd, quantized)
+        else:
+            # The same reservation FLUX.1 makes above, and for the same reason: the split
+            # dequantizes its unusable subset through fp32, so reserving afterwards lets that
+            # transient land on an unreserved cache. This path had no reservation at all, which on
+            # a machine already holding the 15 GiB Qwen3-8B encoder meant nothing was ever evicted
+            # to make room for a 16.9 GiB bf16 Klein 9B.
+            self._ram_cache.make_room(
+                predict_cast_state_dict_size(
+                    converted_sd,
+                    torch.bfloat16,
+                    keep_fp8=keep_fp8,
+                    model=model,
+                    skip_patterns=skip_patterns,
+                    scaled_layers=fp8_layers,
+                )
+            )
+
+            # Scaled layers the cast would dequantize anyway are folded here, scale applied, so
+            # `cast_state_dict` never strips a scale that can no longer be put back.
+            fp8_layers = split_fp8_scaled_layers(
+                converted_sd, fp8_layers, torch.bfloat16, model=model, skip_patterns=skip_patterns
+            )
+
+            kept = cast_state_dict(
+                converted_sd,
+                torch.bfloat16,
+                keep_fp8=keep_fp8,
+                model=model,
+                skip_patterns=skip_patterns,
+            )
 
         # Load the state dict - guidance weights were already initialized above if missing
         load_state_dict_ignoring_extras(model, converted_sd, source="FLUX.2 transformer checkpoint", assign=True)
+
+        if int8_markers:
+            # No setting behind this one and nothing to fall back to: `Int8ConvrotLinear` holds the
+            # stored codes and dequantizes per forward, so an 8.8 GiB file stays 8.8 GiB resident on
+            # every device. What it does not get is int8 *compute*.
+            self._logger.info(
+                f"FLUX.2: kept {len(quantized)} layer(s) in int8 (int8_tensorwise checkpoint, dequantized per forward)"
+            )
+            return model
 
         if fp8_layers:
             attached = attach_fp8_scales(model, fp8_layers)

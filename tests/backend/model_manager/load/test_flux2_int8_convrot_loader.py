@@ -1,0 +1,419 @@
+"""Loader-level tests for the `int8_tensorwise` FLUX.2 path.
+
+These drive `Flux2CheckpointModel._load_from_singlefile` and assert the end state of the module:
+which layers keep their codes, what the reconstructed weight is, and what the cache was asked to
+free. The geometry is the released Klein 9B layout scaled down by 16 -- same module tree and the
+same two fusions, 4 tensors per block instead of 4096-wide ones.
+
+The branch this covers is one decision: an int8 layer ships a `.weight_scale` exactly like a scaled
+fp8 layer, so a loader that probes for scales first takes the whole checkpoint down the fp8 path.
+There the codes are scaled but never dequantized to a dtype torch computes in.
+"""
+
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+import torch
+
+from invokeai.backend.model_manager.configs.main import Main_Checkpoint_Flux2_Config
+from invokeai.backend.model_manager.load.model_loaders.flux import Flux2CheckpointModel
+from invokeai.backend.model_manager.load.model_loaders.flux2_state_dict_utils import remap_flux2_layer_paths
+from invokeai.backend.model_manager.taxonomy import Flux2VariantType, SubModelType
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
+
+MARKER = {"format": "int8_tensorwise"}
+
+H = 256  # hidden size: two 128-wide attention heads, the smallest the architecture allows
+JOINT = 768  # context_embedder input; only its presence and rank matter here
+IN_CHANNELS = 128  # FLUX.2's 32 latent channels x 4 packing -- what identification keys on
+
+# `<bfl path>: (out, in)`, at the released ratios. The two fused layers are what make FLUX.2 the
+# hard case: one int8 tensor and one scalar scale become three (or two) diffusers projections.
+QUANTIZED: dict[str, tuple[int, int]] = {
+    "double_blocks.0.img_attn.qkv": (3 * H, H),
+    "double_blocks.0.img_attn.proj": (H, H),
+    "double_blocks.0.img_mlp.0": (6 * H, H),
+    "double_blocks.0.img_mlp.2": (H, 3 * H),
+    "double_blocks.0.txt_attn.qkv": (3 * H, H),
+    "double_blocks.0.txt_attn.proj": (H, H),
+    "double_blocks.0.txt_mlp.0": (6 * H, H),
+    "double_blocks.0.txt_mlp.2": (H, 3 * H),
+    "single_blocks.0.linear1": (9 * H, H),
+    "single_blocks.0.linear2": (H, 4 * H),
+}
+
+DENSE: dict[str, tuple[int, ...]] = {
+    "img_in.weight": (H, IN_CHANNELS),
+    "txt_in.weight": (H, JOINT),
+    "time_in.in_layer.weight": (H, 256),
+    "time_in.out_layer.weight": (H, H),
+    "double_stream_modulation_img.lin.weight": (6 * H, H),
+    "double_stream_modulation_txt.lin.weight": (6 * H, H),
+    "single_stream_modulation.lin.weight": (3 * H, H),
+    "final_layer.adaLN_modulation.1.weight": (2 * H, H),
+    "final_layer.linear.weight": (IN_CHANNELS, H),
+    "double_blocks.0.img_attn.norm.key_norm.scale": (128,),
+    "double_blocks.0.img_attn.norm.query_norm.scale": (128,),
+    "double_blocks.0.txt_attn.norm.key_norm.scale": (128,),
+    "double_blocks.0.txt_attn.norm.query_norm.scale": (128,),
+    "single_blocks.0.norm.key_norm.scale": (128,),
+    "single_blocks.0.norm.query_norm.scale": (128,),
+}
+
+
+def _marker_blob(marker: dict) -> torch.Tensor:
+    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8).clone()
+
+
+def _quantize_tensorwise(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """As the repack stores it: one scalar scale for the whole tensor, no rotation."""
+    scale = weight.abs().max() / 127.0
+    return torch.clamp(torch.round(weight / scale), -128, 127).to(torch.int8), scale.to(torch.float32)
+
+
+# Stored fp32 rather than bf16, because a repack that mixes precisions in its dense remainder is
+# what makes `cast_unquantized` observable at all: `load_state_dict_ignoring_extras(assign=True)`
+# assigns storage dtypes straight through, so without the cast this layer lands as fp32 inside a
+# bf16 model -- and the reservation, which charged it two bytes, comes up short by its size.
+STORED_FP32 = "img_in.weight"
+
+# W8A8 metadata for a mode this path does not implement. The load is not strict, but the cast and
+# the reservation would both pay for it.
+ACTIVATION_SCALE = "double_blocks.0.img_attn.proj.input_scale"
+
+
+def _checkpoint(marker: dict | None = MARKER) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """A BFL-format state dict with every block linear stored int8, plus the float originals."""
+    torch.manual_seed(0)
+    sd: dict[str, torch.Tensor] = {
+        key: torch.randn(*shape, dtype=torch.float32 if key == STORED_FP32 else torch.bfloat16)
+        for key, shape in DENSE.items()
+    }
+    sd[ACTIVATION_SCALE] = torch.ones((), dtype=torch.float32)
+
+    originals: dict[str, torch.Tensor] = {}
+    for path, (out_features, in_features) in QUANTIZED.items():
+        weight = torch.randn(out_features, in_features, dtype=torch.float32)
+        originals[path] = weight
+        sd[f"{path}.weight"], sd[f"{path}.weight_scale"] = _quantize_tensorwise(weight)
+        if marker is not None:
+            sd[f"{path}.comfy_quant"] = _marker_blob(marker)
+    return sd, originals
+
+
+def _expected_reservation() -> int:
+    """What the load occupies, with the four widths spelled out rather than recomputed.
+
+    A payload that stays int8 is one byte, whatever the compute dtype. Its scalar scale is *copied*
+    to each projection the fused layer becomes and stays fp32 there, so that count follows the
+    destinations and not the checkpoint's ten layers. Everything else arrives at the compute width,
+    including the layer the checkpoint stored as fp32 -- charged what it becomes, not what it was.
+    The marker and the activation scale are dropped before the load and charged nothing.
+
+    Charging a kept int8 payload two bytes asks the cache to evict roughly twice what an 8.8 GiB
+    file needs; charging none lets the split's transient land on an unreserved cache.
+    """
+    int8_bytes = sum(out * inp for out, inp in QUANTIZED.values())
+    destinations = sum(len(paths) for paths in remap_flux2_layer_paths(QUANTIZED).values())
+    scale_bytes = destinations * torch.float32.itemsize
+    dense_bytes = sum(torch.Size(shape).numel() for shape in DENSE.values()) * torch.bfloat16.itemsize
+    # Klein has no guidance embedder, so the loader fills one with zeros shaped like the timestep
+    # embedder's two linears. It is part of what the load occupies and is reserved for.
+    guidance_bytes = (H * 256 + H * H) * torch.bfloat16.itemsize
+    return int8_bytes + scale_bytes + dense_bytes + guidance_bytes
+
+
+def _driver(monkeypatch, tmp_path, state_dict: dict, trace: dict | None = None, header: dict | None = None):
+    """Drive the loader with the cache recorded rather than stubbed out."""
+    import invokeai.backend.model_manager.load.model_loaders.flux as module
+
+    recorded = trace if trace is not None else {}
+    recorded.setdefault("reserved", None)
+
+    checkpoint = tmp_path / "flux-2-klein-9b-int8-convrot.safetensors"
+    checkpoint.touch()
+    config = Main_Checkpoint_Flux2_Config.model_construct(
+        path=str(checkpoint), name="klein-9b-int8", variant=Flux2VariantType.Klein9B
+    )
+
+    def make_room(reserved: int) -> None:
+        recorded["reserved"] = reserved
+
+    loader = object.__new__(Flux2CheckpointModel)
+    loader._ram_cache = SimpleNamespace(make_room=make_room)
+    loader._logger = MagicMock()
+    loader._torch_device = torch.device("cpu")
+    loader._torch_dtype = torch.bfloat16
+
+    monkeypatch.setattr(module, "load_file", lambda _path: state_dict)
+    monkeypatch.setattr(module, "should_keep_fp8_weights", lambda _device: False)
+    monkeypatch.setattr(module, "read_safetensors_metadata", lambda _path, _logger: header)
+    return loader, config
+
+
+def _load(monkeypatch, tmp_path, state_dict, trace: dict | None = None, header: dict | None = None):
+    loader, config = _driver(monkeypatch, tmp_path, state_dict, trace, header)
+    return loader._load_from_singlefile(config)
+
+
+def test_an_int8_checkpoint_stays_int8_resident(monkeypatch, tmp_path) -> None:
+    """The point of the build: the file's size is the resident size.
+
+    `Int8ConvrotLinear` holds the stored codes and dequantizes per forward, so the weights must
+    still be int8 after the load -- on a path whose every other branch casts to bf16.
+    """
+    state_dict, _ = _checkpoint()
+
+    model = _load(monkeypatch, tmp_path, state_dict)
+
+    swapped = [name for name, module in model.named_modules() if isinstance(module, Int8ConvrotLinear)]
+    assert swapped, "no layer kept its int8 storage"
+    assert all(model.get_submodule(name).weight.dtype is torch.int8 for name in swapped)
+    # This repack declares no rotation, and inventing one would derotate a weight that was never
+    # rotated -- which loads cleanly and generates noise.
+    assert all(model.get_submodule(name).convrot is False for name in swapped)
+
+
+def test_both_fusions_are_swapped_and_reconstruct_their_source(monkeypatch, tmp_path) -> None:
+    """The fused layers are where a marker or a scale goes missing silently.
+
+    Each projection is compared against its slice of the *original float* tensor, so a scale left
+    on the fused path -- the failure that has no error attached to it -- fails here.
+    """
+    state_dict, originals = _checkpoint()
+
+    model = _load(monkeypatch, tmp_path, state_dict)
+
+    for fused, parts in (
+        ("double_blocks.0.img_attn.qkv", ("transformer_blocks.0.attn.to_q", "transformer_blocks.0.attn.to_k")),
+        ("double_blocks.0.txt_attn.qkv", ("transformer_blocks.0.attn.add_q_proj",)),
+    ):
+        source = originals[fused]
+        for index, path in enumerate(parts):
+            layer = model.get_submodule(path)
+            assert isinstance(layer, Int8ConvrotLinear), path
+            reconstructed = layer._dequantized_weight(torch.device("cpu"), torch.float32)
+            expected = source[index * H : (index + 1) * H]
+            assert torch.allclose(reconstructed, expected, rtol=0.05, atol=0.05 * source.abs().max())
+
+
+def test_the_dense_remainder_is_cast_to_the_compute_dtype(monkeypatch, tmp_path) -> None:
+    """The layers the repack left alone still have to arrive in the compute dtype.
+
+    `assign=True` hands the checkpoint's storage dtype straight to the module, so a repack whose
+    dense remainder is fp32 -- the module docstring names real ones that mix precisions -- would
+    otherwise put an fp32 `x_embedder` inside a bf16 model. The fixture stores exactly one layer
+    that way, which is what makes this assertion able to fail.
+    """
+    state_dict, _ = _checkpoint()
+    assert state_dict[STORED_FP32].dtype is torch.float32, "fixture no longer exercises the cast"
+
+    model = _load(monkeypatch, tmp_path, state_dict)
+
+    for path in ("x_embedder", "context_embedder", "proj_out"):
+        layer = model.get_submodule(path)
+        assert not isinstance(layer, Int8ConvrotLinear), path
+        assert layer.weight.dtype is torch.bfloat16, path
+
+
+def test_an_unusable_activation_scale_is_dropped(monkeypatch, tmp_path) -> None:
+    """W8A8 sidecars are metadata for a mode this path does not implement.
+
+    Left in place they are cast to the compute dtype and charged against the reservation for
+    nothing, and on a strict loader they would fail the load outright.
+    """
+    with_scale, without_scale = _checkpoint()[0], _checkpoint()[0]
+    del without_scale[ACTIVATION_SCALE]
+    traces: list[dict] = [{}, {}]
+
+    model = _load(monkeypatch, tmp_path, with_scale, traces[0])
+    _load(monkeypatch, tmp_path, without_scale, traces[1])
+
+    assert isinstance(model.get_submodule("transformer_blocks.0.attn.to_out.0"), Int8ConvrotLinear)
+    # Compared against the same file without the sidecar rather than against a computed total: what
+    # has to hold is that carrying one costs nothing, and a dropped `drop_unconsumed_...` shows up
+    # as the two branches disagreeing.
+    assert traces[0]["reserved"] == traces[1]["reserved"] == _expected_reservation()
+
+
+def test_the_reservation_charges_the_int8_payloads_one_byte(monkeypatch, tmp_path) -> None:
+    """This path asked the cache for nothing at all before int8 arrived.
+
+    The number matters in both directions: charging bf16's two bytes asks the cache to evict about
+    twice what an 8.8 GiB file needs, and charging none lets the split's transient land on an
+    unreserved cache.
+    """
+    state_dict, _ = _checkpoint()
+    trace: dict = {}
+
+    _load(monkeypatch, tmp_path, state_dict, trace)
+
+    assert trace["reserved"] == _expected_reservation()
+
+
+def test_an_int8_weight_without_a_marker_is_refused(monkeypatch, tmp_path) -> None:
+    """An unclaimed int8 weight would be cast to bf16 as raw codes: a model of small integers.
+
+    It is refused rather than loaded, because nothing downstream can tell the difference.
+    """
+    state_dict, _ = _checkpoint(marker=None)
+
+    with pytest.raises(ValueError, match="int8"):
+        _load(monkeypatch, tmp_path, state_dict)
+
+
+def test_the_fp8_storage_pass_is_not_offered_an_int8_model(monkeypatch, tmp_path) -> None:
+    """FP8 Storage is documented as a no-op on an already-quantized checkpoint, and here it has to
+    be made one: the cast walks `model.parameters()` and only converts the handful of layers this
+    path left dense -- `Int8ConvrotLinear` holds buffers and is not a layer type it casts at all.
+    So it would spend the walk for no saving on the 144 layers that matter, and it is skipped.
+    """
+    state_dict, _ = _checkpoint()
+    trace: dict = {}
+    calls: list[str] = []
+
+    loader, config = _driver(monkeypatch, tmp_path, state_dict, trace)
+    loader._apply_fp8_layerwise_casting = lambda model, *_args: calls.append("cast") or model
+
+    model = loader._load_model(config, SubModelType.Transformer)
+
+    assert calls == []
+    assert any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
+
+
+def test_a_dense_checkpoint_still_reaches_the_fp8_storage_pass(monkeypatch, tmp_path) -> None:
+    # The other half: skipping for int8 must not skip for everything else, or the FP8 Storage
+    # setting quietly stops working for ordinary FLUX.2 checkpoints.
+    state_dict, originals = _checkpoint()
+    for path in QUANTIZED:
+        del state_dict[f"{path}.comfy_quant"]
+        del state_dict[f"{path}.weight_scale"]
+        state_dict[f"{path}.weight"] = originals[path].to(torch.bfloat16)
+    calls: list[str] = []
+
+    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    loader._apply_fp8_layerwise_casting = lambda model, *_args: calls.append("cast") or model
+
+    model = loader._load_model(config, SubModelType.Transformer)
+
+    assert calls == ["cast"]
+    assert not any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
+
+
+def test_a_file_mixing_int8_with_scaled_fp8_is_refused(monkeypatch, tmp_path) -> None:
+    """Inside the int8 branch the fp8 pipeline is skipped entirely.
+
+    An fp8 layer that came along would be cast to the compute dtype without its scale -- off by
+    `1/weight_scale` -- while the non-strict load drops the orphaned scale and says nothing. The
+    detection is file-wide, so a merged export is exactly the shape that reaches this.
+    """
+    state_dict, _ = _checkpoint()
+    weight = state_dict["final_layer.linear.weight"].float()
+    scale = weight.abs().max() / 448.0
+    state_dict["final_layer.linear.weight"] = (weight / scale).to(torch.float8_e4m3fn)
+    state_dict["final_layer.linear.weight_scale"] = scale.to(torch.float32)
+
+    with pytest.raises(ValueError, match="mixing int8_tensorwise with scaled fp8"):
+        _load(monkeypatch, tmp_path, state_dict)
+
+
+def test_a_repack_that_quantizes_a_skip_patterned_layer_is_dequantized(monkeypatch, tmp_path) -> None:
+    """`Flux2Transformer2DModel` declares `('pos_embed', 'norm')`, and the final adaLN projection
+    lands on `norm_out.linear` after the rename -- the one quantizable path those patterns match.
+
+    A repack that claims it must still come back dense, and the reservation must charge it the
+    width it is about to become rather than the one byte its marker implies.
+    """
+    state_dict, originals = _checkpoint()
+    path = "final_layer.adaLN_modulation.1"
+    weight = state_dict[f"{path}.weight"].float()
+    originals[path] = weight
+    state_dict[f"{path}.weight"], state_dict[f"{path}.weight_scale"] = _quantize_tensorwise(weight)
+    state_dict[f"{path}.comfy_quant"] = _marker_blob(MARKER)
+
+    model = _load(monkeypatch, tmp_path, state_dict)
+
+    skipped = model.get_submodule("norm_out.linear")
+    assert not isinstance(skipped, Int8ConvrotLinear)
+    assert skipped.weight.dtype is torch.bfloat16
+    # The block linears it was mixed with still keep their codes.
+    assert isinstance(model.get_submodule("transformer_blocks.0.attn.to_q"), Int8ConvrotLinear)
+
+
+def test_a_checkpoint_that_declares_int8_only_in_its_header_still_loads(monkeypatch, tmp_path) -> None:
+    """Per-layer markers are one of the two forms ComfyUI writes, and not the one it writes here.
+
+    Comfy-Org's own fp8 build of Klein 9B carries no `.comfy_quant` tensors at all and names every
+    layer in the safetensors header instead. A repack from that tooling would otherwise be refused
+    for a marker it never had to write -- and refused by the guard whose message says the file
+    would generate noise, which is the wrong story to tell about a perfectly valid checkpoint.
+
+    The header names layers in the BFL scheme, so it needs the same one-to-many rename as the
+    scales: a fused `qkv` becomes three diffusers modules.
+    """
+    state_dict, _ = _checkpoint(marker=None)
+    header = {
+        "_quantization_metadata": json.dumps(
+            {"format_version": "1.0", "layers": {path: {"format": "int8_tensorwise"} for path in QUANTIZED}}
+        )
+    }
+
+    model = _load(monkeypatch, tmp_path, state_dict, header=header)
+
+    for path in (
+        "transformer_blocks.0.attn.to_q",
+        "transformer_blocks.0.attn.to_v",
+        "single_transformer_blocks.0.attn.to_qkv_mlp_proj",
+    ):
+        assert isinstance(model.get_submodule(path), Int8ConvrotLinear), path
+
+
+def test_a_per_layer_marker_wins_over_the_header(monkeypatch, tmp_path) -> None:
+    # Only the per-layer marker can carry `convrot` and the group size, so where both are present
+    # it is the one that decides how the weight is decoded.
+    state_dict, _ = _checkpoint(marker={**MARKER, "convrot": False})
+    header = {
+        "_quantization_metadata": json.dumps(
+            {"layers": {path: {"format": "int8_tensorwise", "convrot": True} for path in QUANTIZED}}
+        )
+    }
+
+    model = _load(monkeypatch, tmp_path, state_dict, header=header)
+
+    assert model.get_submodule("transformer_blocks.0.attn.to_q").convrot is False
+
+
+def _scaled_fp8_checkpoint() -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """The other build this loader takes: ComfyUI scaled fp8, one scale per tensor."""
+    state_dict, originals = _checkpoint(marker=None)
+    for path in QUANTIZED:
+        weight = originals[path]
+        scale = weight.abs().max() / 448.0
+        state_dict[f"{path}.weight"] = (weight / scale).to(torch.float8_e4m3fn)
+        state_dict[f"{path}.weight_scale"] = scale.to(torch.float32)
+    return state_dict, originals
+
+
+def test_a_scaled_fp8_checkpoint_still_folds_its_scales(monkeypatch, tmp_path) -> None:
+    """The fp8 pipeline moved wholesale into the `else` branch, and nothing drove it end to end.
+
+    Without the fp8 matmul the scales are folded into the weights, so what has to come out is a
+    plain bf16 Linear whose values are the original ones -- a dropped scale is off by
+    `1/weight_scale`, i.e. orders of magnitude, not a rounding difference.
+    """
+    state_dict, originals = _scaled_fp8_checkpoint()
+
+    model = _load(monkeypatch, tmp_path, state_dict)
+
+    assert not any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
+    for path, source in (
+        ("transformer_blocks.0.attn.to_q", originals["double_blocks.0.img_attn.qkv"][:H]),
+        ("transformer_blocks.0.ff.linear_out", originals["double_blocks.0.img_mlp.2"]),
+    ):
+        layer = model.get_submodule(path)
+        assert layer.weight.dtype is torch.bfloat16, path
+        assert not hasattr(layer, "weight_scale"), path
+        # fp8 keeps ~2 decimal digits, so this is a "the scale was applied" check, not a bit compare.
+        assert torch.allclose(layer.weight.float(), source, rtol=0.1, atol=0.1 * source.abs().max())

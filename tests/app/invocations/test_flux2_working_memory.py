@@ -26,6 +26,7 @@ from invokeai.app.invocations.flux2.flux2_denoise import (
 )
 from invokeai.app.invocations.vae.flux2_vae_decode import Flux2VaeDecodeInvocation
 from invokeai.app.invocations.vae.flux2_vae_encode import Flux2VaeEncodeInvocation
+from invokeai.backend.patches.layer_patcher import LayerPatcher
 from invokeai.backend.util.attention import (
     SDPA_MATH_BYTES_PER_SCORE_ELEMENT,
     _diffusers_attention_dispatch,
@@ -554,8 +555,21 @@ class TestFlux2DenoiseRequestsWorkingMemory:
     """The denoise node must hand its estimate to the cache, and that estimate must grow with the
     attached reference images -- the combination that #9500 was missing."""
 
-    def _run(self, num_ref_tokens: int, batch: int = 1, init_batch: int | None = None, variant="klein_9b"):
-        """Drive `_run_diffusion` up to the transformer load and return the requested working memory."""
+    def _run(
+        self,
+        num_ref_tokens: int,
+        batch: int = 1,
+        init_batch: int | None = None,
+        variant="klein_9b",
+        transformer: torch.nn.Module | None = None,
+        on_device=None,
+    ):
+        """Drive `_run_diffusion` up to the transformer load and return the requested working memory.
+
+        `transformer` replaces the mocked model the node reads before locking. It has to be a real
+        module for anything that walks the module tree: a `MagicMock` iterates empty, so an int8
+        build looks exactly like a dense one.
+        """
         from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType
         from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
             ConditioningFieldData,
@@ -563,7 +577,9 @@ class TestFlux2DenoiseRequestsWorkingMemory:
         )
 
         transformer_info = MagicMock()
-        transformer_info.model_on_device = MagicMock(side_effect=_StopBeforeLoad)
+        transformer_info.model_on_device = MagicMock(side_effect=on_device or _StopBeforeLoad)
+        if transformer is not None:
+            transformer_info.model = transformer
 
         context = MagicMock()
         context.models.load.return_value = transformer_info
@@ -620,6 +636,9 @@ class TestFlux2DenoiseRequestsWorkingMemory:
 
         transformer_info.model_on_device.assert_called_once()
         return transformer_info.model_on_device.call_args.kwargs["working_mem_bytes"]
+
+    # `on_device` lets a caller get past the load instead of stopping at it, for the wires that sit
+    # further down the node.
 
     def test_estimate_reaches_the_model_cache(self):
         """Without this the cache reserves only the default `device_working_mem_gb`."""
@@ -1223,3 +1242,104 @@ class TestDiffusersAttentionDispatchIsConsulted:
             side_effect=AttributeError("moved"),
         ):
             assert _diffusers_attention_dispatch() == "math"
+
+
+class TestTheInt8DequantTransientReachesTheReservation:
+    """A helper existing is not the same as it being called.
+
+    An `int8_tensorwise` build materializes each linear's dequantized weight inside `forward`, and
+    that peak is not part of the model's resident size. Deleting `+ int8_dequant_bytes` from the
+    node leaves every other test in this file green, because they drive it with a `MagicMock` whose
+    module tree is empty -- so this is the only place the wire is pinned. For Klein 9B the term is
+    576 MiB, against a card this build exists to fit into.
+    """
+
+    @staticmethod
+    def _int8_transformer() -> torch.nn.Module:
+        from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
+
+        model = torch.nn.Module()
+        model.dense = torch.nn.Linear(64, 64, bias=False).to(torch.bfloat16)
+        model.quantized = Int8ConvrotLinear(
+            weight=torch.zeros(128, 64, dtype=torch.int8),
+            weight_scale=torch.ones(()),
+            convrot=False,
+        )
+        return model
+
+    def test_an_int8_build_adds_its_transient_on_top_of_the_activation_estimate(self):
+        harness = TestFlux2DenoiseRequestsWorkingMemory()
+        model = self._int8_transformer()
+
+        dense = harness._run(num_ref_tokens=0)
+        with_int8 = harness._run(num_ref_tokens=0, transformer=model)
+
+        # Two weight-sized tensors in the compute dtype, over the largest quantized layer.
+        assert with_int8 - dense == 2 * 128 * 64 * torch.bfloat16.itemsize
+
+    def test_a_dense_build_adds_nothing(self):
+        # The other half: a bf16 or fp8 checkpoint must not be charged for a dequantization it
+        # never performs.
+        harness = TestFlux2DenoiseRequestsWorkingMemory()
+        dense_model = torch.nn.Linear(64, 64).to(torch.bfloat16)
+
+        assert harness._run(num_ref_tokens=0, transformer=dense_model) == harness._run(num_ref_tokens=0)
+
+
+class TestTheSidecarDecisionReachesThePatcher:
+    """An int8 checkpoint carries `ModelFormat.Checkpoint` like any other single file.
+
+    Asking the format alone therefore answers "not quantized", and `LayerPatcher` picks direct
+    patching -- which calls `get_parameter("weight")` on an `Int8ConvrotLinear` that owns only
+    buffers. Verified consequence: `RuntimeError: generator raised StopIteration`, i.e. every LoRA
+    on an int8 Klein 9B dies with an error that names nothing. So the question has to be put to the
+    loaded module tree.
+    """
+
+    @staticmethod
+    def _sidecar_flag_for(transformer: torch.nn.Module, model_format) -> bool:
+        from invokeai.backend.quantization.int8_convrot import requires_sidecar_patching
+
+        return requires_sidecar_patching(transformer, model_format)
+
+    def test_an_int8_checkpoint_is_patched_as_a_sidecar(self):
+        from invokeai.backend.model_manager.taxonomy import ModelFormat
+
+        model = TestTheInt8DequantTransientReachesTheReservation._int8_transformer()
+
+        assert self._sidecar_flag_for(model, ModelFormat.Checkpoint) is True
+
+    def test_a_dense_checkpoint_is_not(self):
+        from invokeai.backend.model_manager.taxonomy import ModelFormat
+
+        assert self._sidecar_flag_for(torch.nn.Linear(4, 4), ModelFormat.Checkpoint) is False
+
+    @staticmethod
+    def _flag_at_the_node(transformer: torch.nn.Module) -> bool:
+        """What the node actually hands `LayerPatcher`, driven through `_run_diffusion`.
+
+        The wire, not the helper: the node used to key on a hardcoded format list, and a list
+        cannot see an int8 build at all.
+        """
+        from contextlib import contextmanager
+
+        captured: dict = {}
+
+        @contextmanager
+        def on_device(**_kwargs):
+            yield (None, transformer)
+
+        def apply_patches(**kwargs):
+            captured["force_sidecar_patching"] = kwargs["force_sidecar_patching"]
+            raise _StopBeforeLoad
+
+        harness = TestFlux2DenoiseRequestsWorkingMemory()
+        with patch.object(LayerPatcher, "apply_smart_model_patches", staticmethod(apply_patches)):
+            harness._run(num_ref_tokens=0, transformer=transformer, on_device=on_device)
+        return captured["force_sidecar_patching"]
+
+    def test_the_node_asks_the_model_and_not_only_the_format(self):
+        int8 = TestTheInt8DequantTransientReachesTheReservation._int8_transformer()
+
+        assert self._flag_at_the_node(int8) is True
+        assert self._flag_at_the_node(torch.nn.Linear(4, 4).to(torch.bfloat16)) is False
