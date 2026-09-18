@@ -1450,11 +1450,13 @@ def get_is_installed(
 
         # Determine expected variant from source pattern
         expected_variant: Qwen3VariantType | None = None
-        if "klein-9B" in starter_model.source or "qwen3_8b" in starter_model.source.lower():
+        source = starter_model.source.lower()
+        if "klein-9B" in starter_model.source or "qwen3_8b" in source or "qwen_3_8b" in source:
             expected_variant = Qwen3VariantType.Qwen3_8B
         elif (
             "klein-4B" in starter_model.source
-            or "qwen3_4b" in starter_model.source.lower()
+            or "qwen3_4b" in source
+            or "qwen_3_4b" in source
             or "Z-Image" in starter_model.source
         ):
             expected_variant = Qwen3VariantType.Qwen3_4B

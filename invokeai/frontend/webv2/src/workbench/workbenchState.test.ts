@@ -236,6 +236,7 @@ const createGenerateValues = (overrides: Partial<GenerateWidgetValues> = {}): Ge
   qwen3VLEncoderModel: null,
   wanT5EncoderModel: null,
   wanLowNoiseModel: null,
+  ideogram4UnconditionalModel: null,
   wanGuidanceScaleLowNoise: null,
   ideogram4SamplerPreset: 'V4_QUALITY_48',
   ideogram4Steps: null,

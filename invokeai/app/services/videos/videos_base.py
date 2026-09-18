@@ -65,8 +65,8 @@ class VideoServiceABC(ABC):
     ) -> VideoDTO:
         """Creates a video by moving the file at `source_path` into storage and recording it.
 
-        ``first_frame``, when provided (e.g. the upload path already decoded frame 0 to
-        prove decodability), is used as the thumbnail source instead of spawning another
+        ``first_frame``, when provided (e.g. the upload path already decoded a representative
+        frame to prove decodability), is used as the thumbnail source instead of spawning another
         decode worker.
 
         ``source_path`` is consumed unless ``move_source=False``. Every caller that hands over a
