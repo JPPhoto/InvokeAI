@@ -127,6 +127,13 @@ const mistralEncoder: ComponentModelConfig = {
   name: 'Mistral Encoder',
   type: 'mistral_encoder',
 };
+const ministralEncoder: ComponentModelConfig = {
+  base: 'any',
+  key: 'ministral',
+  name: 'Ministral 3B Encoder',
+  type: 'mistral_encoder',
+  variant: 'ministral3_3b',
+};
 const qwen3Encoder: ComponentModelConfig = {
   base: 'any',
   key: 'qwen3',
@@ -772,6 +779,30 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     name: 'Ideogram 4',
     type: 'main',
   };
+  const ideogram4Conditional: MainModelConfig = {
+    base: 'ideogram-4',
+    branch: 'conditional',
+    format: 'checkpoint',
+    key: 'ideogram4-cond',
+    name: 'Ideogram 4 (single file, fp8)',
+    type: 'main',
+  };
+  const ideogram4Unconditional: MainModelConfig = {
+    base: 'ideogram-4',
+    branch: 'unconditional',
+    format: 'checkpoint',
+    key: 'ideogram4-uncond',
+    name: 'Ideogram 4 Unconditional (single file, fp8)',
+    type: 'main',
+  };
+  const ideogram4Vae: VaeModelConfig = { base: 'flux2', key: 'flux2-vae', name: 'FLUX.2 VAE', type: 'vae' };
+  const qwen3Vl8bEncoder: ComponentModelConfig = {
+    base: 'any',
+    key: 'qwen3-vl-8b',
+    name: 'Qwen3-VL 8B',
+    type: 'qwen3_vl_encoder',
+    variant: 'qwen3_vl_8b',
+  };
   const wanDiffusers: MainModelConfig = {
     base: 'wan',
     format: 'diffusers',
@@ -786,6 +817,7 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     key: 'qwen3-vl',
     name: 'Qwen3-VL',
     type: 'qwen3_vl_encoder',
+    variant: 'qwen3_vl_4b',
   };
   const wanLowNoise: MainModelConfig = {
     base: 'wan',
@@ -916,6 +948,49 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     });
   });
 
+  it('wires both Ideogram 4 branches and its standalone components for a single-file transformer', () => {
+    // Every step runs both branches, so a single-file main that reached denoise without the second
+    // one would fail at the node -- the loader emits it and the builder must connect it.
+    const graph = compile(ideogram4Conditional, {
+      ideogram4UnconditionalModel: ideogram4Unconditional,
+      qwen3VLEncoderModel: qwen3Vl8bEncoder,
+      vae: ideogram4Vae,
+    });
+
+    expect(graph.nodes.model_loader).toMatchObject({
+      qwen3_vl_encoder_model: qwen3Vl8bEncoder,
+      unconditional_model: ideogram4Unconditional,
+      vae_model: ideogram4Vae,
+    });
+    expect(getEdge(graph, 'denoise_latents', 'unconditional_transformer')?.source).toMatchObject({
+      field: 'unconditional_transformer',
+      node_id: 'model_loader',
+    });
+    // Two files made the image; recording one of them would not identify what ran.
+    expect(getNodeByType(graph, 'core_metadata')).toMatchObject({
+      ideogram4_unconditional_model: ideogram4Unconditional,
+      qwen3_vl_encoder: qwen3Vl8bEncoder,
+    });
+  });
+
+  it('drops a component selection that does not suit the Ideogram 4 model about to run', () => {
+    // Component settings survive a main-model switch and an optional slot is never validated, so a
+    // Krea-2 4B encoder left over from an earlier session used to be forwarded as an override and
+    // then rejected by the loader node — breaking a bundled pipeline that needs no components.
+    const graph = compile(ideogram4Model, { qwen3VLEncoderModel: qwen3VlEncoder });
+
+    expect(graph.nodes.model_loader?.qwen3_vl_encoder_model).toBeUndefined();
+  });
+
+  it('leaves the Ideogram 4 unconditional input unconnected for a diffusers pipeline', () => {
+    // That pipeline's Transformer submodel is both branches; connecting a second one is an error
+    // on the node, not a no-op.
+    const graph = compile(ideogram4Model);
+
+    expect(getEdge(graph, 'denoise_latents', 'unconditional_transformer')).toBeUndefined();
+    expect(graph.nodes.model_loader?.unconditional_model).toBeUndefined();
+  });
+
   it('forwards the Ideogram 4 color palette to the caption builder', () => {
     const graph = compile(ideogram4Model, { ideogram4ColorPalette: ['teal', 'ochre'] });
 
@@ -997,6 +1072,29 @@ describe('ERNIE-Image graphs', () => {
     expect(withoutCfg.nodes.neg_cond).toBeUndefined();
     expect(getEdge(withoutCfg, 'denoise_latents', 'negative_conditioning')).toBeUndefined();
     expect(withoutCfg.nodes.denoise_latents?.guidance_scale).toBe(1);
+  });
+
+  it('wires a single-file transformer to the encoder and VAE it was given', () => {
+    // A single-file ERNIE transformer carries only itself. Nothing downstream would notice the two
+    // component fields being swapped -- both are model identifiers -- so the wiring is pinned here.
+    const singleFile: MainModelConfig = { ...ernieModel, format: 'checkpoint', key: 'ernie-image-single' };
+
+    const graph = compile(singleFile, { mistralEncoderModel: ministralEncoder, vae: flux2Vae });
+
+    expect(graph.nodes.model_loader).toMatchObject({
+      text_encoder_model: { key: 'ministral' },
+      vae_model: { key: 'flux2-vae' },
+    });
+  });
+
+  it('keeps a FLUX.2 Mistral encoder its picker would hide out of the graph', () => {
+    // For a bundled pipeline the slot is optional, so validation never looks at it and only the
+    // picker hides the stale selection. Mistral Small 3 and Ministral 3B both install as
+    // `mistral_encoder` and each loads in the other's slot without error, so forwarding one here
+    // would degrade conditioning silently rather than fail.
+    const graph = compile(ernieModel, { mistralEncoderModel: mistralEncoder });
+
+    expect(graph.nodes.model_loader?.text_encoder_model).toBeUndefined();
   });
 
   it('builds the rest of the graph out of the one bundled pipeline', () => {

@@ -13,9 +13,12 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
+from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_ZImage_Config
+from invokeai.backend.model_manager.load import load_default
 from invokeai.backend.model_manager.load.model_loaders.z_image import ZImageCheckpointModel
 from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, Int8ConvrotLinear, build_regular_hadamard
+from invokeai.backend.quantization.nvfp4 import NVFP4Linear
 
 MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": CONVROT_GROUP_SIZE}
 
@@ -74,6 +77,41 @@ def _driver(monkeypatch, tmp_path, state_dict: dict) -> tuple[ZImageCheckpointMo
         lambda _device: torch.float32,
     )
     return loader, config
+
+
+class _TinyMixedZImage(torch.nn.Module):
+    """Two blocks, so a checkpoint can be int8 in one and scaled fp8 in the other."""
+
+    def __init__(self, **_kwargs) -> None:
+        super().__init__()
+        self.layers = torch.nn.ModuleList([_TinyBlock(), _TinyBlock()])
+
+
+def test_a_mixed_int8_and_scaled_fp8_checkpoint_is_refused(monkeypatch, tmp_path) -> None:
+    """This branch skips the fp8 pipeline entirely, so an fp8 weight that came along would be cast
+    without its scale -- off by `1/weight_scale` -- while the orphaned scale disappears into the
+    load. Z-Image made exactly that mistake: it ran every other step of the int8 install and not
+    this check, and the result was a model that loaded cleanly and generated noise.
+    """
+    import diffusers
+
+    torch.manual_seed(0)
+    quantized, scale = _quantize_convrot(torch.randn(4, CONVROT_GROUP_SIZE))
+    state_dict = {
+        "layers.0.proj.weight": quantized,
+        "layers.0.proj.weight_scale": scale,
+        "layers.0.proj.comfy_quant": _marker_blob(MARKER),
+        "layers.1.proj.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.float8_e4m3fn),
+        "layers.1.proj.weight_scale": torch.ones(()),
+    }
+    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyMixedZImage, raising=False)
+
+    with pytest.raises(ValueError, match=r"layers\.1\.proj\.weight_scale"):
+        loader._load_from_singlefile(config)
+
+    # Refused before the cache was asked to evict anything for a load that cannot finish.
+    loader._ram_cache.make_room.assert_not_called()
 
 
 def test_an_int8_checkpoint_loads_int8_resident_and_un_rotated(monkeypatch, tmp_path) -> None:
@@ -183,3 +221,161 @@ def test_a_precision_sensitive_layer_is_not_left_int8(monkeypatch, tmp_path) -> 
     # And the reservation covers the widened layer at its post-split width, not at one byte.
     (reserved,), _ = loader._ram_cache.make_room.call_args
     assert reserved >= sensitive.nelement() * 4 + ordinary_q.nelement()
+
+
+class _TinyAttention(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.to_q = torch.nn.Linear(64, 128, bias=False)
+        self.to_k = torch.nn.Linear(64, 128, bias=False)
+        self.to_v = torch.nn.Linear(64, 128, bias=False)
+
+
+class _TinyNativeBlock(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attention = _TinyAttention()
+        self.adaLN_modulation = torch.nn.Sequential(torch.nn.Linear(64, 128))
+
+
+class _TinyNvfp4TimestepEmbedder(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mlp = torch.nn.ModuleList([torch.nn.Linear(64, 128, bias=False)])
+
+
+class _TinyNativeZImage(torch.nn.Module):
+    """What the native-to-diffusers conversion makes of a checkpoint with a fused `attention.qkv`, beside the
+    timestep embedder Z-Image declares precision-sensitive."""
+
+    _skip_layerwise_casting_patterns = ["t_embedder", "cap_embedder"]
+
+    def __init__(self, **_kwargs) -> None:
+        super().__init__()
+        self.all_x_embedder = torch.nn.ModuleDict({"2-1": torch.nn.Linear(4, 4, bias=False)})
+        self.t_embedder = _TinyNvfp4TimestepEmbedder()
+        self.layers = torch.nn.ModuleList([_TinyNativeBlock()])
+
+
+def _nvfp4_layer(
+    path: str, positive: torch.Tensor, tile_row_scales: list[float], global_scale: float
+) -> dict[str, torch.Tensor]:
+    """One layer as Comfy stores it. Codes 2 and 10 decode to +1.0 and -1.0, so the expected weight needs no
+    E2M1 table, and a block scale constant over each 128-row tile row reads the same tiled as row by row."""
+    codes = torch.where(positive, 2, 10).to(torch.uint8)
+    scales = torch.tensor(tile_row_scales).repeat_interleave(128).unsqueeze(1).repeat(1, positive.shape[1] // 16)
+    return {
+        f"{path}.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
+        f"{path}.weight_scale": scales.to(torch.float8_e4m3fn),
+        f"{path}.weight_scale_2": torch.tensor(global_scale),
+    }
+
+
+def test_an_nvfp4_checkpoint_loads_packed_with_its_qkv_split_on_tile_rows(monkeypatch, tmp_path) -> None:
+    """Comfy's nvfp4 Z-Image build quantizes the fused `attention.qkv` and names its layers only in the
+    safetensors header. The packed tensors have to leave the state dict before the key conversion and the
+    scaled-fp8 extraction -- which drops block scales whose weight is not float8 -- follow the QKV split on
+    whole tile rows, and come back as `NVFP4Linear` modules for the strict load. The timestep embedder is
+    decoded to the compute dtype instead, since its forward picks its activation dtype off its weight, and a
+    bundled encoder's layers are dropped with everything else the transformer does not hold."""
+    torch.manual_seed(4)
+    qkv, modulation, timestep, bundled = (
+        torch.randint(0, 2, (rows, 64), dtype=torch.bool) for rows in (384, 128, 128, 128)
+    )
+    modulation_bias = torch.randn(128)
+    embedder = torch.randn(4, 4)
+    state_dict = {
+        "x_embedder.weight": embedder,
+        **_nvfp4_layer("layers.0.attention.qkv", qkv, [1.0, 2.0, 4.0], global_scale=0.5),
+        "layers.0.attention.qkv.input_scale": torch.tensor(1.0),
+        **_nvfp4_layer("layers.0.adaLN_modulation.0", modulation, [2.0], global_scale=0.25),
+        "layers.0.adaLN_modulation.0.bias": modulation_bias,
+        **_nvfp4_layer("t_embedder.mlp.0", timestep, [2.0], global_scale=0.25),
+        **_nvfp4_layer("text_encoders.qwen3.layers.0.mlp.up_proj", bundled, [2.0], global_scale=0.25),
+    }
+    header = {
+        path: {"format": "nvfp4"}
+        for path in (
+            "layers.0.attention.qkv",
+            "layers.0.adaLN_modulation.0",
+            "t_embedder.mlp.0",
+            "text_encoders.qwen3.layers.0.mlp.up_proj",
+        )
+    }
+    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    import diffusers
+
+    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyNativeZImage, raising=False)
+    monkeypatch.setattr(
+        "invokeai.backend.model_manager.load.model_loaders.z_image.read_safetensors_metadata",
+        lambda _path, _logger: {"_quantization_metadata": json.dumps({"layers": header})},
+    )
+    # bf16 rather than the driver's float32, so a layer decoded or charged at any other width shows.
+    monkeypatch.setattr(
+        "invokeai.backend.model_manager.load.model_loaders.z_image.TorchDevice.choose_bfloat16_safe_dtype",
+        lambda _device: torch.bfloat16,
+    )
+
+    model = loader._load_from_singlefile(config)
+
+    bf16 = torch.bfloat16
+    x = torch.randn(3, 64, dtype=bf16)
+    attention = model.layers[0].attention
+    for projection, signs, magnitude in (
+        (attention.to_q, qkv[:128], 0.5),
+        (attention.to_k, qkv[128:256], 1.0),
+        (attention.to_v, qkv[256:], 2.0),
+    ):
+        assert isinstance(projection, NVFP4Linear)
+        assert projection.weight.dtype is torch.uint8
+        expected = torch.where(signs, magnitude, -magnitude).to(bf16)
+        assert torch.equal(projection(x), torch.nn.functional.linear(x, expected))
+    adaln = model.layers[0].adaLN_modulation[0]
+    assert isinstance(adaln, NVFP4Linear)
+    expected = torch.nn.functional.linear(x, torch.where(modulation, 0.5, -0.5).to(bf16), modulation_bias.to(bf16))
+    assert torch.equal(adaln(x), expected)
+    assert type(model.t_embedder.mlp[0]) is torch.nn.Linear
+    assert torch.equal(model.t_embedder.mlp[0].weight, torch.where(timestep, 0.5, -0.5).to(bf16))
+    assert torch.equal(model.all_x_embedder["2-1"].weight, embedder.to(bf16))
+
+    # One reservation for what the model ends up holding: the packed tensors as stored, and the decoded embedder
+    # and the dense rest at two bytes. Not the bundled layer, and not the packed layers at their decoded size,
+    # which would ask for about 45 KB more.
+    packed = (384 + 128) * 32 + (384 + 128) * 4
+    dense = 128 * 64 * 2 + 128 * 2 + 4 * 4 * 2
+    loader._ram_cache.make_room.assert_called_once()
+    (reserved,), _ = loader._ram_cache.make_room.call_args
+    assert packed + dense <= reserved < packed + dense + 1024
+
+
+def test_a_scaled_fp8_checkpoint_stays_packed_when_storage_is_on(monkeypatch, tmp_path) -> None:
+    """The keep decision has to reach the loader, not only the helper it was extracted into.
+
+    With FP8 Storage on, the checkpoint's own scaled fp8 weights are kept rather than folded into
+    bf16 and re-quantized by the layerwise cast, which has no scale to apply. A loader that goes
+    back to asking only about the fp8 matmul folds them again -- silently, and precisely on the
+    hardware most users have, since `fp8_compute` is off by default.
+    """
+    torch.manual_seed(3)
+    original = torch.randn(4, CONVROT_GROUP_SIZE)
+    scale = (original.abs().max() / 448.0).to(torch.float32)
+    packed = (original / scale).to(torch.float8_e4m3fn)
+    state_dict = {"layers.0.proj.weight": packed, "layers.0.proj.weight_scale": scale}
+
+    loader, driver_config = _driver(monkeypatch, tmp_path, state_dict)
+    config = Main_Checkpoint_ZImage_Config.model_construct(
+        path=driver_config.path,
+        name="z-image",
+        default_settings=MainModelDefaultSettings(fp8_storage=True),
+    )
+    # The configuration this path exists for: no fp8 matmul, but a device that can hold fp8.
+    monkeypatch.setattr(load_default, "should_keep_fp8_weights", lambda _device: False)
+    monkeypatch.setattr(load_default, "_device_supports_fp8_storage", lambda _device, _logger=None: True)
+
+    model = loader._load_from_singlefile(config)
+
+    proj = model.layers[0].proj
+    assert proj.weight.dtype is torch.float8_e4m3fn, "folded back to a float dtype"
+    assert getattr(proj, "weight_scale", None) is not None, "kept packed but without its scale"
+    dequantized = (proj.weight.float() * proj.weight_scale).flatten()
+    assert torch.corrcoef(torch.stack([dequantized, original.flatten()]))[0, 1] > 0.999

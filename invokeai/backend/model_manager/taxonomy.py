@@ -257,6 +257,22 @@ class Qwen3VariantType(str, Enum):
     """Qwen3 0.6B text encoder (hidden_size=1024). Used by Anima."""
 
 
+class Qwen3VLVariantType(str, Enum):
+    """Qwen3-VL (vision-language) text encoder variants, by language-model width.
+
+    Separate from `Qwen3VariantType`: those are the text-only Qwen3 encoders (Z-Image, FLUX.2
+    Klein). The VL models carry a visual tower and are not interchangeable with them, and the two
+    families do not even share widths at the same parameter count.
+    """
+
+    Qwen3VL_4B = "qwen3_vl_4b"
+    """Qwen3-VL 4B (hidden_size=2560, 36 layers). The encoder Krea-2 conditions on."""
+
+    Qwen3VL_8B = "qwen3_vl_8b"
+    """Qwen3-VL 8B (hidden_size=4096, 36 layers). The encoder Ideogram 4 conditions on, tapping 13
+    of its layers for a 53248-wide feature vector."""
+
+
 class MiniMaxH3VariantType(str, Enum):
     """MiniMax H3 model variants (task-specific transformer checkpoints sharing every other component)."""
 
@@ -271,7 +287,7 @@ class MiniMaxH3VariantType(str, Enum):
 
 
 class MistralVariantType(str, Enum):
-    """Mistral text encoder variants used by FLUX.2 [dev]."""
+    """Mistral text encoder variants used by FLUX.2 [dev] and ERNIE-Image."""
 
     Cow = "cow_mistral3_small"
     """The 30-layer BFL "cow-mistral3-small" distillation (hidden_size=5120).
@@ -288,6 +304,14 @@ class MistralVariantType(str, Enum):
     of those instead of BFL's release will load fine but produces visibly
     weaker prompt adherence than the cow distillation, so the cow variants
     remain the recommended default."""
+
+    Ministral3B = "ministral3_3b"
+    """The 26-layer Ministral 3B (hidden_size=3072) ERNIE-Image encodes its
+    prompts with. A different model family from the two above, not a smaller
+    build of them: it is loaded as ``Ministral3Model`` and uses YaRN RoPE
+    scaling, so the geometry alone decides the variant. The final RMSNorm is
+    kept — ERNIE reads the second-to-last hidden state, which the norm never
+    touches."""
 
 
 class PiDDecoderVariantType(str, Enum):
@@ -332,6 +356,17 @@ class ModelFormat(str, Enum):
     ExternalApi = "external_api"
     SDNQQuantized = "sdnq_quantized"
     Unknown = "unknown"
+
+
+QUANTIZED_MODEL_FORMATS: frozenset[ModelFormat] = frozenset(
+    {
+        ModelFormat.GGUFQuantized,
+        ModelFormat.BnbQuantizednf4b,
+        ModelFormat.BnbQuantizedLlmInt8b,
+        ModelFormat.SDNQQuantized,
+    }
+)
+"""Formats whose weights are already quantized: packed payloads FP8 Storage must never re-encode."""
 
 
 class SchedulerPredictionType(str, Enum):
@@ -385,6 +420,7 @@ AnyVariant: TypeAlias = Union[
     WanVariantType,
     WanLoRAVariantType,
     Qwen3VariantType,
+    Qwen3VLVariantType,
     Krea2VariantType,
     MiniMaxH3VariantType,
     MistralVariantType,
@@ -400,6 +436,7 @@ variant_type_adapter = TypeAdapter[
     | WanVariantType
     | WanLoRAVariantType
     | Qwen3VariantType
+    | Qwen3VLVariantType
     | Krea2VariantType
     | MiniMaxH3VariantType
     | MistralVariantType
@@ -414,6 +451,7 @@ variant_type_adapter = TypeAdapter[
     | WanVariantType
     | WanLoRAVariantType
     | Qwen3VariantType
+    | Qwen3VLVariantType
     | Krea2VariantType
     | MiniMaxH3VariantType
     | MistralVariantType

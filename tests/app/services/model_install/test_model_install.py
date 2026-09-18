@@ -93,6 +93,26 @@ def test_registration_meta_override_succeed(mm2_installer: ModelInstallServiceBa
     assert model_record.key == "xyzzy"
 
 
+def test_registration_keeps_the_default_settings_sent_with_the_install(
+    mm2_installer: ModelInstallServiceBase, tmp_path: Path
+) -> None:
+    """Identification computes a model's default settings; the ones a user picked while installing must survive it."""
+    import torch
+    from safetensors.torch import save_file
+
+    checkpoint = tmp_path / "qwen_image.safetensors"
+    save_file(
+        {"img_in.weight": torch.zeros(8, 4), "txt_in.weight": torch.zeros(8, 4), "txt_norm.weight": torch.ones(4)},
+        str(checkpoint),
+    )
+
+    key = mm2_installer.register_path(checkpoint, ModelRecordChanges(default_settings={"fp8_storage": True}))
+
+    record = mm2_installer.record_store.get_model(key)
+    assert record.default_settings is not None
+    assert record.default_settings.fp8_storage is True
+
+
 def test_install(
     mm2_installer: ModelInstallServiceBase, embedding_file: Path, mm2_app_config: InvokeAIAppConfig
 ) -> None:
