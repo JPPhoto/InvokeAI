@@ -64,6 +64,8 @@ export interface GalleryStateView {
   selectedItemKeys: GalleryItemKey[];
   /** Active image-similarity query, rendered as a chip in place of the search text. */
   semanticImageQuery: GallerySemanticReference | null;
+  /** The semantic field's text while the field is in semantic mode; null in metadata mode. */
+  semanticSearchText: string | null;
   settings: GallerySettings;
   /** The listing is restricted to starred items. */
   starredOnly: boolean;
@@ -80,6 +82,10 @@ export const getGalleryStarredOnly = (values: Record<string, unknown>): boolean 
 
 export const getGallerySemanticImageQuery = (values: Record<string, unknown>): GallerySemanticReference | null =>
   parseGallerySemanticReference(values.semanticImageQuery);
+
+/** Semantic mode is the presence of its text: null means the field searches metadata. */
+export const getGallerySemanticSearchText = (values: Record<string, unknown>): string | null =>
+  typeof values.semanticSearchText === 'string' ? values.semanticSearchText : null;
 
 /** The saved board choice as persisted, before any resolution against loaded boards. */
 export const getGalleryRawSelectedBoardId = (values: Record<string, unknown>): string | null =>
@@ -283,6 +289,7 @@ export const getGalleryStateView = (
         ? [visibleSelectedItemKey, ...selectedItemKeys]
         : selectedItemKeys,
     semanticImageQuery,
+    semanticSearchText: getGallerySemanticSearchText(values),
     settings,
     starredOnly,
   };

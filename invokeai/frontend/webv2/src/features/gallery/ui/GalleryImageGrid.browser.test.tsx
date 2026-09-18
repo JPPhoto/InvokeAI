@@ -255,6 +255,7 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     selectedItemKey: 'image:first.png',
     selectedItemKeys: ['image:first.png'],
     semanticImageQuery: null,
+    semanticSearchText: null,
     settings: { ...getGallerySettings({ paginationMode: 'paginated' }), imageDensityPercent: 0 },
     starredOnly: false,
     ...overrides,
@@ -705,6 +706,22 @@ describe('GalleryImageGrid mixed item cells', () => {
 
     expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
     expect(sectionOrder()).toEqual(['regular']);
+  });
+
+  it('reads a ranking that matched nothing as a search result, not an empty board', async () => {
+    setStrip([]);
+    await renderGallery(
+      createGallery({
+        items: [],
+        searchTerm: '',
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+        semanticSearchText: 'sunset',
+        settings: DENSE_SETTINGS,
+      })
+    );
+
+    expect(host?.textContent).toContain('No items');
+    expect(host?.textContent).not.toContain('Drop media');
   });
 
   it('keeps showing the strip when every item on the board is starred', async () => {

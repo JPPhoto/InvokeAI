@@ -246,7 +246,9 @@ export const GalleryImageGrid = () => {
   // The listing is unstarred-only, so a board whose items are all starred
   // still has the strip to show.
   const isEmpty = gallery.items.length === 0 && starredStrip.items.length === 0;
-  const hasActiveSearch = gallery.searchTerm.trim() !== '';
+  // A ranking that matched nothing is still a search result, never an empty
+  // board inviting an upload.
+  const hasActiveSearch = gallery.searchTerm.trim() !== '' || gallery.semanticImageQuery !== null;
   const isVirtualBoard = isDateBoardId(gallery.selectedBoardId);
 
   const rows = useMemo(() => buildGalleryGridRows(gallery.items, columnCount), [columnCount, gallery.items]);

@@ -846,6 +846,40 @@ export const searchGallerySemantic = async (
 };
 
 /**
+ * Whether the server can rank a text query: not configured at all, configured
+ * but without its embedding model, or ready.
+ */
+export interface ImageIndexAvailability {
+  state: 'disabled' | 'model_missing' | 'ready';
+  /** The configured embedding model's name; set only while it is missing. */
+  modelName: string | null;
+}
+
+interface ImageIndexStatusBody {
+  enabled: boolean;
+  model_name?: string | null;
+}
+
+/**
+ * Read from the map's status endpoint, whose `enabled` is "the index has its
+ * model": text search needs exactly that and the stored embeddings, and never
+ * the map's projection, so the projection half of the response is not read.
+ * `model_name` is set only when indexing is configured and the model is
+ * missing, which is what separates that case from a disabled index.
+ */
+export const fetchImageIndexAvailability = async (signal: AbortSignal): Promise<ImageIndexAvailability> => {
+  const body = await apiFetchJson<ImageIndexStatusBody>('/api/v1/image_map/status', { signal });
+
+  if (body.enabled) {
+    return { modelName: null, state: 'ready' };
+  }
+
+  return body.model_name
+    ? { modelName: body.model_name, state: 'model_missing' }
+    : { modelName: null, state: 'disabled' };
+};
+
+/**
  * The ranked result set as item refs, in relevance order. Pages hydrate
  * slices of this list (`hydrateGalleryDateBoardItemPage`), and range
  * selection / deletion neighbors read it directly. Results carry both media

@@ -213,6 +213,19 @@ const createCommands = (
         projectId,
         starredOnly,
       })),
+      setSemanticSearchMode: command('setGallerySemanticSearchMode', (enabled: boolean, projectId?: string) => ({
+        enabled,
+        projectId,
+      })),
+      setSemanticSearchText: command('setGallerySemanticSearchText', (text: string, projectId?: string) => ({
+        projectId,
+        text,
+      })),
+      commitSemanticSearch: command('commitGallerySemanticSearch', (text: string, projectId?: string) => ({
+        projectId,
+        text,
+      })),
+      clearSearch: command('clearGallerySearch', (projectId?: string) => ({ projectId })),
       setView: command(
         'setGalleryView',
         (galleryView: ActionPayload<'setGalleryView'>['galleryView'], projectId?: string) => ({

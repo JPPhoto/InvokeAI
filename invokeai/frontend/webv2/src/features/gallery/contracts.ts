@@ -42,6 +42,7 @@ export {
   stripSessionScopedGallerySearch,
   stripUnresolvableGallerySearch,
   registerImageCluster,
+  toGallerySemanticTextReference,
   type GallerySemanticReference,
 } from './core/semanticImageQuery';
 export {

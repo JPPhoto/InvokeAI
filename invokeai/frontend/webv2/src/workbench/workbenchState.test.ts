@@ -4742,6 +4742,163 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     );
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImage).toEqual(image);
   });
+  describe('gallery semantic search mode', () => {
+    const galleryValues = (state: WorkbenchState) => getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    it('entering carries the text across and ranks it at once; leaving carries it back', () => {
+      // The sparkle changes what the words mean, not whether they are there.
+      // A click is deliberate, so entering applies the ranking immediately
+      // rather than waiting for a typing pause; leaving drops the ranking
+      // because metadata search has its own listing.
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { searchTerm: ' sunset ', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { page: 3, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        searchTerm: '',
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+        semanticSearchText: ' sunset ',
+      });
+
+      state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { enabled: false, type: 'setGallerySemanticSearchMode' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        searchTerm: ' sunset ',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+    });
+
+    it('entering with an empty field ranks nothing, and re-entering changes nothing', () => {
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+
+      expect(galleryValues(state)).toMatchObject({ semanticImageQuery: null, semanticSearchText: '' });
+      expect(workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' })).toBe(state);
+
+      const initial = createInitialWorkbenchState();
+
+      expect(workbenchReducer(initial, { enabled: false, type: 'setGallerySemanticSearchMode' })).toBe(initial);
+    });
+
+    it('commits only the text the field still holds', () => {
+      // Commits arrive on a timer. One scheduled against text that has since
+      // been edited, or a field that has since been cleared, must not apply.
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { text: 'sun', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+
+      expect(galleryValues(state).semanticSearchText).toBe('sun');
+      expect(workbenchReducer(state, { text: 'su', type: 'commitGallerySemanticSearch' })).toBe(state);
+
+      state = workbenchReducer(state, { text: 'sun', type: 'commitGallerySemanticSearch' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        semanticImageQuery: { kind: 'text', query: 'sun' },
+        semanticSearchText: 'sun',
+      });
+
+      // Blank text is no ranking; a whitespace edit is not a new ranking and
+      // so leaves the page where the user has paged to.
+      state = workbenchReducer(state, { page: 4, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { text: 'sun ', type: 'setGallerySemanticSearchText' });
+
+      const paged = state;
+
+      state = workbenchReducer(state, { text: 'sun ', type: 'commitGallerySemanticSearch' });
+
+      expect(state).toBe(paged);
+
+      state = workbenchReducer(state, { text: '  ', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { text: '  ', type: 'commitGallerySemanticSearch' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        semanticImageQuery: null,
+        semanticSearchText: '  ',
+      });
+    });
+
+    it('ignores text edits and late commits once semantic mode is left', () => {
+      let state = createInitialWorkbenchState();
+
+      expect(workbenchReducer(state, { text: 'sun', type: 'setGallerySemanticSearchText' })).toBe(state);
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { text: 'sun', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { enabled: false, type: 'setGallerySemanticSearchMode' });
+
+      expect(workbenchReducer(state, { text: 'sun', type: 'commitGallerySemanticSearch' })).toBe(state);
+      expect(galleryValues(state)).toMatchObject({
+        searchTerm: 'sun',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+    });
+
+    it('clears text, ranking and mode together; clearing an empty field changes nothing', () => {
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { type: 'clearGallerySearch' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        searchTerm: '',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+      expect(workbenchReducer(state, { type: 'clearGallerySearch' })).toBe(state);
+
+      state = workbenchReducer(state, { searchTerm: 'plain', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { type: 'clearGallerySearch' });
+
+      expect(galleryValues(state).searchTerm).toBe('');
+    });
+
+    it('leaves semantic mode with the ranking on a board move or a tab switch, not on a re-click', () => {
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+      state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+
+      expect(galleryValues(state)).toMatchObject({
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+        semanticSearchText: 'sunset',
+      });
+
+      state = workbenchReducer(state, { boardId: 'board-b', type: 'selectGalleryBoard' });
+
+      expect(galleryValues(state)).toMatchObject({
+        searchTerm: '',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { text: 'beach', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { galleryView: 'images', type: 'setGalleryView' });
+
+      expect(galleryValues(state).semanticSearchText).toBe('beach');
+
+      state = workbenchReducer(state, { galleryView: 'assets', type: 'setGalleryView' });
+
+      expect(galleryValues(state)).toMatchObject({ semanticImageQuery: null, semanticSearchText: null });
+    });
+  });
 });
 
 describe('workbench account and project settings', () => {

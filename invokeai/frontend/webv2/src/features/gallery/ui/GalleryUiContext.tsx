@@ -64,6 +64,10 @@ export interface GalleryCommandsPort {
   setPageInfo(totalImages: number): void;
   setSearchTerm(searchTerm: string): void;
   setStarredOnly(starredOnly: boolean): void;
+  setSemanticSearchMode(enabled: boolean): void;
+  setSemanticSearchText(text: string): void;
+  commitSemanticSearch(text: string): void;
+  clearSearch(): void;
   setView(view: GalleryView): void;
   toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null): void;
   updateSettings(settings: Partial<GallerySettings>): void;
