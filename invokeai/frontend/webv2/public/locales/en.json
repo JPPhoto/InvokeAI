@@ -1,4 +1,11 @@
 {
+  "alphaNotice": {
+    "body": "This is an alpha build of the new Invoke interface. Expect rough edges, missing features, and behavior that changes between releases.",
+    "dismiss": "Got it",
+    "reportLink": "file an issue on GitHub",
+    "reportPrefix": "When something breaks or looks wrong, please",
+    "title": "Alpha build"
+  },
   "commandPalette": {
     "title": "Command palette",
     "buttonLabel": "Command palette",

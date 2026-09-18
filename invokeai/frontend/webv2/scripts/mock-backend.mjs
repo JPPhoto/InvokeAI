@@ -100,7 +100,9 @@ const createState = (profile) => {
 
   return {
     boards: new Map(fixture.boards.map((board) => [board.board_id, clone(board)])),
-    clientState: new Map(),
+    // An existing account: the one-time alpha notice was dismissed already, so
+    // journeys and verification scripts land on the page, not a modal.
+    clientState: new Map([['webv2:workbench-settings', JSON.stringify({ alphaNoticeAcknowledged: true })]]),
     images: new Map(fixture.images.map((image) => [image.image_name, clone(image)])),
     models: new Map(fixture.models.map((model) => [model.key, clone(model)])),
     mutationClock: 0,
