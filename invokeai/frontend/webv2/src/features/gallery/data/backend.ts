@@ -88,6 +88,7 @@ interface BackendImageDTO {
   is_intermediate: boolean;
   starred?: boolean;
   board_id?: string | null;
+  has_workflow?: boolean;
 }
 
 export interface BackendGalleryItemDTO {
@@ -236,6 +237,7 @@ const getGalleryVideoTotal = async ({
 const mapImage = (image: BackendImageDTO): GalleryImage => ({
   boardId: image.board_id ?? 'none',
   createdAt: image.created_at,
+  hasWorkflow: image.has_workflow,
   height: image.height,
   imageCategory: image.image_category,
   imageName: image.image_name,
@@ -498,13 +500,17 @@ export const getGalleryVideoMetadata = async (
   return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
 };
 
-export interface GalleryVideoWorkflow {
+/** The workflow and graph a piece of media embeds, each as stringified JSON, when it has them. */
+export interface GalleryMediaWorkflow {
   graph: string | null;
   workflow: string | null;
 }
 
-export const getGalleryVideoWorkflow = (videoName: string, signal?: AbortSignal): Promise<GalleryVideoWorkflow> =>
-  apiFetchJson<GalleryVideoWorkflow>(`/api/v1/videos/i/${encodeURIComponent(videoName)}/workflow`, { signal });
+export const getGalleryVideoWorkflow = (videoName: string, signal?: AbortSignal): Promise<GalleryMediaWorkflow> =>
+  apiFetchJson<GalleryMediaWorkflow>(`/api/v1/videos/i/${encodeURIComponent(videoName)}/workflow`, { signal });
+
+export const getGalleryImageWorkflow = (imageName: string, signal?: AbortSignal): Promise<GalleryMediaWorkflow> =>
+  apiFetchJson<GalleryMediaWorkflow>(`/api/v1/images/i/${encodeURIComponent(imageName)}/workflow`, { signal });
 
 interface PaletteDateBoardImageNames {
   imageNames: string[];

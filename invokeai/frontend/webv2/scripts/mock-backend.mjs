@@ -1450,6 +1450,15 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         return state.images.has(imageName) ? writePng(response) : json(404, { detail: 'Image not found' });
       }
 
+      const imageWorkflowMatch = /^\/api\/v1\/images\/i\/([^/]+)\/workflow$/.exec(path);
+      if (method === 'GET' && imageWorkflowMatch) {
+        const image = state.images.get(decodeURIComponent(imageWorkflowMatch[1]));
+
+        return image
+          ? json(200, { graph: image.graph ?? null, workflow: image.workflow ?? null })
+          : json(404, { detail: 'Image not found' });
+      }
+
       const imageMetadataMatch = /^\/api\/v1\/images\/i\/([^/]+)\/metadata$/.exec(path);
       if (method === 'GET' && imageMetadataMatch) {
         return json(200, {});

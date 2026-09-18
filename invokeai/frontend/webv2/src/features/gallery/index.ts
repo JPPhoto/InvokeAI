@@ -46,6 +46,7 @@ import {
   getGalleryImageByName,
   getGalleryImageMetadata,
   getGalleryImagesByNames,
+  getGalleryImageWorkflow,
   getGalleryItemByRef,
   getGalleryVideoMetadata,
   getGalleryVideoWorkflow,
@@ -71,6 +72,7 @@ export const galleryImages = {
   metadata: getGalleryImageMetadata,
   resolve: getGalleryImageByName,
   resolveMany: getGalleryImagesByNames,
+  workflow: getGalleryImageWorkflow,
 } as const;
 
 /** Resolve either media kind while keeping the legacy image port strictly image-only. */

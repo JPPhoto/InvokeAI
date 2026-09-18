@@ -3644,6 +3644,12 @@
       "imageSort": "Image Sort",
       "infinite": "Infinite",
       "itemActions": {
+        "loadWorkflow": {
+          "editorUnavailable": "The Workflow editor is not available in this layout.",
+          "failed": "Could not load the image's workflow",
+          "loadedLabel": "Loaded “{{name}}” from image",
+          "missing": "This image has no workflow embedded."
+        },
         "delete": {
           "failure_one": "Could not delete {{count}} item.",
           "failure_other": "Could not delete {{count}} items.",

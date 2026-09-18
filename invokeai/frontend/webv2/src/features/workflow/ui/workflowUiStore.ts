@@ -34,16 +34,21 @@ export interface WorkflowUiSnapshot {
   isNewWorkflowConfirmOpen: boolean;
   /** Bumped to ask the dialog host to open the JSON file picker. */
   importRequestCount: number;
-  /** Library workflow a shell surface (command palette) asked to load; consumed by the widget chrome. */
-  pendingLibraryWorkflowLoad: LibraryWorkflowLoadRequest | null;
+  /** A workflow a shell surface (command palette, an image's context menu) asked to load; consumed by the widget chrome. */
+  pendingWorkflowLoad: WorkflowLoadRequest | null;
 }
 
-export interface LibraryWorkflowLoadRequest {
+export type WorkflowLoadSource =
+  | { kind: 'library'; workflowId: string }
+  /** An already-fetched workflow document (an image's embedded workflow); `label` names the undo step. */
+  | { kind: 'document'; label: string; raw: unknown };
+
+export interface WorkflowLoadRequest {
   requestId: number;
-  workflowId: string;
+  source: WorkflowLoadSource;
 }
 
-let nextLibraryWorkflowLoadRequestId = 0;
+let nextWorkflowLoadRequestId = 0;
 
 const INITIAL_WORKFLOW_UI_SNAPSHOT: WorkflowUiSnapshot = {
   addNodeConnection: null,
@@ -53,7 +58,7 @@ const INITIAL_WORKFLOW_UI_SNAPSHOT: WorkflowUiSnapshot = {
   isAddNodeOpen: false,
   isLibraryOpen: false,
   isNewWorkflowConfirmOpen: false,
-  pendingLibraryWorkflowLoad: null,
+  pendingWorkflowLoad: null,
 };
 
 export const workflowUiStore = createExternalStore<WorkflowUiSnapshot>(INITIAL_WORKFLOW_UI_SNAPSHOT);
@@ -85,16 +90,20 @@ export const setNewWorkflowConfirmOpen = (isOpen: boolean): void => {
   workflowUiStore.patchSnapshot({ isNewWorkflowConfirmOpen: isOpen });
 };
 
-export const requestLibraryWorkflowLoad = (workflowId: string): void => {
-  nextLibraryWorkflowLoadRequestId += 1;
-  workflowUiStore.patchSnapshot({
-    pendingLibraryWorkflowLoad: { requestId: nextLibraryWorkflowLoadRequestId, workflowId },
-  });
+const requestWorkflowLoad = (source: WorkflowLoadSource): void => {
+  nextWorkflowLoadRequestId += 1;
+  workflowUiStore.patchSnapshot({ pendingWorkflowLoad: { requestId: nextWorkflowLoadRequestId, source } });
 };
 
-export const clearPendingLibraryWorkflowLoad = (requestId: number): void => {
-  if (workflowUiStore.getSnapshot().pendingLibraryWorkflowLoad?.requestId === requestId) {
-    workflowUiStore.patchSnapshot({ pendingLibraryWorkflowLoad: null });
+export const requestLibraryWorkflowLoad = (workflowId: string): void =>
+  requestWorkflowLoad({ kind: 'library', workflowId });
+
+export const requestWorkflowDocumentLoad = (raw: unknown, label: string): void =>
+  requestWorkflowLoad({ kind: 'document', label, raw });
+
+export const clearPendingWorkflowLoad = (requestId: number): void => {
+  if (workflowUiStore.getSnapshot().pendingWorkflowLoad?.requestId === requestId) {
+    workflowUiStore.patchSnapshot({ pendingWorkflowLoad: null });
   }
 };
 
