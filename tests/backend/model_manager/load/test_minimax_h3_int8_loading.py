@@ -10,7 +10,6 @@ routes -- once from the header before committing to the tensor read, once from t
 the header route is only exercised by an actual file.
 """
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -25,9 +24,9 @@ from invokeai.backend.model_manager.load.model_loaders.minimax_h3 import MiniMax
 from invokeai.backend.model_manager.taxonomy import MiniMaxH3VariantType
 from invokeai.backend.quantization.int8_convrot import (
     Int8ConvrotLinear,
-    build_regular_hadamard,
     read_comfy_quant_markers,
 )
+from tests.fixtures.quantized_payloads import comfy_quant_marker, quantize_convrot
 
 
 @pytest.fixture(autouse=True)
@@ -93,23 +92,6 @@ def _tiny_remote_code_state_dict() -> dict[str, torch.Tensor]:
     return sd
 
 
-def _quantize_convrot(weight: torch.Tensor, group_size: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mirror of comfy-quants: rotate along the input dim in groups, then per-output-channel int8."""
-    out_features, in_features = weight.shape
-    hadamard = build_regular_hadamard(group_size, dtype=weight.dtype)
-    rotated = (weight.view(out_features, in_features // group_size, group_size) @ hadamard.T).view(
-        out_features, in_features
-    )
-    scale = rotated.abs().amax(dim=1, keepdim=True) / 127.0
-    return torch.clamp(torch.round(rotated / scale), -128, 127).to(torch.int8), scale.to(torch.float32)
-
-
-def _marker_blob(marker: dict, *, pad: int = 0) -> torch.Tensor:
-    """Comfy pads these to a fixed width with NUL bytes; `pad` reproduces that."""
-    raw = json.dumps(marker).encode("utf-8") + b"\x00" * pad
-    return torch.frombuffer(bytearray(raw), dtype=torch.uint8).clone()
-
-
 def _write_checkpoint(
     tmp_path: Path, *, scale: torch.Tensor | None = None, marker: dict | None = None, pad: int = 16
 ) -> tuple[Path, torch.Tensor]:
@@ -117,10 +99,10 @@ def _write_checkpoint(
     torch.manual_seed(0)
     sd = _tiny_remote_code_state_dict()
     original = sd[QUANTIZED_SOURCE_KEY]
-    quantized, derived_scale = _quantize_convrot(original, GROUP_SIZE)
+    quantized, derived_scale, _restored = quantize_convrot(original, group_size=GROUP_SIZE)
     sd[QUANTIZED_SOURCE_KEY] = quantized
     sd["blocks.0.attn.out_proj.weight_scale"] = derived_scale if scale is None else scale
-    sd["blocks.0.attn.out_proj.comfy_quant"] = _marker_blob(
+    sd["blocks.0.attn.out_proj.comfy_quant"] = comfy_quant_marker(
         marker or {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": GROUP_SIZE}, pad=pad
     )
     path = tmp_path / "minimax_h3_int8_convrot.safetensors"
