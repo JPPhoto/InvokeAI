@@ -1311,6 +1311,7 @@
     "saveDefaults": "Save Defaults",
     "scan": "Scan",
     "scanFailed": "Scan failed",
+    "stopScan": "Stop",
     "scanFolderTooltip": "Scan this folder for model files",
     "scanSummary_one": "{{count}} file in {{path}} · {{notInstalled}} not installed",
     "scanSummary_other": "{{count}} files in {{path}} · {{notInstalled}} not installed",
