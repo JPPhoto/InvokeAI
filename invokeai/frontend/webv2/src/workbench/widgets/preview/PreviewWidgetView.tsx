@@ -599,6 +599,10 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
             ref={overviewButtonRef}
             alignSelf="start"
             flexShrink={0}
+            // Clears the centre region's floating header islands, which
+            // otherwise sit on top of the first row of the widget body.
+            ms="2"
+            mt="var(--wb-center-chrome-inset, 0px)"
             size="2xs"
             variant="ghost"
             onClick={livePreview.showAll}
