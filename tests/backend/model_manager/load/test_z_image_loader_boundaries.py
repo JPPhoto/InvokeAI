@@ -126,13 +126,49 @@ def test_an_int8_checkpoint_loads_int8_resident_and_un_rotated(monkeypatch, tmp_
     assert torch.corrcoef(torch.stack([rotated, original.flatten()]))[0, 1].abs() < 0.2
 
 
-def test_an_int8_weight_without_a_marker_is_refused(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("declared_in_header", [False, True], ids=["unmarked", "declared_in_header"])
+def test_an_int8_weight_without_a_per_tensor_marker_is_refused(monkeypatch, tmp_path, declared_in_header) -> None:
     """A quantized weight the loader does not recognise would be handed to a float Linear and only
-    fail at forward time, if at all. Refuse at load, and say which layers."""
+    fail at forward time, if at all. Refuse at load, and say which layers.
+
+    The header case records a deliberate asymmetry. ComfyUI writes the per-layer flags in either of
+    two places, and this loader reads only the per-tensor markers for int8 -- the header is consulted
+    for fp8 and nvfp4 hints alone. FLUX.1 (`flux.py:806-822`) and FLUX.2 (`:1204-1221`) merge both;
+    Z-Image, its Qwen3 encoder, Krea-2, Krea-2's Qwen3-VL encoder, Ideogram 4 and the PiD decoder
+    refuse; MiniMax H3's transformer and its Qwen3-VL encoder have no such check at all, so a
+    header-only build dies later in `load_state_dict` on the int8 dtype without naming the scheme.
+
+    Refusing is the *conservative* side, and that is the reason to keep it -- not the survey that
+    first motivated this cell. No header entry observed says whether the weight was rotated: across
+    every checkpoint on this machine, each `int8_tensorwise` header entry reads
+    `{"format": "int8_tensorwise"}` and nothing more, while Ideogram 4's per-tensor markers read
+    `{"format": "int8_tensorwise", "convrot": true, "convrot_groupsize": 256}`. Merging the header
+    here would therefore build `Int8ConvrotLinear(convrot=False)` over a rotated weight, which loads
+    and generates noise. Nothing stops a producer writing `convrot` into the header -- the parser
+    passes each entry through verbatim, and nvfp4 entries do carry extra keys -- so this is what has
+    been observed, not a property of the format. FLUX gets away with merging because the per-tensor
+    marker wins where both are present, and the one build that writes int8 header entries
+    (`flux-2-klein-9b-int8-convrot`) is unrotated in both channels.
+
+    What is not a reason: "the transport is chosen per format". That was the first version of this
+    docstring and it is false. `flux-2-klein-9b-fp8` is header-only fp8 while `ideogram4_fp8_scaled`
+    is marker-only fp8 -- same format, different transport -- and `flux-2-klein-9b-int8-convrot`
+    writes int8 entries in *both*. The transport follows the producing tool.
+    """
     torch.manual_seed(1)
     quantized, scale, _restored = quantize_convrot(torch.randn(4, CONVROT_GROUP_SIZE))
     state_dict = {"layers.0.proj.weight": quantized, "layers.0.proj.weight_scale": scale}
     run, config = _driver(monkeypatch, tmp_path, state_dict)
+    if declared_in_header:
+        monkeypatch.setattr(
+            z_image,
+            "read_safetensors_metadata",
+            # Bare on purpose: the damaging shape is a header entry that says the format and not
+            # the rotation, which is every int8 header entry observed.
+            lambda _path, _logger: {
+                "_quantization_metadata": json.dumps({"layers": {"layers.0.proj": {"format": "int8_tensorwise"}}})
+            },
+        )
 
     with pytest.raises(ValueError, match=r"int8 weight\(s\) with no `comfy_quant` marker"):
         run.load(config)

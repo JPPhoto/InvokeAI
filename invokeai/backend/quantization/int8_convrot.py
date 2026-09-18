@@ -342,9 +342,10 @@ def reject_int8_layers_a_plain_fold_cannot_decode(sd: Mapping[str, Any], what: s
     marker is refused too: nothing says whether it was rotated, and every published build marks
     every one of its int8 weights.
 
-    Read from the *per-tensor* marker only. The safetensors header names formats as well, but it
-    cannot carry ``convrot`` or the group size (see ``flux.py``, where the per-layer marker wins for
-    that reason), so a header entry is not evidence that a layer is safe to fold — consulting one
+    Read from the *per-tensor* marker only. The safetensors header names formats as well, but no
+    observed header entry carries ``convrot`` or the group size (see ``flux.py``, where the
+    per-layer marker wins for that reason), so a header entry is not evidence that a layer is safe
+    to fold — consulting one
     would let a header-named rotated build straight through. Every caller here still has the markers
     in ``sd``: the two folds run before anything pops them, and the Mistral seam checks ahead of
     ``extract_fp8_scaled_layers`` for the same reason.
