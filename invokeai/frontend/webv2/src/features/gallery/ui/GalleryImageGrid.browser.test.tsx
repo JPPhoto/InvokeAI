@@ -1497,7 +1497,10 @@ describe('shared gallery progress section', () => {
     currentLiveFollowEnabled = true;
     currentPinnedSessionId = 'run:2';
     setStrip([starred]);
-    await renderGallery(createGallery({ items: [regular], selectedItemKey: null, selectedItemKeys: [] }));
+    // A saved selection is still there while following live; the followed tile is the cursor, not it.
+    await renderGallery(
+      createGallery({ items: [regular], selectedItemKey: 'image:regular.png', selectedItemKeys: ['image:regular.png'] })
+    );
 
     // Down from the second tile lands on the strip's only cell; right steps off the tiles into it too.
     registeredCommands.get('gallery.galleryNavDown')?.();

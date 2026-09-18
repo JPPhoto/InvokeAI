@@ -228,7 +228,6 @@ const GalleryProgressTile = ({
     <chakra.button
       ref={buttonRef}
       type="button"
-      data-progress-tile
       focusVisibleRing="inside"
       aria-label={`${label} · ${status}`}
       aria-pressed={selected && session.state !== 'queued'}
