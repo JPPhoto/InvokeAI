@@ -273,7 +273,11 @@ def test_an_nf4_text_encoder_gets_past_the_guards(monkeypatch: pytest.MonkeyPatc
     not the point. What must not happen is that it fails *here*: widening `is_scale_metadata_key` to
     any bnb spelling would refuse a build that ships today, and nothing else in the tree would
     notice.
+
+    Skipped where bitsandbytes is not installed (macOS): the branch imports it, and the broad
+    `except` below would otherwise swallow that `ModuleNotFoundError` and pass having checked nothing.
     """
+    pytest.importorskip("bitsandbytes")
     state_dict = _tiny_encoder_state_dict()
     weight = state_dict.pop(f"{ENCODER_LAYER}.weight")
     state_dict[f"{ENCODER_LAYER}.weight"] = torch.zeros(weight.numel() // 2, 1, dtype=torch.uint8)

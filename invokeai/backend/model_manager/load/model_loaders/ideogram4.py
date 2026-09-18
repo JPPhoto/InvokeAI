@@ -146,7 +146,6 @@ class Ideogram4DiffusersModel(ModelLoader):
             reject_scale_spellings_this_path_drops,
             swap_linears_to_fp8,
         )
-        from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
 
         target_device = TorchDevice.choose_torch_device()
         compute_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
@@ -174,6 +173,10 @@ class Ideogram4DiffusersModel(ModelLoader):
         self._ram_cache.make_room(sum(t.nelement() * t.element_size() for t in sd.values()))
 
         if is_bnb4bit_state_dict(sd):
+            # Here rather than at the top: bitsandbytes is not installed on macOS, and importing it
+            # up front failed every load through this method there, fp8 and unquantized included.
+            from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
+
             # nf4: build the model with InvokeLinearNF4 layers (compress_statistics=False, matching
             # the on-disk single-quant format), then load the prequantized state dict. The model
             # stays on CPU/meta until the cache moves it to the GPU.
@@ -208,7 +211,6 @@ class Ideogram4DiffusersModel(ModelLoader):
             reject_scale_spellings_this_path_drops,
             swap_linears_to_fp8,
         )
-        from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
 
         encoder_path = model_path / "text_encoder"
         target_device = TorchDevice.choose_torch_device()
@@ -262,6 +264,9 @@ class Ideogram4DiffusersModel(ModelLoader):
         with accelerate.init_empty_weights():
             model = AutoModel.from_config(cfg)
             if is_bnb_nf4:
+                # Only this branch needs bitsandbytes, which macOS does not have; see the transformer.
+                from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
+
                 model = quantize_model_nf4(model, modules_to_not_convert=set(), compute_dtype=compute_dtype)
 
         _, unexpected = model.load_state_dict(sd, strict=False, assign=True)
