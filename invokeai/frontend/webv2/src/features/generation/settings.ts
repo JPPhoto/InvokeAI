@@ -49,6 +49,7 @@ export {
   getPromptHistoryRecallPatch,
   getSettingsWithModelDefaults,
   isArchitectureDescribed,
+  isGenerateModelSelectable,
   isKnownScheduler,
   isReferenceImageSupported,
   isSupportedGenerateModel,

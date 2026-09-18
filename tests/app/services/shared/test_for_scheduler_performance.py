@@ -1,8 +1,10 @@
 """Scheduler behavior and overhead for trivial loop bodies.
 
 `test_loop_scheduler_overhead_is_linear` measures CPU time, not wall clock: it compares per-item
-cost at two sizes, and CPU time is not inflated when xdist workers share the runner's cores. The
-absolute budget below it is machine-dependent and stays `slow`, as does the sibling
+cost at two sizes, and CPU time is not inflated when xdist workers share the runner's cores. It can
+be *deflated* by them, though -- Windows charges CPU in whole 15.625ms quanta at the clock interrupt
+and a contended worker misses some -- so the comparison sums its repeats rather than picking one of
+them. The absolute budget below it is machine-dependent and stays `slow`, as does the sibling
 `test_graph_execution_performance.py`. The completion-state tests are not benchmarks at all.
 """
 
@@ -40,19 +42,30 @@ def _run_trivial_loop(loop_type: str, count: int) -> float:
     return time.process_time() - started
 
 
+_REPEATS = 3
+
+
 @pytest.mark.parametrize("loop_type", ["iterate", "for"])
 def test_loop_scheduler_overhead_is_linear(loop_type: str) -> None:
-    timings = {count: [] for count in (300, 1200)}
-    for _ in range(3):
+    totals = dict.fromkeys((300, 1200), 0.0)
+    for _ in range(_REPEATS):
         for count in (1200, 300):
             # CPU time, so a worker losing the core to a sibling does not read as scheduler cost.
-            # Both sizes take hundreds of milliseconds, well clear of the ~15ms clock granularity
-            # that made this measurement unusable when the loops were cheaper.
-            timings[count].append(_run_trivial_loop(loop_type, count) / count)
-    # Best-of-N is the noise-tolerant estimator for a lower bound: shared CI hosts inflate any
-    # single sample (a GC pause or a scheduler hiccup), and the median of three still fell over
-    # a tight threshold on macOS.
-    per_node = {count: min(samples) for count, samples in timings.items()}
+            totals[count] += _run_trivial_loop(loop_type, count)
+
+    # One estimate per size over all the repeats, rather than best-of-N over them. `min` assumes the
+    # noise only ever inflates a sample, and on a contended Windows runner it does not: CPU time is
+    # charged in whole 15.625ms quanta at the clock interrupt, and a worker sharing four vCPUs under
+    # `-n logical` misses some of them, so a reading can come back *short*. It came back at exactly
+    # 0.0 for a 300-item run that the 1200 reading beside it puts at ~250ms -- sixteen quanta, which
+    # no rounding can turn into zero -- and `min` took that for the fastest run, leaving the
+    # threshold at `0.0 * 2.5`.
+    # From there the assertion could not be satisfied by any scheduler. Summing absorbs a short
+    # reading instead of selecting it, and averages an inflated one instead of being blind to it.
+    for count, total in totals.items():
+        assert total, f"{loop_type}: the CPU clock did not advance across any {count}-item run ({totals})"
+    per_node = {count: total / (_REPEATS * count) for count, total in totals.items()}
+
     # Linear scheduling keeps per-item cost flat. The quadratic regression scaled per-item cost with
     # the item count - about 4x between 300 and 1200 - so 2.5x leaves noise headroom on both sides.
     assert per_node[1200] < per_node[300] * 2.5, f"{loop_type}: {per_node}"

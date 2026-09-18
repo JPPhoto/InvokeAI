@@ -224,6 +224,11 @@ export interface GenerateSettings {
    * high-noise expert runs the whole schedule, which still produces an image at lower quality.
    */
   wanLowNoiseModel: MainModelConfig | null;
+  /**
+   * Ideogram 4's unconditional transformer branch. Required with a single-file main, which holds
+   * only the conditional branch; null for a diffusers pipeline, which bundles both.
+   */
+  ideogram4UnconditionalModel: MainModelConfig | null;
   /** Optional Diffusers main model used as a component source for split/quantized model families. */
   componentSourceModel: MainModelConfig | null;
   /** Guidance for the low-noise half of a Wan A14B schedule; null reuses `cfgScale`. */

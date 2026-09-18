@@ -8,7 +8,7 @@ import { getGalleryBoardLabel, type GalleryBoard, type GalleryImage } from '@fea
 import { ALL_READABLE_BOARDS_ID, listPaletteImages } from '@features/gallery/paletteSearch';
 import { galleryBoardsOptions } from '@features/gallery/queries';
 import { focusPositivePrompt } from '@features/generation/react';
-import { isSupportedGenerateModel } from '@features/generation/settings';
+import { isGenerateModelSelectable } from '@features/generation/settings';
 import { ensureModelsLoaded, getModelBaseLabel, getModelsSnapshot } from '@features/models';
 import { extractGenerationMeta, getResultImageName } from '@features/queue/contracts';
 import { listLibraryWorkflows } from '@features/workflow/paletteSearch';
@@ -201,7 +201,7 @@ export const createModelsProvider = ({
     const matchesQuery = createTermsMatcher(query.text);
 
     return models
-      .filter(isSupportedGenerateModel)
+      .filter(isGenerateModelSelectable)
       .filter((model) => matchesQuery(`${model.name} ${model.base}`))
       .map<PaletteEntry>((model) => ({
         group: 'Models',

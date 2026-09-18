@@ -21,6 +21,7 @@ from invokeai.app.invocations.primitives import QwenImageConditioningOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.model_manager.load.model_cache.model_cache import MB, MODEL_LOAD_LOCK
 from invokeai.backend.model_manager.load.model_util import calc_model_size_by_fs
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
     ConditioningFieldData,
     QwenImageConditioningInfo,
@@ -339,7 +340,13 @@ class QwenImageTextEncoderInvocation(BaseInvocation):
         from transformers import Qwen2_5_VLForConditionalGeneration
 
         text_encoder_info = context.models.load(self.qwen_vl_encoder.text_encoder)
-        ctx = text_encoder_info.model_on_device()
+        # An nvfp4 build dequantizes each packed Linear per forward, a transient its resident size does not cover. The
+        # cache holds back the larger of this and its default working memory, not their sum. Read from the unlocked
+        # model, before the lock; zero for every other build.
+        dequant_bytes = peak_dequant_transient_bytes(
+            text_encoder_info.model, TorchDevice.choose_bfloat16_safe_dtype(text_encoder_info.compute_device)
+        )
+        ctx = text_encoder_info.model_on_device(working_mem_bytes=dequant_bytes)
         _, text_encoder = ctx.__enter__()
         # Use the encoder's intended compute device, not its current parameter residency: partial loading may have
         # temporarily offloaded all weights to RAM, which would wrongly run the whole encode on the CPU.
@@ -372,10 +379,8 @@ class QwenImageTextEncoderInvocation(BaseInvocation):
         encoder_config = context.models.get_config(self.qwen_vl_encoder.text_encoder)
         model_root = context.models.get_absolute_path(encoder_config)
         if model_root.is_file():
-            # Single-file checkpoint (e.g. ComfyUI fp8_scaled): BnB can't load from
-            # a single file, and the checkpoint is already FP8-compressed anyway.
-            # Fall back to the cached path; the user effectively gets fp8 instead of
-            # int8/nf4, which is comparable in size.
+            # Single-file checkpoint (e.g. ComfyUI fp8_scaled or nvfp4): BnB can't load from a single file. Fall back
+            # to the cached path, which folds fp8 layers to bf16 and keeps nvfp4 layers packed.
             return self._load_cached_encoder(context)
         encoder_path = model_root / "text_encoder"
 

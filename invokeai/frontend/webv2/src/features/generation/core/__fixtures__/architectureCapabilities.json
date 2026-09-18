@@ -135,7 +135,14 @@
       "cpu_only": null,
       "fp8_storage": null
     },
-    "vae": null
+    "vae": {
+      "accepted": [
+        {
+          "base": "flux2",
+          "latent_channels": null
+        }
+      ]
+    }
   },
   {
     "base": "flux",
@@ -472,7 +479,14 @@
       "cpu_only": null,
       "fp8_storage": null
     },
-    "vae": null
+    "vae": {
+      "accepted": [
+        {
+          "base": "flux2",
+          "latent_channels": null
+        }
+      ]
+    }
   },
   {
     "base": "krea-2",
