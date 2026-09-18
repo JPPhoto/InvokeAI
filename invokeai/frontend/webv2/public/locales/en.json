@@ -1858,7 +1858,9 @@
     "centerViewsAdd": "Add To Center",
     "failure": {
       "compactLabel": "{{label}} failed — select to retry",
+      "copiedError": "Error details copied",
       "copyError": "Copy Error",
+      "copyErrorFailed": "Could not copy the error details",
       "retry": "Retry",
       "title": "{{label}} failed"
     },
@@ -2461,6 +2463,7 @@
     },
     "graph": {
       "setSource": "Set Source",
+      "previewFailed": "Could not open the graph preview",
       "viewGraph": "View Graph"
     },
     "project": {
