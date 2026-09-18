@@ -52,6 +52,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
+    reject_quantized_side_channel,
     split_fp8_scaled_layers,
     split_qkv_sidechannel,
     strip_layer_path_prefix,
@@ -1068,6 +1069,8 @@ class ZImageControlCheckpointModel(ModelLoader):
 
         # Load the safetensors state dict
         sd = load_file(model_path)
+        # Before the geometry probe, because the shapes it reads are meaningless on a packed weight.
+        reject_quantized_side_channel(sd, f"Z-Image ControlNet checkpoint {model_path.name}")
 
         # Determine number of control blocks from state dict
         # Control blocks are named control_layers.0, control_layers.1, etc.
@@ -1164,7 +1167,7 @@ def _fold_comfy_scaled_weights(sd: dict[str, Any], dtype: torch.dtype) -> int:
     for weight_key, scale_key in list(iter_weight_scale_pairs(sd)):
         # Float8 needs `.float()`; torch has no direct type promotion for it.
         weight_float = sd[weight_key].float()
-        scale = expand_weight_scale(weight_float, sd[scale_key].float())
+        scale = expand_weight_scale(weight_float, sd[scale_key].float(), weight_key)
         sd[weight_key] = (weight_float * scale).to(dtype)
         del weight_float
         folded += 1

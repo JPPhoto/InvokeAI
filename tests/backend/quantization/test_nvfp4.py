@@ -7,7 +7,6 @@ bf16 build. That slice is one tile row high: it pins the layout inside a row of 
 while the order of the tile rows rests on the formula test.
 """
 
-import json
 from pathlib import Path
 
 import pytest
@@ -32,24 +31,16 @@ from invokeai.backend.quantization.nvfp4 import (
     split_nvfp4_rows,
 )
 from tests.backend.quantization.test_block_scale_tiles import stored_layout
+from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_tensors
 
 FIXTURE = Path(__file__).parent / "data" / "z_image_turbo_nvfp4_slices.safetensors"
 
 
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
-
-
 def _nvfp4_tensors(path: str, codes: torch.Tensor, block_scale: float, global_scale: float) -> dict[str, torch.Tensor]:
-    """One marked layer in checkpoint layout. A uniform block scale keeps the expectation independent of the
-    tile layout, which the tests above pin on their own."""
-    rows, in_features = codes.shape
-    return {
-        f"{path}.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
-        f"{path}.weight_scale": torch.full((rows, in_features // 16), block_scale).to(torch.float8_e4m3fn),
-        f"{path}.weight_scale_2": torch.tensor(global_scale),
-        f"{path}.comfy_quant": _marker_blob({"format": "nvfp4"}),
-    }
+    """One layer in checkpoint layout, carrying the per-tensor marker this module's subject reads."""
+    layer = nvfp4_tensors(path, codes, block_scale=block_scale, global_scale=global_scale)
+    layer[f"{path}.comfy_quant"] = comfy_quant_marker({"format": "nvfp4"})
+    return layer
 
 
 def _zero_layer(path: str, rows: int = 128) -> dict[str, torch.Tensor]:
@@ -114,7 +105,7 @@ def test_a_real_checkpoint_slice_decodes_to_its_bf16_build(layer: str) -> None:
 def test_popped_layers_keep_their_tensors_as_stored_and_leave_the_rest_for_the_fp8_path() -> None:
     fp8_weight = torch.randn(32, 32).to(torch.float8_e4m3fn)
     fp8_scale = torch.tensor(0.5)
-    fp8_marker = _marker_blob({"format": "float8_e4m3fn"})
+    fp8_marker = comfy_quant_marker({"format": "float8_e4m3fn"})
     tekken = torch.randint(0, 256, (64,), dtype=torch.uint8)
     sd = {
         **_zero_layer("blocks.0.mlp"),
@@ -217,7 +208,7 @@ def test_a_malformed_layer_is_refused_before_any_layer_is_taken_out() -> None:
 )
 def test_a_marker_that_contradicts_its_tensors_is_refused(tensors: str, marker: dict, message: str) -> None:
     sd = {"layer.weight": torch.zeros(128, 64)} if tensors == "dense" else _zero_layer("layer")
-    sd["layer.comfy_quant"] = _marker_blob(marker)
+    sd["layer.comfy_quant"] = comfy_quant_marker(marker)
 
     with pytest.raises(ValueError, match=message):
         pop_nvfp4_layers(sd)
