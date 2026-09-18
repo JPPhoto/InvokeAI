@@ -75,6 +75,9 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.int8_convrot import (
+    reject_int8_layers_a_plain_fold_cannot_decode,
+)
 from invokeai.backend.quantization.nvfp4 import (
     NVFP4Payload,
     install_nvfp4_layers,
@@ -566,7 +569,7 @@ def _drop_quantization_metadata(sd: dict[str, Any], logger, target_dtype: torch.
         # `expand_weight_scale` rather than a local broadcast: a per-output-channel scale is 1-D of
         # length `out`, and `(out, in) * (out,)` aligns on the *last* axis, so it scales input
         # channels instead of output channels -- wrong on a square weight, a shape error otherwise.
-        scale = expand_weight_scale(weight, sd[scale_key].float())
+        scale = expand_weight_scale(weight, sd[scale_key].float(), weight_key)
         result = weight * scale
         sd[weight_key] = result.to(target_dtype) if target_dtype is not None else result
         dequantized += 1
@@ -1212,6 +1215,12 @@ class MistralEncoderCheckpointLoader(ModelLoader):
         # device check is always true, so the choice is unconditional and has no user setting behind
         # it. This loader never calls the layerwise cast (text encoders are excluded there), so the
         # kept weights reach `CustomLinear` with their scales intact.
+        # Before either branch, because both consume what the check reads: `extract_fp8_scaled_layers`
+        # pops every scale key -- discarding the ones whose weight is not float8, int8's included --
+        # and deletes the markers with them. On CUDA that branch is always the one taken, so a check
+        # placed after it would never run on the device almost everyone loads on.
+        reject_int8_layers_a_plain_fold_cannot_decode(sd, "This Mistral encoder checkpoint")
+
         keep_fp8 = should_keep_fp8_weights(target_device) or _device_supports_fp8_storage(target_device, logger)
         fp8_layers: dict[str, Any] = {}
         if keep_fp8:

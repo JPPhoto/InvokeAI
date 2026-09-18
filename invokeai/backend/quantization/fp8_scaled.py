@@ -327,6 +327,43 @@ def is_scale_metadata_key(key: Any) -> bool:
     )
 
 
+def reject_quantized_side_channel(sd: Mapping[str, Any], what: str) -> None:
+    """Refuse a checkpoint carrying a quantization side channel to a loader that handles none.
+
+    Several loaders read a state dict and hand it straight to the model. Where they load
+    non-strictly — the VAEs and the Z-Image ControlNet — a quantized file does not fail: it *loads*,
+    with the ``weight_scale`` dropped as an unexpected key. The worst shape builds its module under
+    ``init_empty_weights`` and calls ``load_state_dict(assign=True, strict=False)``, so the fp8
+    codes become the parameters with no cast to widen them; every weight is then off by
+    ``1/weight_scale`` — orders of magnitude — and the only trace is a DEBUG line.
+
+    Two callers load strictly (ERNIE-Image, the Anima LLLite adapter) and so already raise on the
+    orphaned key. There this buys a message that names the cause instead of a list of unexpected
+    tensors, and for ERNIE it refuses before a multi-gigabyte state dict has been reserved for and
+    cast.
+
+    Refusing is the honest outcome while no such build exists: the alternative is not "it works
+    slightly worse", it is a model that generates noise with nothing to point at. Supporting a
+    scheme here is a separate piece of work, and this error is what would announce that it is needed.
+
+    Scoped to the *side channel*. A raw fp8 checkpoint with no scale is out of scope because it
+    cannot fail quietly: a loader that casts handles e4m3 exactly, and one that does not — the
+    Z-Image ControlNet casts nowhere — installs fp8 parameters that raise at the first ``F.linear``
+    on the dtype mismatch against the activations ("expected m1 and m2 to have the same dtype").
+    """
+    carried = sorted(key for key in sd if is_scale_metadata_key(key))
+    if carried:
+        # Keyed on the side channel rather than on the weights' dtype, so the wording says what was
+        # actually seen: a dense weight beside a stray scale key trips this too, and telling a user
+        # their checkpoint "is quantized" when it merely carries the key would send them looking for
+        # a build that does not exist.
+        raise ValueError(
+            f"{what} carries a quantization side channel ({len(carried)} key(s), e.g. "
+            f"{', '.join(carried[:3])}) and this loader does not support quantized checkpoints: its weights "
+            "would be loaded without their scales applied. Use an unquantized build of this model."
+        )
+
+
 def _strip_scale_suffix(key: str) -> tuple[str, bool] | None:
     """Return ``(module path, is_input_scale)``, or None if ``key`` is not a scale key."""
     for suffix in WEIGHT_SCALE_SUFFIXES:
@@ -477,12 +514,12 @@ def reject_undecoded_mx_scale(path: str, scale: Any) -> None:
         )
 
 
-def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor, path: str | None = None) -> torch.Tensor:
     """Broadcast ``scale`` to line up with ``weight`` for an elementwise multiply.
 
     Handles the three layouts producers emit:
 
-    - per-tensor (0-d / single element) — returned unchanged, broadcasting handles it;
+    - per-tensor (0-d / single element) — flattened to 0-d, broadcasting handles it;
     - per-output-channel (one entry per row) — reshaped to ``(rows, 1, ...)``;
     - block-wise (one entry per block along one or more dims) — each axis is
       ``repeat_interleave``d by that axis' block size.
@@ -491,21 +528,27 @@ def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tens
     a checkpoint using that layout fails to load outright. That is the layout ComfyUI's own
     dequantizer expands, and the FLUX.2 loader used to expand before this module centralized the
     logic.
+
+    ``path`` is the layer the scale belongs to, and only appears in the error. On a checkpoint with
+    a thousand Linears, "which one" is the whole of the diagnosis.
     """
-    reject_undecoded_mx_scale("<weight_scale>", scale)
+    reject_undecoded_mx_scale(path or "<weight_scale>", scale)
     if scale.numel() == 1:
-        return scale
+        # Flattened rather than returned as-is: a `(1, 1, 1)` scale on an `(out, in)` weight would
+        # otherwise broadcast back-aligned into a `(1, out, in)` product.
+        return scale.reshape(())
     if scale.dim() <= 1:
         if scale.numel() != weight.shape[0]:
             # A 1-D scale is per-output-channel by definition, so any other length means the file
             # does not describe this weight — most likely a block-wise scale flattened by the
             # producer, whose block structure is not recoverable from the tensor alone. Say so:
-            # left to broadcast, torch raises "size of tensor a (32) must match tensor b (7)" from
-            # inside the multiply, which names neither the layer nor the file.
+            # left to broadcast, torch raises "The size of tensor a (16) must match the size of
+            # tensor b (7)" from inside the multiply — the weight's *last* axis against the scale,
+            # naming neither the layer nor the axis the scale was supposed to describe.
             raise ValueError(
-                f"fp8 weight_scale has {scale.numel()} entries but the weight has {weight.shape[0]} output "
-                "channels; the scale is neither per-tensor nor per-output-channel and cannot be applied. "
-                "The checkpoint's quantization metadata appears to be malformed."
+                f"{f'{path}: ' if path else ''}fp8 weight_scale has {scale.numel()} entries but the weight has "
+                f"{weight.shape[0]} output channels; the scale is neither per-tensor nor per-output-channel and "
+                "cannot be applied. The checkpoint's quantization metadata appears to be malformed."
             )
         return scale.reshape(-1, *([1] * (weight.dim() - 1)))
     for dim in range(weight.dim()):
@@ -604,7 +647,7 @@ def dequantize_fp8_scaled(
         if weight is None:
             continue
         weight = weight.float()
-        sd[key] = (weight * expand_weight_scale(weight, layer.weight_scale)).to(dtype)
+        sd[key] = (weight * expand_weight_scale(weight, layer.weight_scale, path)).to(dtype)
     return sd
 
 
