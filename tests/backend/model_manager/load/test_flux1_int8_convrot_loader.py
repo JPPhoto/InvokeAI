@@ -356,3 +356,49 @@ def test_a_dense_checkpoint_still_reaches_the_fp8_storage_pass(monkeypatch, tmp_
 
     assert calls == ["cast"]
     assert not any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
+
+
+def test_a_prefixed_checkpoint_is_refused_by_name_rather_than_loaded_without_its_hints(monkeypatch, tmp_path) -> None:
+    """Why the header hints and the state dict cannot fall out of step on a checkpoint that loads.
+
+    The hints are re-keyed into the stripped namespace unconditionally; the state dict is converted
+    only when the bundle probe fires, and that probe looks for one key under `model.diffusion_model.`
+    alone. So a `diffusion_model.`- or `net.`-prefixed file would keep its prefix while its hints
+    lost theirs -- the header below names the prefixed layers, which is exactly the shape that would
+    desync -- and every `full_precision_matrix_mult` would name nothing.
+
+    It cannot bite, and the reason is upstream of this loader: `_validate_is_flux` admits a file only
+    if `double_blocks.0.img_attn.norm.key_norm.scale` is present bare or under
+    `model.diffusion_model.`, so a file in any other namespace never becomes a FLUX config at all.
+    The loader's probe therefore cannot be narrower than what reaches it. Pinned here because the two
+    refusals below are what a reader of this loader can see; the identification gate is not.
+    """
+    state_dict, _ = _checkpoint()
+    prefixed = {f"diffusion_model.{key}": value for key, value in state_dict.items()}
+    header = {"_quantization_metadata": json.dumps({"layers": {f"diffusion_model.{p}": MARKER for p in QUANTIZED}})}
+
+    with pytest.raises(ValueError, match="keys need a conversion this loader did not apply"):
+        _load(monkeypatch, tmp_path, prefixed, header=header)
+
+
+def test_a_prefixed_dense_checkpoint_is_refused_for_want_of_every_parameter(monkeypatch, tmp_path) -> None:
+    """The same file with no int8 install to catch it first. Either refusal alone is enough -- they
+    are redundant, not each other's only line of defence -- and both are pinned because either is
+    the kind of check a later change relaxes.
+
+    What neither sees, and what would make the desync live, is a *new* state-dict prefix stripper on
+    this path for a prefix `TRANSFORMER_KEY_PREFIXES` does not know.
+    """
+    state_dict, originals = _checkpoint(marker=None)
+    for path in QUANTIZED:
+        del state_dict[f"{path}.weight_scale"]
+        state_dict[f"{path}.weight"] = originals[path].to(torch.bfloat16)
+    prefixed = {f"diffusion_model.{key}": value for key, value in state_dict.items()}
+    header = {
+        "_quantization_metadata": json.dumps(
+            {"layers": {f"diffusion_model.{p}": {"full_precision_matrix_mult": True} for p in QUANTIZED}}
+        )
+    }
+
+    with pytest.raises(RuntimeError, match=r"missing \d+ parameter\(s\) that the model requires"):
+        _load(monkeypatch, tmp_path, prefixed, header=header)
