@@ -52,6 +52,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
+    reject_quantized_side_channel,
     split_fp8_scaled_layers,
     split_qkv_sidechannel,
     strip_layer_path_prefix,
@@ -1068,6 +1069,8 @@ class ZImageControlCheckpointModel(ModelLoader):
 
         # Load the safetensors state dict
         sd = load_file(model_path)
+        # Before the geometry probe, because the shapes it reads are meaningless on a packed weight.
+        reject_quantized_side_channel(sd, f"Z-Image ControlNet checkpoint {model_path.name}")
 
         # Determine number of control blocks from state dict
         # Control blocks are named control_layers.0, control_layers.1, etc.

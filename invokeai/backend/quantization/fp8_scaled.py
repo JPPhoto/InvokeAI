@@ -313,6 +313,43 @@ def is_scale_metadata_key(key: Any) -> bool:
     )
 
 
+def reject_quantized_side_channel(sd: Mapping[str, Any], what: str) -> None:
+    """Refuse a checkpoint carrying a quantization side channel to a loader that handles none.
+
+    Several loaders read a state dict and hand it straight to the model. Where they load
+    non-strictly — the VAEs and the Z-Image ControlNet — a quantized file does not fail: it *loads*,
+    with the ``weight_scale`` dropped as an unexpected key. The worst shape builds its module under
+    ``init_empty_weights`` and calls ``load_state_dict(assign=True, strict=False)``, so the fp8
+    codes become the parameters with no cast to widen them; every weight is then off by
+    ``1/weight_scale`` — orders of magnitude — and the only trace is a DEBUG line.
+
+    Two callers load strictly (ERNIE-Image, the Anima LLLite adapter) and so already raise on the
+    orphaned key. There this buys a message that names the cause instead of a list of unexpected
+    tensors, and for ERNIE it refuses before a multi-gigabyte state dict has been reserved for and
+    cast.
+
+    Refusing is the honest outcome while no such build exists: the alternative is not "it works
+    slightly worse", it is a model that generates noise with nothing to point at. Supporting a
+    scheme here is a separate piece of work, and this error is what would announce that it is needed.
+
+    Scoped to the *side channel*. A raw fp8 checkpoint with no scale is out of scope because it
+    cannot fail quietly: a loader that casts handles e4m3 exactly, and one that does not — the
+    Z-Image ControlNet casts nowhere — installs fp8 parameters that raise at the first ``F.linear``
+    on the dtype mismatch against the activations ("expected m1 and m2 to have the same dtype").
+    """
+    carried = sorted(key for key in sd if is_scale_metadata_key(key))
+    if carried:
+        # Keyed on the side channel rather than on the weights' dtype, so the wording says what was
+        # actually seen: a dense weight beside a stray scale key trips this too, and telling a user
+        # their checkpoint "is quantized" when it merely carries the key would send them looking for
+        # a build that does not exist.
+        raise ValueError(
+            f"{what} carries a quantization side channel ({len(carried)} key(s), e.g. "
+            f"{', '.join(carried[:3])}) and this loader does not support quantized checkpoints: its weights "
+            "would be loaded without their scales applied. Use an unquantized build of this model."
+        )
+
+
 def _strip_scale_suffix(key: str) -> tuple[str, bool] | None:
     """Return ``(module path, is_input_scale)``, or None if ``key`` is not a scale key."""
     for suffix in WEIGHT_SCALE_SUFFIXES:

@@ -100,6 +100,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
+    reject_quantized_side_channel,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
@@ -214,6 +215,7 @@ class Flux2VAELoader(ModelLoader):
 
         # Load state dict manually since from_single_file may not support AutoencoderKLFlux2 yet
         sd = load_file(model_path)
+        reject_quantized_side_channel(sd, f"FLUX.2 VAE checkpoint {model_path.name}")
 
         # Convert BFL format to diffusers format if needed
         # BFL format uses: encoder.down., decoder.up., decoder.mid.block_1, decoder.mid.attn_1, decoder.norm_out
