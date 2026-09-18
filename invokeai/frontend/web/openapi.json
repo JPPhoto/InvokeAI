@@ -7954,7 +7954,7 @@
       "get": {
         "tags": ["videos"],
         "summary": "Get Video Thumbnail",
-        "description": "Returns the first-frame WebP thumbnail of an authorized video.",
+        "description": "Returns the WebP thumbnail of an authorized video.",
         "operationId": "get_video_thumbnail",
         "security": [
           {
@@ -98231,7 +98231,7 @@
           "thumbnail_url": {
             "type": "string",
             "title": "Thumbnail Url",
-            "description": "The URL of the video's first-frame thumbnail (WebP)."
+            "description": "The URL of the video's thumbnail (WebP)."
           },
           "video_origin": {
             "$ref": "#/components/schemas/ResourceOrigin",
@@ -98751,7 +98751,7 @@
           "thumbnail_url": {
             "type": "string",
             "title": "Thumbnail Url",
-            "description": "The URL of the video's first-frame thumbnail (WebP)."
+            "description": "The URL of the video's thumbnail (WebP)."
           }
         },
         "type": "object",

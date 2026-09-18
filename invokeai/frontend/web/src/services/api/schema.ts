@@ -1970,7 +1970,7 @@ export type paths = {
         };
         /**
          * Get Video Thumbnail
-         * @description Returns the first-frame WebP thumbnail of an authorized video.
+         * @description Returns the WebP thumbnail of an authorized video.
          */
         get: operations["get_video_thumbnail"];
         put?: never;
@@ -43683,7 +43683,7 @@ export type components = {
             video_url: string;
             /**
              * Thumbnail Url
-             * @description The URL of the video's first-frame thumbnail (WebP).
+             * @description The URL of the video's thumbnail (WebP).
              */
             thumbnail_url: string;
             /** @description The origin of the video. */
@@ -43977,7 +43977,7 @@ export type components = {
             video_url: string;
             /**
              * Thumbnail Url
-             * @description The URL of the video's first-frame thumbnail (WebP).
+             * @description The URL of the video's thumbnail (WebP).
              */
             thumbnail_url: string;
         };
