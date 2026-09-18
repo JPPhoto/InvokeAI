@@ -144,7 +144,7 @@ import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
 import {
   cloneProjectGraph,
   createProjectGraph,
-  getProjectGraphUndoLabel,
+  getProjectGraphUndoEntry,
   normalizeProjectGraph,
   projectGraphReducer,
   type ProjectGraphAction,
@@ -452,6 +452,8 @@ type WorkbenchReducerAction =
   | { type: 'recordNotice'; kind: WorkbenchNotificationKind; title: string; message?: string };
 
 const HISTORY_LIMIT = 40;
+/** A pause this long between same-key edits (typing, dragging) starts a new undo step. */
+const UNDO_MERGE_WINDOW_MS = 1500;
 const NOTIFICATION_LIMIT = 100;
 // Side panels host real widget UIs (gallery grid, generate form); below
 // ~350px their toolbars and grids collapse into unusable slivers, so that is
@@ -1166,21 +1168,50 @@ const restoreUndoSnapshot = (project: Project, snapshot: ProjectUndoSnapshot): P
   widgetRegions: cloneWidgetRegions(snapshot.widgetRegions),
 });
 
-const pushUndo = (project: Project, label: string, projectGraph?: ProjectGraphState): Project => ({
-  ...project,
-  undoRedo: {
-    future: [],
-    past: [
-      ...project.undoRedo.past,
-      {
-        createdAt: now(),
-        id: createId('undo'),
-        label,
-        project: createUndoSnapshot(project, projectGraph),
+/**
+ * Records the project as it is *before* an edit. A `mergeKey` folds a stream
+ * of edits (each keystroke in a field, each move of a drag) into the entry
+ * that opened the stream while they keep arriving within the merge window,
+ * so one undo reverts the whole burst.
+ */
+const pushUndo = (project: Project, label: string, projectGraph?: ProjectGraphState, mergeKey?: string): Project => {
+  const previous = project.undoRedo.past.at(-1);
+  const timestamp = now();
+
+  // An undo in between (`future` non-empty) ends the burst: the state the user
+  // just stood on must stay reachable as its own step.
+  if (
+    mergeKey &&
+    previous?.mergeKey === mergeKey &&
+    project.undoRedo.future.length === 0 &&
+    Date.parse(timestamp) - Date.parse(previous.mergedAt ?? previous.createdAt) <= UNDO_MERGE_WINDOW_MS
+  ) {
+    return {
+      ...project,
+      undoRedo: {
+        future: [],
+        past: [...project.undoRedo.past.slice(0, -1), { ...previous, mergedAt: timestamp }],
       },
-    ].slice(-HISTORY_LIMIT),
-  },
-});
+    };
+  }
+
+  return {
+    ...project,
+    undoRedo: {
+      future: [],
+      past: [
+        ...project.undoRedo.past,
+        {
+          createdAt: timestamp,
+          id: createId('undo'),
+          label,
+          ...(mergeKey ? { mergeKey } : {}),
+          project: createUndoSnapshot(project, projectGraph),
+        },
+      ].slice(-HISTORY_LIMIT),
+    },
+  };
+};
 
 const createWidgetStates = (): WidgetStateMap => ({
   'autosave-status': { id: 'autosave-status', label: 'Autosave', values: {}, version: 1 },
@@ -4268,8 +4299,10 @@ export const __workbenchReducerInternal = (
         const routedProject = isHighConfidenceGraphEdit(action.action)
           ? applyAutoRouteForEdit(project, 'workflow', context)
           : project;
-        const undoLabel = getProjectGraphUndoLabel(action.action);
-        const nextProject = undoLabel ? pushUndo(routedProject, undoLabel) : routedProject;
+        const undoEntry = getProjectGraphUndoEntry(action.action);
+        const nextProject = undoEntry
+          ? pushUndo(routedProject, undoEntry.label, undefined, undoEntry.mergeKey)
+          : routedProject;
         const updated = { ...nextProject, projectGraph };
 
         return updated;
