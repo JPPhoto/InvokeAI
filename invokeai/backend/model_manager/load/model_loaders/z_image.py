@@ -1164,7 +1164,7 @@ def _fold_comfy_scaled_weights(sd: dict[str, Any], dtype: torch.dtype) -> int:
     for weight_key, scale_key in list(iter_weight_scale_pairs(sd)):
         # Float8 needs `.float()`; torch has no direct type promotion for it.
         weight_float = sd[weight_key].float()
-        scale = expand_weight_scale(weight_float, sd[scale_key].float())
+        scale = expand_weight_scale(weight_float, sd[scale_key].float(), weight_key)
         sd[weight_key] = (weight_float * scale).to(dtype)
         del weight_float
         folded += 1

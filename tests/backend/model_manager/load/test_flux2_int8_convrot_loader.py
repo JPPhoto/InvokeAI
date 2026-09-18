@@ -20,6 +20,7 @@ from invokeai.backend.model_manager.load.model_loaders import flux
 from invokeai.backend.model_manager.load.model_loaders.flux import Flux2CheckpointModel
 from invokeai.backend.model_manager.load.model_loaders.flux2_state_dict_utils import remap_flux2_layer_paths
 from invokeai.backend.model_manager.taxonomy import Flux2VariantType, SubModelType
+from invokeai.backend.quantization.fp8_scaled import iter_weight_scale_pairs
 from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 from tests.fixtures.loader_seams import Seam, prepare
 from tests.fixtures.quantized_payloads import comfy_quant_marker, quantize_scaled_fp8
@@ -390,6 +391,32 @@ def _scaled_fp8_checkpoint() -> tuple[dict[str, torch.Tensor], dict[str, torch.T
         state_dict[f"{path}.weight"] = fp8.codes
         state_dict[f"{path}.weight_scale"] = fp8.scale
     return state_dict, originals
+
+
+def test_the_extraction_runs_before_the_fold_safety_net(monkeypatch, tmp_path) -> None:
+    """`_dequantize_fp8_weights` still carries a scale fold, described as a safety net. It cannot
+    fire, because `extract_fp8_scaled_layers` runs first and takes every scale key it is shown --
+    and that ordering is the whole of the reason. Swap the two calls and the fold goes live over a
+    state dict whose scales are already gone, which is a silent no-op on exactly the layers it was
+    meant to rescue.
+
+    The ordering is held today by the order the two lines happen to be written in, so it is asserted
+    on what the method is actually handed rather than on the lines.
+    """
+    state_dict, _ = _scaled_fp8_checkpoint()
+    assert list(iter_weight_scale_pairs(state_dict)), "the fixture carries no pair to observe"
+    handed: list[list[tuple[str, str]]] = []
+    original = Flux2CheckpointModel._dequantize_fp8_weights
+
+    def recording(self, sd, keep_fp8=False):
+        handed.append(list(iter_weight_scale_pairs(sd)))
+        return original(self, sd, keep_fp8=keep_fp8)
+
+    monkeypatch.setattr(Flux2CheckpointModel, "_dequantize_fp8_weights", recording)
+
+    _load(monkeypatch, tmp_path, state_dict)
+
+    assert handed == [[]], f"a weight/scale pair reached the safety net: {handed}"
 
 
 def test_a_scaled_fp8_checkpoint_still_folds_its_scales(monkeypatch, tmp_path) -> None:

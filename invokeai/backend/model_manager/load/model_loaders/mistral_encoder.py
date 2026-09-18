@@ -566,7 +566,7 @@ def _drop_quantization_metadata(sd: dict[str, Any], logger, target_dtype: torch.
         # `expand_weight_scale` rather than a local broadcast: a per-output-channel scale is 1-D of
         # length `out`, and `(out, in) * (out,)` aligns on the *last* axis, so it scales input
         # channels instead of output channels -- wrong on a square weight, a shape error otherwise.
-        scale = expand_weight_scale(weight, sd[scale_key].float())
+        scale = expand_weight_scale(weight, sd[scale_key].float(), weight_key)
         result = weight * scale
         sd[weight_key] = result.to(target_dtype) if target_dtype is not None else result
         dequantized += 1

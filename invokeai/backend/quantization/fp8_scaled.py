@@ -414,12 +414,12 @@ def _normalize_weight_scale(scale: torch.Tensor) -> torch.Tensor:
     return scale.flatten()
 
 
-def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor, path: str | None = None) -> torch.Tensor:
     """Broadcast ``scale`` to line up with ``weight`` for an elementwise multiply.
 
     Handles the three layouts producers emit:
 
-    - per-tensor (0-d / single element) — returned unchanged, broadcasting handles it;
+    - per-tensor (0-d / single element) — flattened to 0-d, broadcasting handles it;
     - per-output-channel (one entry per row) — reshaped to ``(rows, 1, ...)``;
     - block-wise (one entry per block along one or more dims) — each axis is
       ``repeat_interleave``d by that axis' block size.
@@ -428,20 +428,26 @@ def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tens
     a checkpoint using that layout fails to load outright. That is the layout ComfyUI's own
     dequantizer expands, and the FLUX.2 loader used to expand before this module centralized the
     logic.
+
+    ``path`` is the layer the scale belongs to, and only appears in the error. On a checkpoint with
+    a thousand Linears, "which one" is the whole of the diagnosis.
     """
     if scale.numel() == 1:
-        return scale
+        # Flattened rather than returned as-is: a `(1, 1, 1)` scale on an `(out, in)` weight would
+        # otherwise broadcast back-aligned into a `(1, out, in)` product.
+        return scale.reshape(())
     if scale.dim() <= 1:
         if scale.numel() != weight.shape[0]:
             # A 1-D scale is per-output-channel by definition, so any other length means the file
             # does not describe this weight — most likely a block-wise scale flattened by the
             # producer, whose block structure is not recoverable from the tensor alone. Say so:
-            # left to broadcast, torch raises "size of tensor a (32) must match tensor b (7)" from
-            # inside the multiply, which names neither the layer nor the file.
+            # left to broadcast, torch raises "The size of tensor a (16) must match the size of
+            # tensor b (7)" from inside the multiply — the weight's *last* axis against the scale,
+            # naming neither the layer nor the axis the scale was supposed to describe.
             raise ValueError(
-                f"fp8 weight_scale has {scale.numel()} entries but the weight has {weight.shape[0]} output "
-                "channels; the scale is neither per-tensor nor per-output-channel and cannot be applied. "
-                "The checkpoint's quantization metadata appears to be malformed."
+                f"{f'{path}: ' if path else ''}fp8 weight_scale has {scale.numel()} entries but the weight has "
+                f"{weight.shape[0]} output channels; the scale is neither per-tensor nor per-output-channel and "
+                "cannot be applied. The checkpoint's quantization metadata appears to be malformed."
             )
         return scale.reshape(-1, *([1] * (weight.dim() - 1)))
     for dim in range(weight.dim()):
@@ -540,7 +546,7 @@ def dequantize_fp8_scaled(
         if weight is None:
             continue
         weight = weight.float()
-        sd[key] = (weight * expand_weight_scale(weight, layer.weight_scale)).to(dtype)
+        sd[key] = (weight * expand_weight_scale(weight, layer.weight_scale, path)).to(dtype)
     return sd
 
 
