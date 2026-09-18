@@ -55,7 +55,10 @@ import {
   getPersistedSelectedGalleryItemKeys,
   stripInfiniteWindowAnchor,
   stripUnresolvableGallerySearch,
+  gallerySemanticReferenceKey,
   getGallerySettings,
+  parseGallerySemanticReference,
+  toGallerySemanticTextReference,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
   normalizeGalleryImage,
@@ -369,6 +372,14 @@ type WorkbenchReducerAction =
   | { type: 'clearGallerySelection'; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
   | { type: 'setGallerySearchTerm'; searchTerm: string; projectId?: string }
+  /** Toggles the search field between metadata search and semantic search, carrying its text across. */
+  | { type: 'setGallerySemanticSearchMode'; enabled: boolean; projectId?: string }
+  /** The semantic field's live text; the ranking follows only on commit. */
+  | { type: 'setGallerySemanticSearchText'; text: string; projectId?: string }
+  /** Applies the semantic text as the ranking, if it is still what the field holds. */
+  | { type: 'commitGallerySemanticSearch'; text: string; projectId?: string }
+  /** The field's clear button: drops the text, the ranking, and semantic mode together. */
+  | { type: 'clearGallerySearch'; projectId?: string }
   | { type: 'setGalleryStarredOnly'; starredOnly: boolean; projectId?: string }
   | { type: 'updateGallerySettings'; settings: Partial<GallerySettings>; projectId?: string }
   | { type: 'setGalleryPage'; page: number; projectId?: string }
@@ -2828,7 +2839,9 @@ const reconcileDeletedGalleryBoard = (
       ...values,
       // Same rule as `selectGalleryBoard`: the view is moving to another
       // board, so a ranking shown against the old one goes with it.
-      ...(selectedBoardWasDeleted ? { galleryPage: 0, selectedBoardId: 'none', semanticImageQuery: null } : {}),
+      ...(selectedBoardWasDeleted
+        ? { galleryPage: 0, selectedBoardId: 'none', semanticImageQuery: null, semanticSearchText: null }
+        : {}),
       ...(projectBoardWasDeleted ? { projectBoardId: null } : {}),
     };
   });
@@ -4647,7 +4660,8 @@ export const __workbenchReducerInternal = (
           // so it is not a view OF any board: moving to one asks for that
           // board's listing, and leaving the ranking up would answer with the
           // same results under a new board name. Dismissed exactly as the
-          // chip's own clear does it — the query alone. The positions on the
+          // chip's own clear does it — the query alone — and the semantic
+          // field leaves with its ranking, text and all. The positions on the
           // selection are NOT rewritten here: a selection made before the
           // search carries a real board page that the search never touched,
           // and zeroing it would cost Preview the cursor it still has.
@@ -4656,7 +4670,7 @@ export const __workbenchReducerInternal = (
           // a change of view, and a text or image reference survives a reload,
           // so treating that click as a dismissal would erase persisted state
           // (and autosave the loss) on what reads as a no-op.
-          ...(values.selectedBoardId !== action.boardId ? { semanticImageQuery: null } : {}),
+          ...(values.selectedBoardId !== action.boardId ? { semanticImageQuery: null, semanticSearchText: null } : {}),
         }),
         action.projectId
       );
@@ -4683,7 +4697,7 @@ export const __workbenchReducerInternal = (
           // `galleryView` reads as Images, so re-clicking the tab already
           // shown must stay the no-op it is today.
           ...((values.galleryView === 'assets' ? 'assets' : 'images') !== action.galleryView
-            ? { semanticImageQuery: null }
+            ? { semanticImageQuery: null, semanticSearchText: null }
             : {}),
         }),
         action.projectId
@@ -4708,6 +4722,90 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           starredOnly: action.starredOnly,
         }),
+        action.projectId
+      );
+    }
+    case 'setGallerySemanticSearchMode': {
+      return updateGalleryValues(
+        state,
+        (values) => {
+          const semanticText = typeof values.semanticSearchText === 'string' ? values.semanticSearchText : null;
+
+          if (action.enabled === (semanticText !== null)) {
+            return values;
+          }
+
+          // The text moves between the two interpretations rather than being
+          // lost: the sparkle only changes what the words mean. Entering
+          // applies them at once — a click is a deliberate act, not a
+          // keystroke to debounce — while leaving drops the ranking, since
+          // metadata search has its own listing.
+          if (action.enabled) {
+            const text = typeof values.searchTerm === 'string' ? values.searchTerm : '';
+
+            return {
+              ...values,
+              galleryPage: 0,
+              searchTerm: '',
+              semanticImageQuery: toGallerySemanticTextReference(text),
+              semanticSearchText: text,
+            };
+          }
+
+          return {
+            ...values,
+            galleryPage: 0,
+            searchTerm: semanticText,
+            semanticImageQuery: null,
+            semanticSearchText: null,
+          };
+        },
+        action.projectId
+      );
+    }
+    case 'setGallerySemanticSearchText': {
+      return updateGalleryValues(
+        state,
+        (values) =>
+          typeof values.semanticSearchText === 'string' ? { ...values, semanticSearchText: action.text } : values,
+        action.projectId
+      );
+    }
+    case 'commitGallerySemanticSearch': {
+      return updateGalleryValues(
+        state,
+        (values) => {
+          // A commit arrives on a timer, after whatever it was scheduled
+          // against may have gone: the field emptied, the mode left, the board
+          // moved. Applying only what the field still holds makes every late
+          // timer harmless without the field having to track them.
+          if (values.semanticSearchText !== action.text) {
+            return values;
+          }
+
+          const reference = toGallerySemanticTextReference(action.text);
+
+          if (
+            gallerySemanticReferenceKey(reference) ===
+            gallerySemanticReferenceKey(parseGallerySemanticReference(values.semanticImageQuery))
+          ) {
+            return values;
+          }
+
+          return { ...values, galleryPage: 0, semanticImageQuery: reference };
+        },
+        action.projectId
+      );
+    }
+    case 'clearGallerySearch': {
+      return updateGalleryValues(
+        state,
+        (values) =>
+          values.searchTerm === '' &&
+          (values.semanticImageQuery === null || values.semanticImageQuery === undefined) &&
+          (values.semanticSearchText === null || values.semanticSearchText === undefined)
+            ? values
+            : { ...values, galleryPage: 0, searchTerm: '', semanticImageQuery: null, semanticSearchText: null },
         action.projectId
       );
     }
