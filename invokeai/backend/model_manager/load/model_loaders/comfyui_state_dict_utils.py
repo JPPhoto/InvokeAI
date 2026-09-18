@@ -12,6 +12,8 @@ need a second copy.
 
 import torch
 
+from invokeai.backend.quantization.fp8_scaled import reject_undecoded_mx_scale
+
 
 def _strip_comfyui_prefix(sd: dict) -> dict:
     """Strip ComfyUI-style `model.diffusion_model.` / `diffusion_model.` prefixes from keys."""
@@ -64,6 +66,7 @@ def _dequantize_comfyui_fp8(sd: dict, compute_dtype: torch.dtype) -> int:
                 break
         if weight_key not in sd:
             continue
+        reject_undecoded_mx_scale(weight_key[: -len(".weight")], sd[scale_key])
         weight = sd[weight_key].to(compute_dtype)
         scale = sd[scale_key].to(compute_dtype)
         if scale.shape != weight.shape and scale.numel() > 1:
