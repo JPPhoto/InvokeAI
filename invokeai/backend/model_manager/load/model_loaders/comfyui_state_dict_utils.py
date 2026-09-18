@@ -12,7 +12,11 @@ need a second copy.
 
 import torch
 
-from invokeai.backend.quantization.fp8_scaled import expand_weight_scale, is_scale_metadata_key
+from invokeai.backend.quantization.fp8_scaled import (
+    expand_weight_scale,
+    is_scale_metadata_key,
+    reject_undecoded_mx_scale,
+)
 from invokeai.backend.quantization.int8_convrot import reject_int8_layers_a_plain_fold_cannot_decode
 
 
@@ -68,6 +72,7 @@ def _dequantize_comfyui_fp8(sd: dict, compute_dtype: torch.dtype, what: str = "T
                 break
         if weight_key not in sd:
             continue
+        reject_undecoded_mx_scale(weight_key[: -len(".weight")], sd[scale_key])
         weight = sd[weight_key].to(compute_dtype)
         scale = sd[scale_key].to(compute_dtype)
         # Through the shared expansion rather than a local copy of it. The copy that used to live
