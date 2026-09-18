@@ -94,7 +94,6 @@ import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-re
 import {
   lazy,
   Suspense,
-  Component,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -104,7 +103,6 @@ import {
   useState,
   type ChangeEvent,
   type MouseEvent,
-  type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -557,28 +555,6 @@ const MEDIA_FIELD_CONFIG = {
 >;
 
 const HIDDEN_FILE_INPUT_STYLE = { display: 'none' } as const;
-const DND_CONTEXT_ERROR = 'useDndMonitor must be used within a children of <DndContext>';
-
-/**
- * Workflow fields are also rendered by isolated workflow surfaces and tests
- * that do not own the workbench-wide dnd context. The media controls still
- * work there; only gallery drag-to-field registration is unavailable.
- */
-class OptionalDndMonitorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-
-  static getDerivedStateFromError(error: unknown) {
-    if (error instanceof Error && error.message === DND_CONTEXT_ERROR) {
-      return { failed: true };
-    }
-
-    throw error;
-  }
-
-  render() {
-    return this.state.failed ? null : this.props.children;
-  }
-}
 const IMAGE_ONLY = ['image'] as const;
 const VIDEO_ONLY = ['video'] as const;
 const MEDIA_INPUT_FOCUS_PROPS = { outline: '2px solid {colors.accent.focusRing}', outlineOffset: '2px' } as const;
@@ -855,9 +831,7 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
-      <OptionalDndMonitorBoundary>
-        <ImageCollectionDropMonitor dropId={dropId} onDrop={appendNames} />
-      </OptionalDndMonitorBoundary>
+      <ImageCollectionDropMonitor dropId={dropId} onDrop={appendNames} />
       <Box
         ref={setNodeRef}
         boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
@@ -1019,9 +993,7 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
-      <OptionalDndMonitorBoundary>
-        <MediaDropMonitor dropId={dropId} kind={kind} onDrop={onMediaDrop} />
-      </OptionalDndMonitorBoundary>
+      <MediaDropMonitor dropId={dropId} kind={kind} onDrop={onMediaDrop} />
       {/* The whole preview area is the drop target, like the legacy editor's widget. */}
       <Box
         ref={setNodeRef}

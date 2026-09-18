@@ -19,7 +19,6 @@ import {
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import { useWorkflowNodeExecutionState } from '@features/workflow/ui/WorkflowUiContext';
 import {
-  CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   cloneWorkflowFieldDefault,
   formatOutputFieldValue,
   getFieldTypeLabel,
@@ -49,6 +48,10 @@ const CONTENT_VISIBILITY_ZOOM = 0.4;
 
 /** True while the viewport is zoomed out far enough that field content is unreadable noise. */
 const useIsZoomedOut = (): boolean => useStore((state) => state.transform[2] < CONTENT_VISIBILITY_ZOOM);
+
+/** The node-level loading hint is only useful while a selected child signature is being fetched. */
+export const shouldShowCallSavedWorkflowLoadingHint = (node: WorkflowInvocationNode): boolean =>
+  node.data.type === 'call_saved_workflow' && node.data.callSavedWorkflowStatus === 'loading';
 
 /** Static placeholder bar standing in for text/controls at far zoom. No animation — there may be hundreds. */
 const SkeletonBar = ({ h = '2', w }: { h?: string; w?: string }) => <Box bg="bg.emphasized" h={h} rounded="sm" w={w} />;
@@ -772,12 +775,9 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
               template={inputTemplate}
             />
           ))}
-          {node.data.type === 'call_saved_workflow' &&
-          inputTemplates.every(
-            (inputTemplate) => !inputTemplate.name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX)
-          ) ? (
+          {shouldShowCallSavedWorkflowLoadingHint(node) ? (
             <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
-              {t('nodes.savedWorkflowSelectExposedFields')}
+              {t('nodes.savedWorkflowUpdating')}
             </Text>
           ) : null}
         </Box>

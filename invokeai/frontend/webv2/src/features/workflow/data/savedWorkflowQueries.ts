@@ -8,10 +8,54 @@ import {
   type WorkflowRecordDTO,
 } from './api';
 
+export const savedWorkflowDetailQueryKey = (workflowId: string) =>
+  ['workflow', 'call-saved', 'detail', workflowId] as const;
+
+export const isSavedWorkflowDetailQueryKey = (
+  queryKey: readonly unknown[]
+): queryKey is readonly ['workflow', 'call-saved', 'detail', string] =>
+  queryKey[0] === 'workflow' &&
+  queryKey[1] === 'call-saved' &&
+  queryKey[2] === 'detail' &&
+  typeof queryKey[3] === 'string' &&
+  queryKey[3].length > 0;
+
+type SavedWorkflowDetailQueryLike = {
+  state: {
+    data?: unknown;
+    fetchStatus: 'fetching' | 'paused' | 'idle';
+    isInvalidated: boolean;
+    status: 'pending' | 'error' | 'success';
+  };
+};
+
+export const shouldFetchSavedWorkflowDetail = (query: SavedWorkflowDetailQueryLike | undefined): boolean =>
+  query === undefined ||
+  (query.state.status === 'success' && query.state.isInvalidated && query.state.fetchStatus === 'idle');
+
+export const getSavedWorkflowDetailQueryStatus = (
+  query: SavedWorkflowDetailQueryLike | undefined
+): 'missing' | 'loading' | 'ready' | 'error' => {
+  if (!query) {
+    return 'missing';
+  }
+
+  if (query.state.status === 'error') {
+    return 'error';
+  }
+
+  if (query.state.status !== 'success' || query.state.fetchStatus !== 'idle') {
+    return 'loading';
+  }
+
+  return query.state.data ? 'ready' : 'error';
+};
+
 export const savedWorkflowDetailQueryOptions = (workflowId: string) => ({
-  queryKey: ['workflow', 'call-saved', 'detail', workflowId] as const,
+  queryKey: savedWorkflowDetailQueryKey(workflowId),
   queryFn: ({ signal }: { signal: AbortSignal }): Promise<WorkflowRecordDTO> =>
     getLibraryWorkflowRecord(workflowId, signal),
+  retry: false,
   staleTime: 30_000,
 });
 

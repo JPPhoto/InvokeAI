@@ -118,8 +118,10 @@ export interface WorkflowInvocationNodeData {
   useCache: boolean;
   nodePack: string;
   inputs: Record<string, WorkflowFieldInstance>;
-  /** Runtime-only templates for fields exposed by the selected saved workflow. */
+  /** Persisted templates for fields exposed by the selected saved workflow. */
   dynamicInputTemplates?: Record<string, FieldInputTemplate>;
+  /** Runtime reconciliation state for the selected saved workflow. */
+  callSavedWorkflowStatus?: 'loading' | 'ready' | 'error';
 }
 
 export interface WorkflowInvocationNode {

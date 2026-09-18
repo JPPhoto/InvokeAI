@@ -85,10 +85,17 @@ export const Combobox = ({
       }),
     [filteredOptions]
   );
-  const handleOpenChange = useCallback((details: { open: boolean }) => {
-    setIsOpen(details.open);
-    setQuery('');
-  }, []);
+  const handleOpenChange = useCallback(
+    (details: { open: boolean }) => {
+      setIsOpen(details.open);
+      setQuery('');
+
+      if (!details.open) {
+        onInputValueChange?.('');
+      }
+    },
+    [onInputValueChange]
+  );
   const handleInputValueChange = useCallback(
     (details: { inputValue: string; reason?: string }) => {
       if (details.reason === 'input-change' || details.reason === 'clear-trigger') {

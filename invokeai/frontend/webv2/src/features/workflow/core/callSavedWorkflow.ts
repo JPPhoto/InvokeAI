@@ -15,6 +15,8 @@ import { validateConnectionTypes } from './validation';
 /** Prefix used by the backend to distinguish child-workflow inputs from node inputs. */
 export const CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX = 'saved_workflow_input::';
 
+export type CallSavedWorkflowStatus = 'loading' | 'ready' | 'error';
+
 export interface SavedWorkflowDynamicField {
   fieldName: string;
   fieldTemplate: FieldInputTemplate;
@@ -79,6 +81,7 @@ export const getSavedWorkflowDynamicFields = (
   }
 
   const dynamicFields: SavedWorkflowDynamicField[] = [];
+  const seenFieldNames = new Set<string>();
 
   for (const element of getFormElementsInOrder(workflow.form)) {
     if (element.type !== 'node-field') {
@@ -100,6 +103,12 @@ export const getSavedWorkflowDynamicFields = (
     }
 
     const dynamicFieldName = getDynamicFieldName(nodeId, fieldName);
+
+    if (seenFieldNames.has(dynamicFieldName)) {
+      continue;
+    }
+
+    seenFieldNames.add(dynamicFieldName);
     const label = field.label || fieldTemplate.title || fieldName;
     const description = field.description || fieldTemplate.description || '';
 
@@ -197,7 +206,8 @@ export const syncCallSavedWorkflowFields = (
   document: ProjectGraphState,
   nodeId: string,
   fields: SavedWorkflowDynamicField[],
-  edgeIdsToRemove: string[]
+  edgeIdsToRemove: string[],
+  status: CallSavedWorkflowStatus = 'ready'
 ): ProjectGraphState => {
   const node = document.nodes.find((candidate) => candidate.id === nodeId);
 
@@ -205,7 +215,10 @@ export const syncCallSavedWorkflowFields = (
     return document;
   }
 
-  const nextFieldNames = new Set(fields.map((field) => field.fieldName));
+  const uniqueFields = fields.filter(
+    (field, index) => fields.findIndex((candidate) => candidate.fieldName === field.fieldName) === index
+  );
+  const nextFieldNames = new Set(uniqueFields.map((field) => field.fieldName));
   const previousTemplates = node.data.dynamicInputTemplates ?? {};
   const nextInputs: typeof node.data.inputs = {};
   const nextTemplates: NonNullable<typeof node.data.dynamicInputTemplates> = {};
@@ -216,16 +229,24 @@ export const syncCallSavedWorkflowFields = (
     }
   }
 
-  for (const field of fields) {
+  for (const field of uniqueFields) {
     const previous = node.data.inputs[field.fieldName];
     const previousTemplate = previousTemplates[field.fieldName];
     const keepValue = previous && previousTemplate && sameFieldType(previousTemplate, field.fieldTemplate);
+    const label =
+      keepValue && previous && previousTemplate && previous.label !== previousTemplate.title
+        ? previous.label
+        : field.label;
+    const description =
+      keepValue && previous && previousTemplate && (previous.description ?? '') !== previousTemplate.description
+        ? previous.description
+        : field.description;
 
     nextTemplates[field.fieldName] = field.fieldTemplate;
     nextInputs[field.fieldName] = {
       ...(keepValue ? previous : {}),
-      description: field.description,
-      label: field.label,
+      description,
+      label,
       name: field.fieldName,
       value: keepValue ? previous.value : field.initialValue,
     };
@@ -233,7 +254,7 @@ export const syncCallSavedWorkflowFields = (
 
   const nextNode: WorkflowInvocationNode = {
     ...node,
-    data: { ...node.data, dynamicInputTemplates: nextTemplates, inputs: nextInputs },
+    data: { ...node.data, callSavedWorkflowStatus: status, dynamicInputTemplates: nextTemplates, inputs: nextInputs },
   };
 
   const removedEdgeIds = new Set(edgeIdsToRemove);
@@ -280,4 +301,29 @@ export const clearSavedWorkflowDynamicFields = (document: ProjectGraphState, nod
     [],
     edgeIds
   );
+};
+
+export const setCallSavedWorkflowStatus = (
+  document: ProjectGraphState,
+  nodeId: string,
+  status: CallSavedWorkflowStatus
+): ProjectGraphState => {
+  const node = document.nodes.find((candidate) => candidate.id === nodeId);
+
+  if (!node || !isInvocationNode(node) || node.data.type !== 'call_saved_workflow') {
+    return document;
+  }
+
+  if (node.data.callSavedWorkflowStatus === status) {
+    return document;
+  }
+
+  return {
+    ...document,
+    nodes: document.nodes.map((candidate) =>
+      candidate.id === nodeId && isInvocationNode(candidate)
+        ? { ...candidate, data: { ...candidate.data, callSavedWorkflowStatus: status } }
+        : candidate
+    ),
+  };
 };

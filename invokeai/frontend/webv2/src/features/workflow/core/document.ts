@@ -22,6 +22,7 @@ import type {
 
 import {
   clearSavedWorkflowDynamicFields,
+  setCallSavedWorkflowStatus,
   syncCallSavedWorkflowFields,
   type SavedWorkflowDynamicField,
 } from './callSavedWorkflow';
@@ -102,6 +103,7 @@ export const buildInvocationNode = (template: InvocationTemplate, position: XYPo
       type: template.type,
       useCache: template.useCache,
       version: template.version,
+      ...(template.type === 'call_saved_workflow' ? { callSavedWorkflowStatus: 'ready' as const } : {}),
     },
     id: createWorkflowId(template.type),
     position,
@@ -309,7 +311,9 @@ export type ProjectGraphAction =
       nodeId: string;
       fields: SavedWorkflowDynamicField[];
       edgeIdsToRemove: string[];
+      status?: 'loading' | 'ready' | 'error';
     }
+  | { type: 'setCallSavedWorkflowStatus'; nodeId: string; status: 'loading' | 'ready' | 'error' }
   | { type: 'setFieldLabel'; nodeId: string; fieldName: string; label: string }
   | { type: 'setFieldDescription'; nodeId: string; fieldName: string; description: string }
   | { type: 'setFieldSeedMode'; nodeId: string; fieldName: string; seedMode: SeedMode }
@@ -559,14 +563,25 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       const clearedDocument = shouldClearDynamicFields
         ? clearSavedWorkflowDynamicFields(document, action.nodeId)
         : document;
+      const nextDocument =
+        shouldClearDynamicFields && node && isInvocationNode(node) && node.data.type === 'call_saved_workflow'
+          ? setCallSavedWorkflowStatus(
+              clearedDocument,
+              action.nodeId,
+              typeof action.value === 'string' && action.value.trim() ? 'loading' : 'ready'
+            )
+          : clearedDocument;
 
-      return setFieldInstance(clearedDocument, action.nodeId, action.fieldName, (instance) => ({
+      return setFieldInstance(nextDocument, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
         value: action.value,
       }));
     }
     case 'syncCallSavedWorkflowFields': {
-      return syncCallSavedWorkflowFields(document, action.nodeId, action.fields, action.edgeIdsToRemove);
+      return syncCallSavedWorkflowFields(document, action.nodeId, action.fields, action.edgeIdsToRemove, action.status);
+    }
+    case 'setCallSavedWorkflowStatus': {
+      return setCallSavedWorkflowStatus(document, action.nodeId, action.status);
     }
     case 'setFieldLabel': {
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({

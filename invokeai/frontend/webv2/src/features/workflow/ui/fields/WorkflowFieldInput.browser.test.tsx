@@ -417,12 +417,14 @@ describe('WorkflowFieldInput saved workflows', () => {
 });
 
 describe('WorkflowFieldInput media inputs', () => {
-  it('still renders media controls when the host does not provide a dnd context', async () => {
+  it('renders media controls when the host provides the workflow dnd context', async () => {
     await act(() => {
       root.render(
         <ChakraProvider value={system}>
           <QueryClientProvider client={queryClient}>
-            <WorkflowFieldInput template={VIDEO_TEMPLATE} value={undefined} onChange={vi.fn()} />
+            <DndContext>
+              <WorkflowFieldInput template={VIDEO_TEMPLATE} value={undefined} onChange={vi.fn()} />
+            </DndContext>
           </QueryClientProvider>
         </ChakraProvider>
       );

@@ -100,7 +100,7 @@ describe('workflow JSON round-trip', () => {
     expect(serialized).toHaveProperty('form');
   });
 
-  it('does not persist runtime-only dynamic input templates', () => {
+  it('persists dynamic input templates needed to preserve Call Saved Workflow values', () => {
     const node = buildInvocationNode(template, { x: 0, y: 0 });
     node.data.dynamicInputTemplates = { runtime: template.inputs.prompt! };
     let doc = createProjectGraph('runtime-fields');
@@ -110,7 +110,10 @@ describe('workflow JSON round-trip', () => {
       nodes: Array<{ data: Record<string, unknown> }>;
     };
 
-    expect(serialized.nodes[0]?.data).not.toHaveProperty('dynamicInputTemplates');
+    expect(serialized.nodes[0]?.data).toHaveProperty('dynamicInputTemplates');
+    expect(parseWorkflowJson(serialized).document.nodes[0]).toMatchObject({
+      data: { dynamicInputTemplates: { runtime: template.inputs.prompt } },
+    });
   });
 
   it('round-trips notes, current_image, and connector UI nodes', () => {
@@ -223,7 +226,7 @@ describe('parseWorkflowJson tolerance', () => {
     });
   });
 
-  it('adds exposed fields that are missing from an existing stored form', () => {
+  it('does not merge stale exposed fields into an existing stored form', () => {
     const { document, warnings } = parseWorkflowJson({
       edges: [],
       exposedFields: [
@@ -264,7 +267,7 @@ describe('parseWorkflowJson tolerance', () => {
       getFormChildren(document.form).map(
         (element) => element.type === 'node-field' && element.data.fieldIdentifier.fieldName
       )
-    ).toEqual(['prompt', 'other']);
+    ).toEqual(['prompt']);
   });
 
   it('preserves connector nodes and edges', () => {

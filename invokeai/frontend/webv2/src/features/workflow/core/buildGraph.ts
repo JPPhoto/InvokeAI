@@ -63,10 +63,10 @@ const getNodeInputTemplates = (
 
 /**
  * Translates a board field value to the backend shape: `auto` and `none`
- * sentinels are omitted so the backend applies its default board behavior.
+ * sentinels are passed through for backend board handling.
  */
 const toBoardGraphValue = (value: unknown): unknown => {
-  if (value === 'auto' || value === 'none' || isEmptyValue(value)) {
+  if (isEmptyValue(value)) {
     return undefined;
   }
 
@@ -122,6 +122,25 @@ export const getProjectGraphReadiness = (
     if (!isExecutableInvocationType(node.data.type)) {
       reasons.push(`Batch/generator node "${getNodeDisplayName(node, templates)}" is not supported yet.`);
       continue;
+    }
+
+    if (node.data.type === 'call_saved_workflow') {
+      const workflowId = node.data.inputs.workflow_id?.value;
+
+      if (typeof workflowId !== 'string' || workflowId.trim() === '') {
+        reasons.push('Call Saved Workflow requires a saved workflow.');
+        continue;
+      }
+
+      if (node.data.callSavedWorkflowStatus === 'loading' || node.data.callSavedWorkflowStatus === undefined) {
+        reasons.push('Call Saved Workflow inputs are still loading.');
+        continue;
+      }
+
+      if (node.data.callSavedWorkflowStatus === 'error') {
+        reasons.push('The selected saved workflow is unavailable or incompatible.');
+        continue;
+      }
     }
 
     for (const inputTemplate of getNodeInputTemplates(node, template)) {
@@ -371,7 +390,7 @@ export const planWorkflowSeeds = (
       continue;
     }
 
-    for (const inputTemplate of Object.values(template.inputs)) {
+    for (const inputTemplate of Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates })) {
       if (!isSeedInputField(inputTemplate) || connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
         continue;
       }

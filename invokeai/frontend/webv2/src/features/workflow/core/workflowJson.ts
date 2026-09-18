@@ -2,6 +2,7 @@ import { SEED_MODES } from '@platform/core/seed';
 import { z } from 'zod';
 
 import type {
+  FieldInputTemplate,
   ProjectGraphState,
   WorkflowEdge,
   WorkflowFieldInstance,
@@ -81,6 +82,45 @@ const zConnectorNode = z.object({
 });
 
 const zAnyNode = z.union([zInvocationNode, zNotesNode, zCurrentImageNode, zConnectorNode]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isPersistedFieldInputTemplate = (value: unknown): value is FieldInputTemplate => {
+  if (!isRecord(value) || !isRecord(value.type)) {
+    return false;
+  }
+
+  return (
+    typeof value.name === 'string' &&
+    typeof value.title === 'string' &&
+    typeof value.description === 'string' &&
+    typeof value.required === 'boolean' &&
+    (value.fieldKind === 'input' || value.fieldKind === 'internal') &&
+    (value.input === 'connection' || value.input === 'direct' || value.input === 'any') &&
+    typeof value.type.name === 'string' &&
+    (value.type.cardinality === 'SINGLE' ||
+      value.type.cardinality === 'COLLECTION' ||
+      value.type.cardinality === 'SINGLE_OR_COLLECTION') &&
+    typeof value.type.batch === 'boolean'
+  );
+};
+
+const parsePersistedDynamicInputTemplates = (value: unknown): Record<string, FieldInputTemplate> | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const templates: Record<string, FieldInputTemplate> = {};
+
+  for (const [name, template] of Object.entries(value)) {
+    if (isPersistedFieldInputTemplate(template)) {
+      templates[name] = template;
+    }
+  }
+
+  return templates;
+};
 
 const zWorkflowEdge = z.object({
   id: z.string().catch(''),
@@ -220,39 +260,6 @@ const parseForm = (
     }
   }
 
-  // Legacy workflows may carry both a form and an exposedFields list. Keep
-  // fields added after the form was saved instead of silently dropping them.
-  const root = form.elements[form.rootElementId];
-
-  if (root?.type === 'container') {
-    const existingFieldKeys = new Set(
-      Object.values(form.elements)
-        .filter(
-          (element): element is Extract<WorkflowFormElement, { type: 'node-field' }> => element.type === 'node-field'
-        )
-        .map((element) => `${element.data.fieldIdentifier.nodeId}:${element.data.fieldIdentifier.fieldName}`)
-    );
-
-    for (const fieldIdentifier of exposedFields) {
-      const fieldKey = `${fieldIdentifier.nodeId}:${fieldIdentifier.fieldName}`;
-
-      if (!nodeIds.has(fieldIdentifier.nodeId) || existingFieldKeys.has(fieldKey)) {
-        continue;
-      }
-
-      const element: WorkflowFormElement = {
-        data: { fieldIdentifier, showDescription: false, showShuffle: false },
-        id: createWorkflowId('node-field'),
-        parentId: root.id,
-        type: 'node-field',
-      };
-
-      form.elements[element.id] = element;
-      root.data.children.push(element.id);
-      existingFieldKeys.add(fieldKey);
-    }
-  }
-
   // Drop node-field elements that point at nodes which did not survive parsing.
   for (const element of Object.values(form.elements)) {
     if (element.type !== 'node-field' || nodeIds.has(element.data.fieldIdentifier.nodeId)) {
@@ -335,8 +342,11 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
       };
     }
 
+    const dynamicInputTemplates = parsePersistedDynamicInputTemplates(node.data.dynamicInputTemplates);
+
     nodes.push({
       data: {
+        ...(dynamicInputTemplates ? { dynamicInputTemplates } : {}),
         inputs,
         isIntermediate: node.data.isIntermediate,
         isOpen: node.data.isOpen,
@@ -346,6 +356,14 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
         type: node.data.type,
         useCache: node.data.useCache,
         version: node.data.version,
+        ...(node.data.type === 'call_saved_workflow'
+          ? {
+              callSavedWorkflowStatus:
+                typeof inputs.workflow_id?.value === 'string' && inputs.workflow_id.value.trim()
+                  ? ('loading' as const)
+                  : ('ready' as const),
+            }
+          : {}),
       },
       id: node.id,
       position: node.position,
@@ -399,7 +417,7 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
 };
 
 const serializeInvocationNode = (node: Extract<WorkflowNode, { type: 'invocation' }>) => {
-  const { dynamicInputTemplates: _dynamicInputTemplates, ...data } = structuredClone(node.data);
+  const { callSavedWorkflowStatus: _callSavedWorkflowStatus, ...data } = structuredClone(node.data);
 
   return {
     data: { ...data, id: node.id },

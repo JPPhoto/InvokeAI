@@ -1,8 +1,14 @@
 import type { WorkflowRecordDTO } from '@features/workflow/data/api';
 
-import { savedWorkflowDetailQueryOptions } from '@features/workflow/data/savedWorkflowQueries';
+import { onWorkflowLibraryCacheInvalidated } from '@features/workflow/data/libraryCache';
+import {
+  getSavedWorkflowDetailQueryStatus,
+  isSavedWorkflowDetailQueryKey,
+  savedWorkflowDetailQueryOptions,
+  shouldFetchSavedWorkflowDetail,
+} from '@features/workflow/data/savedWorkflowQueries';
 import { getInvocationTemplatesSnapshot, subscribeInvocationTemplates } from '@features/workflow/data/templates';
-import { useWorkflowProjectSelector, useWorkflowUi } from '@features/workflow/ui/WorkflowUiContext';
+import { useWorkflowUi } from '@features/workflow/ui/WorkflowUiContext';
 import {
   CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   getSavedWorkflowDynamicEdgeIdsToRemove,
@@ -12,7 +18,6 @@ import {
 } from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffectEvent } from 'react';
 
 export const createDeferredCallSavedWorkflowReconciler = (reconcile: () => void) => {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -86,8 +91,9 @@ const needsDynamicFieldSync = (
         !currentInstance ||
         !hasSameFieldType(currentTemplate, field.fieldTemplate) ||
         JSON.stringify(currentTemplate) !== JSON.stringify(field.fieldTemplate) ||
-        currentInstance.label !== field.label ||
-        (currentInstance.description ?? '') !== field.description
+        (currentInstance.label === currentTemplate.title && currentInstance.label !== field.label) ||
+        ((currentInstance.description ?? '') === currentTemplate.description &&
+          (currentInstance.description ?? '') !== field.description)
       );
     })
   ) {
@@ -100,16 +106,28 @@ const needsDynamicFieldSync = (
 /** Reconciles asynchronously loaded child workflow forms into the project document. */
 export const CallSavedWorkflowSyncRuntime = () => {
   const queryClient = useQueryClient();
-  const projectGraph = useWorkflowProjectSelector((snapshot) => snapshot.projectGraph);
   const { commands, project: projectPort } = useWorkflowUi();
-  const reconcile = useEffectEvent(() => {
+  const reconcile = () => {
     const templatesSnapshot = getInvocationTemplatesSnapshot();
 
     if (templatesSnapshot.status !== 'loaded') {
       return;
     }
 
-    const document = projectGraph;
+    const document = projectPort.getSnapshot().projectGraph;
+    const setStatus = (nodeId: string, workflowId: string, status: 'loading' | 'ready' | 'error') => {
+      const currentDocument = projectPort.getSnapshot().projectGraph;
+      const currentNode = currentDocument.nodes.find((candidate) => candidate.id === nodeId);
+
+      if (
+        currentNode?.type === 'invocation' &&
+        currentNode.data.type === 'call_saved_workflow' &&
+        currentNode.data.inputs.workflow_id?.value === workflowId &&
+        currentNode.data.callSavedWorkflowStatus !== status
+      ) {
+        commands.editGraph({ nodeId, status, type: 'setCallSavedWorkflowStatus' });
+      }
+    };
 
     for (const node of document.nodes) {
       if (node.type !== 'invocation' || node.data.type !== 'call_saved_workflow') {
@@ -124,30 +142,59 @@ export const CallSavedWorkflowSyncRuntime = () => {
           Object.keys(node.data.dynamicInputTemplates ?? {}).length > 0 ||
           Object.keys(node.data.inputs).some((name) => name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX));
 
-        if (hasDynamicFields) {
-          commands.editGraph({ edgeIdsToRemove: [], fields: [], nodeId: node.id, type: 'syncCallSavedWorkflowFields' });
+        if (hasDynamicFields || node.data.callSavedWorkflowStatus !== 'ready') {
+          commands.editGraph({
+            edgeIdsToRemove: [],
+            fields: [],
+            nodeId: node.id,
+            status: 'ready',
+            type: 'syncCallSavedWorkflowFields',
+          });
         }
         continue;
       }
 
       const detailOptions = savedWorkflowDetailQueryOptions(workflowId);
-      const record = queryClient.getQueryData<WorkflowRecordDTO>(detailOptions.queryKey);
+      const query = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
 
-      if (!record) {
-        void queryClient.ensureQueryData(detailOptions).catch(() => undefined);
+      if (shouldFetchSavedWorkflowDetail(query)) {
+        setStatus(node.id, workflowId, 'loading');
+        void queryClient.ensureQueryData({ ...detailOptions, revalidateIfStale: true }).catch(() => {
+          setStatus(node.id, workflowId, 'error');
+        });
         continue;
       }
 
-      const selectedWorkflow = getSelectedSavedWorkflow(workflowId, record);
+      const queryStatus = getSavedWorkflowDetailQueryStatus(query);
+
+      if (queryStatus === 'loading') {
+        setStatus(node.id, workflowId, 'loading');
+        continue;
+      }
+
+      if (queryStatus === 'error') {
+        setStatus(node.id, workflowId, 'error');
+        continue;
+      }
+
+      const record = query?.state.data as WorkflowRecordDTO | undefined;
+      const selectedWorkflow = record ? getSelectedSavedWorkflow(workflowId, record) : undefined;
+
+      if (!selectedWorkflow || selectedWorkflow.call_saved_workflow_compatibility?.is_callable === false) {
+        setStatus(node.id, workflowId, 'error');
+        continue;
+      }
+
       let childDocument;
 
       try {
-        childDocument = selectedWorkflow ? parseWorkflowJson(selectedWorkflow.workflow).document : undefined;
+        childDocument = parseWorkflowJson(selectedWorkflow.workflow).document;
       } catch {
         childDocument = undefined;
       }
 
       if (!childDocument) {
+        setStatus(node.id, workflowId, 'error');
         continue;
       }
 
@@ -159,11 +206,20 @@ export const CallSavedWorkflowSyncRuntime = () => {
         templatesSnapshot.templates
       );
 
-      if (needsDynamicFieldSync(node, fields, edgeIdsToRemove, document.edges)) {
-        commands.editGraph({ edgeIdsToRemove, fields, nodeId: node.id, type: 'syncCallSavedWorkflowFields' });
+      if (
+        node.data.callSavedWorkflowStatus !== 'ready' ||
+        needsDynamicFieldSync(node, fields, edgeIdsToRemove, document.edges)
+      ) {
+        commands.editGraph({
+          edgeIdsToRemove,
+          fields,
+          nodeId: node.id,
+          status: 'ready',
+          type: 'syncCallSavedWorkflowFields',
+        });
       }
     }
-  });
+  };
 
   /* eslint-disable react-hooks/rules-of-hooks -- useMountEffect is the repository's explicit useEffect wrapper */
   useMountEffect(() => {
@@ -172,13 +228,22 @@ export const CallSavedWorkflowSyncRuntime = () => {
 
     const unsubscribeProject = projectPort.subscribe(reconciler.schedule);
     const unsubscribeTemplates = subscribeInvocationTemplates(reconciler.schedule);
-    const unsubscribeQueries = queryClient.getQueryCache().subscribe(reconciler.schedule);
+    const unsubscribeQueries = queryClient.getQueryCache().subscribe((event) => {
+      if (isSavedWorkflowDetailQueryKey(event.query.queryKey)) {
+        reconciler.schedule();
+      }
+    });
+    const unsubscribeLibrary = onWorkflowLibraryCacheInvalidated(() => {
+      void queryClient.invalidateQueries({ queryKey: ['workflow', 'call-saved', 'detail'] });
+      reconciler.schedule();
+    });
 
     return () => {
       reconciler.dispose();
       unsubscribeProject();
       unsubscribeTemplates();
       unsubscribeQueries();
+      unsubscribeLibrary();
     };
   });
   /* eslint-enable react-hooks/rules-of-hooks */

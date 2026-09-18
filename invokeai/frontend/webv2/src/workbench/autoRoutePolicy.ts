@@ -105,6 +105,7 @@ const GRAPH_EDIT_CONFIDENCE = {
   setNodeNotes: false,
   setNodePosition: false,
   setNodeUseCache: false,
+  setCallSavedWorkflowStatus: false,
   syncCallSavedWorkflowFields: false,
   unexposeField: false,
 } satisfies Record<ProjectGraphAction['type'], boolean>;
