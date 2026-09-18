@@ -19,8 +19,7 @@ import type {
   GalleryView,
 } from '@features/gallery/core/types';
 
-import { DATE_BOARD_ID_PREFIX, isDateBoardId } from '@features/gallery/core/boardLabels';
-import { parseGalleryItemKey } from '@features/gallery/core/items';
+import { DATE_BOARD_ID_PREFIX, isDateBoardId, parseGalleryItemKey } from '@features/gallery/core/items';
 import { getExternalImageFile, getImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { isTimestampInRange } from '@platform/search/dateTokens';
 import {

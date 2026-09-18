@@ -1,7 +1,7 @@
 import type { GalleryBoard, GalleryImage, GalleryOrderDir, GalleryView } from '@features/gallery/core/types';
 
-import { isDateBoardId } from '@features/gallery/core/boardLabels';
 import {
+  isDateBoardId,
   legacyGeneratedImageToGalleryItem,
   toGalleryItemKey,
   type GalleryItem,
