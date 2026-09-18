@@ -161,6 +161,10 @@ const adapter: GalleryUiAdapter = {
     setPageInfo: noop,
     setSearchTerm: noop,
     setStarredOnly: noop,
+    setSemanticSearchMode: noop,
+    setSemanticSearchText: noop,
+    commitSemanticSearch: noop,
+    clearSearch: noop,
     setView: noop,
     toggleItemSelection: noop,
     updateSettings: noop,
@@ -677,6 +681,7 @@ describe('setSemanticImageQuery', () => {
       galleryPage: 0,
       searchTerm: '',
       semanticImageQuery: { imageName: 'ref.png', kind: 'image' },
+      semanticSearchText: null,
     });
   });
 
@@ -684,6 +689,11 @@ describe('setSemanticImageQuery', () => {
     actionsRef.current?.setSemanticImageQuery(null);
 
     expect(patchGalleryValues).toHaveBeenCalledOnce();
-    expect(patchGalleryValues).toHaveBeenCalledWith({ galleryPage: 0, searchTerm: '', semanticImageQuery: null });
+    expect(patchGalleryValues).toHaveBeenCalledWith({
+      galleryPage: 0,
+      searchTerm: '',
+      semanticImageQuery: null,
+      semanticSearchText: null,
+    });
   });
 });
