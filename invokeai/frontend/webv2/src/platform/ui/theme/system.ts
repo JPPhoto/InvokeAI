@@ -343,6 +343,13 @@ const config = defineConfig({
     },
   },
   theme: {
+    keyframes: {
+      // A band crossing an indeterminate progress track (StatusWidgetChip).
+      'wb-status-sweep': {
+        from: { transform: 'translateX(-100%)' },
+        to: { transform: 'translateX(300%)' },
+      },
+    },
     tokens: {
       // Pro-app convention: controls keep the default arrow cursor; pointer is
       // reserved for links. Overrides Chakra's `button`/`switch` pointer tokens.
