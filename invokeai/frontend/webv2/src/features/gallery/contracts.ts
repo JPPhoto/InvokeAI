@@ -62,9 +62,13 @@ export {
 export {
   claimGalleryNavigationSequence,
   getGalleryDeletionSuccessor,
+  getGalleryNavigationStep,
+  getGallerySessionNavigationKey,
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,
   isGalleryNavigationCurrent,
   requestGalleryItemReveal,
+  type GalleryNavigationDirection,
+  type GalleryNavigationEntry,
 } from './core/selection';

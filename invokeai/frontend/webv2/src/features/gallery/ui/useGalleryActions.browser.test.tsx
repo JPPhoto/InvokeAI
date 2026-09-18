@@ -181,6 +181,7 @@ const adapter: GalleryUiAdapter = {
   liveFollowEnabled: false,
   progressSessions: [],
   pinnedProgressSessionId: null,
+  followedProgressSessionId: null,
   followProgressSession: vi.fn(),
   notifications: {
     add: (...args: unknown[]) => mocks.notificationsAdd(...args),

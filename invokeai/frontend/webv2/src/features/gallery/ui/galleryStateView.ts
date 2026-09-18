@@ -190,11 +190,24 @@ export const getGalleryCompareImage = (values: Record<string, unknown>): Gallery
     selectedImageName: null,
   });
 
+/** The infinite window's anchor page; 0 whenever the window covers the top of the listing. */
+export const getGalleryAnchoredWindowPage = (values: Record<string, unknown>): number => {
+  const page = getGalleryPage(values);
+
+  return getGallerySettings(values).paginationMode === 'infinite' && page > 0 ? page : 0;
+};
+
+/**
+ * `starredStripItems` are the strip the grid pins above the listing: a
+ * starred selection lives there, never in the unstarred listing, and still
+ * counts as visible.
+ */
 export const getGalleryStateView = (
   values: Record<string, unknown>,
   backendBoards: GalleryBoard[],
   backendItems: GalleryItem[] | null,
-  isLoading: boolean
+  isLoading: boolean,
+  starredStripItems: readonly GalleryItem[] = []
 ): GalleryStateView => {
   const localItems = getBoundedRecentImages(values.recentImages).map(legacyGeneratedImageToGalleryItem);
   const items = backendItems ?? (isLoading ? [] : localItems);
@@ -205,8 +218,9 @@ export const getGalleryStateView = (
       : selectedItem
         ? toGalleryItemKey(selectedItem)
         : null;
+  const isVisible = (item: GalleryItem) => toGalleryItemKey(item) === persistedSelectedItemKey;
   const visibleSelectedItemKey =
-    persistedSelectedItemKey && items.some((item) => toGalleryItemKey(item) === persistedSelectedItemKey)
+    persistedSelectedItemKey && (items.some(isVisible) || starredStripItems.some(isVisible))
       ? persistedSelectedItemKey
       : null;
   const selectedItemKeys = getPersistedSelectedGalleryItemKeys(values);
@@ -234,7 +248,6 @@ export const getGalleryStateView = (
     compareImageKey !== visibleSelectedItemKey;
   const semanticImageQuery = getGallerySemanticImageQuery(values);
   const page = getGalleryPage(values);
-  const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && page > 0;
   const selectedImageQuery = getGallerySelectedImageQuery(values);
   const revealTargetPage =
     settings.paginationMode === 'paginated' &&
@@ -252,7 +265,7 @@ export const getGalleryStateView = (
       : null;
 
   return {
-    anchoredWindowPage: isAnchoredInfiniteWindow ? page : 0,
+    anchoredWindowPage: getGalleryAnchoredWindowPage(values),
     boards,
     compareImageKey,
     galleryView,

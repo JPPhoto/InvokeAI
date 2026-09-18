@@ -282,6 +282,16 @@ describe('gallery state view', () => {
     expect(gallery.selectedItemKeys).toEqual(['image:selected.png']);
   });
 
+  it('treats a selection in the starred strip as visible, though the listing does not hold it', () => {
+    const starred = { ...createImageItem('starred.png'), starred: true };
+    const values = { selectedImageName: 'image:starred.png' };
+
+    expect(getGalleryStateView(values, boards, [createImageItem('regular.png')], false).selectedItemKey).toBeNull();
+    expect(
+      getGalleryStateView(values, boards, [createImageItem('regular.png')], false, [starred]).selectedItemKey
+    ).toBe('image:starred.png');
+  });
+
   it('projects same-name images and videos independently by qualified key', () => {
     const image = createImageItem('shared');
     const video = createVideoItem('shared');

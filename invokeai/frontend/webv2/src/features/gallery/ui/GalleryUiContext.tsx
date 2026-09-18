@@ -110,7 +110,10 @@ export interface GalleryUiAdapter {
   exportProject(projectId: string, projectName: string): void;
   progressSessions: QueueProgressSession[];
   pinnedProgressSessionId: string | null;
-  followProgressSession(sessionId: string): void;
+  /** The session Preview is showing while it follows live; null otherwise. The arrow keys step from it. */
+  followedProgressSessionId: string | null;
+  /** Follow `sessionId` live; a tile click also reveals Preview, an arrow step must not move the layout. */
+  followProgressSession(sessionId: string, options: { revealPreview: boolean }): void;
   liveFollowEnabled: boolean;
   widgets: {
     /** Open (or reveal) the Gallery widget; false when no region can host it. */
