@@ -30,10 +30,10 @@ class VideoFileStorageBase(ABC):
     ) -> None:
         """Saves a video by moving the file at `source_path` into storage, then writes a sibling
         WEBP thumbnail, plus an optional sidecar JSON of metadata/workflow/graph.
-        The thumbnail is extracted from a representative frame (~1s in; see
-        ``representative_thumbnail_frame_index``), located using ``duration``/``fps`` when the
-        caller knows them. A caller that already decoded a representative frame can pass it as
-        `first_frame` to skip the extraction.
+        The thumbnail is extracted from a representative frame (the first informative one on a
+        seek ladder starting ~1s in; see ``extract_representative_video_frame``), located using
+        ``duration``/``fps`` when the caller knows them. A caller that already decoded a
+        representative frame can pass it as `first_frame` to skip the extraction.
 
         `source_path` is **consumed** by default: almost every caller hands over a temp file it just
         wrote, and moving it is both cheaper and the correct lifetime. A caller whose source is a

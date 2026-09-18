@@ -383,14 +383,14 @@ def _probe_decodable_video(path: Path) -> tuple[tuple[int, int, float, Optional[
     """Probes metadata and proves the video has a decodable frame.
 
     Returns the metadata plus the decoded frame so the save path can reuse it as the
-    thumbnail source instead of spawning another decode worker. The frame is taken ~1s into
-    the clip (see representative_thumbnail_frame_index) rather than at index 0 — first
-    frames are routinely unrepresentative (fade-ins, the synthesized waveform track's empty
-    first window) — with a frame-0 fallback inside the helper. Acceptance is thereby
-    slightly WIDER than before: a file whose frame 0 is corrupt but whose ~1s frame decodes
-    is now accepted rather than 415'd. A decode timeout is contention on a loaded server, not evidence the video is
-    bad — probe_video already succeeded — so it yields (metadata, None) and the upload
-    proceeds, with save-time thumbnail extraction as the backstop.
+    thumbnail source instead of spawning another decode worker. The frame comes from the
+    thumbnail seek ladder (see extract_representative_video_frame): the first informative
+    frame found starting ~1s in, else the best-scoring one, with frame 0 as the last rung.
+    Acceptance is thereby slightly WIDER than a frame-0 check: a file whose frame 0 is
+    corrupt but whose later frame decodes is accepted rather than 415'd. A decode timeout
+    is contention on a loaded server, not evidence the video is bad — probe_video already
+    succeeded — so it yields (metadata, None) and the upload proceeds, with save-time
+    thumbnail extraction as the backstop.
     """
     width, height, duration, fps, codec = probe_video_with_codec(path)
     if codec is None or codec.lower() not in {"h264", "avc", "avc1", "libx264"}:
@@ -897,7 +897,7 @@ def get_video_thumbnail(
     current_user: CurrentMediaUserOrDefault,
     video_name: str = PathParam(description="The name of thumbnail file to get"),
 ) -> Response:
-    """Returns the first-frame WebP thumbnail of an authorized video."""
+    """Returns the WebP thumbnail of an authorized video."""
     _assert_video_read_access(video_name, current_user)
     try:
         path = ApiDependencies.invoker.services.videos.get_path(video_name, thumbnail=True)

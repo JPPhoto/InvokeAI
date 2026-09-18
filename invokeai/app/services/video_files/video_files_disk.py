@@ -27,7 +27,7 @@ class _StagedDelete:
 
 
 class DiskVideoFileStorage(VideoFileStorageBase):
-    """Stores video files on disk under {outputs}/videos/, with first-frame WebP thumbnails under
+    """Stores video files on disk under {outputs}/videos/, with representative-frame WebP thumbnails under
     {outputs}/videos/thumbnails/ and optional JSON sidecars for metadata/workflow/graph under
     {outputs}/videos/sidecars/."""
 
@@ -83,8 +83,8 @@ class DiskVideoFileStorage(VideoFileStorageBase):
             # the video record + file in place and the invocation to complete. A missing
             # thumbnail leaves the gallery with a broken-image placeholder for that item, which
             # is annoying but not fatal. The upload path already decoded a representative frame
-            # to prove decodability and passes it in, saving a decode-worker subprocess per
-            # upload; this fallback picks the same ~1s-in frame for generated/derived videos.
+            # to prove decodability and passes it in, saving the decode-worker spawns per
+            # upload; this fallback runs the same seek ladder for generated/derived videos.
             frame = first_frame
             if frame is None:
                 try:
