@@ -19,6 +19,7 @@ import type {
   GalleryView,
 } from '@features/gallery/core/types';
 
+import { DATE_BOARD_ID_PREFIX, isDateBoardId } from '@features/gallery/core/boardLabels';
 import { parseGalleryItemKey } from '@features/gallery/core/items';
 import { getExternalImageFile, getImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { isTimestampInRange } from '@platform/search/dateTokens';
@@ -67,10 +68,9 @@ interface BackendBoardDTO {
  * unassigned images (board_id 'none'); 'date' is a read-only virtual board
  * grouping images by creation date (id 'by_date:YYYY-MM-DD').
  */
-const DATE_BOARD_ID_PREFIX = 'by_date:';
 export const ALL_READABLE_BOARDS_ID = 'all';
 
-export const isDateBoardId = (boardId: string): boolean => boardId.startsWith(DATE_BOARD_ID_PREFIX);
+export { isDateBoardId };
 
 const getDateFromBoardId = (boardId: string): string => boardId.slice(DATE_BOARD_ID_PREFIX.length);
 

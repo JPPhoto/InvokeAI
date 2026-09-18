@@ -1,5 +1,6 @@
 import type { GalleryBoard, GalleryImage, GalleryOrderDir, GalleryView } from '@features/gallery/core/types';
 
+import { isDateBoardId } from '@features/gallery/core/boardLabels';
 import {
   legacyGeneratedImageToGalleryItem,
   toGalleryItemKey,
@@ -90,6 +91,19 @@ export const getGallerySemanticSearchText = (values: Record<string, unknown>): s
 /** The saved board choice as persisted, before any resolution against loaded boards. */
 export const getGalleryRawSelectedBoardId = (values: Record<string, unknown>): string | null =>
   typeof values.selectedBoardId === 'string' ? values.selectedBoardId : null;
+
+/**
+ * Where new results and uploads land: the board the person picked, else the
+ * project's own board. A date bucket cannot hold items, so it defers to the
+ * project board too; an explicit Uncategorized (`'none'`) choice is kept.
+ */
+export const getGalleryDestinationBoardId = (values: Record<string, unknown>): string | null => {
+  const selectedBoardId = getGalleryRawSelectedBoardId(values);
+
+  return selectedBoardId !== null && !isDateBoardId(selectedBoardId)
+    ? selectedBoardId
+    : getGalleryProjectBoardId(values);
+};
 
 /**
  * Where new results land, resolved against the boards this install actually has.

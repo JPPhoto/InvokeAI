@@ -4731,6 +4731,21 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(queueItem.snapshot.galleryBoardId).toBe('backend-board-id');
   });
 
+  it('sends gallery submissions to the project board until a board is picked', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, {
+      boardId: 'project-board',
+      projectId: getActiveProject(state).id,
+      type: 'setGalleryProjectBoardId',
+    });
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = primeGenerate(state);
+    state = submitGenerate(state);
+
+    expect(getActiveProject(state).queue.items[0]?.snapshot.galleryBoardId).toBe('project-board');
+  });
+
   it('stores full selected gallery image data for Preview widget', () => {
     let state = createInitialWorkbenchState();
     const image = createGalleryImageItem('backend-selected.png');

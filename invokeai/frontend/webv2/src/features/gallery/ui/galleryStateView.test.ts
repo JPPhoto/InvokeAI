@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getBoardCounts,
+  getGalleryDestinationBoardId,
   getGallerySelectedBoardId,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
@@ -339,5 +340,20 @@ describe('gallery state view', () => {
     );
     expect(ranked.semanticImageQuery).toEqual({ imageName: 'ref.png', kind: 'image' });
     expect(getGalleryStateView({ selectedBoardId: 'board-1' }, boards, [], false).semanticImageQuery).toBeNull();
+  });
+});
+
+describe('getGalleryDestinationBoardId', () => {
+  it('sends results to the picked board, keeping an explicit Uncategorized choice', () => {
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'picked' })).toBe('picked');
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'none' })).toBe('none');
+  });
+
+  it('falls back to the project board when nothing is picked or a date bucket is', () => {
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project' })).toBe('project');
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'by_date:2026-07-15' })).toBe(
+      'project'
+    );
+    expect(getGalleryDestinationBoardId({})).toBeNull();
   });
 });

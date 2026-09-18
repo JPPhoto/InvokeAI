@@ -54,6 +54,7 @@ export {
 } from './core/settings';
 export {
   getGalleryCompareImage,
+  getGalleryDestinationBoardId,
   getGalleryPage,
   getGallerySelectedImagePage,
   getGallerySelectedImageQuery,

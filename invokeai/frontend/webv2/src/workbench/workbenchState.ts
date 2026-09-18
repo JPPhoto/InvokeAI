@@ -59,6 +59,7 @@ import {
   getGallerySettings,
   parseGallerySemanticReference,
   toGallerySemanticTextReference,
+  getGalleryDestinationBoardId,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
   normalizeGalleryImage,
@@ -3228,7 +3229,7 @@ const enqueueCompiledSnapshot = (
             seedStep: seedPlan?.step ?? 0,
           }
         : { error: `${route.sourceId} queue item is missing source submission metadata.`, kind: 'invalid' };
-  const selectedGalleryBoardId = widgetStates.gallery?.values.selectedBoardId;
+  const galleryBoardId = getGalleryDestinationBoardId(widgetStates.gallery?.values ?? {});
   const generatePresentationSettings = normalizeGenerateSettings(widgetStates.generate?.values);
   const videoPresentationDimensions =
     route.sourceId === 'video' && videoSettings?.model ? getVideoDimensions(videoSettings.model, videoSettings) : null;
@@ -3269,7 +3270,7 @@ const enqueueCompiledSnapshot = (
       },
       destination: route.destination,
       filterIntermediateResults: route.sourceId === 'workflow',
-      galleryBoardId: typeof selectedGalleryBoardId === 'string' ? selectedGalleryBoardId : null,
+      galleryBoardId,
       graph: { id: graph.id, label: graph.label },
       presentation: {
         // Placeholder sizing only: superseded by the backend's real item ids as

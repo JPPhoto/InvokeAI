@@ -49,7 +49,6 @@ import {
   getGalleryItemByRef,
   getGalleryVideoMetadata,
   getGalleryVideoWorkflow,
-  isDateBoardId,
   isInvalidGalleryBoardDestination,
   listGalleryBoards,
   makeImageCanvasAsset,
@@ -250,8 +249,6 @@ export const galleryItemOrganization = {
 export const galleryDestinations = {
   list: listGalleryBoards,
 } as const;
-
-export const isGalleryVirtualBoard = isDateBoardId;
 
 /**
  * Whether a board id can actually receive item attachments. Virtual destinations
