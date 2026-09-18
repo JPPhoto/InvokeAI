@@ -2970,7 +2970,15 @@
       "panelContent": "Workflow panel content",
       "panelMode": "Workflow panel mode",
       "resizeNodeInspector": "Resize node inspector",
-      "runOutputsNotRecorded": "Run outputs are not recorded per node yet; results currently route to the Gallery or Canvas. This tab will show the node's outputs from its most recent run once run records land.",
+      "latestOutput": "Latest output",
+      "noRunRecorded": "This node has not run in this session.",
+      "outputImage": "Output image",
+      "runStatus": {
+        "completed": "Completed",
+        "failed": "Failed",
+        "running": "Running…"
+      },
+      "status": "Status",
       "newWorkflowWithEllipsis": "New workflow…",
       "saveToLibrary": "Save to library",
       "selectNodeToInspect": "Select a node in the Workflow editor to inspect it.",
