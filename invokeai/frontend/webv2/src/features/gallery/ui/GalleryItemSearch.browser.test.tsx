@@ -72,6 +72,7 @@ const adapter: GalleryUiAdapter = {
   liveFollowEnabled: false,
   progressSessions: [],
   pinnedProgressSessionId: null,
+  followedProgressSessionId: null,
   followProgressSession: noop,
   notifications: { add: notificationsAdd, reportError: noop },
   projectId: 'project-1',
