@@ -5,7 +5,7 @@ import { updateModel } from '@features/models/data/api';
 import { replaceModelInStore } from '@features/models/data/modelsStore';
 import { useScopedAction } from '@platform/react/useScopedAction';
 import { assertAccountScopeCurrent } from '@platform/state/accountLifecycle';
-import { Field } from '@platform/ui';
+import { Field } from '@platform/ui/Field';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
