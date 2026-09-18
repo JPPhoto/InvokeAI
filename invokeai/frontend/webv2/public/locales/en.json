@@ -1867,10 +1867,11 @@
       "floatWindow": "Float Window",
       "maximize": "Maximize",
       "move": "Move {{label}} window",
+      "railSlot": "{{label}} (floating — click to dock)",
       "resize": "Resize window",
       "restore": "Restore",
-      "shade": "Shade",
-      "unshade": "Unshade"
+      "shade": "Collapse",
+      "unshade": "Expand"
     },
     "loadingLabel": "Loading {{label}}",
     "moveToLeftSide": "Move to left side",
@@ -2512,7 +2513,6 @@
       "hideInProgressDiffusion": "Hide in-progress diffusion",
       "imageCount_one": "{{count}} image",
       "imageCount_other": "{{count}} images",
-      "invoke": "Invoke",
       "itemCount_one": "{{count}} item",
       "itemCount_other": "{{count}} items",
       "loadingBoard": "Loading board",

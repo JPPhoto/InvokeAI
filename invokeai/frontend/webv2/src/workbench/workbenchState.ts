@@ -251,6 +251,7 @@ type WorkbenchReducerAction =
       region?: WidgetRegion;
     }
   | { type: 'dockFloatingWidget'; instanceId: WidgetInstanceId }
+  | { type: 'closeFloatingWidget'; instanceId: WidgetInstanceId }
   | {
       type: 'setFloatingWidgetGeometry';
       instanceId: WidgetInstanceId;
@@ -3953,6 +3954,19 @@ export const __workbenchReducerInternal = (
           action.instanceId,
           context
         );
+      });
+    }
+    case 'closeFloatingWidget': {
+      // The window is the instance's only placement, so closing it is one
+      // change: the entry goes, nothing docks, and no surface is revealed.
+      return updateActiveProject(state, (project) => {
+        if (!project.floatingWidgets?.[action.instanceId]) {
+          return project;
+        }
+
+        const { [action.instanceId]: _closed, ...remaining } = project.floatingWidgets;
+
+        return { ...project, floatingWidgets: Object.keys(remaining).length > 0 ? remaining : undefined };
       });
     }
     case 'setFloatingWidgetGeometry': {
