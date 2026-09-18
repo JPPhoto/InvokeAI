@@ -637,8 +637,9 @@ describe('workbench widget region defaults', () => {
       'gallery',
       'queue',
     ]);
+    // Edit folds the editors into Layers and Video keeps a still-free rail.
     for (const preset of layoutPresets) {
-      if (preset.id !== 'edit') {
+      if (preset.id !== 'edit' && preset.id !== 'video') {
         expect(preset.snapshot.widgetRegions.right.instanceIds).toContain('image-map');
       }
     }
