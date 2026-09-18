@@ -13,6 +13,7 @@ need a second copy.
 import torch
 
 from invokeai.backend.quantization.fp8_scaled import expand_weight_scale, is_scale_metadata_key
+from invokeai.backend.quantization.int8_convrot import reject_int8_layers_a_plain_fold_cannot_decode
 
 
 def _strip_comfyui_prefix(sd: dict) -> dict:
@@ -33,7 +34,7 @@ def _strip_comfyui_prefix(sd: dict) -> dict:
     return stripped
 
 
-def _dequantize_comfyui_fp8(sd: dict, compute_dtype: torch.dtype) -> int:
+def _dequantize_comfyui_fp8(sd: dict, compute_dtype: torch.dtype, what: str = "This checkpoint") -> int:
     """Dequantize ComfyUI-style fp8_scaled weights in-place. Returns count of dequantized tensors.
 
     Weights are dequantized directly to `compute_dtype` (typically bf16) instead of via a
@@ -56,6 +57,7 @@ def _dequantize_comfyui_fp8(sd: dict, compute_dtype: torch.dtype) -> int:
     in the file is a scale that still needs applying — i.e. a checkpoint must not ship
     already-dequantized weights alongside their scales.
     """
+    reject_int8_layers_a_plain_fold_cannot_decode(sd, what)
     scale_suffixes = (".weight_scale", ".scale_weight")
     weight_scale_keys = [k for k in sd.keys() if isinstance(k, str) and k.endswith(scale_suffixes)]
     count = 0

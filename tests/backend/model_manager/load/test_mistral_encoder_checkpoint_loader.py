@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 import torch
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 
 from invokeai.backend.model_manager.configs.mistral_encoder import MistralEncoder_Checkpoint_Config
 from invokeai.backend.model_manager.load.model_loaders import mistral_encoder
@@ -19,7 +19,7 @@ from invokeai.backend.model_manager.load.model_loaders.mistral_encoder import Mi
 from invokeai.backend.model_manager.taxonomy import MistralVariantType
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear, NVFP4Payload
 from tests.fixtures.loader_seams import Seam, prepare
-from tests.fixtures.quantized_payloads import comfy_quant_marker
+from tests.fixtures.quantized_payloads import comfy_quant_marker, quantize_convrot
 
 # The loader derives head counts as projection rows // 128: two query heads over one key/value head, so a config
 # that mixes up the two lookups, or falls back to the cow model's, cannot build this model. Dimensions are multiples
@@ -185,6 +185,39 @@ def test_an_nvfp4_mixed_checkpoint_keeps_its_nvfp4_layers_packed_under_either_fp
     )
     assert len(run.reserved) == 1
     assert abs(run.reserved[0] - expected_bytes) < 1024, (run.reserved, expected_bytes)
+
+
+@pytest.mark.parametrize("keep_fp8", [False, True], ids=["fp8_folded", "fp8_kept"])
+def test_an_int8_convrot_layer_is_refused_rather_than_folded_unrotated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, keep_fp8: bool
+) -> None:
+    """This encoder has no int8 branch, and `int8_tensorwise` shares the fp8 key layout, so the fold
+    applied the scale and skipped the inverse rotation -- a weight of the right shape and magnitude
+    that bears no relation to the stored one.
+
+    Both branches, because the first version of this guard only covered one. `keep_fp8` is
+    unconditionally true on CUDA, and that branch's `extract_fp8_scaled_layers` pops every scale key
+    -- discarding the ones whose weight is not float8 -- and deletes the markers with them. A check
+    downstream of it is a no-op on the device almost everyone loads on.
+    """
+    checkpoint, _, _ = _write_checkpoint(tmp_path, evidence="none")
+    tensors = load_file(checkpoint)
+    target = f"model.layers.0.{FP8_PROJECTION}"
+    payload = quantize_convrot(torch.randn(KV_ROWS, HIDDEN), group_size=64)
+    tensors[f"{target}.weight"] = payload.codes
+    tensors[f"{target}.weight_scale"] = payload.scale
+    tensors[f"{target}.comfy_quant"] = comfy_quant_marker(
+        {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 64}
+    )
+    save_file(tensors, checkpoint)
+    run = prepare(SEAM, monkeypatch, geometry=_fp8_matmul(keep_fp8))
+
+    with pytest.raises(ValueError, match="quantized with convrot"):
+        run.load(_config(checkpoint))
+
+    # And before the cache was evicted for a load that cannot finish. The reservation sits fifty
+    # lines below the check; a guard placed after it would cost a 16 GiB encoder's worth of room.
+    assert run.reserved == []
 
 
 def test_a_checkpoint_without_nvfp4_layers_loads_as_before(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
