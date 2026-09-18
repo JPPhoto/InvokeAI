@@ -691,8 +691,12 @@ describe('WorkflowLibraryDialog', () => {
 
     const menu = () => document.querySelector<HTMLElement>('[data-workflow-context-menu]');
 
-    await vi.waitFor(() => expect(menu()).not.toBeNull());
-    expect(menu()!.getBoundingClientRect().left).toBeGreaterThan(card('wf-landscape')!.getBoundingClientRect().left);
+    // The positioner places the menu a frame after it mounts; anchored inside the card, not at the viewport corner.
+    await vi.waitFor(() =>
+      expect(menu()?.getBoundingClientRect().left ?? 0).toBeGreaterThan(
+        card('wf-landscape')!.getBoundingClientRect().left
+      )
+    );
 
     await act(async () => {
       await userEvent.keyboard('{Escape}');
