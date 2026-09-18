@@ -435,6 +435,18 @@ def _reject_mx_scale(path: str) -> None:
     )
 
 
+def reject_mx_block_scale(path: str, scale: Any) -> None:
+    """Refuse an MX exponent grid to anything that would multiply it as a number.
+
+    The same refusal :func:`extract_fp8_scaled_layers` applies, for the folds that do not go through
+    it. An E8M0 byte is a biased exponent -- 127 means ``2**0`` -- so folding the grid as a linear
+    scale multiplies every weight by something around 120-135. Right shape, right dtype, roughly two
+    orders of magnitude out, and nothing raises.
+    """
+    if getattr(scale, "dtype", None) in _MX_SCALE_DTYPES:
+        _reject_mx_scale(path)
+
+
 def _normalize_weight_scale(scale: torch.Tensor) -> torch.Tensor:
     """Canonical float32 form of a weight scale, preserving its layout.
 

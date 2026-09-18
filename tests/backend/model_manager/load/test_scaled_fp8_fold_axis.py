@@ -27,6 +27,8 @@ from invokeai.backend.model_manager.load.model_loaders.z_image import _fold_comf
 from invokeai.backend.quantization.fp8_scaled import (
     WEIGHT_SCALE_SUFFIXES,
 )
+from invokeai.backend.quantization.nvfp4 import pop_nvfp4_layers
+from tests.fixtures.quantized_payloads import nvfp4_signed_tensors
 
 
 def _per_channel_case(out_features: int = 4, in_features: int = 2):
@@ -58,6 +60,21 @@ class TestMistralEncoderFold:
 
         rows = torch.tensor([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [3.0, 3.0, 3.0]], dtype=torch.bfloat16)
         assert torch.equal(sd["layer.weight"], rows), "scale must vary down the rows, not across them"
+
+    def test_an_mx_block_scale_is_refused_rather_than_folded_as_a_multiplier(self) -> None:
+        """An MXFP8 grid is E8M0 exponent *bytes*: 127 means 2**0, i.e. a scale of 1.0. Folded as a
+        linear multiplier it makes every weight ~127x too large, at the right shape and the right
+        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` has refused this
+        since MXFP8 was recognised -- but these folds do not go through it, so the refusal never
+        reached them.
+        """
+        sd = {
+            "layer.weight": torch.ones(128, 128).to(torch.float8_e4m3fn),
+            "layer.weight_scale": torch.full((128, 4), 127, dtype=torch.uint8),
+        }
+
+        with pytest.raises(NotImplementedError, match="MXFP8"):
+            _drop_quantization_metadata(sd, MagicMock(), target_dtype=torch.bfloat16)
 
 
 class TestZImageQwen3EncoderFold:
@@ -101,10 +118,25 @@ class TestZImageQwen3EncoderFold:
                 }
             )
 
+    def test_an_mx_block_scale_is_refused_rather_than_folded_as_a_multiplier(self) -> None:
+        """An MXFP8 grid is E8M0 exponent *bytes*: 127 means 2**0, i.e. a scale of 1.0. Folded as a
+        linear multiplier it makes every weight ~127x too large, at the right shape and the right
+        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` has refused this
+        since MXFP8 was recognised -- but these folds do not go through it, so the refusal never
+        reached them.
+        """
+        sd = {
+            "layer.weight": torch.ones(128, 128).to(torch.float8_e4m3fn),
+            "layer.weight_scale": torch.full((128, 4), 127, dtype=torch.uint8),
+        }
+
+        with pytest.raises(NotImplementedError, match="MXFP8"):
+            _fold_comfy_scaled_weights(sd, torch.bfloat16)
+
 
 class TestSharedComfyFold:
     """`_dequantize_comfyui_fp8`, the copy the Wan (`wan.py:511`) and Qwen-Image
-    (`qwen_image.py:514`) loaders reach. Its local loop compared `scale.shape[dim] !=
+    (`qwen_image.py:520`) loaders reach. Its local loop compared `scale.shape[dim] !=
     weight.shape[dim]`, so a per-output-channel scale -- whose length already equals the row count
     -- was expanded by nothing and left to broadcasting."""
 
@@ -154,6 +186,57 @@ class TestSharedComfyFold:
         folded = self._fold(torch.ones(3, 2), torch.full((1, 1, 1), 2.0))
 
         assert torch.equal(folded, torch.full((3, 2), 2.0))
+
+    def test_an_nvfp4_layer_is_refused_rather_than_folded_over_its_packed_codes(self) -> None:
+        """nvfp4 packs two 4-bit codes per byte and carries a block-scale grid, one entry per 16
+        logical elements. The shapes line up by accident -- eight packed columns per grid entry --
+        so this fold, which has no dtype gate, multiplied the packed bytes and reported a
+        dequantized weight. The result is half the width the model needs, so `load_state_dict`
+        catches it; it just says "size mismatch" after a log line claiming success.
+        """
+        tensors, _ = nvfp4_signed_tensors("layer", torch.randint(0, 2, (128, 64), dtype=torch.bool))
+
+        with pytest.raises(ValueError, match="does not support nvfp4"):
+            _dequantize_comfyui_fp8(tensors, torch.float32)
+
+    def test_an_nvfp4_layer_missing_its_global_scale_is_refused_too(self) -> None:
+        """The half-state: packed codes and a block-scale grid, no `weight_scale_2`. It is the shape
+        `_find_nvfp4_layers` refuses by name, so a build that loses the global scale somewhere
+        upstream arrives here looking like ordinary scaled fp8 -- and the fold takes it exactly as
+        readily as the whole layer, for the same reason and to the same end. Keying the guard on
+        `weight_scale_2` alone, which is what the decode keys on, would let this one through."""
+        tensors, _ = nvfp4_signed_tensors("layer", torch.randint(0, 2, (128, 64), dtype=torch.bool))
+        del tensors["layer.weight_scale_2"]
+
+        with pytest.raises(ValueError, match="does not support nvfp4"):
+            _dequantize_comfyui_fp8(tensors, torch.float32)
+
+    def test_a_layer_whose_packed_payload_was_taken_out_first_still_folds(self) -> None:
+        """Two loaders reach this fold: Wan, which has no nvfp4 support at all, and the Qwen2.5-VL
+        encoder, which calls `pop_nvfp4_layers` first (`qwen_image.py:473`) and ships the layers
+        packed. That pop takes the weight and both scales out together, so by the time the fold runs
+        there is nothing for the guard to see -- asserted, because a guard that fired here anyway
+        would break the one supported nvfp4 build that passes through."""
+        tensors, _ = nvfp4_signed_tensors("packed", torch.randint(0, 2, (128, 64), dtype=torch.bool))
+        pop_nvfp4_layers(tensors, header_layers={"packed": {"format": "nvfp4"}})
+        tensors.update({"layer.weight": torch.ones(4, 3), "layer.weight_scale": torch.tensor([1.0, 2.0, 3.0, 4.0])})
+
+        assert _dequantize_comfyui_fp8(tensors, torch.float32) == 1
+
+    def test_an_mx_block_scale_is_refused_rather_than_folded_as_a_multiplier(self) -> None:
+        """An MXFP8 grid is E8M0 exponent *bytes*: 127 means 2**0, i.e. a scale of 1.0. Folded as a
+        linear multiplier it makes every weight ~127x too large, at the right shape and the right
+        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` has refused this
+        since MXFP8 was recognised -- but these folds do not go through it, so the refusal never
+        reached them.
+        """
+        sd = {
+            "layer.weight": torch.ones(128, 128).to(torch.float8_e4m3fn),
+            "layer.weight_scale": torch.full((128, 4), 127, dtype=torch.uint8),
+        }
+
+        with pytest.raises(NotImplementedError, match="MXFP8"):
+            _dequantize_comfyui_fp8(sd, torch.bfloat16)
 
 
 class TestFlux2Fold:

@@ -295,6 +295,60 @@ def _find_nvfp4_layers(sd: Mapping[str, Any], header_layers: Mapping[str, Any] |
     return layers
 
 
+def reject_nvfp4_layers_a_plain_fold_cannot_decode(sd: Mapping[str, Any], what: str = "This checkpoint") -> None:
+    """Refuse an nvfp4 layer to a fold that only multiplies a scale into a weight.
+
+    **Wan** (`wan.py:511`) is the seam this exists for: it reads scaled fp8 and never calls
+    :func:`pop_nvfp4_layers`. The other caller of the shared fold, the Qwen2.5-VL encoder, *does*
+    pop first (`qwen_image.py:473`, forty-odd lines before its fold) and ships the packed layers, so
+    the guard is unreachable there — do not read it as evidence that encoder lacks nvfp4 support.
+
+    The fold has no dtype gate, by design, so it takes the layer: the block-scale grid carries one
+    entry per 16 logical elements and the weight packs two 4-bit codes per byte, so eight packed
+    columns fall to each grid entry and the shapes line up by accident. What comes out is the packed
+    bytes multiplied by the grid, at the compute dtype and half the logical width, reported in the
+    log as a dequantized weight.
+
+    Half the width is usually caught at ``load_state_dict`` — but not always, and that is the reason
+    to refuse rather than rely on it. Wan infers ``text_dim`` from ``shape[1]`` of
+    ``condition_embedder.text_embedder.linear_1`` (`wan.py:356`), which is the dimension the fold
+    halves: with that layer packed, the *architecture* is built to match the mangled weight and
+    nothing mismatches. The load then fails on the leftover ``weight_scale_2`` with a message about
+    Wan variants with extra conditioning branches — a diagnosis pointing somewhere else entirely.
+
+    Detection is the union of two structural tests: a ``weight_scale_2`` beside the weight, which is
+    what the decode keys on, and a packed ``uint8`` weight carrying a block scale without one, which
+    is the half-state :func:`_find_nvfp4_layers` refuses by name. Keying on the first alone would
+    miss the second, and the fold takes it just as readily.
+
+    Narrower than the decode in one way worth knowing: at the Wan seam a bundled nvfp4 text encoder
+    in an all-in-one file is removed by ``_drop_benign_extra_keys`` before the fold, so it is dropped
+    rather than refused.
+    """
+    named = {
+        key[: -len(WEIGHT_SCALE_2_SUFFIX)]
+        for key in sd
+        if isinstance(key, str)
+        and key.endswith(WEIGHT_SCALE_2_SUFFIX)
+        and f"{key[: -len(WEIGHT_SCALE_2_SUFFIX)]}.weight" in sd
+    }
+    # A packed weight with a block scale and no global one is the half-state `_find_nvfp4_layers`
+    # refuses by name. Keying on `weight_scale_2` alone would miss it, and the fold takes it just as
+    # readily -- so the detection here is the union, not the narrower test.
+    half = {
+        weight_key[: -len(".weight")]
+        for weight_key, _scale_key in iter_weight_scale_pairs(sd)
+        if getattr(sd.get(weight_key), "dtype", None) is torch.uint8
+    }
+    packed = sorted(named | half)
+    if packed:
+        raise ValueError(
+            f"{what} carries {len(packed)} nvfp4 layer(s) (e.g. {', '.join(packed[:3])}) and this loader does "
+            "not support nvfp4. Their weights are two 4-bit codes per byte, so folding a scale into them "
+            "produces a tensor of half the width the model needs. Use the fp8 or bf16 build of this checkpoint."
+        )
+
+
 def pop_nvfp4_layers(sd: dict[str, Any], header_layers: Mapping[str, Any] | None = None) -> dict[str, NVFP4Payload]:
     """Take every nvfp4 layer's packed tensors out of ``sd`` and drop the rest of its side channel.
 
