@@ -68,7 +68,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    reject_mx_block_scale,
+    reject_undecoded_mx_scale,
     should_keep_fp8_weights,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
@@ -566,11 +566,11 @@ def _drop_quantization_metadata(sd: dict[str, Any], logger, target_dtype: torch.
     """
     dequantized = 0
     for weight_key, scale_key in list(iter_weight_scale_pairs(sd)):
-        # The one scheme no pass upstream of this fold catches. `extract_fp8_scaled_layers` refuses
+        # The one scheme no pass upstream of this fold catches. `extract_fp8_scaled_layers` decodes
         # an MX grid, but it only runs on the branch that *keeps* fp8; this is the other one, taken
         # wherever fp8 cannot be held at all. Without this the exponent bytes are folded as linear
         # multipliers -- around 120-135 -- at the right shape and dtype, with nothing logged.
-        reject_mx_block_scale(weight_key[: -len(".weight")], sd[scale_key])
+        reject_undecoded_mx_scale(weight_key[: -len(".weight")], sd[scale_key])
         weight = sd[weight_key].float()
         # `expand_weight_scale` rather than a local broadcast: a per-output-channel scale is 1-D of
         # length `out`, and `(out, in) * (out,)` aligns on the *last* axis, so it scales input

@@ -15,7 +15,7 @@ import torch
 from invokeai.backend.quantization.fp8_scaled import (
     expand_weight_scale,
     is_scale_metadata_key,
-    reject_mx_block_scale,
+    reject_undecoded_mx_scale,
 )
 from invokeai.backend.quantization.int8_convrot import reject_int8_layers_a_plain_fold_cannot_decode
 from invokeai.backend.quantization.nvfp4 import reject_nvfp4_layers_a_plain_fold_cannot_decode
@@ -76,7 +76,7 @@ def _dequantize_comfyui_fp8(sd: dict, compute_dtype: torch.dtype, what: str = "T
             continue
         # Before the cast: `.to(compute_dtype)` on an E8M0 grid converts the exponent bytes to
         # floats and loses the only evidence of what they were.
-        reject_mx_block_scale(weight_key[: -len(".weight")], sd[scale_key])
+        reject_undecoded_mx_scale(weight_key[: -len(".weight")], sd[scale_key])
         weight = sd[weight_key].to(compute_dtype)
         scale = sd[scale_key].to(compute_dtype)
         # Through the shared expansion rather than a local copy of it. The copy that used to live

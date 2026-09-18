@@ -52,8 +52,8 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
-    reject_mx_block_scale,
     reject_quantized_side_channel,
+    reject_undecoded_mx_scale,
     split_fp8_scaled_layers,
     split_qkv_sidechannel,
     strip_layer_path_prefix,
@@ -1168,7 +1168,7 @@ def _fold_comfy_scaled_weights(sd: dict[str, Any], dtype: torch.dtype) -> int:
     for weight_key, scale_key in list(iter_weight_scale_pairs(sd)):
         # Before the cast: `.float()` on an E8M0 grid turns the exponent bytes into ordinary numbers
         # and loses the only evidence of what they were.
-        reject_mx_block_scale(weight_key[: -len(".weight")], sd[scale_key])
+        reject_undecoded_mx_scale(weight_key[: -len(".weight")], sd[scale_key])
         # Float8 needs `.float()`; torch has no direct type promotion for it.
         weight_float = sd[weight_key].float()
         scale = expand_weight_scale(weight_float, sd[scale_key].float(), weight_key)

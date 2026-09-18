@@ -64,9 +64,9 @@ class TestMistralEncoderFold:
     def test_an_mx_block_scale_is_refused_rather_than_folded_as_a_multiplier(self) -> None:
         """An MXFP8 grid is E8M0 exponent *bytes*: 127 means 2**0, i.e. a scale of 1.0. Folded as a
         linear multiplier it makes every weight ~127x too large, at the right shape and the right
-        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` has refused this
-        since MXFP8 was recognised -- but these folds do not go through it, so the refusal never
-        reached them.
+        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` decodes these grids
+        (`decode_mx_block_scales`) -- but these folds do not go through it, so they took the bytes as
+        numbers.
         """
         sd = {
             "layer.weight": torch.ones(128, 128).to(torch.float8_e4m3fn),
@@ -121,9 +121,9 @@ class TestZImageQwen3EncoderFold:
     def test_an_mx_block_scale_is_refused_rather_than_folded_as_a_multiplier(self) -> None:
         """An MXFP8 grid is E8M0 exponent *bytes*: 127 means 2**0, i.e. a scale of 1.0. Folded as a
         linear multiplier it makes every weight ~127x too large, at the right shape and the right
-        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` has refused this
-        since MXFP8 was recognised -- but these folds do not go through it, so the refusal never
-        reached them.
+        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` decodes these grids
+        (`decode_mx_block_scales`) -- but these folds do not go through it, so they took the bytes as
+        numbers.
         """
         sd = {
             "layer.weight": torch.ones(128, 128).to(torch.float8_e4m3fn),
@@ -226,9 +226,9 @@ class TestSharedComfyFold:
     def test_an_mx_block_scale_is_refused_rather_than_folded_as_a_multiplier(self) -> None:
         """An MXFP8 grid is E8M0 exponent *bytes*: 127 means 2**0, i.e. a scale of 1.0. Folded as a
         linear multiplier it makes every weight ~127x too large, at the right shape and the right
-        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` has refused this
-        since MXFP8 was recognised -- but these folds do not go through it, so the refusal never
-        reached them.
+        dtype, with nothing raised and nothing logged. `extract_fp8_scaled_layers` decodes these grids
+        (`decode_mx_block_scales`) -- but these folds do not go through it, so they took the bytes as
+        numbers.
         """
         sd = {
             "layer.weight": torch.ones(128, 128).to(torch.float8_e4m3fn),

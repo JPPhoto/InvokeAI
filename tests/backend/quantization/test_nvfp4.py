@@ -29,23 +29,11 @@ from invokeai.backend.quantization.nvfp4 import (
     pop_nvfp4_layers,
     predict_nvfp4_install_size,
     split_nvfp4_rows,
-    unblock_scale_grid,
 )
+from tests.backend.quantization.test_block_scale_tiles import stored_layout
 from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_tensors
 
 FIXTURE = Path(__file__).parent / "data" / "z_image_turbo_nvfp4_slices.safetensors"
-
-
-def _stored_layout(grid: torch.Tensor) -> torch.Tensor:
-    """Lay a row-major grid out the way the checkpoints store it, by the index formula measured
-    against real files: element ``[m, k]`` lands at flat position ``position``."""
-    rows, blocks = grid.shape
-    flat = torch.full((rows * blocks,), float("nan"), dtype=grid.dtype)
-    for m in range(rows):
-        for k in range(blocks):
-            position = ((((m // 128) * (blocks // 4) + k // 4) * 32 + m % 32) * 4 + (m % 128) // 32) * 4 + k % 4
-            flat[position] = grid[m, k]
-    return flat.reshape(rows, blocks)
 
 
 def _nvfp4_tensors(path: str, codes: torch.Tensor, block_scale: float, global_scale: float) -> dict[str, torch.Tensor]:
@@ -83,20 +71,6 @@ def test_the_upper_nibble_is_the_first_element_and_both_scales_multiply() -> Non
     assert decoded.shape == (128, 64)
 
 
-@pytest.mark.parametrize("shape", [(128, 4), (128, 8), (256, 16), (384, 8)])
-def test_the_block_scale_grid_is_unblocked_the_way_checkpoints_store_it(shape: tuple[int, int]) -> None:
-    """(384, 8) is three tile rows by two tile columns, so a swap of the tile axes cannot pass."""
-    grid = torch.arange(shape[0] * shape[1], dtype=torch.float64).reshape(shape)
-
-    assert torch.equal(unblock_scale_grid(_stored_layout(grid)), grid)
-
-
-@pytest.mark.parametrize("shape", [(100, 8), (128, 6)])
-def test_a_grid_outside_the_tile_layout_is_refused_rather_than_guessed(shape: tuple[int, int]) -> None:
-    with pytest.raises(ValueError, match="tile layout"):
-        unblock_scale_grid(torch.zeros(shape))
-
-
 @pytest.mark.parametrize("layer", ["layers.0.attention.out", "layers.5.feed_forward.w2"])
 def test_a_real_checkpoint_slice_decodes_to_its_bf16_build(layer: str) -> None:
     """Comfy-Org/z_image_turbo at revision 08d04455279082882deaabc8d0d09fc914c071e1 (Apache-2.0): the
@@ -118,7 +92,7 @@ def test_a_real_checkpoint_slice_decodes_to_its_bf16_build(layer: str) -> None:
     assert (decoded.norm() / reference.norm()).item() == pytest.approx(1.0, abs=0.01)
 
     # Laying the stored grid out once more makes the unblock hand back the raw grid: a row-major read.
-    row_major = _stored_layout(scale.float()).to(torch.float8_e4m3fn)
+    row_major = stored_layout(scale.float()).to(torch.float8_e4m3fn)
     naive = dequantize_nvfp4_weight(weight, row_major, scale_2, torch.float32).flatten()
     assert torch.cosine_similarity(naive, reference, dim=0).item() < 0.95
 
