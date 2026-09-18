@@ -1451,6 +1451,8 @@
     "forReturnOwnership": "Each ForReturn must belong to exactly one For",
     "executionCompleted": "Completed",
     "executionFailed": "Failed",
+    "latestOutput": "Latest output",
+    "latestOutputImage": "Latest output of this node",
     "forLoopBodyBoundary": "For loop body",
     "imageCollectionCount_one": "{{count}} image",
     "imageCollectionCount_other": "{{count}} images",
