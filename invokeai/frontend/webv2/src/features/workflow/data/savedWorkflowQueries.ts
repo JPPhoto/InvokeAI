@@ -38,9 +38,9 @@ export const shouldFetchSavedWorkflowDetail = (
   options: SavedWorkflowDetailFetchOptions = {}
 ): boolean =>
   query === undefined ||
-  (query.state.isInvalidated &&
-    query.state.fetchStatus === 'idle' &&
-    (query.state.status === 'success' || (options.retryErrors === true && query.state.status === 'error')));
+  (query.state.fetchStatus === 'idle' &&
+    ((query.state.isInvalidated && query.state.status === 'success') ||
+      (options.retryErrors === true && query.state.status === 'error')));
 
 export const getSavedWorkflowDetailQueryStatus = (
   query: SavedWorkflowDetailQueryLike | undefined
@@ -49,12 +49,12 @@ export const getSavedWorkflowDetailQueryStatus = (
     return 'missing';
   }
 
-  if (query.state.data !== undefined && query.state.data !== null) {
-    return 'ready';
-  }
-
   if (query.state.status === 'error') {
     return 'error';
+  }
+
+  if (query.state.data !== undefined && query.state.data !== null) {
+    return 'ready';
   }
 
   if (query.state.status !== 'success' || query.state.fetchStatus !== 'idle') {
@@ -68,6 +68,7 @@ export const savedWorkflowDetailQueryOptions = (workflowId: string) => ({
   queryKey: savedWorkflowDetailQueryKey(workflowId),
   queryFn: ({ signal }: { signal: AbortSignal }): Promise<WorkflowRecordDTO> =>
     getLibraryWorkflowRecord(workflowId, signal),
+  gcTime: Infinity,
   retry: false,
   staleTime: 30_000,
 });
@@ -76,6 +77,7 @@ export const savedWorkflowPickerQueryOptions = (params: ListWorkflowsParams) => 
   queryKey: ['workflow', 'call-saved', 'picker', params] as const,
   queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }): Promise<WorkflowLibraryPage> =>
     listLibraryWorkflows({ ...params, page: pageParam, signal }),
+  staleTime: 30_000,
   initialPageParam: 0,
   getNextPageParam: (lastPage: WorkflowLibraryPage): number | undefined =>
     lastPage.page + 1 < lastPage.pages ? lastPage.page + 1 : undefined,

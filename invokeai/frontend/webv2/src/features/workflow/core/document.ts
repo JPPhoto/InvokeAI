@@ -637,6 +637,7 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
         label: action.label,
+        labelOverride: action.label !== '',
       }));
     }
     case 'setFieldDescription': {

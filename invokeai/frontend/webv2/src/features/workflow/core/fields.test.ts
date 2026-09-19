@@ -245,6 +245,22 @@ describe('getRandomWorkflowFieldValue', () => {
     expect(getRandomWorkflowFieldValue(steppedExclusive, () => 0.999)).toBe(0.5);
   });
 
+  it('keeps legacy numeric templates finite when optional constraints are absent', () => {
+    const legacy = input({
+      exclusiveMaximum: undefined,
+      exclusiveMinimum: undefined,
+      maximum: undefined,
+      minimum: undefined,
+      multipleOf: undefined,
+      type: single('IntegerField'),
+    });
+    const value = getRandomWorkflowFieldValue(legacy, () => 0.5);
+
+    expect(Number.isFinite(value)).toBe(true);
+    expect(Number.isInteger(value)).toBe(true);
+    expect(isWorkflowFieldValueValid(legacy, value)).toBe(true);
+  });
+
   it('shuffles only direct numeric fields', () => {
     expect(isShuffleableField(input({ type: single('IntegerField') }))).toBe(true);
     expect(isShuffleableField(input({ type: single('FloatField') }))).toBe(true);

@@ -87,6 +87,8 @@ export interface XYPosition {
 export interface WorkflowFieldInstance {
   name: string;
   label: string;
+  /** True when the label was explicitly changed by the user rather than generated from a template. */
+  labelOverride?: boolean;
   /** User override of the template's field description (shown in the Linear UI). */
   description?: string;
   /**

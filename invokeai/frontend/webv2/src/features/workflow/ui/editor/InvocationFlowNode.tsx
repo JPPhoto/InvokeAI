@@ -883,7 +883,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
           ))}
           {shouldShowCallSavedWorkflowLoadingHint(node) ? (
             <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
-              {t('nodes.savedWorkflowLoading')}
+              {t('nodes.savedWorkflowDetailLoading')}
             </Text>
           ) : shouldShowCallSavedWorkflowNoExposedFieldsHint(node) ? (
             <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">

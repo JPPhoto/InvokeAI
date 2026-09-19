@@ -130,4 +130,28 @@ describe('zInvocationNodeData: extra-input scoping', () => {
       ui_hidden: false,
     });
   });
+
+  it('accepts legacy-compatible enum dynamic templates from webv2', () => {
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        literal: {
+          batch: false,
+          cardinality: 'SINGLE',
+          default: '2',
+          description: 'Literal value',
+          fieldKind: 'input',
+          input: 'any',
+          name: 'literal',
+          options: ['2'],
+          required: false,
+          title: 'Literal',
+          type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
+          uiHidden: false,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.literal).toMatchObject({ default: '2', options: ['2'] });
+  });
 });

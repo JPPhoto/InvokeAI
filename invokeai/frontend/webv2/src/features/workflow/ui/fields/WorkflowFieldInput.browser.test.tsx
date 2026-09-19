@@ -332,6 +332,18 @@ describe('WorkflowFieldInput textarea', () => {
 });
 
 describe('WorkflowFieldInput saved workflows', () => {
+  it('uses plural loading copy while the workflow list is loading', async () => {
+    workflowApiMock.apiFetchJson.mockImplementation(() => new Promise(() => {}));
+
+    await renderField(SAVED_WORKFLOW_TEMPLATE, '', vi.fn());
+
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.placeholder).toBe(
+        'nodes.savedWorkflowListLoading'
+      )
+    );
+  });
+
   it('displays dynamic workflow names and marks incompatible workflows disabled', async () => {
     const onChange = vi.fn();
     workflowApiMock.apiFetchJson.mockImplementation((path: string) => {

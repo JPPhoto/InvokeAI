@@ -149,6 +149,15 @@ const toFiniteNumber = (raw: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const finiteNumberOrUndefined = (value: number | null | undefined): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+const positiveFiniteNumberOrUndefined = (value: number | null | undefined): number | undefined => {
+  const normalized = finiteNumberOrUndefined(value);
+
+  return normalized !== undefined && normalized > 0 ? normalized : undefined;
+};
+
 const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const text = typeof value === 'string' ? value : '';
   const onTextareaChange = useCallback(
@@ -199,8 +208,9 @@ const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTa
 const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
-  const min = template.minimum ?? template.exclusiveMinimum ?? undefined;
-  const max = template.maximum ?? template.exclusiveMaximum ?? undefined;
+  const min = finiteNumberOrUndefined(template.minimum) ?? finiteNumberOrUndefined(template.exclusiveMinimum);
+  const max = finiteNumberOrUndefined(template.maximum) ?? finiteNumberOrUndefined(template.exclusiveMaximum);
+  const multipleOf = positiveFiniteNumberOrUndefined(template.multipleOf);
   const onInputChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       const parsed = toFiniteNumber(event.currentTarget.value);
@@ -220,7 +230,7 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
       max={max !== undefined ? String(max) : undefined}
       min={min !== undefined ? String(min) : undefined}
       size="xs"
-      step={template.multipleOf !== null ? String(template.multipleOf) : isInteger ? '1' : 'any'}
+      step={multipleOf !== undefined ? String(multipleOf) : isInteger ? '1' : 'any'}
       type="number"
       value={numericValue}
       w="full"
@@ -1589,7 +1599,7 @@ const SavedWorkflowInput = ({ onChange, template, value }: WorkflowFieldInputPro
           flex="1"
           noResultsText={t('nodes.noMatchingWorkflows')}
           options={options}
-          searchPlaceholder={isLoading ? t('nodes.savedWorkflowLoading') : t('nodes.savedWorkflowSearch')}
+          searchPlaceholder={isLoading ? t('nodes.savedWorkflowListLoading') : t('nodes.savedWorkflowSearch')}
           value={selectedOption?.value ?? null}
           onInputValueChange={setSearch}
           onListScrollToBottom={fetchNextPage}

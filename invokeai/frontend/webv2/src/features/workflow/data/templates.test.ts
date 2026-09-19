@@ -270,6 +270,47 @@ describe('parseOpenApiToTemplates', () => {
     expect(parsed.for?.outputs.output_collection?.outputScope).toBe('final');
     expect(parsed.for?.outputs.output?.uiHidden).toBe(true);
   });
+
+  it('extracts options from nullable Literal schemas and normalizes numeric options', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          LiteralInvocation: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              type: { default: 'literal_invocation' },
+              text: {
+                anyOf: [{ enum: ['fast', 'slow'], type: 'string' }, { type: 'null' }],
+                default: 'slow',
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Text',
+              },
+              number: {
+                anyOf: [{ const: 2, type: 'integer' }, { type: 'null' }],
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Number',
+              },
+            },
+            title: 'Literal',
+            type: 'object',
+          },
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.literal_invocation?.inputs.text?.options).toEqual(['fast', 'slow']);
+    expect(parsed.literal_invocation?.inputs.text?.default).toBe('slow');
+    expect(parsed.literal_invocation?.inputs.number?.options).toEqual(['2']);
+    expect(parsed.literal_invocation?.inputs.number?.default).toBe('2');
+  });
 });
 
 describe('parseFieldType', () => {

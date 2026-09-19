@@ -1,7 +1,23 @@
 import { getWidgetHosts } from '@workbench/widgetRegistry';
+import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { Suspense, use } from 'react';
 
 import { WidgetFailureBoundary } from './WidgetFailureBoundary';
+
+type WidgetHostProject = {
+  floatingWidgets?: Record<string, unknown>;
+  widgetInstances: Record<string, { typeId?: string }>;
+  widgetRegions: Record<string, { instanceIds: string[] }>;
+};
+
+export const projectHasWidgetType = (project: WidgetHostProject, widgetTypeId: string): boolean => {
+  const regionInstanceIds = Object.values(project.widgetRegions).flatMap((region) => region.instanceIds);
+  const floatingInstanceIds = Object.keys(project.floatingWidgets ?? {});
+
+  return [...regionInstanceIds, ...floatingInstanceIds].some(
+    (instanceId) => project.widgetInstances[instanceId]?.typeId === widgetTypeId
+  );
+};
 
 const WidgetHost = ({ widget }: { widget: ReturnType<typeof getWidgetHosts>[number] }) => {
   const Host = use(widget.host!.load());
@@ -37,10 +53,15 @@ const WidgetHostBoundary = ({ widget }: { widget: ReturnType<typeof getWidgetHos
   );
 };
 
-export const WidgetHosts = () => (
-  <>
-    {getWidgetHosts().map((widget) => (
-      <WidgetHostBoundary key={widget.manifest.id} widget={widget} />
-    ))}
-  </>
-);
+export const WidgetHosts = () => {
+  const hasWorkflowWidget = useActiveProjectSelector((project) => projectHasWidgetType(project, 'workflow'));
+  const widgets = getWidgetHosts().filter((widget) => widget.manifest.id !== 'workflow' || hasWorkflowWidget);
+
+  return (
+    <>
+      {widgets.map((widget) => (
+        <WidgetHostBoundary key={widget.manifest.id} widget={widget} />
+      ))}
+    </>
+  );
+};

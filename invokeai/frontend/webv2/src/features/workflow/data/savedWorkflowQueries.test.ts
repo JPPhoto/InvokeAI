@@ -1,14 +1,19 @@
 import { QueryClient } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getSavedWorkflowDetailQueryStatus,
   isSavedWorkflowDetailQueryKey,
   savedWorkflowDetailQueryOptions,
+  savedWorkflowPickerQueryOptions,
   shouldFetchSavedWorkflowDetail,
 } from './savedWorkflowQueries';
 
 describe('saved workflow detail query policy', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('recognizes only detail query keys with a workflow id', () => {
     expect(isSavedWorkflowDetailQueryKey(['workflow', 'call-saved', 'detail', 'workflow-1'])).toBe(true);
     expect(isSavedWorkflowDetailQueryKey(['workflow', 'call-saved', 'picker', 'workflow-1'])).toBe(false);
@@ -35,6 +40,14 @@ describe('saved workflow detail query policy', () => {
         { retryErrors: true }
       )
     ).toBe(true);
+    expect(
+      shouldFetchSavedWorkflowDetail(
+        { state: { fetchStatus: 'idle', isInvalidated: false, status: 'error' } },
+        {
+          retryErrors: true,
+        }
+      )
+    ).toBe(true);
   });
 
   it('classifies detail query state for reconciliation', () => {
@@ -59,11 +72,13 @@ describe('saved workflow detail query policy', () => {
       getSavedWorkflowDetailQueryStatus({
         state: { data: { workflow_id: 'workflow-1' }, fetchStatus: 'idle', isInvalidated: true, status: 'error' },
       })
-    ).toBe('ready');
+    ).toBe('error');
   });
 
   it('does not retry a failed detail lookup', () => {
     expect(savedWorkflowDetailQueryOptions('workflow-1').retry).toBe(false);
+    expect(savedWorkflowDetailQueryOptions('workflow-1').gcTime).toBe(Infinity);
+    expect(savedWorkflowPickerQueryOptions({ isPublic: true, page: 0 }).staleTime).toBe(30_000);
   });
 
   it('recovers an invalidated failed lookup with one authorized retry', async () => {
@@ -99,6 +114,24 @@ describe('saved workflow detail query policy', () => {
       expect(
         getSavedWorkflowDetailQueryStatus(queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey }))
       ).toBe('ready');
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it('retains an observerless selected detail beyond the default cache lifetime', async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const detailOptions = savedWorkflowDetailQueryOptions('workflow-1');
+
+    try {
+      await queryClient.fetchQuery({
+        ...detailOptions,
+        queryFn: () => Promise.resolve({ workflow_id: 'workflow-1' }) as never,
+      });
+      vi.advanceTimersByTime(5 * 60_000 + 1);
+
+      expect(queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey })).toBeDefined();
     } finally {
       queryClient.clear();
     }

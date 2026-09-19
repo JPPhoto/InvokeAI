@@ -66,4 +66,14 @@ describe('createSavedWorkflowDocumentParser', () => {
     expect(parser(malformed)).toBeUndefined();
     expect(parse).toHaveBeenCalledOnce();
   });
+
+  it('rejects non-object payloads before consulting the object cache', () => {
+    const parse = vi.fn();
+    const parser = createSavedWorkflowDocumentParser(parse);
+
+    expect(parser(42)).toBeUndefined();
+    expect(parser(null)).toBeUndefined();
+    expect(parser([])).toBeUndefined();
+    expect(parse).not.toHaveBeenCalled();
+  });
 });

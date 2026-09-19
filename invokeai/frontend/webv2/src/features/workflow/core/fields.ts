@@ -63,11 +63,18 @@ const countDecimals = (value: number): number => {
   return fraction.length;
 };
 
+const finiteNumberOrNull = (value: number | null | undefined): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
 /** A random value inside the template's bounds, snapped to its step; unbounded ends default to 0…SEED_MAX. */
 export const getRandomWorkflowFieldValue = (template: FieldInputTemplate, random = Math.random): number => {
   const isInteger = template.type.name === 'IntegerField';
-  const step = template.multipleOf ?? (isInteger ? 1 : 0);
-  const { exclusiveMaximum, exclusiveMinimum, maximum, minimum } = template;
+  const multipleOf = finiteNumberOrNull(template.multipleOf);
+  const step = multipleOf !== null && multipleOf > 0 ? multipleOf : isInteger ? 1 : 0;
+  const exclusiveMaximum = finiteNumberOrNull(template.exclusiveMaximum);
+  const exclusiveMinimum = finiteNumberOrNull(template.exclusiveMinimum);
+  const maximum = finiteNumberOrNull(template.maximum);
+  const minimum = finiteNumberOrNull(template.minimum);
 
   if (step <= 0) {
     const min = minimum ?? exclusiveMinimum ?? 0;
@@ -171,24 +178,31 @@ const isNumberFieldValueValid = (template: FieldInputTemplate, value: unknown): 
     return false;
   }
 
-  if (template.minimum !== null && value < template.minimum) {
+  const minimum = finiteNumberOrNull(template.minimum);
+  const maximum = finiteNumberOrNull(template.maximum);
+  const exclusiveMinimum = finiteNumberOrNull(template.exclusiveMinimum);
+  const exclusiveMaximum = finiteNumberOrNull(template.exclusiveMaximum);
+
+  if (minimum !== null && value < minimum) {
     return false;
   }
 
-  if (template.maximum !== null && value > template.maximum) {
+  if (maximum !== null && value > maximum) {
     return false;
   }
 
-  if (template.exclusiveMinimum !== null && value <= template.exclusiveMinimum) {
+  if (exclusiveMinimum !== null && value <= exclusiveMinimum) {
     return false;
   }
 
-  if (template.exclusiveMaximum !== null && value >= template.exclusiveMaximum) {
+  if (exclusiveMaximum !== null && value >= exclusiveMaximum) {
     return false;
   }
 
-  if (template.multipleOf !== null) {
-    const quotient = value / template.multipleOf;
+  const multipleOf = finiteNumberOrNull(template.multipleOf);
+
+  if (multipleOf !== null && multipleOf > 0) {
+    const quotient = value / multipleOf;
 
     if (Math.abs(quotient - Math.round(quotient)) > Number.EPSILON * 100) {
       return false;

@@ -29,6 +29,7 @@ const zXYPosition = z.object({ x: z.number().catch(0), y: z.number().catch(0) })
 const zFieldInstance = z.object({
   description: z.string().optional().catch(undefined),
   label: z.string().catch(''),
+  labelOverride: z.boolean().optional().catch(undefined),
   name: z.string(),
   seedMode: z.enum(SEED_MODES).optional().catch(undefined),
   value: z.unknown().optional(),

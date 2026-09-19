@@ -238,7 +238,9 @@ export const syncCallSavedWorkflowFields = (
         ? sameFieldType(previousTemplate, field.fieldTemplate)
         : isWorkflowFieldValueValid(field.fieldTemplate, previous.value));
     const label =
-      keepValue && previous && (!previousTemplate ? previous.label !== '' : previous.label !== previousTemplate.title)
+      keepValue &&
+      previous &&
+      (!previousTemplate ? previous.labelOverride === true : previous.label !== previousTemplate.title)
         ? previous.label
         : field.label;
     const description =
