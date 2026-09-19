@@ -8,6 +8,9 @@ causal temporal padding — so the ROCm-gated class patch can never change
 results, only speed.
 """
 
+import random
+
+import pytest
 import torch
 
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import MiniMaxH3VideoCausalConv3d
@@ -83,7 +86,7 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
 
 
 def test_patch_applies_on_every_hip_version(monkeypatch) -> None:
-    """Unlike the Wan twin there is no HIP-version gate: MIOpen in rocm7.2 still takes the
+    """There is no HIP-version gate: MIOpen in rocm7.2 still takes the
     ~50x Im3d2Col fallback for this encoder's shapes (W7900: 208 s vs 3.6 s per chunk).
     Non-HIP builds are never patched; INVOKEAI_ROCM_CONV3D=native opts out."""
     import invokeai.backend.minimax_h3.rocm_causal_conv3d as mod
@@ -107,3 +110,36 @@ def test_patch_applies_on_every_hip_version(monkeypatch) -> None:
     monkeypatch.setattr(mod, "_MODE", "native")
     mod.patch_minimax_h3_causal_conv3d_for_rocm()
     assert calls == [True, True], "INVOKEAI_ROCM_CONV3D=native leaves the stock forward in place"
+
+
+needs_rocm = pytest.mark.skipif(torch.version.hip is None or not torch.cuda.is_available(), reason="needs a ROCm GPU")
+
+
+@pytest.mark.slow
+@needs_rocm
+def test_decomposition_matches_native_on_device_under_allocation_churn() -> None:
+    """Both device paths stay within bf16 noise of a CPU fp32 reference on a 17-frame encoder chunk
+    at a non-square size while junk allocations come and go between calls. `slow`: a dev-machine
+    lane, not CI."""
+    torch.cuda.empty_cache()
+    if torch.cuda.mem_get_info()[0] < 8 * 2**30:
+        pytest.skip("needs ~8 GiB free")
+    torch.manual_seed(0)
+    conv = MiniMaxH3VideoCausalConv3d(64, 64, kernel_size=3, spatial_padding=1, temporal_padding=2)
+    x = torch.randn((1, 64, 17, 224, 384))
+    with torch.inference_mode():
+        reference = MiniMaxH3VideoCausalConv3d.forward(conv, x)
+        conv = conv.to("cuda", torch.bfloat16)
+        x = x.to("cuda", torch.bfloat16)
+        rnd = random.Random(0)
+        for _ in range(20):
+            junk = [
+                torch.empty(rnd.randint(1, 400) * 2**20, device="cuda", dtype=torch.uint8)
+                for _ in range(rnd.randint(1, 4))
+            ]
+            for fn in (MiniMaxH3VideoCausalConv3d.forward, _decomposed_forward):
+                err = (fn(conv, x).float().cpu() - reference).abs().max().item()
+                assert err < 0.1, f"{fn.__name__}: max abs error {err:.4f} vs CPU fp32"
+            del junk
+            if rnd.random() < 0.5:
+                torch.cuda.empty_cache()
