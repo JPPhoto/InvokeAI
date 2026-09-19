@@ -75,7 +75,7 @@ const ComponentSlotRow = memo(function ComponentSlotRow({
   return (
     <Field
       error={isMissing ? (slot.missingMessage ?? t('widgets.video.componentRequired')) : undefined}
-      helpText={isMissing ? undefined : slot.helpText}
+      helpText={isMissing || !slot.helpTextKey ? undefined : t(slot.helpTextKey)}
       label={slot.label}
     >
       <ModelSelect

@@ -719,3 +719,106 @@ describe('model-position recall shapes', () => {
     expect(result?.mediaNames.sourceVideoTrim).toEqual({ endFrame: 400, startFrame: 10 });
   });
 });
+
+describe('portable records (metadata_version 1.0.0)', () => {
+  const catalog = [WAN_T2V, WAN_I2V, h3Model(), LIGHTNING_HIGH, LIGHTNING_LOW];
+  const currentValues = { ...createDefaultVideoWidgetValues([h3Model()]) };
+
+  it('reads the canonical low-noise CFG key and its pre-1.0 alias alike', () => {
+    const withLow = { ...createDefaultVideoWidgetValues([WAN_T2V]), cfgScaleLowNoise: 2 };
+    const canonical = buildVideoRecallSettings({
+      currentValues: withLow,
+      kind: 'all',
+      metadata: wanMetadata({ wan_guidance_scale_low_noise: 3.5 }),
+      models: catalog,
+    });
+    const legacy = buildVideoRecallSettings({
+      currentValues: withLow,
+      kind: 'all',
+      metadata: wanMetadata({ guidance_scale_low_noise: 3.5 }),
+      models: catalog,
+    });
+
+    expect(canonical?.values.cfgScaleLowNoise).toBe(3.5);
+    expect(legacy?.values.cfgScaleLowNoise).toBe(3.5);
+  });
+
+  it('resolves a model recorded on another install by hash when its key is unknown here', () => {
+    const hashed = { ...WAN_T2V, hash: 'blake3:abc' };
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: wanMetadata({
+        model: { base: 'wan', hash: 'blake3:abc', key: 'foreign-key', name: 'Other name', type: 'main' },
+      }),
+      models: [hashed, h3Model()],
+    });
+
+    expect(result?.fields).toContain('model');
+    expect(result?.values.model?.key).toBe(WAN_T2V.key);
+  });
+
+  it('falls back to name, base and type when neither key nor hash matches', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: wanMetadata({
+        model: { base: 'wan', hash: 'blake3:nope', key: 'foreign-key', name: WAN_T2V.name, type: 'main' },
+      }),
+      models: catalog,
+    });
+
+    expect(result?.values.model?.key).toBe(WAN_T2V.key);
+
+    const wrongType = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: wanMetadata({ model: { base: 'wan', key: 'foreign-key', name: WAN_T2V.name, type: 'lora' } }),
+      models: catalog,
+    });
+
+    expect(wrongType?.fields).not.toContain('model');
+  });
+
+  it('resolves LoRAs and Wan components through the same ladder', () => {
+    const hashedLora = { ...LIGHTNING_HIGH, hash: 'blake3:high' };
+    const umt5 = { base: 'any', hash: 'blake3:umt5', key: 'local-umt5', name: 'UMT5-XXL', type: 'wan_t5_encoder' };
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: wanMetadata({
+        loras: [{ model: { hash: 'blake3:high', key: 'foreign-lora' }, weight: 0.8 }],
+        // The canonical key for the standalone encoder; a record may also spell it `wan_t5_encoder`.
+        wan_t5_encoder_model: {
+          base: 'any',
+          hash: 'blake3:umt5',
+          key: 'foreign-umt5',
+          name: 'UMT5-XXL',
+          type: 'wan_t5_encoder',
+        },
+      }),
+      models: [WAN_T2V, hashedLora, umt5],
+    });
+
+    expect(result?.values.loras).toEqual([{ isEnabled: true, model: hashedLora, weight: 0.8 }]);
+    expect(result?.values.wanT5EncoderModel).toEqual(umt5);
+
+    const lowExpert = wanModel('t2v_a14b', 'checkpoint', 'low-expert');
+    const aliased = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: wanMetadata({ transformer_low_noise: { key: lowExpert.key }, wan_t5_encoder: { key: 'local-umt5' } }),
+      models: [WAN_T2V, umt5, lowExpert],
+    });
+
+    expect(aliased?.values.wanT5EncoderModel).toEqual(umt5);
+    expect(aliased?.values.wanLowNoiseModel).toEqual(lowExpert);
+  });
+
+  it('does not advertise a recall for a model reference nothing can resolve', () => {
+    expect(getVideoRecallCapabilities({ generation_mode: 'wan_t2v', model: { name: 'only a name' } })).toEqual(
+      EMPTY_VIDEO_RECALL_CAPABILITIES
+    );
+    expect(getVideoRecallCapabilities({ generation_mode: 'wan_t2v', model: { hash: 'blake3:x' } }).remix).toBe(true);
+  });
+});
