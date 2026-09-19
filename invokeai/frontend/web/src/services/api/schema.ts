@@ -27562,8 +27562,11 @@ export type components = {
          * Main_Diffusers_LTX2_Config
          * @description An LTX-2 folder of per-component single files in the official key layout.
          *
-         *     This is how LTX-2.5 is distributed (``Lightricks/LTX-2.5`` and the ``DeepBeepMeep/LTX-2`` mirror):
-         *     one safetensors per component rather than a diffusers ``model_index.json`` tree. The folder is
+         *     This is how the ``DeepBeepMeep/LTX-2`` mirror distributes LTX-2.5: one safetensors per component
+         *     rather than a diffusers ``model_index.json`` tree. (The official ``Lightricks/LTX-2.5`` files use
+         *     the same layout for the VAEs, upsamplers and transformer, but keep the connectors inside the
+         *     transformer file and the text projection inside the text-encoder file; a folder of official files
+         *     therefore lacks a text-projection component in this version.) The folder is
          *     the *component source* of a generation -- video VAE, audio VAE, vocoder, text projection, the two
          *     text connectors and the latent upsamplers -- while the 22B transformer normally comes from a
          *     single-file record selected in the model loader (bf16, int8-convrot or nvfp4). A folder that
