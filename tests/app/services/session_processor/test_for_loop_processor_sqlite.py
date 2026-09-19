@@ -334,6 +334,7 @@ def test_processor_sqlite_queue_nested_iterate_for_cleanup(
     registered_event_bus: _RecordingRegisteredEventService,
     outcome: str,
 ) -> None:
+    test_timeout = 30
     monkeypatch.setattr(
         "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
         _build_test_invocation_context,
@@ -378,7 +379,7 @@ def test_processor_sqlite_queue_nested_iterate_for_cleanup(
             "canceled": "canceled",
             "failure": "failed",
         }[outcome]
-        assert registered_event_bus.wait_for_status(item_id, expected_status)
+        assert registered_event_bus.wait_for_status(item_id, expected_status, timeout=test_timeout)
 
         queue_item = queue.get_queue_item(item_id)
         assert queue_item.status == expected_status
