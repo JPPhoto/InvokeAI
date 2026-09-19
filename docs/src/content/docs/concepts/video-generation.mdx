@@ -1,7 +1,7 @@
 ---
 title: Video Generation
 description: Generate short videos — with audio on MiniMax H3 — from the Video panel. Covers the panel's controls, the Wan 2.2 and MiniMax H3 model families, and how to make longer videos.
-lastUpdated: 2026-09-16
+lastUpdated: 2026-09-19
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
@@ -127,6 +127,8 @@ If a Wan A14B pairing looks mis-wired — for example a low-noise-tagged file in
 ### Recalling parameters
 
 Video generations record their parameters as metadata. Select a video in the gallery and use **Recall parameters** (in the viewer's header or the context menu) to load its prompt, model, dimensions, frames, LoRAs, and conditioning back into the Video panel — the same round-trip the image panel offers. Media that no longer exists is cleared rather than silently substituted. The MiniMax H3 hybrid is part of the record too: recalling a hybrid video restores its base and start block, and recalling a video made without the hybrid clears the slot.
+
+The record travels **inside the MP4**, the way an image's does inside its PNG. Download a video, upload it to any Invoke install — yours or someone else's — and **Recall parameters** works there too: models are matched by content hash when the other install's model keys differ, and conditioning media that only existed in the original gallery is simply left empty. The [Media Metadata](/development/architecture/media-metadata/) reference documents the record's fields and versioning.
 
 ---
 

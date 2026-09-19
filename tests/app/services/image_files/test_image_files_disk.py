@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from invokeai.app.api.extract_metadata_from_image import extract_metadata_from_image
+from invokeai.app.api.extract_metadata import extract_metadata_from_image
 from invokeai.app.services.image_files.image_files_common import ImageFileDeleteException, ImageFileSaveException
 from invokeai.app.services.image_files.image_files_disk import DiskImageFileStorage, _should_use_png_rle
 from invokeai.app.util.thumbnails import get_thumbnail_name

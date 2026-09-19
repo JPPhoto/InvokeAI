@@ -64,12 +64,12 @@ class VideoFileStorageBase(ABC):
 
     @abstractmethod
     def get_workflow(self, video_name: str, video_subfolder: str = "") -> Optional[str]:
-        """Gets the workflow JSON sidecar of a video, if any."""
+        """Gets the workflow JSON embedded in (or stored beside) a video, if any."""
         pass
 
     @abstractmethod
     def get_graph(self, video_name: str, video_subfolder: str = "") -> Optional[str]:
-        """Gets the graph JSON sidecar of a video, if any."""
+        """Gets the graph JSON embedded in (or stored beside) a video, if any."""
         pass
 
     @abstractmethod
