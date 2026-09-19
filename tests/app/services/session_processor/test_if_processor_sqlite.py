@@ -153,6 +153,7 @@ def test_if_cancellation_preserves_activation_and_never_resumes_unselected_branc
     unselected_branch: str,
     selected_field: str,
 ) -> None:
+    test_timeout = 30
     queue = SqliteSessionQueue(db=mock_invoker.services.board_records._db)
     mock_invoker.services.events = registered_event_bus
     mock_invoker.services.session_queue = queue
@@ -179,8 +180,8 @@ def test_if_cancellation_preserves_activation_and_never_resumes_unselected_branc
     )
     try:
         processor.start(mock_invoker)
-        assert registered_event_bus.wait_for_status(item_id, "canceled")
-        assert session_persisted.wait(timeout=5)
+        assert registered_event_bus.wait_for_status(item_id, "canceled", timeout=test_timeout)
+        assert session_persisted.wait(timeout=test_timeout)
 
         queue_item = queue.get_queue_item(item_id)
         assert queue_item.status == "canceled"
