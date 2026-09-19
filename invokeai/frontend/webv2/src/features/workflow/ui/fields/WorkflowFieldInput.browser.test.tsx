@@ -377,7 +377,9 @@ describe('WorkflowFieldInput saved workflows', () => {
     await renderField(SAVED_WORKFLOW_TEMPLATE, '', onChange);
     await vi.waitFor(() => expect(workflowApiMock.apiFetchJson).toHaveBeenCalledTimes(2));
     await vi.waitFor(() =>
-      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.placeholder).not.toBe('common.loading')
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.placeholder).toBe(
+        'nodes.savedWorkflowSearch'
+      )
     );
     const input = host.querySelector<HTMLInputElement>('input[role="combobox"]');
 
