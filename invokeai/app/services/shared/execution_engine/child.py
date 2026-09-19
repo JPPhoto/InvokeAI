@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
@@ -54,6 +55,20 @@ def _id(value: str, label: str) -> str:
 
 class _ChildModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> "_ChildModel":
+        """Copy durable fields and runtime state without copying process-local locks."""
+        memo = {} if memo is None else memo
+        copied = type(self).__new__(type(self))
+        memo[id(self)] = copied
+        object.__setattr__(copied, "__dict__", deepcopy(self.__dict__, memo))
+        object.__setattr__(copied, "__pydantic_extra__", deepcopy(self.__pydantic_extra__, memo))
+        object.__setattr__(copied, "__pydantic_fields_set__", deepcopy(self.__pydantic_fields_set__, memo))
+        private = {}
+        for name, value in (self.__pydantic_private__ or {}).items():
+            private[name] = threading.RLock() if name == "_lock" else deepcopy(value, memo)
+        object.__setattr__(copied, "__pydantic_private__", private)
+        return copied
 
 
 class ChildExecutionRecord(_ChildModel):

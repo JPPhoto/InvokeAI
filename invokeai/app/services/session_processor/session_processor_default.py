@@ -37,7 +37,11 @@ from invokeai.app.services.session_processor.workflow_call_runtime import (
     WorkflowCallCoordinator,
     WorkflowCallQueueLifecycle,
 )
-from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem, SessionQueueItemNotFoundError
+from invokeai.app.services.session_queue.session_queue_common import (
+    SessionQueueItem,
+    SessionQueueItemChangedError,
+    SessionQueueItemNotFoundError,
+)
 from invokeai.app.services.shared.graph import CollectInvocation, IterateInvocation, NodeInputError
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
 from invokeai.app.util.profiler import Profiler
@@ -264,6 +268,7 @@ class DefaultSessionRunner(SessionRunnerBase):
                 child_capability = None
                 workflow_inputs = None
                 workflow_authorizer = None
+                authorized_workflow_record = None
                 if isinstance(invocation, CallSavedWorkflowInvocation):
                     if not hasattr(queue_item.session, "build_child_execution_capability"):
                         data = InvocationContextData(
@@ -295,7 +300,9 @@ class DefaultSessionRunner(SessionRunnerBase):
                 if isinstance(invocation, CallSavedWorkflowInvocation):
 
                     def workflow_authorizer(_workflow_id: str):
-                        return invocation.validate_selected_workflow(context)
+                        nonlocal authorized_workflow_record
+                        authorized_workflow_record = invocation.validate_selected_workflow(context)
+                        return authorized_workflow_record
 
                 data = InvocationContextData(
                     invocation=invocation,
@@ -354,7 +361,9 @@ class DefaultSessionRunner(SessionRunnerBase):
                         )
                         return
 
-                    workflow_record = invocation.validate_selected_workflow(context)
+                    if authorized_workflow_record is None:
+                        raise RuntimeError("Saved workflow execution completed without authorization.")
+                    workflow_record = authorized_workflow_record
                     self._dispatch_workflow_call_effects(
                         invocation=invocation,
                         queue_item=queue_item,
@@ -380,6 +389,19 @@ class DefaultSessionRunner(SessionRunnerBase):
                     if control_collection is not None:
                         invocation.collection = []
 
+        except SessionQueueItemChangedError:
+            # A concurrent cancellation or terminal transition won the parent CAS. The in-memory session
+            # belongs to the losing worker and must not be persisted or emitted as a new invocation error.
+            try:
+                current_queue_item = self._services.session_queue.get_queue_item(queue_item.item_id)
+            except SessionQueueItemNotFoundError:
+                return
+            self._services.logger.info(
+                "Discarding stale workflow-call transition for queue item %s; current status is %s",
+                queue_item.item_id,
+                current_queue_item.status,
+            )
+            return
         except CanceledException:
             # A CanceledException is raised during the denoising step callback if the cancel event is set. We don't need
             # to do any handling here, and no error should be set - just pass and the cancellation will be handled
@@ -596,6 +618,7 @@ class DefaultSessionRunner(SessionRunnerBase):
         error_type: str,
         error_message: str,
         error_traceback: str,
+        require_active: bool = False,
     ):
         """Called when a node errors. Node errors may occur when running or preparing the node..
 
@@ -624,7 +647,13 @@ class DefaultSessionRunner(SessionRunnerBase):
         event_queue_item = queue_item
 
         # Fail the queue item
-        queue_item = self._services.session_queue.set_queue_item_session(queue_item.item_id, queue_item.session)
+        if require_active:
+            saved = self._save_queue_item_session_if_active(queue_item)
+            if not saved:
+                return False
+            queue_item = self._services.session_queue.get_queue_item(queue_item.item_id)
+        else:
+            queue_item = self._services.session_queue.set_queue_item_session(queue_item.item_id, queue_item.session)
         queue_item = self._services.session_queue.fail_queue_item(
             queue_item.item_id, error_type, error_message, error_traceback
         )
@@ -646,6 +675,21 @@ class DefaultSessionRunner(SessionRunnerBase):
                 error_message=error_message,
                 error_traceback=error_traceback,
             )
+        return True
+
+    def _save_queue_item_session_if_active(self, queue_item: SessionQueueItem) -> bool:
+        """Persist a workflow-call transition only while its queue item remains active."""
+        saver = getattr(self._services.session_queue, "_save_queue_item_session_if_active", None)
+        if saver is not None:
+            return bool(saver(queue_item.item_id, queue_item.session))
+        try:
+            current_queue_item = self._services.session_queue.get_queue_item(queue_item.item_id)
+        except SessionQueueItemNotFoundError:
+            return False
+        if current_queue_item.status in ("completed", "failed", "canceled"):
+            return False
+        self._services.session_queue.save_queue_item_session(queue_item.item_id, queue_item.session)
+        return True
 
 
 class _SessionWorker:

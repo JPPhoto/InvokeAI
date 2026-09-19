@@ -9,6 +9,10 @@ def test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatc
     workflow_call_tests.test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatch(monkeypatch)
 
 
+def test_run_node_discards_stale_workflow_call_transition_without_failing_parent(monkeypatch) -> None:
+    workflow_call_tests.test_run_node_discards_stale_workflow_call_transition_without_failing_parent(monkeypatch)
+
+
 def test_run_node_preserves_saved_workflow_failure_metadata(monkeypatch) -> None:
     workflow_call_tests.test_run_node_preserves_saved_workflow_failure_metadata(monkeypatch)
 
@@ -49,6 +53,10 @@ def test_run_preserves_canceled_child_workflow_chain_without_failing_parent(monk
 
 def test_run_does_not_resume_canceled_parent_after_completed_child(monkeypatch) -> None:
     workflow_call_tests.test_run_does_not_resume_canceled_parent_after_completed_child(monkeypatch)
+
+
+def test_run_does_not_overwrite_parent_canceled_during_completion_save(monkeypatch) -> None:
+    workflow_call_tests.test_run_does_not_overwrite_parent_canceled_during_completion_save(monkeypatch)
 
 
 def test_run_does_not_fail_canceled_parent_after_child_return_error(monkeypatch) -> None:

@@ -7,11 +7,12 @@ engine migration.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from pydantic_core import PydanticSerializationError
 
 if TYPE_CHECKING:
@@ -350,6 +351,14 @@ class ContinuationEffect(ExecutionEffect):
     _validate_payload = field_validator("payload")(_validate_json_serializable)
 
 
+class LegacyExecutionEffect(_ExecutionModel):
+    """Typed envelope for the pre-kind effect records retained for snapshot compatibility."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+    owner_node_id: str | None = None
+    source_port: str | None = None
+
+
 ExecutionEffectModel = Union[
     SetValueEffect,
     AddEdgeEffect,
@@ -360,7 +369,113 @@ ExecutionEffectModel = Union[
     AwaitEffect,
     FailEffect,
     ContinuationEffect,
+    LegacyExecutionEffect,
 ]
+
+_EXECUTION_EFFECT_MODELS: dict[str, type[ExecutionEffect]] = {
+    "set_value": SetValueEffect,
+    "add_edge": AddEdgeEffect,
+    "remove_edge": RemoveEdgeEffect,
+    "emit": EmitEffect,
+    "close_stream": CloseStreamEffect,
+    "spawn_execution": SpawnExecutionEffect,
+    "await": AwaitEffect,
+    "fail": FailEffect,
+    "continuation": ContinuationEffect,
+}
+
+_LEGACY_LIFECYCLE_FIELDS = frozenset(
+    {
+        "execution_ref",
+        "execution_reference",
+        "owner_ref",
+        "parent",
+        "dependency",
+        "child_execution_id",
+        "child_id",
+        "graph",
+        "inputs",
+        "authorization_context",
+        "target",
+        "source",
+        "destination",
+        "token",
+        "value",
+        "message",
+        "error_type",
+        "error_traceback",
+        "operation",
+        "continuation_kind",
+        "payload",
+    }
+)
+
+
+def normalize_persisted_execution_effects(
+    value: Any,
+    *,
+    path: str = "execution_effects",
+) -> dict[str, list[ExecutionEffect]]:
+    """Validate and normalize the persisted effect ledger into concrete models.
+
+    ``effect_type`` and ``type`` were accepted names for the effect discriminator in older
+    snapshots. They are migrated to ``kind`` here so the rest of the runtime only sees the
+    typed, canonical representation.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{path} must be a mapping of execution reference ids to effect lists")
+
+    normalized: dict[str, list[ExecutionEffect]] = {}
+    for reference_id, effects in value.items():
+        reference_path = f"{path}[{reference_id!r}]"
+        if not isinstance(reference_id, str) or not reference_id.strip():
+            raise ValueError(f"{reference_path} must use a non-blank string execution reference id")
+        if not isinstance(effects, list):
+            raise ValueError(f"{reference_path} must be a list of execution effects")
+
+        typed_effects: list[ExecutionEffect] = []
+        for index, effect in enumerate(effects):
+            effect_path = f"{reference_path}[{index}]"
+            if not isinstance(effect, Mapping):
+                raise ValueError(f"{effect_path} must be a mapping")
+
+            data = dict(effect)
+            present_kind_fields = [name for name in ("kind", "effect_type", "type") if name in data]
+            if not present_kind_fields:
+                if "owner_node_id" not in data and "source_port" not in data:
+                    raise ValueError(f"{effect_path} is missing an execution effect kind ('kind')")
+                lifecycle_fields = sorted(_LEGACY_LIFECYCLE_FIELDS.intersection(data))
+                if lifecycle_fields:
+                    raise ValueError(
+                        f"{effect_path} has lifecycle fields {lifecycle_fields} but no execution effect kind ('kind')"
+                    )
+                try:
+                    typed_effects.append(LegacyExecutionEffect.model_validate(data, strict=False))
+                except (ValidationError, TypeError, ValueError) as exc:
+                    raise ValueError(f"{effect_path} is not a valid legacy execution effect: {exc}") from exc
+                continue
+            kind = data[present_kind_fields[0]]
+            if any(data[name] != kind for name in present_kind_fields[1:]):
+                raise ValueError(f"{effect_path} has conflicting execution effect kind aliases")
+            if not isinstance(kind, str):
+                raise ValueError(f"{effect_path} execution effect kind must be a string")
+            model = _EXECUTION_EFFECT_MODELS.get(kind)
+            if model is None:
+                supported = ", ".join(sorted(_EXECUTION_EFFECT_MODELS))
+                raise ValueError(
+                    f"{effect_path} has unknown execution effect kind {kind!r}; supported kinds: {supported}"
+                )
+
+            data["kind"] = kind
+            for alias in ("effect_type", "type"):
+                data.pop(alias, None)
+            try:
+                typed_effects.append(model.model_validate(data, strict=False))
+            except (ValidationError, TypeError, ValueError) as exc:
+                raise ValueError(f"{effect_path} is not a valid {kind} effect: {exc}") from exc
+        normalized[reference_id] = typed_effects
+    return normalized
+
 
 # Descriptive aliases keep call sites free to use execution-specific names.
 SetExecutionValueEffect = SetValueEffect

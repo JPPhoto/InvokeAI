@@ -70,67 +70,18 @@ def can_use_nested_iterate_planner(state: "GraphExecutionState") -> bool:
     return not state._legacy_snapshot_loaded and _get_exact_nested_iterate_body(state) is not None
 
 
-def can_use_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
-    """Check the exact two-level Iterate-only chain before generic admission."""
-    return (
-        not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=2)
-        is not None
-    )
+_SUPPORTED_NESTED_ITERATE_SEQUENCE_DEPTHS = range(2, 9)
 
 
-def can_use_three_level_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
-    """Check the exact three-level Iterate-only chain before generic admission."""
-    return (
-        not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=3)
-        is not None
-    )
-
-
-def can_use_four_level_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
-    """Check the exact four-level Iterate-only chain before generic admission."""
-    return (
-        not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=4)
-        is not None
-    )
-
-
-def can_use_five_level_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
-    """Check the exact five-level Iterate-only chain before generic admission."""
-    return (
-        not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=5)
-        is not None
-    )
-
-
-def can_use_six_level_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
-    """Check the exact six-level Iterate-only chain before generic admission."""
-    return (
-        not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=6)
-        is not None
-    )
-
-
-def can_use_seven_level_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
-    """Check the exact seven-level Iterate-only chain before generic admission."""
-    return (
-        not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=7)
-        is not None
-    )
-
-
-def can_use_eight_level_nested_iterate_sequence_planner(state: "GraphExecutionState") -> bool:
-    """Check the exact eight-level Iterate-only chain before generic admission."""
-    return (
-        not state._legacy_snapshot_loaded
-        and state.graph._get_supported_nested_iterate_sequence(state._get_source_graph_flat(), iterate_count=8)
-        is not None
-    )
+def get_nested_iterate_sequence_depth(state: "GraphExecutionState") -> int | None:
+    """Return the exact supported fresh Iterate-only chain depth, if any."""
+    if state._legacy_snapshot_loaded:
+        return None
+    source_graph = state._get_source_graph_flat()
+    for depth in _SUPPORTED_NESTED_ITERATE_SEQUENCE_DEPTHS:
+        if state.graph._get_supported_nested_iterate_sequence(source_graph, iterate_count=depth) is not None:
+            return depth
+    return None
 
 
 def _outer_iteration_path(state: "GraphExecutionState", prepared_for_id: str) -> tuple[int, ...]:
@@ -142,14 +93,7 @@ def _outer_iteration_path(state: "GraphExecutionState", prepared_for_id: str) ->
 
 
 def _prepared_at_path(state: "GraphExecutionState", source_node_id: str, path: tuple[int, ...]) -> str | None:
-    matches = [
-        prepared_id
-        for prepared_id in state._prepared_registry().get_prepared_ids(source_node_id)
-        if state._get_iteration_path(prepared_id) == path
-    ]
-    if len(matches) > 1:
-        raise RuntimeError(f"Multiple prepared nested nodes exist for {source_node_id} at {path}")
-    return matches[0] if matches else None
+    return state._prepared_registry().get_prepared_id_at_path(source_node_id, path)
 
 
 def _prepare_nested_iterate_body_for_outer(
@@ -459,14 +403,7 @@ def _prepare_nested_iterate_sequence(state: "GraphExecutionState", *, iterate_co
     assert nested is not None
 
     def prepared_at_path(source_node_id: str, path: tuple[int, ...]) -> str | None:
-        matches = [
-            exec_id
-            for exec_id in state._prepared_registry().get_prepared_ids(source_node_id)
-            if state._get_iteration_path(exec_id) == path
-        ]
-        if len(matches) > 1:
-            raise RuntimeError(f"Multiple prepared nested nodes exist for {source_node_id} at {path}")
-        return matches[0] if matches else None
+        return state._prepared_registry().get_prepared_id_at_path(source_node_id, path)
 
     def create_copy(
         source_node_id: str,
@@ -575,43 +512,9 @@ def _prepare_nested_iterate_sequence(state: "GraphExecutionState", *, iterate_co
                 state._mark_source_executed(source_node_id)
 
 
-def prepare_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact two-level nested Iterate chain."""
-    if can_use_nested_iterate_sequence_planner(state):
-        _prepare_nested_iterate_sequence(state, iterate_count=2)
-
-
-def prepare_three_level_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact three-level nested Iterate chain."""
-    if can_use_three_level_nested_iterate_sequence_planner(state):
-        _prepare_nested_iterate_sequence(state, iterate_count=3)
-
-
-def prepare_four_level_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact four-level nested Iterate chain."""
-    if can_use_four_level_nested_iterate_sequence_planner(state):
-        _prepare_nested_iterate_sequence(state, iterate_count=4)
-
-
-def prepare_five_level_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact five-level nested Iterate chain."""
-    if can_use_five_level_nested_iterate_sequence_planner(state):
-        _prepare_nested_iterate_sequence(state, iterate_count=5)
-
-
-def prepare_six_level_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact six-level nested Iterate chain."""
-    if can_use_six_level_nested_iterate_sequence_planner(state):
-        _prepare_nested_iterate_sequence(state, iterate_count=6)
-
-
-def prepare_seven_level_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact seven-level nested Iterate chain."""
-    if can_use_seven_level_nested_iterate_sequence_planner(state):
-        _prepare_nested_iterate_sequence(state, iterate_count=7)
-
-
-def prepare_eight_level_nested_iterate_sequences(state: "GraphExecutionState") -> None:
-    """Prepare the exact eight-level nested Iterate chain."""
-    if can_use_eight_level_nested_iterate_sequence_planner(state):
-        _prepare_nested_iterate_sequence(state, iterate_count=8)
+def prepare_nested_iterate_sequence(state: "GraphExecutionState", *, depth: int | None = None) -> None:
+    """Prepare the exact supported nested Iterate chain."""
+    if depth is None:
+        depth = get_nested_iterate_sequence_depth(state)
+    if depth is not None:
+        _prepare_nested_iterate_sequence(state, iterate_count=depth)

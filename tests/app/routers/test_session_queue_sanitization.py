@@ -1,11 +1,13 @@
 """Tests for session queue item sanitization in multiuser mode."""
 
 from datetime import datetime
+from unittest.mock import Mock
 
 import pytest
 
 from invokeai.app.api.routers.session_queue import sanitize_queue_item_for_user, strip_missing_image_results
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
+from invokeai.app.invocations.collections import RangeInvocation
 from invokeai.app.invocations.fields import ImageField, InputField, OutputField, VideoField
 from invokeai.app.invocations.primitives import ImageCollectionOutput, ImageOutput, VideoOutput
 from invokeai.app.services.session_queue.session_queue_common import (
@@ -13,7 +15,15 @@ from invokeai.app.services.session_queue.session_queue_common import (
     SessionQueueItem,
     SessionQueueItemSummary,
 )
-from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state, load_execution_state
+from invokeai.app.services.shared.graph import (
+    CollectInvocation,
+    Edge,
+    EdgeConnection,
+    Graph,
+    GraphExecutionState,
+    IterateInvocation,
+)
 from invokeai.app.services.shared.invocation_context import InvocationContext
 
 
@@ -230,6 +240,41 @@ def test_strip_missing_image_results_removes_deleted_single_image_output(sample_
     assert "missing_node" in sample_session_queue_item.session.results
 
 
+def test_strip_missing_image_results_deep_copies_rehydrated_iterate_runtime(sample_session_queue_item):
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="range", field="collection"),
+            destination=EdgeConnection(node_id="iterate", field="collection"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="iterate", field="item"),
+            destination=EdgeConnection(node_id="collect", field="item"),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    range_node = state.next()
+    assert isinstance(range_node, RangeInvocation)
+    state.complete(range_node.id, range_node.invoke(Mock(InvocationContext)))
+    iterate_node = state.next()
+    assert isinstance(iterate_node, IterateInvocation)
+    state.complete(iterate_node.id, iterate_node.invoke(Mock(InvocationContext)))
+    restored = load_execution_state(dump_execution_state(state))
+    restored.results["missing_node"] = ImageOutput(image=ImageField(image_name="missing.png"), width=64, height=64)
+    queue_item = sample_session_queue_item.model_copy(update={"session": restored, "status": "completed"})
+
+    result = strip_missing_image_results(queue_item, image_exists=lambda _name: False)
+
+    assert "missing_node" not in result.session.results
+    assert len(result.session.results) == len(restored.results) - 1
+    assert queue_item.session.results["missing_node"].image.image_name == "missing.png"
+
+
 def test_strip_missing_image_results_filters_deleted_collection_items(sample_session_queue_item):
     sample_session_queue_item.session.results = {
         "collection_node": ImageCollectionOutput(
@@ -246,6 +291,18 @@ def test_strip_missing_image_results_filters_deleted_collection_items(sample_ses
         ImageField(image_name="missing.png"),
         ImageField(image_name="kept.png"),
     ]
+
+
+def test_strip_missing_image_results_handles_projected_dict_outputs(sample_session_queue_item):
+    sample_session_queue_item.session.results = {
+        "collection_node": {
+            "collection": [{"image_name": "missing.png"}, {"image_name": "kept.png"}],
+        }
+    }
+
+    result = strip_missing_image_results(sample_session_queue_item, image_exists=lambda name: name == "kept.png")
+
+    assert result.session.results["collection_node"]["collection"] == [{"image_name": "kept.png"}]
 
 
 def test_sanitize_preserves_device_for_owner_and_admin(sample_session_queue_item):

@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -8,6 +9,7 @@ from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import IntegerCollectionOutput
 from invokeai.app.services.shared.execution_effects import (
     AwaitEffect,
+    EmitEffect,
     SpawnExecutionEffect,
 )
 from invokeai.app.services.shared.execution_effects import (
@@ -115,6 +117,84 @@ def test_loads_frozen_legacy_snapshot_without_runtime_ledgers() -> None:
 
     assert restored.id == "legacy-state"
     assert dump_execution_state(restored)["execution_state_version"] == CURRENT_EXECUTION_STATE_VERSION
+
+
+def _snapshot_with_persisted_effect(effect: dict[str, object]) -> dict[str, object]:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="add", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    invocation = state.next()
+    assert invocation is not None
+    effect["token"]["node_id"] = invocation.id  # type: ignore[index]
+    execution_ref = state.get_execution_ref(invocation.id, effect_count=1)
+    state.apply(execution_ref, invocation.invoke(None), effects=[effect])
+    return dump_execution_state(state)
+
+
+def test_load_normalizes_supported_effect_kind_alias_to_typed_model() -> None:
+    snapshot = _snapshot_with_persisted_effect(
+        {
+            "kind": "emit",
+            "token": {"node_id": "add", "field": "value", "value": 3},
+            "value": 3,
+        }
+    )
+    reference_id = next(iter(snapshot["execution_effects"]))
+    effect = snapshot["execution_effects"][reference_id][0]
+    effect["effect_type"] = effect.pop("kind")
+
+    restored = load_execution_state(snapshot)
+
+    loaded_effect = restored.execution_effects[reference_id][0]
+    assert isinstance(loaded_effect, EmitEffect)
+    assert loaded_effect.kind == "emit"
+
+
+def test_load_preserves_supported_legacy_effect_aliases() -> None:
+    snapshot = _snapshot_with_persisted_effect(
+        {
+            "kind": "emit",
+            "token": {"node_id": "add", "field": "value", "value": 3},
+            "value": 3,
+        }
+    )
+    snapshot.pop("execution_state_version")
+    reference_id = next(iter(snapshot["execution_effects"]))
+    effect = snapshot["execution_effects"][reference_id][0]
+    effect["effect_type"] = effect.pop("kind")
+
+    restored = load_execution_state(snapshot)
+
+    assert restored.execution_effects[reference_id][0]["effect_type"] == "emit"
+
+
+@pytest.mark.parametrize(
+    ("execution_effects", "error"),
+    [
+        ([], "execution_effects must be a mapping"),
+        ({"reference": {}}, "must be a list"),
+        ({"reference": [None]}, "must be a mapping"),
+        ({"reference": [{"kind": "unknown"}]}, "unknown execution effect kind 'unknown'"),
+        ({"reference": [{"kind": "emit"}]}, "is not a valid emit effect"),
+        ({"reference": [{"owner_node_id": "add", "graph": {}}]}, "lifecycle fields"),
+    ],
+)
+def test_load_rejects_malformed_persisted_effects_with_actionable_errors(execution_effects: object, error: str) -> None:
+    snapshot = _snapshot_with_persisted_effect(
+        {
+            "kind": "emit",
+            "token": {"node_id": "add", "field": "value", "value": 3},
+            "value": 3,
+        }
+    )
+    snapshot["execution_effects"] = execution_effects
+
+    if isinstance(execution_effects, dict):
+        reference_id = next(iter(snapshot["execution_effects"]))
+        snapshot["execution_effects"] = {reference_id: next(iter(execution_effects.values()))}
+
+    with pytest.raises(ValueError, match=re.escape(error)):
+        load_execution_state(snapshot)
 
 
 def test_rejects_future_execution_state_versions() -> None:
@@ -244,6 +324,31 @@ def test_round_trips_pending_generic_child_dependency_and_partial_completion() -
     assert dependency.completions["10"].outputs == {"value": "ten"}
 
 
+@pytest.mark.parametrize(
+    ("terminal_method", "expected_status"),
+    [("fail_generic_child", "failed"), ("cancel_generic_child", "canceled")],
+)
+def test_compacts_terminal_generic_child_dependency_after_recovery(terminal_method: str, expected_status: str) -> None:
+    graph = Graph()
+    graph.add_node(AddInvocation(id="source-call", a=1, b=2))
+    state = GraphExecutionState(graph=graph)
+    state.execution_graph.add_node(AddInvocation(id="prepared-call", a=1, b=2))
+    state.prepared_source_mapping["prepared-call"] = "source-call"
+    frame = state.build_workflow_call_frame(exec_node_id="prepared-call", workflow_id="saved-workflow")
+    state.begin_waiting_on_workflow_call(frame)
+    state.attach_waiting_workflow_call_child_sessions([GraphExecutionState(graph=Graph())])
+    state.set_waiting_workflow_call_child_item_ids([20])
+
+    update = getattr(state, terminal_method)(20, "child terminal")
+    assert update is not None
+    assert update.status == expected_status
+    state.end_waiting_on_workflow_call(status="failed", error_message="child terminal")
+
+    snapshot = dump_execution_state(state)
+
+    assert snapshot["execution_child_dependencies"] == {}
+
+
 def _make_completed_iterate_state(iteration_count: int = 2) -> GraphExecutionState:
     graph = Graph()
     graph.add_node(RangeInvocation(id="range", start=0, stop=iteration_count, step=1))
@@ -338,6 +443,15 @@ def test_compact_iterate_ledgers_have_deterministic_record_bound_and_rehydrate()
     assert restored.is_complete()
 
 
+def test_compact_iterate_ledger_has_bounded_runtime_metadata_at_100_iterations() -> None:
+    snapshot = dump_execution_state(_make_completed_iterate_state(iteration_count=100))
+
+    assert snapshot["execution_refs"] == {}
+    assert snapshot["execution_tokens"] == {}
+    assert sum(len(effects) for effects in snapshot["execution_effects"].values()) == 101
+    assert len(json.dumps(snapshot, sort_keys=True, separators=(",", ":"))) < 100_000
+
+
 def test_completed_workflow_call_snapshot_does_not_retain_child_graph() -> None:
     graph = Graph()
     graph.add_node(CallSavedWorkflowInvocation(id="call", workflow_id="saved"))
@@ -407,4 +521,48 @@ def test_completed_workflow_call_snapshot_does_not_retain_child_graph() -> None:
     ]
     active_snapshot = dump_execution_state(active_parent)
     assert active_ref.reference_id in active_snapshot["execution_effects"]
-    assert "waiting_workflow_call_child_session" in active_snapshot
+    active_spawn = active_snapshot["execution_effects"][active_ref.reference_id][0]
+    assert active_spawn["graph"] == {"child_execution_id": active_child.id}
+    assert active_spawn["inputs"] == {}
+    assert "waiting_workflow_call_child_session" not in active_snapshot
+
+
+def test_failed_workflow_call_snapshot_does_not_retain_lifecycle_effects() -> None:
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="call", workflow_id="saved"))
+    parent = GraphExecutionState(graph=graph)
+    call = parent.next()
+    assert call is not None
+    frame = parent.build_workflow_call_frame(call.id, "saved")
+    parent.begin_waiting_on_workflow_call(frame)
+    execution_ref = parent._expected_execution_ref(call.id)
+    parent.execution_refs[call.id] = execution_ref
+    parent.execution_effects[execution_ref.reference_id] = [
+        SpawnExecutionEffect(
+            parent=EffectExecutionRef(
+                execution_node_id=call.id,
+                state_id=parent.id,
+                frame_path=execution_ref.frame.iteration_path,
+                frame_id=execution_ref.frame.frame_id,
+                workflow_call_depth=execution_ref.frame.workflow_call_depth,
+            ),
+            graph=Graph().model_dump(mode="json"),
+            child_execution_id="child-id",
+        ),
+        AwaitEffect(
+            dependency=EffectExecutionRef(
+                execution_node_id=call.id,
+                state_id=parent.id,
+                frame_path=execution_ref.frame.iteration_path,
+                frame_id=execution_ref.frame.frame_id,
+                workflow_call_depth=execution_ref.frame.workflow_call_depth,
+            )
+        ),
+    ]
+    parent.end_waiting_on_workflow_call(status="failed", error_message="child failed")
+    parent.set_node_error(call.id, "child failed")
+
+    snapshot = dump_execution_state(parent)
+
+    assert parent.workflow_call_history[0].status == "failed"
+    assert execution_ref.reference_id not in snapshot["execution_effects"]

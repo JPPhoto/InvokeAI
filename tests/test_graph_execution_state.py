@@ -760,6 +760,50 @@ def test_partial_iterate_stream_round_trip_defers_collect_until_close():
     assert restored.is_complete()
 
 
+def test_rehydrated_iterate_state_can_be_deep_copied_without_sharing_runtime_locks():
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "collect", "item"))
+
+    state = GraphExecutionState(graph=graph)
+    range_node, range_output = invoke_next(state)
+    assert range_node is not None
+    assert range_output is not None
+    iterate_node = state.next()
+    assert isinstance(iterate_node, IterateInvocation)
+    state.complete(iterate_node.id, iterate_node.invoke(Mock(InvocationContext)))
+
+    restored = load_execution_state(dump_execution_state(state))
+    copied = restored.model_copy(deep=True)
+
+    original_stream = next(
+        stream for stream in restored._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    )
+    copied_stream = next(
+        stream for stream in copied._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    )
+    assert copied_stream is not original_stream
+    assert copied_stream._lock is not original_stream._lock
+    assert copied_stream.values == original_stream.values == (0,)
+    assert copied_stream.closed is original_stream.closed is False
+    assert copied.id == restored.id
+    assert copied.execution_refs.keys() == restored.execution_refs.keys()
+    assert copied.execution_effects == restored.execution_effects
+
+    next_iterate = restored.next()
+    assert isinstance(next_iterate, IterateInvocation)
+    restored.complete(next_iterate.id, next_iterate.invoke(Mock(InvocationContext)))
+    closed_copy = restored.model_copy(deep=True)
+    closed_stream = next(
+        stream for stream in closed_copy._generic_runtime().streams.values() if stream.owner_id == "iterate"
+    )
+    assert closed_stream.closed
+    assert closed_stream.values == (0, 1)
+
+
 @pytest.mark.parametrize("port", ["type", "output_meta", "loop_linkage"])
 @pytest.mark.parametrize("effect_kind, token_kind", [("emit", "data"), ("close_stream", "stream_end")])
 def test_graph_state_apply_rejects_reserved_effect_ports(port: str, effect_kind: str, token_kind: str):

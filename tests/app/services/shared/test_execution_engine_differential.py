@@ -37,6 +37,7 @@ from invokeai.app.services.shared.graph import (
     _ExecutionScheduler,
     _GenericGraphSchedulerAdapter,
 )
+from invokeai.app.services.shared.graph_nested_iterate_planner import get_nested_iterate_sequence_depth
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
 from tests.test_nodes import (
     AnyTypeTestInvocation,
@@ -3863,6 +3864,20 @@ def test_nine_level_nested_iterate_remains_on_compatibility_fallback() -> None:
     assert trace.count("body") == 1
     assert state.is_complete()
     assert prepare.call_count > 0
+
+
+@pytest.mark.parametrize("depth", range(2, 9))
+def test_nested_iterate_sequence_depth_matcher_matches_supported_inventory(depth: int) -> None:
+    state = GraphExecutionState(graph=_serial_nested_iterate_chain_graph_at_depth(depth))
+
+    assert get_nested_iterate_sequence_depth(state) == depth
+
+
+@pytest.mark.parametrize("depth", [1, 9])
+def test_nested_iterate_sequence_depth_matcher_rejects_unsupported_depth(depth: int) -> None:
+    state = GraphExecutionState(graph=_serial_nested_iterate_chain_graph_at_depth(depth))
+
+    assert get_nested_iterate_sequence_depth(state) is None
 
 
 @pytest.mark.parametrize("values", [[1, None, 1], []], ids=["ordered-duplicates-and-none", "empty"])

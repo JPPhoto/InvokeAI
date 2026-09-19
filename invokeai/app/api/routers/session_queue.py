@@ -91,8 +91,15 @@ def strip_missing_image_results(
     image_cache: dict[str, bool] = {}
     video_cache: dict[str, bool] = {}
 
-    def is_media_field(item: object) -> bool:
-        return isinstance(item, (ImageField, VideoField))
+    def media_field(item: object) -> ImageField | VideoField | None:
+        if isinstance(item, (ImageField, VideoField)):
+            return item
+        if isinstance(item, dict):
+            if isinstance(item.get("image_name"), str):
+                return ImageField.model_validate(item)
+            if isinstance(item.get("video_name"), str):
+                return VideoField.model_validate(item)
+        return None
 
     def cached_exists(field: ImageField | VideoField) -> bool:
         if isinstance(field, VideoField):
@@ -104,24 +111,31 @@ def strip_missing_image_results(
         return image_cache[field.image_name]
 
     for node_id, output in queue_item.session.results.items():
-        image = getattr(output, "image", None)
-        if isinstance(image, ImageField) and not cached_exists(image):
+        image = output.get("image") if isinstance(output, dict) else getattr(output, "image", None)
+        image_field = media_field(image)
+        if isinstance(image_field, ImageField) and not cached_exists(image_field):
             did_filter = True
             continue
 
-        video = getattr(output, "video", None)
-        if isinstance(video, VideoField) and not cached_exists(video):
+        video = output.get("video") if isinstance(output, dict) else getattr(output, "video", None)
+        video_field = media_field(video)
+        if isinstance(video_field, VideoField) and not cached_exists(video_field):
             did_filter = True
             continue
 
-        collection = getattr(output, "collection", None)
-        if isinstance(collection, list) and any(is_media_field(item) for item in collection):
-            filtered_collection = [item for item in collection if not is_media_field(item) or cached_exists(item)]
+        collection = output.get("collection") if isinstance(output, dict) else getattr(output, "collection", None)
+        if isinstance(collection, list) and any(media_field(item) is not None for item in collection):
+            filtered_collection = [
+                item for item in collection if (field := media_field(item)) is None or cached_exists(field)
+            ]
             if len(filtered_collection) != len(collection):
                 did_filter = True
                 if len(filtered_collection) == 0:
                     continue
-                output = output.model_copy(update={"collection": filtered_collection})
+                if isinstance(output, dict):
+                    output = {**output, "collection": filtered_collection}
+                else:
+                    output = output.model_copy(update={"collection": filtered_collection})
 
         filtered_results[node_id] = output
 

@@ -240,6 +240,28 @@ def test_unreadable_snapshot_is_safe_for_detail_list_and_retry(
     assert retry_result.retried_item_ids == []
 
 
+def test_unreadable_terminal_snapshot_is_not_reported_as_completed(
+    session_queue_fifo: SqliteSessionQueue,
+) -> None:
+    future_session = json.loads(_EMPTY_SESSION_JSON)
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    bad_id = _insert_queue_item(
+        session_queue_fifo,
+        "default",
+        "bad-user",
+        session_json=json.dumps(future_session),
+    )
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'completed' WHERE item_id = ?", (bad_id,))
+
+    detail = session_queue_fifo.get_queue_item(bad_id)
+    listed = next(item for item in session_queue_fifo.list_all_queue_items("default") if item.item_id == bad_id)
+
+    assert detail.status == "failed"
+    assert listed.status == "failed"
+    assert detail.error_type == "UnsupportedExecutionStateVersionError"
+
+
 def test_unreadable_field_values_are_safe_for_summary(
     session_queue_fifo: SqliteSessionQueue,
 ) -> None:
@@ -256,6 +278,42 @@ def test_unreadable_field_values_are_safe_for_summary(
     assert summaries[0].item_id == item_id
     assert summaries[0].user_id == "summary-user"
     assert summaries[0].field_values is None
+
+
+def test_summary_read_does_not_hydrate_runtime_session(
+    session_queue_fifo: SqliteSessionQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item_id = _insert_queue_item(session_queue_fifo, "default", "summary-user")
+
+    def fail_runtime_hydration(_queue_item_dict: dict) -> GraphExecutionState:
+        raise AssertionError("metadata summary read hydrated runtime session")
+
+    monkeypatch.setattr(
+        "invokeai.app.services.session_queue.session_queue_common.get_session",
+        fail_runtime_hydration,
+    )
+
+    summaries = session_queue_fifo.get_queue_item_summaries_by_ids("default", [item_id])
+
+    assert [summary.item_id for summary in summaries] == [item_id]
+
+
+def test_queue_list_read_does_not_hydrate_runtime_session(
+    session_queue_fifo: SqliteSessionQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item_id = _insert_queue_item(session_queue_fifo, "default", "list-user")
+
+    def fail_runtime_hydration(_queue_item_dict: dict) -> GraphExecutionState:
+        raise AssertionError("queue list read hydrated runtime session")
+
+    monkeypatch.setattr(
+        "invokeai.app.services.session_queue.session_queue_common.get_session",
+        fail_runtime_hydration,
+    )
+
+    listed = session_queue_fifo.list_all_queue_items("default")
+
+    assert [item.item_id for item in listed] == [item_id]
 
 
 def test_unreadable_child_retries_readable_root(
@@ -640,3 +698,22 @@ def test_affinity_lookahead_window_bounds_deferral(session_queue_round_robin: Sq
     # relative to the cold candidate, so the cold item finally runs.
     second = session_queue_round_robin.dequeue(device="cuda:0")
     assert second is not None and second.item_id == cold_id
+
+
+def test_affinity_does_not_scan_older_history(session_queue_round_robin: SqliteSessionQueue) -> None:
+    """The affinity window must be bounded on both sides of the fairness candidate."""
+    _install_fake_cache(session_queue_round_robin._SqliteSessionQueue__invoker, "cuda:0", {_WARM_MODEL_KEY})
+    old_warm_id = _insert_queue_item(
+        session_queue_round_robin,
+        "default",
+        "user_a",
+        session_json=_session_with_model_key(_WARM_MODEL_KEY),
+        item_id=1,
+    )
+    candidate_id = _insert_queue_item(session_queue_round_robin, "default", "user_a", item_id=100)
+    candidate = session_queue_round_robin.get_queue_item(candidate_id)
+
+    selected = session_queue_round_robin._apply_device_affinity(candidate, {_WARM_MODEL_KEY})
+
+    assert selected.item_id == candidate_id
+    assert old_warm_id != candidate_id

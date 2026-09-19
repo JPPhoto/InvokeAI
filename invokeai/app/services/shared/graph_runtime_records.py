@@ -65,6 +65,19 @@ class _PreparedExecRegistry:
         self._metadata = metadata
         self._on_iteration_path_change = on_iteration_path_change
         self._state = state
+        self._prepared_ids_by_source_and_path: dict[str, dict[tuple[int, ...], set[str]]] = {}
+
+    def _invalidate_source_path_index(self, source_node_id: str) -> None:
+        previous = self._prepared_ids_by_source_and_path.pop(source_node_id, None)
+        if self._state is not None and self._state._apply_transaction is not None:
+            self._state._tx_record_once(
+                ("prepared_path_index", id(self), source_node_id),
+                lambda: (
+                    self._prepared_ids_by_source_and_path.__setitem__(source_node_id, previous)
+                    if previous is not None
+                    else self._prepared_ids_by_source_and_path.pop(source_node_id, None)
+                ),
+            )
 
     def _set_mapping(self, mapping: dict[Any, Any], key: Any, value: Any) -> None:
         if self._state is not None:
@@ -85,6 +98,7 @@ class _PreparedExecRegistry:
             setattr(obj, name, value)
 
     def register(self, exec_node_id: str, source_node_id: str) -> None:
+        self._invalidate_source_path_index(source_node_id)
         self._set_mapping(self._prepared_source_mapping, exec_node_id, source_node_id)
         self._pop_mapping(self._prepared_iteration_paths, exec_node_id)
         self._set_mapping(self._metadata, exec_node_id, _new_prepared_exec_node_metadata(source_node_id))
@@ -111,6 +125,26 @@ class _PreparedExecRegistry:
     def get_prepared_ids(self, source_node_id: str) -> set[str]:
         return self._source_prepared_mapping.get(source_node_id, set())
 
+    def get_prepared_id_at_path(self, source_node_id: str, iteration_path: tuple[int, ...]) -> str | None:
+        """Return the only prepared execution for a source/path without rescanning siblings."""
+        paths = self._prepared_ids_by_source_and_path.get(source_node_id)
+        if paths is None:
+            paths = {}
+            for exec_node_id in self.get_prepared_ids(source_node_id):
+                path = self.get_iteration_path(exec_node_id)
+                if path is not None:
+                    paths.setdefault(path, set()).add(exec_node_id)
+            self._prepared_ids_by_source_and_path[source_node_id] = paths
+            if self._state is not None and self._state._apply_transaction is not None:
+                self._state._tx_record_once(
+                    ("prepared_path_index", id(self), source_node_id),
+                    lambda: self._prepared_ids_by_source_and_path.pop(source_node_id, None),
+                )
+        matches = paths.get(iteration_path, set())
+        if len(matches) > 1:
+            raise RuntimeError(f"Multiple prepared nested nodes exist for {source_node_id} at {iteration_path}")
+        return next(iter(matches), None)
+
     def set_state(self, exec_node_id: str, state: PreparedExecState) -> None:
         self._set_attr(self.get_metadata(exec_node_id), "state", state)
 
@@ -124,6 +158,7 @@ class _PreparedExecRegistry:
         return iteration_path
 
     def set_iteration_path(self, exec_node_id: str, iteration_path: tuple[int, ...]) -> None:
+        self._invalidate_source_path_index(self.get_source_node_id(exec_node_id))
         self._set_mapping(self._prepared_iteration_paths, exec_node_id, iteration_path)
         self._set_attr(self.get_metadata(exec_node_id), "iteration_path", iteration_path)
         if self._on_iteration_path_change is not None:

@@ -9,6 +9,7 @@ safe to retry.
 from __future__ import annotations
 
 import threading
+from copy import deepcopy
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import (
@@ -54,6 +55,20 @@ class _InternalModel(BaseModel):
         if not isinstance(other, type(self)):
             return NotImplemented
         return self.model_dump(mode="python") == other.model_dump(mode="python")
+
+    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> "_InternalModel":
+        """Copy durable fields and runtime state without copying process-local locks."""
+        memo = {} if memo is None else memo
+        copied = type(self).__new__(type(self))
+        memo[id(self)] = copied
+        object.__setattr__(copied, "__dict__", deepcopy(self.__dict__, memo))
+        object.__setattr__(copied, "__pydantic_extra__", deepcopy(self.__pydantic_extra__, memo))
+        object.__setattr__(copied, "__pydantic_fields_set__", deepcopy(self.__pydantic_fields_set__, memo))
+        private = {}
+        for name, value in (self.__pydantic_private__ or {}).items():
+            private[name] = threading.RLock() if name == "_lock" else deepcopy(value, memo)
+        object.__setattr__(copied, "__pydantic_private__", private)
+        return copied
 
 
 class ExecutionFrame(_InternalModel):

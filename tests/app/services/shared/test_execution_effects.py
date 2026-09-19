@@ -131,6 +131,52 @@ def test_context_default_recorder_preserves_execution_frame() -> None:
     assert context.execution_effects.execution_ref.workflow_call_depth == 2
 
 
+def test_direct_and_builder_contexts_preserve_lifecycle_recorder_authority() -> None:
+    services = MagicMock()
+    capability = ChildExecutionCapability(
+        parent_execution_id="node",
+        parent_frame=(2, 1),
+        authorization_context={"user_id": "user"},
+    )
+    data = InvocationContextData(
+        queue_item=SimpleNamespace(user_id="user"),
+        invocation=ExecutionEffectsTestInvocation(id="node"),
+        source_invocation_id="source",
+        execution_frame=(2, 1),
+        execution_state_id="state",
+        execution_frame_id="frame",
+        execution_workflow_call_depth=3,
+        execution_child_capability=capability,
+    )
+    built = build_invocation_context(services, data, lambda: False)
+    direct = InvocationContext(
+        images=built.images,
+        videos=built.videos,
+        tensors=built.tensors,
+        conditioning=built.conditioning,
+        models=built.models,
+        logger=built.logger,
+        config=built.config,
+        util=built.util,
+        boards=built.boards,
+        wildcards=built.wildcards,
+        data=data,
+        services=services,
+    )
+
+    for context in (built, direct):
+        recorder = context.execution_effects
+        assert recorder.allow_lifecycle_effects is True
+        assert recorder.child_capability is capability
+        assert recorder.execution_ref.state_id == "state"
+        assert recorder.execution_ref.frame_id == "frame"
+        assert recorder.execution_ref.workflow_call_depth == 3
+        context.execution.spawn(graph={"nodes": {}}, inputs={})
+        context.execution.await_dependency(ExecutionRef(execution_node_id="dependency"))
+        context.execution.fail("failed")
+        assert [effect.kind for effect in recorder.snapshot()] == ["spawn_execution", "await", "fail"]
+
+
 @pytest.mark.parametrize(
     ("condition", "selected_field"),
     [(True, "true_input"), (False, "false_input")],

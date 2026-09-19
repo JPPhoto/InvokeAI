@@ -24,8 +24,9 @@ effect/dependency seam to declare, persist, and resume the call.
 The callable node, saved-workflow, and queue interaction contract is stable. Internal execution references, tokens,
 effects, frames, and scheduler records are persistence-only implementation metadata. Version-2
 `dump_execution_state()` rebuilds execution references and ordinary output tokens, retains frame-scoped activation
-tokens and effects needed for active recovery, and omits terminal saved-workflow lifecycle effects and completed child
-dependencies. Attached child state is retained while a call is active and omitted after the call is terminal.
+tokens and compact dispatch metadata needed for active recovery, and omits terminal saved-workflow lifecycle effects
+and completed child dependencies. The active child queue row is the recovery authority: attached child state remains
+available in memory but is omitted from the persisted parent snapshot, while terminal child state is omitted entirely.
 Ordinary model serialization and public schemas exclude these four internal ledgers. Existing fields,
 requiredness, statuses, events, and client behavior remain compatible. Frontend application behavior is outside this
 backend architecture. No code under `invokeai/frontend/...`, including generated `openapi.json` or `schema.ts`, is part
@@ -306,6 +307,16 @@ Execution semantics:
 
 The queue/session/runtime layer now implements an explicit parent-child execution relationship through runtime state,
 durable queue metadata, and queue-visible child rows.
+
+Child snapshot semantics are explicit:
+
+- the saved workflow is resolved and converted to a child `Graph` when the call is created
+- the child queue row persists that graph snapshot and its inputs; resume/recovery uses that snapshot rather than
+  resolving the saved workflow again
+- an active parent retains the child session in memory while it is waiting, but its persisted snapshot keeps only
+  compact lifecycle metadata because the child queue row is authoritative
+- queue pruning is the boundary that removes the child row's postmortem snapshot; retry creates a new execution and
+  therefore resolves the saved workflow again under the retrying user's authorization
 
 Current limitation:
 

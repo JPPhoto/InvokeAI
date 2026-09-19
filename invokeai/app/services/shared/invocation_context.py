@@ -90,6 +90,18 @@ class InvocationContextInterface:
         self._data = data
 
 
+def _build_execution_effects(data: InvocationContextData) -> ExecutionEffectsRecorder:
+    return ExecutionEffectsRecorder(
+        source_node_id=getattr(data.invocation, "id", None) or data.source_invocation_id or "context",
+        frame_path=data.execution_frame,
+        state_id=data.execution_state_id,
+        frame_id=data.execution_frame_id,
+        workflow_call_depth=data.execution_workflow_call_depth,
+        allow_lifecycle_effects=data.execution_child_capability is not None,
+        child_capability=data.execution_child_capability,
+    )
+
+
 class BoardsInterface(InvocationContextInterface):
     def create(self, board_name: str) -> BoardDTO:
         """Creates a board for the current user.
@@ -1024,14 +1036,7 @@ class InvocationContext:
         """An internal API providing access to data about the current queue item and invocation. You probably shouldn't use this. It may change without warning."""
         self._services = services
         """An internal API providing access to all application services. You probably shouldn't use this. It may change without warning."""
-        source_node_id = getattr(data.invocation, "id", None) or data.source_invocation_id or "context"
-        self.execution_effects = execution_effects or ExecutionEffectsRecorder(
-            source_node_id=source_node_id,
-            frame_path=data.execution_frame,
-            state_id=data.execution_state_id,
-            frame_id=data.execution_frame_id,
-            workflow_call_depth=data.execution_workflow_call_depth,
-        )
+        self.execution_effects = execution_effects or _build_execution_effects(data)
         """Effects recorded during the current invocation run."""
         self.effects = self.execution_effects
         """Alias for :attr:`execution_effects`."""
@@ -1071,15 +1076,7 @@ def build_invocation_context(
     wildcards = WildcardsInterface(services=services, data=data)
 
     if execution_effects is None:
-        execution_effects = ExecutionEffectsRecorder(
-            source_node_id=getattr(data.invocation, "id", None) or data.source_invocation_id or "context",
-            frame_path=data.execution_frame,
-            state_id=data.execution_state_id,
-            frame_id=data.execution_frame_id,
-            workflow_call_depth=data.execution_workflow_call_depth,
-            allow_lifecycle_effects=data.execution_child_capability is not None,
-            child_capability=data.execution_child_capability,
-        )
+        execution_effects = _build_execution_effects(data)
 
     ctx = InvocationContext(
         images=images,

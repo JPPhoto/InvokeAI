@@ -264,15 +264,22 @@ class WorkflowCallQueueLifecycle:
         self._apply_workflow_call_output(queue_item, invocation, output)
         self._session_runner._on_after_run_node(invocation, queue_item, output)
 
-    def fail_waiting_workflow_call(self, queue_item: SessionQueueItem, error_message: str) -> None:
+    def fail_waiting_workflow_call(
+        self,
+        queue_item: SessionQueueItem,
+        error_message: str,
+    ) -> bool:
         invocation = self.get_waiting_workflow_call_invocation(queue_item)
         queue_item.session.end_waiting_on_workflow_call(status="failed", error_message=error_message)
-        self._session_runner._on_node_error(
-            invocation=invocation,
-            queue_item=queue_item,
-            error_type="ValueError",
-            error_message=error_message,
-            error_traceback=error_message,
+        return bool(
+            self._session_runner._on_node_error(
+                invocation=invocation,
+                queue_item=queue_item,
+                error_type="ValueError",
+                error_message=error_message,
+                error_traceback=error_message,
+                require_active=True,
+            )
         )
 
     def _get_parent_queue_item(self, child_queue_item: SessionQueueItem) -> SessionQueueItem | None:
@@ -327,14 +334,16 @@ class WorkflowCallQueueLifecycle:
         parent_queue_item.session.end_waiting_on_workflow_call(status="completed")
         parent_output = WorkflowReturnOutput(values=aggregated_values)
         self._apply_workflow_call_output(parent_queue_item, waiting_invocation, parent_output)
+        saved = self._session_runner._save_queue_item_session_if_active(parent_queue_item)
+        if not saved:
+            return
         self._session_runner._on_after_run_node(waiting_invocation, parent_queue_item, parent_output)
-        self._session_runner._services.session_queue.save_queue_item_session(
-            parent_queue_item.item_id, parent_queue_item.session
-        )
         if parent_queue_item.session.is_complete():
             parent_queue_item = self._session_runner._services.session_queue.complete_queue_item(
                 parent_queue_item.item_id, queue_item=parent_queue_item
             )
+            if parent_queue_item.status != "completed":
+                return
             if getattr(parent_queue_item, "parent_item_id", None) is not None:
                 self._resume_parent_from_completed_child(parent_queue_item)
             return
@@ -358,11 +367,13 @@ class WorkflowCallQueueLifecycle:
             generic_update = parent_queue_item.session.fail_generic_child(child_queue_item.item_id, child_error_message)
             if generic_update is not None and generic_update.status != "failed":
                 return
+        if not self.fail_waiting_workflow_call(parent_queue_item, child_error_message):
+            return
+        if workflow_call_execution is not None:
             self._session_runner._services.session_queue.cancel_workflow_call_children(
                 workflow_call_execution.id,
                 exclude_item_ids={child_queue_item.item_id},
             )
-        self.fail_waiting_workflow_call(parent_queue_item, child_error_message)
         try:
             parent_queue_item = self._session_runner._services.session_queue.get_queue_item(parent_queue_item.item_id)
         except SessionQueueItemNotFoundError:
@@ -378,9 +389,9 @@ class WorkflowCallQueueLifecycle:
         if generic_update is not None and generic_update.status != "canceled":
             return
         if generic_update is not None:
-            self._session_runner._services.session_queue.save_queue_item_session(
-                parent_queue_item.item_id, parent_queue_item.session
-            )
+            saved = self._session_runner._save_queue_item_session_if_active(parent_queue_item)
+            if not saved:
+                return
         self._session_runner._services.session_queue.cancel_queue_item(parent_queue_item.item_id)
 
     def run_queue_item(self, queue_item: SessionQueueItem) -> None:

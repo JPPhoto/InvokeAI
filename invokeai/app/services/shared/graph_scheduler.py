@@ -13,22 +13,10 @@ from invokeai.app.services.shared.execution_engine.scheduler import (
     ExecutionScheduler,
 )
 from invokeai.app.services.shared.graph_nested_iterate_planner import (
-    can_use_eight_level_nested_iterate_sequence_planner,
-    can_use_five_level_nested_iterate_sequence_planner,
-    can_use_four_level_nested_iterate_sequence_planner,
     can_use_nested_iterate_planner,
-    can_use_nested_iterate_sequence_planner,
-    can_use_seven_level_nested_iterate_sequence_planner,
-    can_use_six_level_nested_iterate_sequence_planner,
-    can_use_three_level_nested_iterate_sequence_planner,
-    prepare_eight_level_nested_iterate_sequences,
-    prepare_five_level_nested_iterate_sequences,
-    prepare_four_level_nested_iterate_sequences,
+    get_nested_iterate_sequence_depth,
     prepare_nested_iterate_bodies,
-    prepare_nested_iterate_sequences,
-    prepare_seven_level_nested_iterate_sequences,
-    prepare_six_level_nested_iterate_sequences,
-    prepare_three_level_nested_iterate_sequences,
+    prepare_nested_iterate_sequence,
 )
 from invokeai.app.services.shared.graph_validation import CollectInvocation, IterateInvocation, nx
 
@@ -635,16 +623,8 @@ class _GenericGraphSchedulerAdapter:
         self._record_completed_node(exec_node_id, output)
         self._known_result_ids.add(exec_node_id)
         finalized_for_exec_node_id = self._state._apply_generic_for_continuation(exec_node_id, output)
-        nested_iterate_sequence = (
-            can_use_nested_iterate_sequence_planner(self._state)
-            or can_use_three_level_nested_iterate_sequence_planner(self._state)
-            or can_use_four_level_nested_iterate_sequence_planner(self._state)
-            or can_use_five_level_nested_iterate_sequence_planner(self._state)
-            or can_use_six_level_nested_iterate_sequence_planner(self._state)
-            or can_use_seven_level_nested_iterate_sequence_planner(self._state)
-            or can_use_eight_level_nested_iterate_sequence_planner(self._state)
-        )
-        if not nested_iterate_sequence:
+        nested_iterate_sequence_depth = get_nested_iterate_sequence_depth(self._state)
+        if nested_iterate_sequence_depth is None:
             self._mark_source_node_complete(exec_node_id)
         # A condition may become resolvable when this node completes. Resolve it
         # while the state has the completed result, before recalculating generic
@@ -664,20 +644,8 @@ class _GenericGraphSchedulerAdapter:
             self._enqueue_activation_ready_nodes()
         if can_use_nested_iterate_planner(self._state):
             prepare_nested_iterate_bodies(self._state)
-        elif can_use_nested_iterate_sequence_planner(self._state):
-            prepare_nested_iterate_sequences(self._state)
-        elif can_use_three_level_nested_iterate_sequence_planner(self._state):
-            prepare_three_level_nested_iterate_sequences(self._state)
-        elif can_use_four_level_nested_iterate_sequence_planner(self._state):
-            prepare_four_level_nested_iterate_sequences(self._state)
-        elif can_use_five_level_nested_iterate_sequence_planner(self._state):
-            prepare_five_level_nested_iterate_sequences(self._state)
-        elif can_use_six_level_nested_iterate_sequence_planner(self._state):
-            prepare_six_level_nested_iterate_sequences(self._state)
-        elif can_use_seven_level_nested_iterate_sequence_planner(self._state):
-            prepare_seven_level_nested_iterate_sequences(self._state)
-        elif can_use_eight_level_nested_iterate_sequence_planner(self._state):
-            prepare_eight_level_nested_iterate_sequences(self._state)
+        elif nested_iterate_sequence_depth is not None:
+            prepare_nested_iterate_sequence(self._state, depth=nested_iterate_sequence_depth)
         else:
             _prepare_deferred_nested_for_body(self._state, exec_node_id, self._state._for_planner())
         if finalized_for_exec_node_id is None:

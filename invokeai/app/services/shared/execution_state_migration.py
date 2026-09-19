@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, Final
 
 from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
+from invokeai.app.services.shared.execution_effects import normalize_persisted_execution_effects
 from invokeai.app.services.shared.graph import GraphExecutionState
 
 CURRENT_EXECUTION_STATE_VERSION: Final[int] = 2
@@ -30,7 +31,7 @@ def _object_value(value: Any, name: str, default: Any = None) -> Any:
     return getattr(value, name, default)
 
 
-def _completed_workflow_call_ids(state: GraphExecutionState) -> set[str]:
+def _terminal_workflow_call_ids(state: GraphExecutionState) -> set[str]:
     return {
         execution.prepared_call_node_id
         for execution in state.workflow_call_history
@@ -42,12 +43,13 @@ def _compact_effects(snapshot: dict[str, Any], state: GraphExecutionState) -> No
     """Drop terminal saved-workflow lifecycle effects whose history is authoritative.
 
     Active lifecycle effects and all stream/continuation effects remain authoritative for recovery and validation.
-    A completed saved-workflow call has already copied its child result into the parent history, so retaining the
-    spawn effect would retain the child graph and inputs for no recovery purpose. Unknown effect shapes stay durable
-    for forward compatibility.
+    A terminal saved-workflow call has already recorded its outcome in parent history, so retaining the spawn effect
+    would retain the child graph and inputs for no recovery purpose. Unknown effect shapes stay durable for forward
+    compatibility.
     """
     references_by_id = {reference.reference_id: reference for reference in state.execution_refs.values()}
-    completed_workflow_calls = _completed_workflow_call_ids(state)
+    terminal_workflow_calls = _terminal_workflow_call_ids(state)
+    active_workflow_call = state.waiting_workflow_call_execution is not None
     compacted: dict[str, list[Any]] = {}
     for reference_id, effects in snapshot["execution_effects"].items():
         reference = references_by_id.get(reference_id)
@@ -55,8 +57,7 @@ def _compact_effects(snapshot: dict[str, Any], state: GraphExecutionState) -> No
         drop_workflow_lifecycle = (
             isinstance(node, CallSavedWorkflowInvocation)
             and reference is not None
-            and reference.exec_node_id in state.executed
-            and reference.exec_node_id in completed_workflow_calls
+            and reference.exec_node_id in terminal_workflow_calls
         )
         retained: list[Any] = []
         for effect in effects:
@@ -65,6 +66,17 @@ def _compact_effects(snapshot: dict[str, Any], state: GraphExecutionState) -> No
             )
             if drop_workflow_lifecycle and effect_kind in {"spawn_execution", "await", "fail"}:
                 continue
+            if (
+                active_workflow_call
+                and isinstance(node, CallSavedWorkflowInvocation)
+                and effect_kind == "spawn_execution"
+            ):
+                compacted_effect = effect.model_dump(mode="json") if hasattr(effect, "model_dump") else dict(effect)
+                child_execution_id = _object_value(effect, "child_execution_id")
+                compacted_effect["graph"] = {"child_execution_id": child_execution_id}
+                compacted_effect["inputs"] = {}
+                retained.append(compacted_effect)
+                continue
             retained.append(effect)
         if retained or not drop_workflow_lifecycle:
             compacted[reference_id] = retained
@@ -72,13 +84,13 @@ def _compact_effects(snapshot: dict[str, Any], state: GraphExecutionState) -> No
 
 
 def _compact_child_dependencies(snapshot: dict[str, Any], state: GraphExecutionState) -> None:
-    """Drop completed dependency records after the parent has left its waiting boundary."""
+    """Drop terminal dependency records after the parent has left its waiting boundary."""
     if state.waiting_workflow_call_execution is not None:
         return
     snapshot["execution_child_dependencies"] = {
         dependency_id: dependency
         for dependency_id, dependency in snapshot["execution_child_dependencies"].items()
-        if _object_value(dependency, "status") != "completed"
+        if _object_value(dependency, "status") not in {"completed", "failed", "canceled"}
     }
 
 
@@ -110,6 +122,13 @@ def _append_runtime_fields(snapshot: dict[str, Any], state: GraphExecutionState)
 
     _compact_effects(snapshot, state)
     _compact_child_dependencies(snapshot, state)
+
+    if state.waiting_workflow_call_execution is not None:
+        # The active child has its own queue row and that row is the recovery authority. Keeping
+        # the same runtime graph under the parent doubles snapshot size and permits stale parent
+        # copies to diverge from child progress.
+        snapshot.pop("waiting_workflow_call_child_session", None)
+        return
 
     child_snapshot = snapshot.get("waiting_workflow_call_child_session")
     child_state = state.waiting_workflow_call_child_session
@@ -155,6 +174,22 @@ def _migrate_v2_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the compact v2 payload boundary before a future migration is added."""
 
     return dict(payload)
+
+
+def _normalize_persisted_effects_in_snapshot(
+    payload: Mapping[str, Any], *, normalize_effects: bool = True
+) -> dict[str, Any]:
+    """Normalize current effect ledgers before GraphExecutionState rehydrates runtime state."""
+    normalized = dict(payload)
+    if normalize_effects and "execution_effects" in normalized:
+        normalized["execution_effects"] = normalize_persisted_execution_effects(normalized["execution_effects"])
+
+    child_snapshot = normalized.get("waiting_workflow_call_child_session")
+    if isinstance(child_snapshot, Mapping):
+        normalized["waiting_workflow_call_child_session"] = _normalize_persisted_effects_in_snapshot(
+            child_snapshot, normalize_effects=normalize_effects
+        )
+    return normalized
 
 
 # Each key is the source version. A future version bump must add its v2 -> v3
@@ -209,8 +244,11 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
             f"Execution state snapshot version {version} is unsupported; current version is "
             f"{CURRENT_EXECUTION_STATE_VERSION}"
         )
+    normalized_payload = _normalize_persisted_effects_in_snapshot(
+        migrate(migrated_payload), normalize_effects=not legacy_execution_snapshot
+    )
     return GraphExecutionState.model_validate(
-        migrate(migrated_payload),
+        normalized_payload,
         strict=False,
         context={
             "execution_effects_persisted": execution_effects_persisted,

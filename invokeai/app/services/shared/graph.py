@@ -112,22 +112,10 @@ from invokeai.app.services.shared.graph_models import (
     WorkflowCallStatus,  # noqa: F401
 )
 from invokeai.app.services.shared.graph_nested_iterate_planner import (
-    can_use_eight_level_nested_iterate_sequence_planner,
-    can_use_five_level_nested_iterate_sequence_planner,
-    can_use_four_level_nested_iterate_sequence_planner,
     can_use_nested_iterate_planner,
-    can_use_nested_iterate_sequence_planner,
-    can_use_seven_level_nested_iterate_sequence_planner,
-    can_use_six_level_nested_iterate_sequence_planner,
-    can_use_three_level_nested_iterate_sequence_planner,
-    prepare_eight_level_nested_iterate_sequences,
-    prepare_five_level_nested_iterate_sequences,
-    prepare_four_level_nested_iterate_sequences,
+    get_nested_iterate_sequence_depth,
     prepare_nested_iterate_bodies,
-    prepare_nested_iterate_sequences,
-    prepare_seven_level_nested_iterate_sequences,
-    prepare_six_level_nested_iterate_sequences,
-    prepare_three_level_nested_iterate_sequences,
+    prepare_nested_iterate_sequence,
 )
 from invokeai.app.services.shared.graph_runtime_records import (
     _ApplyTransaction,
@@ -2197,12 +2185,16 @@ class GraphExecutionState(BaseModel):
         if token_state_id not in (None, "", execution_ref.state_id):
             raise ValueError("Execution token belongs to another graph execution state")
 
-        self._validate_execution_frame(self._value_from_object(token, "frame"), execution_ref, "Execution token")
+        token_frame = self._value_from_object(token, "frame")
+        # Typed persisted tokens materialize the legacy-omitted frame as the model default ``()``. Treat that
+        # empty value as absent so loading old stream effects does not invent a conflicting execution frame.
+        if token_frame not in (None, (), [], ""):
+            self._validate_execution_frame(token_frame, execution_ref, "Execution token")
         token_frame_id = self._value_from_object(token, "frame_id")
         if token_frame_id not in (None, "", execution_ref.frame.frame_id):
             raise ValueError("Execution token belongs to another execution frame")
         token_path = self._value_from_object(token, "iteration_path", "frame_path")
-        if token_path is not None and tuple(token_path) != execution_ref.frame.iteration_path:
+        if token_path not in (None, (), [], "") and tuple(token_path) != execution_ref.frame.iteration_path:
             raise ValueError("Execution token belongs to another execution frame")
         token_depth = self._value_from_object(token, "workflow_call_depth", "call_depth")
         if token_depth not in (None, execution_ref.frame.workflow_call_depth):
@@ -2985,40 +2977,11 @@ class GraphExecutionState(BaseModel):
         ):
             self._prepare_direct_iterate_collect()
             return self._get_next_node()
-        if isinstance(self._scheduler(), _GenericGraphSchedulerAdapter) and can_use_nested_iterate_sequence_planner(
-            self
+        if (
+            isinstance(self._scheduler(), _GenericGraphSchedulerAdapter)
+            and (sequence_depth := get_nested_iterate_sequence_depth(self)) is not None
         ):
-            prepare_nested_iterate_sequences(self)
-            return self._get_next_node()
-        if isinstance(
-            self._scheduler(), _GenericGraphSchedulerAdapter
-        ) and can_use_three_level_nested_iterate_sequence_planner(self):
-            prepare_three_level_nested_iterate_sequences(self)
-            return self._get_next_node()
-        if isinstance(
-            self._scheduler(), _GenericGraphSchedulerAdapter
-        ) and can_use_four_level_nested_iterate_sequence_planner(self):
-            prepare_four_level_nested_iterate_sequences(self)
-            return self._get_next_node()
-        if isinstance(
-            self._scheduler(), _GenericGraphSchedulerAdapter
-        ) and can_use_five_level_nested_iterate_sequence_planner(self):
-            prepare_five_level_nested_iterate_sequences(self)
-            return self._get_next_node()
-        if isinstance(
-            self._scheduler(), _GenericGraphSchedulerAdapter
-        ) and can_use_six_level_nested_iterate_sequence_planner(self):
-            prepare_six_level_nested_iterate_sequences(self)
-            return self._get_next_node()
-        if isinstance(
-            self._scheduler(), _GenericGraphSchedulerAdapter
-        ) and can_use_seven_level_nested_iterate_sequence_planner(self):
-            prepare_seven_level_nested_iterate_sequences(self)
-            return self._get_next_node()
-        if isinstance(
-            self._scheduler(), _GenericGraphSchedulerAdapter
-        ) and can_use_eight_level_nested_iterate_sequence_planner(self):
-            prepare_eight_level_nested_iterate_sequences(self)
+            prepare_nested_iterate_sequence(self, depth=sequence_depth)
             return self._get_next_node()
 
         planner = (
@@ -3386,6 +3349,8 @@ class GraphExecutionState(BaseModel):
             self._execution_effects_persisted = __context["execution_effects_persisted"]
             self._legacy_execution_snapshot = __context.get("legacy_execution_snapshot", False)
             self._legacy_snapshot_loaded = self._legacy_execution_snapshot
+        if isinstance(__context, dict) and __context.get("queue_read_projection"):
+            return
         self._generic_child_dependencies = {
             dependency_id: ChildDependencyRecord.model_validate(dependency.model_dump(mode="python"))
             for dependency_id, dependency in self.execution_child_dependencies.items()

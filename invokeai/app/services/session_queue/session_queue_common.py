@@ -1,5 +1,6 @@
 import datetime
 import json
+from collections.abc import Mapping
 from itertools import chain, product
 from typing import Generator, Literal, Optional, TypeAlias, Union
 
@@ -17,7 +18,10 @@ from pydantic import (
 from pydantic_core import to_jsonable_python
 
 from invokeai.app.invocations.fields import ImageField, VideoField
+from invokeai.app.services.shared.execution_effects import normalize_persisted_execution_effects
 from invokeai.app.services.shared.execution_state_migration import (
+    CURRENT_EXECUTION_STATE_VERSION,
+    UnsupportedExecutionStateVersionError,
     dump_execution_state,
     load_execution_state,
 )
@@ -64,6 +68,10 @@ class TooManySessionsError(ValueError):
 
 class SessionQueueItemNotFoundError(ValueError):
     """Raise when a queue item is not found."""
+
+
+class SessionQueueItemChangedError(ValueError):
+    """Raise when a guarded queue-item update loses a concurrent state transition."""
 
 
 # endregion
@@ -229,6 +237,38 @@ def get_session(queue_item_dict: dict) -> GraphExecutionState:
     return load_execution_state(session_payload)
 
 
+def get_session_for_queue_read(queue_item_dict: dict) -> GraphExecutionState:
+    """Build a response-shaped session without rehydrating runtime execution state."""
+    session_raw = queue_item_dict.get("session", "{}")
+    session_payload = json.loads(session_raw) if isinstance(session_raw, str) else dict(session_raw)
+    if "version" in session_payload and isinstance(session_payload.get("state"), Mapping):
+        version = session_payload["version"]
+        session_payload = dict(session_payload["state"])
+    else:
+        version = session_payload.pop("execution_state_version", None)
+
+    if version is not None:
+        if isinstance(version, bool) or not isinstance(version, int):
+            raise ValueError("Execution state snapshot version must be an integer")
+        if version > CURRENT_EXECUTION_STATE_VERSION:
+            raise UnsupportedExecutionStateVersionError(
+                f"Execution state snapshot version {version} is newer than supported version "
+                f"{CURRENT_EXECUTION_STATE_VERSION}"
+            )
+
+    if version != 0 and "execution_effects" in session_payload:
+        normalize_persisted_execution_effects(session_payload["execution_effects"])
+
+    graph_payload = session_payload.get("graph")
+    if not isinstance(graph_payload, Mapping):
+        raise ValueError("Queue session projection is missing a graph mapping")
+    session_payload["graph"] = Graph.model_validate(graph_payload, strict=False)
+    execution_graph_payload = session_payload.get("execution_graph")
+    if isinstance(execution_graph_payload, Mapping):
+        session_payload["execution_graph"] = Graph.model_validate(execution_graph_payload, strict=False)
+    return GraphExecutionState.model_validate(session_payload, context={"queue_read_projection": True})
+
+
 def get_workflow(queue_item_dict: dict) -> Optional[WorkflowWithoutID]:
     workflow_raw = queue_item_dict.get("workflow", None)
     if workflow_raw is not None:
@@ -248,6 +288,7 @@ class SessionQueueItem(BaseModel):
     """Session queue item without the full graph. Used for serialization."""
 
     _snapshot_readable: bool = PrivateAttr(default=True)
+    _session_json: str | None = PrivateAttr(default=None)
 
     item_id: int = Field(description="The identifier of the session queue item")
     status: QUEUE_ITEM_STATUS = Field(default="pending", description="The status of this queue item")
@@ -319,12 +360,17 @@ class SessionQueueItem(BaseModel):
     )
 
     @classmethod
-    def queue_item_from_dict(cls, queue_item_dict: dict) -> "SessionQueueItem":
+    def queue_item_from_dict(cls, queue_item_dict: dict, *, hydrate_runtime: bool = True) -> "SessionQueueItem":
         # must parse these manually
+        session_json = queue_item_dict.get("session") if isinstance(queue_item_dict.get("session"), str) else None
         queue_item_dict["field_values"] = get_field_values(queue_item_dict)
-        queue_item_dict["session"] = get_session(queue_item_dict)
+        queue_item_dict["session"] = (
+            get_session(queue_item_dict) if hydrate_runtime else get_session_for_queue_read(queue_item_dict)
+        )
         queue_item_dict["workflow"] = get_workflow(queue_item_dict)
-        return SessionQueueItem(**queue_item_dict)
+        queue_item = SessionQueueItem(**queue_item_dict)
+        queue_item._session_json = session_json
+        return queue_item
 
     model_config = ConfigDict(
         json_schema_extra={

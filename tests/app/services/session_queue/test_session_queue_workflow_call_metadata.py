@@ -1,13 +1,15 @@
 """Tests for workflow-call relationship metadata on session_queue items."""
 
 import uuid
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
+from types import SimpleNamespace
 
 import pytest
 
 from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
 from invokeai.app.services.events.events_common import QueueItemsRetriedEvent, QueueItemStatusChangedEvent
 from invokeai.app.services.invoker import Invoker
+from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
 from invokeai.app.services.session_queue.session_queue_common import (
     NodeFieldValue,
     SessionQueueItemNotFoundError,
@@ -189,6 +191,61 @@ def test_save_queue_item_session_does_not_reload_full_queue_item(
     assert persisted.errors == {"node": "updated"}
 
 
+def test_active_save_queue_item_session_does_not_overwrite_terminal_item(session_queue: SqliteSessionQueue) -> None:
+    session = GraphExecutionState(graph=Graph())
+    item_id = _insert_queue_item(session_queue, session=session, status="pending")
+    stale_session = session_queue.get_queue_item(item_id).session
+    stale_session.errors["stale"] = "parent completion"
+
+    session_queue.cancel_queue_item(item_id)
+
+    assert session_queue._save_queue_item_session_if_active(item_id, stale_session) is False
+    persisted = session_queue.get_queue_item(item_id)
+    assert persisted.status == "canceled"
+    assert persisted.session.errors == {}
+
+
+def test_failed_child_transitions_sqlite_parent_to_failed(
+    session_queue: SqliteSessionQueue, mock_invoker: Invoker
+) -> None:
+    parent_item_id, _parent_session, _child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=1)
+    mock_invoker.services.session_queue = session_queue
+    runner = DefaultSessionRunner()
+    runner.start(mock_invoker.services, Event())
+    child_queue_item = SimpleNamespace(item_id=999, parent_item_id=parent_item_id, error_message="child failed")
+
+    runner.workflow_call_queue_lifecycle._fail_parent_from_failed_child(child_queue_item)
+
+    parent_queue_item = session_queue.get_queue_item(parent_item_id)
+    assert parent_queue_item.status == "failed"
+    assert parent_queue_item.error_message == "child failed"
+    assert list(parent_queue_item.session.errors.values()) == ["ValueError: child failed"]
+
+
+def test_enqueue_workflow_call_children_rejects_stale_parent_session(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    parent_item_id, _parent_session, child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=2)
+    stale_parent = session_queue.get_queue_item(parent_item_id)
+    current_parent = session_queue.get_queue_item(parent_item_id)
+    current_parent.session.errors["sibling"] = "newer parent state"
+    session_queue.save_queue_item_session(parent_item_id, current_parent.session)
+
+    with pytest.raises(ValueError, match="changed while enqueuing"):
+        session_queue.enqueue_workflow_call_children(
+            parent_queue_item=stale_parent,
+            child_sessions=[(child_session, None) for child_session in child_sessions],
+        )
+
+    persisted_parent = session_queue.get_queue_item(parent_item_id)
+    assert persisted_parent.status == "in_progress"
+    assert persisted_parent.session.errors == {"sibling": "newer parent state"}
+    assert [item.item_id for item in session_queue.list_all_queue_items("default")] == [parent_item_id]
+    with session_queue._db.transaction() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM session_queue")
+        assert cursor.fetchone()[0] == 1
+
+
 def test_status_transition_reuses_loaded_queue_item(
     session_queue: SqliteSessionQueue, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -266,6 +323,56 @@ def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_q
     assert child_queue_item.root_item_id == parent_item_id
     assert child_queue_item.workflow_call_depth == 1
     assert child_queue_item.session_id == child_session.id
+
+
+def test_enqueue_workflow_call_child_rejects_canceled_stale_parent(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    parent_graph = Graph()
+    parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
+    parent_session = GraphExecutionState(graph=parent_graph)
+    invocation = parent_session.next()
+    assert isinstance(invocation, CallSavedWorkflowInvocation)
+
+    frame = parent_session.build_workflow_call_frame(invocation.id, invocation.workflow_id)
+    child_session = parent_session.create_child_workflow_execution_state(Graph(), frame)
+    parent_session.begin_waiting_on_workflow_call(frame)
+    parent_session.attach_waiting_workflow_call_child_session(child_session)
+
+    with session_queue._db.transaction() as cursor:
+        cursor.execute(
+            """--sql
+            INSERT INTO session_queue (
+                queue_id, session, session_id, batch_id, field_values, priority,
+                workflow, origin, destination, retried_from_item_id, user_id, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "default",
+                parent_session.model_dump_json(warnings=False),
+                parent_session.id,
+                str(uuid.uuid4()),
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                "user-1",
+                "in_progress",
+            ),
+        )
+        parent_item_id = cursor.lastrowid
+
+    stale_parent = session_queue.get_queue_item(parent_item_id)
+    session_queue.cancel_queue_item(parent_item_id)
+
+    with pytest.raises(ValueError, match="terminal parent"):
+        session_queue.enqueue_workflow_call_child(stale_parent, child_session)
+
+    with session_queue._db.transaction() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM session_queue WHERE parent_item_id = ?", (parent_item_id,))
+        assert cursor.fetchone()[0] == 0
 
 
 def test_enqueue_workflow_call_children_publishes_parent_state_before_children(
@@ -727,6 +834,38 @@ def test_cancel_queue_item_cascades_from_waiting_parent_to_child_chain(session_q
     assert session_queue.get_queue_item(parent_item_id).status == "canceled"
     assert session_queue.get_queue_item(child_item_id).status == "canceled"
     assert session_queue.get_queue_item(grandchild_item_id).status == "canceled"
+
+
+def test_cancel_child_uses_metadata_chain_walk_and_hydrates_each_item_once(
+    session_queue: SqliteSessionQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent_item_id, parent_session, child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=1)
+    child_item_id = _insert_queue_item(
+        session_queue,
+        session=child_sessions[0],
+        status="pending",
+        workflow_call_id=parent_session.waiting_workflow_call_execution.id,  # type: ignore[union-attr]
+        parent_item_id=parent_item_id,
+        parent_session_id=parent_session.id,
+        root_item_id=parent_item_id,
+        workflow_call_depth=1,
+    )
+
+    original_hydrate = session_queue._hydrate_queue_item
+    hydrate_calls = 0
+
+    def count_hydration(raw_queue_item: dict, *, quarantine: bool):
+        nonlocal hydrate_calls
+        hydrate_calls += 1
+        return original_hydrate(raw_queue_item, quarantine=quarantine)
+
+    monkeypatch.setattr(session_queue, "_hydrate_queue_item", count_hydration)
+
+    canceled = session_queue.cancel_queue_item(child_item_id)
+
+    assert canceled.item_id == child_item_id
+    assert canceled.status == "canceled"
+    assert hydrate_calls == 2
 
 
 def test_cancel_queue_item_cascades_from_child_to_waiting_parents(session_queue: SqliteSessionQueue) -> None:

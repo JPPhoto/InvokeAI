@@ -26,7 +26,10 @@ from invokeai.app.services.session_processor.workflow_call_runtime import (
     WorkflowCallQueueLifecycle,
 )
 from invokeai.app.services.session_queue.session_queue_base import WorkflowCallChildCompletion
-from invokeai.app.services.session_queue.session_queue_common import SessionQueueItemNotFoundError
+from invokeai.app.services.session_queue.session_queue_common import (
+    SessionQueueItemChangedError,
+    SessionQueueItemNotFoundError,
+)
 from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, WorkflowCallFrame
 from invokeai.app.services.workflow_records.workflow_records_common import WorkflowCategory
@@ -123,6 +126,7 @@ class _DummyWorkflowRecords:
         self.return_invalid_workflow = False
         self.return_batch_special_workflow = False
         self.exposed_field_name = "a"
+        self.get_calls = 0
 
     @staticmethod
     def _invocation_node(node_id: str, invocation_type: str, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -224,6 +228,7 @@ class _DummyWorkflowRecords:
         }
 
     def get(self, workflow_id: str):
+        self.get_calls += 1
         workflow_dump = self._workflow_dump(
             nodes=[
                 self._invocation_node(
@@ -945,6 +950,7 @@ class _DummySessionQueue:
         # being deleted after a successful get_queue_item lookup. Like the SQLite implementation's
         # mutations, which re-read the row and raise when it has disappeared.
         self.not_found_item_ids: set[int] = set()
+        self.cancel_before_save_item_ids: set[int] = set()
 
     def _raise_if_not_found(self, item_id: int) -> None:
         if item_id in self.not_found_item_ids:
@@ -992,6 +998,18 @@ class _DummySessionQueue:
         queue_item = self._ensure_queue_item(item_id, session)
         queue_item.session = session
         self.session_updates.append((item_id, session))
+
+    def _save_queue_item_session_if_active(self, item_id: int, session) -> bool:
+        self._raise_if_not_found(item_id)
+        if item_id in self.cancel_before_save_item_ids:
+            self.cancel_before_save_item_ids.remove(item_id)
+            self.cancel_queue_item(item_id)
+        queue_item = self._ensure_queue_item(item_id, session)
+        if queue_item.status in ("completed", "failed", "canceled"):
+            return False
+        queue_item.session = session
+        self.session_updates.append((item_id, session))
+        return True
 
     def enqueue_workflow_call_children(self, parent_queue_item, child_sessions):
         self._ensure_queue_item(parent_queue_item.item_id, parent_queue_item.session)
@@ -1439,7 +1457,7 @@ def test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatc
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_queue = _DummySessionQueue()
-    runner, events, _workflow_records = _build_workflow_runner(monkeypatch, session_queue=session_queue)
+    runner, events, workflow_records = _build_workflow_runner(monkeypatch, session_queue=session_queue)
     source_invocation = CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a")
     session = GraphExecutionState(graph=Graph())
     session.graph.add_node(source_invocation)
@@ -1474,6 +1492,47 @@ def test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatc
     assert dependency.child_execution_ids == [str(session_queue.enqueued_child_item_ids[0])]
     assert dependency.status in {"waiting", "running"}
     assert events.completed == []
+    assert workflow_records.get_calls == 1
+
+
+def test_run_node_discards_stale_workflow_call_transition_without_failing_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_queue = _DummySessionQueue()
+    runner, events, _workflow_records = _build_workflow_runner(monkeypatch, session_queue=session_queue)
+    source_invocation = CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a")
+    session = GraphExecutionState(graph=Graph())
+    session.graph.add_node(source_invocation)
+    invocation = session.next()
+    assert isinstance(invocation, CallSavedWorkflowInvocation)
+    queue_item = type(
+        "QueueItem",
+        (),
+        {
+            "item_id": 1,
+            "session_id": session.id,
+            "user_id": "user-1",
+            "status": "in_progress",
+            "session": session,
+            "queue_id": "default",
+            "batch_id": "batch-1",
+            "priority": 0,
+            "origin": None,
+            "destination": None,
+            "root_item_id": None,
+        },
+    )()
+
+    def raise_stale_transition(**_kwargs: Any) -> None:
+        raise SessionQueueItemChangedError("parent was canceled")
+
+    monkeypatch.setattr(runner.workflow_call_queue_lifecycle, "apply_execution_effects", raise_stale_transition)
+
+    runner.run_node(invocation=invocation, queue_item=queue_item)
+
+    assert events.errors == []
+    assert session_queue.failed_item_ids == []
+    assert session_queue.session_updates == []
 
 
 def test_run_node_preserves_saved_workflow_failure_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3012,6 +3071,24 @@ def test_run_does_not_resume_canceled_parent_after_completed_child(monkeypatch: 
     assert session_queue.completed_item_ids == [child_queue_item.item_id]
     assert session_queue.resumed_item_ids == []
     assert [event for event in events.completed if event[0].get_type() == "call_saved_workflow"] == []
+
+
+def test_run_does_not_overwrite_parent_canceled_during_completion_save(monkeypatch: pytest.MonkeyPatch) -> None:
+    session_queue, _runner, lifecycle, events = _setup_suspended_workflow_call_parent(monkeypatch)
+    session_queue.cancel_before_save_item_ids.add(1)
+    completed_call_count = sum(invocation.get_type() == "call_saved_workflow" for invocation, _, _ in events.completed)
+
+    child_queue_item = session_queue.dequeue()
+    assert child_queue_item is not None
+    lifecycle.run_queue_item(child_queue_item)
+
+    assert session_queue.items[1].status == "canceled"
+    assert session_queue.completed_item_ids == [child_queue_item.item_id]
+    assert session_queue.resumed_item_ids == []
+    assert (
+        sum(invocation.get_type() == "call_saved_workflow" for invocation, _, _ in events.completed)
+        == completed_call_count
+    )
 
 
 def test_run_does_not_fail_canceled_parent_after_child_return_error(monkeypatch: pytest.MonkeyPatch) -> None:
