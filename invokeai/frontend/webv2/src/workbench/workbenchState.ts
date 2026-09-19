@@ -147,6 +147,7 @@ import {
   getProjectGraphUndoEntry,
   normalizeProjectGraph,
   projectGraphReducer,
+  serializeWorkflowJson,
   type ProjectGraphAction,
 } from '@features/workflow/utility';
 
@@ -2497,6 +2498,7 @@ const compileInvocationSnapshot = (
 ): {
   graph: GraphContract;
   widgetStates: WidgetStateMap;
+  workflowJson?: Record<string, unknown>;
   workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
 } | null => {
   const widgetStates = getWidgetStatesSnapshot(project.widgetInstances);
@@ -2514,8 +2516,9 @@ const compileInvocationSnapshot = (
     const { graph, ...workflow } = planWorkflowSubmission(project.projectGraph, templatesSnapshot.templates, {
       batchCount: sanitizeBatchCount(widgetStates.workflow?.values.batchCount),
     });
+    const { id: _id, ...workflowJson } = serializeWorkflowJson(project.projectGraph);
 
-    return { graph, widgetStates, workflow };
+    return { graph, widgetStates, workflow, workflowJson };
   }
 
   if (route.sourceId === 'upscale') {
@@ -3151,6 +3154,8 @@ const enqueueCompiledSnapshot = (
     graph: GraphContract;
     positivePrompts?: string[];
     widgetStates: WidgetStateMap;
+    /** The serialized parent workflow, without its library record id. */
+    workflowJson?: Record<string, unknown>;
     /** The workflow route's seed plan: batch data, run count, and the fields to advance. */
     workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
   },
@@ -3233,6 +3238,7 @@ const enqueueCompiledSnapshot = (
             ...(compiled.workflow.seeds.length ? { seeds: compiled.workflow.seeds } : {}),
             graph: backendGraph,
             kind: 'workflow',
+            ...(compiled.workflowJson ? { workflow: compiled.workflowJson } : {}),
             // Provenance for the completed-run capture: a run submitted from a
             // library-bound graph knows which record to stamp, even after the
             // editor has moved on to another workflow. An unbound graph stamps
