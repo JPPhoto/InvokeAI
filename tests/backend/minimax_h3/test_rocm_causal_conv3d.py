@@ -83,7 +83,7 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
 
 
 def test_patch_applies_on_every_hip_version(monkeypatch) -> None:
-    """Unlike the Wan twin there is no HIP-version gate: MIOpen in rocm7.2 still takes the
+    """There is no HIP-version gate: MIOpen in rocm7.2 still takes the
     ~50x Im3d2Col fallback for this encoder's shapes (W7900: 208 s vs 3.6 s per chunk).
     Non-HIP builds are never patched; INVOKEAI_ROCM_CONV3D=native opts out."""
     import invokeai.backend.minimax_h3.rocm_causal_conv3d as mod
