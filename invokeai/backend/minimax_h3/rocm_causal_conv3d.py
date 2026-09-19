@@ -17,16 +17,12 @@ rebinds ``MiniMaxH3VideoCausalConv3d.forward`` to that decomposition.
 Numerics: identical math up to floating-point summation order — max abs error vs
 ``F.conv3d`` is ~1e-6 in fp32.
 
-Unlike the Wan twin, this decomposition stays on for EVERY HIP version. The Wan
-one was retired on HIP >= 7.2 because new MIOpen ran Wan's conv3ds at full speed
-and the decomposition showed allocator-state-dependent corruption in Wan *decodes*
-there. Neither finding transfers to this encoder: measured on a W7900 with torch
-2.13.0+rocm7.2 (HIP 7.2.53211), one 17-frame 768x448 reference chunk encodes in
-208 s fp32 / 222 s under fp16 autocast on native MIOpen conv3d (peak 9.2 GiB —
-the Im3d2Col column buffer), against 3.6 s / 2.7 s decomposed (peak 6.7 GiB).
-That is the same ~50x Im3d2Col penalty as on older HIP, so the retirement was
-wrong for these shapes (3x3x3 taps over 17-frame chunks with reflect padding);
-the H3 encoder was never re-timed when it happened.
+Like the Wan twin, the decomposition stays on for every HIP version: measured on
+a W7900 with torch 2.13.0+rocm7.2 (HIP 7.2.53211), one 17-frame 768x448 reference
+chunk encodes in 208 s fp32 / 222 s under fp16 autocast on native MIOpen conv3d
+(peak 9.2 GiB — the Im3d2Col column buffer), against 3.6 s / 2.7 s decomposed
+(peak 6.7 GiB). Native conv3d is only fast when a conv emits a single output
+frame, which never happens for these 17-frame chunks.
 
 ``INVOKEAI_ROCM_CONV3D=native`` (the Wan module's diagnostic override, shared)
 leaves the stock forward in place on any HIP version, for A/B or if a future
@@ -53,16 +49,21 @@ def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor
     b, c, t, h, w = x.shape
     k_t = module.weight.shape[2]
     t_out = t - k_t + 1
+    # Every tensor handed to MIOpen, and the activation handed back, is made standard-contiguous:
+    # the Wan twin's identical strided views made MIOpen in torch 2.13.0+rocm7.2 fault
+    # asynchronously part-way through long clips (see `invokeai.backend.wan.rocm_causal_conv3d`).
+    # The copies cost a small fraction of the conv itself.
     out = None
     for k in range(k_t):
-        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w)
-        o = F.conv2d(xs, module.weight[:, :, k], None)
-        out = o if out is None else out + o
+        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w).contiguous()
+        o = F.conv2d(xs, module.weight[:, :, k].contiguous(), None)
+        del xs  # keep at most one tap input live alongside the accumulator
+        out = o if out is None else out.add_(o)
     assert out is not None
     if module.bias is not None:
         out = out + module.bias.view(1, -1, 1, 1)
     oh, ow = out.shape[-2:]
-    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2)
+    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2).contiguous()
 
 
 def _decomposed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
