@@ -593,6 +593,88 @@
     }
   },
   {
+    "base": "ltx-2",
+    "variant": null,
+    "features": {
+      "negative_prompt": {
+        "visible": true,
+        "usage": "cfg-gated"
+      },
+      "dimension_grid": 32,
+      "guidance_label": "CFG",
+      "guidance_min": 0.0,
+      "guidance_max": null,
+      "scheduler_set": null,
+      "scheduler_applies_to_graph": false,
+      "control_kinds": [],
+      "max_reference_images": 0,
+      "reference_images_require_variant": null,
+      "supports_regional_guidance": false,
+      "regional_negative": false,
+      "clip_skip_max": null,
+      "supports_seamless": false,
+      "supports_cfg_rescale": false,
+      "sd_vae_override": false,
+      "color_compensation": false,
+      "vae_precision": false
+    },
+    "defaults": {
+      "vae": null,
+      "vae_precision": null,
+      "scheduler": null,
+      "steps": 40,
+      "cfg_scale": 3.0,
+      "cfg_rescale_multiplier": null,
+      "width": 1280,
+      "height": 704,
+      "guidance": null,
+      "cpu_only": null,
+      "fp8_storage": null
+    },
+    "vae": null
+  },
+  {
+    "base": "ltx-2",
+    "variant": "ltx2_distilled",
+    "features": {
+      "negative_prompt": {
+        "visible": true,
+        "usage": "cfg-gated"
+      },
+      "dimension_grid": 32,
+      "guidance_label": "CFG",
+      "guidance_min": 0.0,
+      "guidance_max": null,
+      "scheduler_set": null,
+      "scheduler_applies_to_graph": false,
+      "control_kinds": [],
+      "max_reference_images": 0,
+      "reference_images_require_variant": null,
+      "supports_regional_guidance": false,
+      "regional_negative": false,
+      "clip_skip_max": null,
+      "supports_seamless": false,
+      "supports_cfg_rescale": false,
+      "sd_vae_override": false,
+      "color_compensation": false,
+      "vae_precision": false
+    },
+    "defaults": {
+      "vae": null,
+      "vae_precision": null,
+      "scheduler": null,
+      "steps": 8,
+      "cfg_scale": 1.0,
+      "cfg_rescale_multiplier": null,
+      "width": 1280,
+      "height": 704,
+      "guidance": null,
+      "cpu_only": null,
+      "fp8_storage": null
+    },
+    "vae": null
+  },
+  {
     "base": "minimax-h3",
     "variant": null,
     "features": {

@@ -191,6 +191,8 @@ GENERATION_MODES = Literal[
     "wan_extend_video",
     "minimax_h3_t2v",
     "minimax_h3_i2v",
+    "ltx2_t2v",
+    "ltx2_i2v",
     "minimax_h3_lf2v",
     "minimax_h3_flf2v",
     "minimax_h3_extend_video",
