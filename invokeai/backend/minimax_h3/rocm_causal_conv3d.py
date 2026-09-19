@@ -49,16 +49,21 @@ def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor
     b, c, t, h, w = x.shape
     k_t = module.weight.shape[2]
     t_out = t - k_t + 1
+    # Every tensor handed to MIOpen, and the activation handed back, is made standard-contiguous:
+    # the Wan twin's identical strided views made MIOpen in torch 2.13.0+rocm7.2 fault
+    # asynchronously part-way through long clips (see `invokeai.backend.wan.rocm_causal_conv3d`).
+    # The copies cost a small fraction of the conv itself.
     out = None
     for k in range(k_t):
-        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w)
-        o = F.conv2d(xs, module.weight[:, :, k], None)
-        out = o if out is None else out + o
+        xs = x[:, :, k : k + t_out].transpose(1, 2).reshape(b * t_out, c, h, w).contiguous()
+        o = F.conv2d(xs, module.weight[:, :, k].contiguous(), None)
+        del xs  # keep at most one tap input live alongside the accumulator
+        out = o if out is None else out.add_(o)
     assert out is not None
     if module.bias is not None:
         out = out + module.bias.view(1, -1, 1, 1)
     oh, ow = out.shape[-2:]
-    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2)
+    return out.reshape(b, t_out, -1, oh, ow).transpose(1, 2).contiguous()
 
 
 def _decomposed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
