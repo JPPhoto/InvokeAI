@@ -20,7 +20,7 @@ from invokeai.backend.model_manager.load.model_loaders.wan import (
     _build_wan_transformer_config,
 )
 from invokeai.backend.model_manager.taxonomy import SubModelType, WanVariantType
-from tests.fixtures.quantized_payloads import comfy_quant_marker, quantize_convrot
+from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_signed_tensors, quantize_convrot
 
 # A structurally faithful but tiny Wan transformer. attention_head_dim must stay
 # at 128 — the loader derives num_attention_heads as inner_dim // 128, matching
@@ -201,7 +201,29 @@ class TestEndToEnd:
         path = tmp_path / "Wan2.2-A14B-HighNoise-int8_convrot.safetensors"
         save_file(sd, path)
 
-        with pytest.raises(ValueError, match="quantized with convrot"):
+        message = r"Wan checkpoint Wan2\.2-A14B-HighNoise-int8_convrot\.safetensors.*quantized with convrot"
+        with pytest.raises(ValueError, match=message):
+            _load(path)
+
+    def test_an_nvfp4_checkpoint_is_refused_rather_than_folded_over_its_packed_codes(self, tmp_path: Path) -> None:
+        """Wan reads scaled fp8 but never calls `pop_nvfp4_layers`, and the shared fold has no dtype
+        gate, so an nvfp4 layer was multiplied by its block-scale grid and logged as dequantized.
+        The load then died on the width -- "size mismatch [128, 64] vs [128, 128]" -- which names
+        neither the scheme nor the remedy, after a line claiming success. Pinned at the loader
+        because that is where the misleading sequence was visible.
+        """
+        reference = _tiny_model()
+        sd = {k: v.clone() for k, v in reference.state_dict().items()}
+
+        target = "blocks.0.attn1.to_q"
+        rows, columns = sd[f"{target}.weight"].shape
+        packed, _ = nvfp4_signed_tensors(target, torch.randint(0, 2, (rows, columns), dtype=torch.bool))
+        sd.update(packed)
+        path = tmp_path / "Wan2.2-A14B-HighNoise-nvfp4.safetensors"
+        save_file(sd, path)
+
+        message = r"Wan checkpoint Wan2\.2-A14B-HighNoise-nvfp4\.safetensors.*does not support nvfp4"
+        with pytest.raises(ValueError, match=message):
             _load(path)
 
     def test_scale_bookkeeping_never_reaches_the_model(self, tmp_path: Path) -> None:

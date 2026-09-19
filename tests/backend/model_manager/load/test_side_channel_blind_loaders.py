@@ -1,7 +1,7 @@
 """Loaders that handle no quantization side channel refuse one rather than dropping it.
 
-Seven call sites across five loader classes read a state dict and hand it to a model without ever
-looking for a `weight_scale`. At the five that load non-strictly a quantized checkpoint does not
+Nine call sites across six loader classes read a state dict and hand it to a model without ever
+looking for a `weight_scale`. At the seven that load non-strictly a quantized checkpoint does not
 fail -- it *loads*, with the scale dropped as an unexpected key. Most cast every tensor to the
 compute dtype, turning the fp8 codes into ordinary floats off by `1/weight_scale`; the Z-Image
 ControlNet assigns them with no cast at all and reports the orphan only at DEBUG.
@@ -17,6 +17,11 @@ The guard is key-only, so that draft still passed.
 Each cell is paired with a dense one. Two of these loaders have no other test in the tree, so
 without that half nothing would notice `is_scale_metadata_key` being widened until it started
 refusing ordinary checkpoints -- and it has been widened before, twice.
+
+Two of the nine are not in the table below: Ideogram 4's text encoder and VAE read a diffusers
+*folder* rather than a single file, and the encoder is the one seam here that does support a
+quantized layout -- Ideogram's own weight-only fp8, behind a private flag in `config.json`. Both are
+covered in `test_ideogram4_diffusers_loader.py`, which owns that loader.
 """
 
 from pathlib import Path
