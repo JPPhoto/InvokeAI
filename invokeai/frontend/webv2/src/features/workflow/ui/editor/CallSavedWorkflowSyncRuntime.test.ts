@@ -1,6 +1,11 @@
+import type { ParsedWorkflow } from '@features/workflow/core/workflowJson';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferredCallSavedWorkflowReconciler } from './CallSavedWorkflowSyncRuntime';
+import {
+  createDeferredCallSavedWorkflowReconciler,
+  createSavedWorkflowDocumentParser,
+} from './CallSavedWorkflowSyncRuntime';
 
 describe('createDeferredCallSavedWorkflowReconciler', () => {
   beforeEach(() => {
@@ -34,5 +39,31 @@ describe('createDeferredCallSavedWorkflowReconciler', () => {
     vi.runAllTimers();
 
     expect(reconcile).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSavedWorkflowDocumentParser', () => {
+  it('parses each immutable child workflow payload once', () => {
+    const parse = vi.fn((workflow: Record<string, unknown>) => ({ document: workflow }) as unknown as ParsedWorkflow);
+    const parser = createSavedWorkflowDocumentParser(parse);
+    const first = { name: 'first' };
+    const replacement = { name: 'replacement' };
+
+    expect(parser(first)).toBe(first);
+    expect(parser(first)).toBe(first);
+    expect(parser(replacement)).toBe(replacement);
+    expect(parse).toHaveBeenCalledTimes(2);
+  });
+
+  it('caches malformed payloads without reparsing on every graph update', () => {
+    const parse = vi.fn(() => {
+      throw new Error('invalid workflow');
+    });
+    const parser = createSavedWorkflowDocumentParser(parse);
+    const malformed = { name: 'malformed' };
+
+    expect(parser(malformed)).toBeUndefined();
+    expect(parser(malformed)).toBeUndefined();
+    expect(parse).toHaveBeenCalledOnce();
   });
 });

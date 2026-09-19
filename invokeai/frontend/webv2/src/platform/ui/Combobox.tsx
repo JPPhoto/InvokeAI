@@ -7,7 +7,7 @@ import type {
 
 import { Combobox as ChakraCombobox, createListCollection, Portal } from '@chakra-ui/react';
 import { CheckIcon, ChevronDownIcon } from 'lucide-react';
-import { useCallback, useMemo, useState, type UIEvent } from 'react';
+import { useCallback, useMemo, useRef, useState, type UIEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const COMBOBOX_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
@@ -20,6 +20,8 @@ const LIST_SCROLL_CSS = {
 export interface ComboboxOption extends CollectionItem {
   disabled?: boolean;
   label: string;
+  /** Additional fields already searched by the server, such as tags and descriptions. */
+  searchText?: string;
   value: string;
 }
 
@@ -61,6 +63,7 @@ export const Combobox = ({
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const lastNotifiedInputValue = useRef('');
   const selectedLabel = options.find((option) => option.value === value)?.label ?? '';
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const selectedValues = useMemo(() => (value ? [value] : []), [value]);
@@ -71,7 +74,8 @@ export const Combobox = ({
         : options.filter(
             (option) =>
               option.label.toLocaleLowerCase().includes(normalizedQuery) ||
-              option.value.toLocaleLowerCase().includes(normalizedQuery)
+              option.value.toLocaleLowerCase().includes(normalizedQuery) ||
+              option.searchText?.toLocaleLowerCase().includes(normalizedQuery)
           ),
     [normalizedQuery, options]
   );
@@ -85,25 +89,36 @@ export const Combobox = ({
       }),
     [filteredOptions]
   );
+  const notifyInputValueChange = useCallback(
+    (nextValue: string) => {
+      if (nextValue === lastNotifiedInputValue.current) {
+        return;
+      }
+
+      lastNotifiedInputValue.current = nextValue;
+      onInputValueChange?.(nextValue);
+    },
+    [onInputValueChange]
+  );
   const handleOpenChange = useCallback(
     (details: { open: boolean }) => {
       setIsOpen(details.open);
       setQuery('');
 
       if (!details.open) {
-        onInputValueChange?.('');
+        notifyInputValueChange('');
       }
     },
-    [onInputValueChange]
+    [notifyInputValueChange]
   );
   const handleInputValueChange = useCallback(
     (details: { inputValue: string; reason?: string }) => {
       if (details.reason === 'input-change' || details.reason === 'clear-trigger') {
         setQuery(details.inputValue);
-        onInputValueChange?.(details.inputValue);
+        notifyInputValueChange(details.inputValue);
       }
     },
-    [onInputValueChange]
+    [notifyInputValueChange]
   );
   const handleListScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {

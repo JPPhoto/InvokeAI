@@ -34,6 +34,7 @@ import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCo
 import { useWorkflowNodeExecutionState } from '@features/workflow/ui/WorkflowUiContext';
 import { setNodePreviewCollapsed, workflowUiStore } from '@features/workflow/ui/workflowUiStore';
 import {
+  CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   cloneWorkflowFieldDefault,
   formatOutputFieldValue,
   getFieldTypeLabel,
@@ -68,6 +69,21 @@ const useIsZoomedOut = (): boolean => useStore((state) => state.transform[2] < C
 /** The node-level loading hint is only useful while a selected child signature is being fetched. */
 export const shouldShowCallSavedWorkflowLoadingHint = (node: WorkflowInvocationNode): boolean =>
   node.data.type === 'call_saved_workflow' && node.data.callSavedWorkflowStatus === 'loading';
+
+/** A callable child can be valid without exposing any fields; explain the empty body instead of showing a blank node. */
+export const shouldShowCallSavedWorkflowNoExposedFieldsHint = (node: WorkflowInvocationNode): boolean => {
+  if (node.data.type !== 'call_saved_workflow' || node.data.callSavedWorkflowStatus !== 'ready') {
+    return false;
+  }
+
+  const workflowId = node.data.inputs.workflow_id?.value;
+  const hasSelectedWorkflow = typeof workflowId === 'string' && workflowId.trim() !== '';
+  const hasDynamicFields =
+    Object.keys(node.data.dynamicInputTemplates ?? {}).length > 0 ||
+    Object.keys(node.data.inputs).some((name) => name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX));
+
+  return hasSelectedWorkflow && !hasDynamicFields;
+};
 
 /** Static placeholder bar standing in for text/controls at far zoom. No animation — there may be hundreds. */
 const SkeletonBar = ({ h = '2', w }: { h?: string; w?: string }) => <Box bg="bg.emphasized" h={h} rounded="sm" w={w} />;
@@ -867,7 +883,11 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
           ))}
           {shouldShowCallSavedWorkflowLoadingHint(node) ? (
             <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
-              {t('nodes.savedWorkflowUpdating')}
+              {t('nodes.savedWorkflowLoading')}
+            </Text>
+          ) : shouldShowCallSavedWorkflowNoExposedFieldsHint(node) ? (
+            <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
+              {t('nodes.savedWorkflowNoExposedFields')}
             </Text>
           ) : null}
         </Box>

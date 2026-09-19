@@ -29,15 +29,28 @@ type SavedWorkflowDetailQueryLike = {
   };
 };
 
-export const shouldFetchSavedWorkflowDetail = (query: SavedWorkflowDetailQueryLike | undefined): boolean =>
+export interface SavedWorkflowDetailFetchOptions {
+  retryErrors?: boolean;
+}
+
+export const shouldFetchSavedWorkflowDetail = (
+  query: SavedWorkflowDetailQueryLike | undefined,
+  options: SavedWorkflowDetailFetchOptions = {}
+): boolean =>
   query === undefined ||
-  (query.state.status === 'success' && query.state.isInvalidated && query.state.fetchStatus === 'idle');
+  (query.state.isInvalidated &&
+    query.state.fetchStatus === 'idle' &&
+    (query.state.status === 'success' || (options.retryErrors === true && query.state.status === 'error')));
 
 export const getSavedWorkflowDetailQueryStatus = (
   query: SavedWorkflowDetailQueryLike | undefined
 ): 'missing' | 'loading' | 'ready' | 'error' => {
   if (!query) {
     return 'missing';
+  }
+
+  if (query.state.data !== undefined && query.state.data !== null) {
+    return 'ready';
   }
 
   if (query.state.status === 'error') {
@@ -48,7 +61,7 @@ export const getSavedWorkflowDetailQueryStatus = (
     return 'loading';
   }
 
-  return query.state.data ? 'ready' : 'error';
+  return query.state.data !== undefined && query.state.data !== null ? 'ready' : 'error';
 };
 
 export const savedWorkflowDetailQueryOptions = (workflowId: string) => ({

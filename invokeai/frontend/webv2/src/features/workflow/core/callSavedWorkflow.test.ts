@@ -192,6 +192,41 @@ describe('Call Saved Workflow dynamic fields', () => {
     });
   });
 
+  it('preserves valid dynamic values and presentation from parents without templates', () => {
+    const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
+    callNode.id = 'call-1';
+    callNode.data.inputs[dynamicFieldName('a')] = {
+      description: 'Persisted description',
+      label: 'Persisted label',
+      name: dynamicFieldName('a'),
+      value: 99,
+    };
+    callNode.data.inputs[dynamicFieldName('b')] = {
+      label: '',
+      name: dynamicFieldName('b'),
+      value: 'not an integer',
+    };
+
+    const fields = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates);
+    const document = syncCallSavedWorkflowFields(
+      { ...createProjectGraph('legacy-parent'), nodes: [callNode] },
+      callNode.id,
+      fields,
+      []
+    );
+    const node = document.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
+
+    expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({
+      description: 'Persisted description',
+      label: 'Persisted label',
+      value: 99,
+    });
+    expect(node?.data.inputs[dynamicFieldName('b')]).toMatchObject({
+      label: 'B',
+      value: 2,
+    });
+  });
+
   it('deduplicates duplicate child form fields before syncing', () => {
     const child = buildChildWorkflow();
     const root = child.form.elements[child.form.rootElementId];

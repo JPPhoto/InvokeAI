@@ -7,6 +7,60 @@ import type { FieldInputInstance } from './field';
 import { zFieldInputInstance, zFieldInputInstanceWithExtras, zFieldInputTemplate, zFieldOutputTemplate } from './field';
 import { zSemVer } from './semver';
 
+const zWebv2DynamicInputTemplate = z
+  .object({
+    default: z.unknown().optional(),
+    description: z.string(),
+    exclusiveMaximum: z.number().nullable().optional(),
+    exclusiveMinimum: z.number().nullable().optional(),
+    fieldKind: z.enum(['input', 'internal']),
+    input: z.enum(['connection', 'direct', 'any']),
+    maximum: z.number().nullable().optional(),
+    minimum: z.number().nullable().optional(),
+    multipleOf: z.number().nullable().optional(),
+    name: z.string(),
+    options: z.array(z.string()).nullable().optional(),
+    required: z.boolean(),
+    title: z.string(),
+    type: z.object({
+      batch: z.boolean(),
+      cardinality: z.enum(['SINGLE', 'COLLECTION', 'SINGLE_OR_COLLECTION']),
+      name: z.string(),
+      originalType: z.unknown().optional(),
+    }),
+    uiChoiceLabels: z.record(z.string(), z.string()).nullable().optional(),
+    uiComponent: z.enum(['slider', 'textarea', 'video-frame-index']).nullable().optional(),
+    uiHidden: z.boolean(),
+    uiModelBase: z.array(z.string()).nullable().optional(),
+    uiModelFormat: z.array(z.string()).nullable().optional(),
+    uiModelType: z.array(z.string()).nullable().optional(),
+    uiOrder: z.number().int().nullable().optional(),
+  })
+  .transform((template) => ({
+    ...template,
+    fieldKind: 'input' as const,
+    labels: template.uiChoiceLabels ?? undefined,
+    exclusiveMaximum: template.exclusiveMaximum ?? undefined,
+    exclusiveMinimum: template.exclusiveMinimum ?? undefined,
+    maximum: template.maximum ?? undefined,
+    minimum: template.minimum ?? undefined,
+    multipleOf: template.multipleOf ?? undefined,
+    options: template.options ?? undefined,
+    originalType: template.type.originalType,
+    type: template.type,
+    ui_choice_labels: template.uiChoiceLabels ?? undefined,
+    ui_component: template.uiComponent ?? undefined,
+    ui_hidden: template.uiHidden,
+    ui_model_base: template.uiModelBase ?? undefined,
+    ui_model_format: template.uiModelFormat ?? undefined,
+    ui_model_type: template.uiModelType ?? undefined,
+    ui_order: template.uiOrder ?? undefined,
+    ui_type: undefined,
+  }))
+  .pipe(zFieldInputTemplate);
+
+const zCompatibleFieldInputTemplate = z.union([zFieldInputTemplate, zWebv2DynamicInputTemplate]);
+
 // #region InvocationTemplate
 const _zInvocationTemplate = z.object({
   type: z.string(),
@@ -37,7 +91,7 @@ export const zInvocationNodeData = z
     // Parsed per-input in the transform below so that the input-instance schema can be chosen based
     // on the node type (extras are only accepted for nodes that declare `extra='allow'`).
     inputs: z.record(z.string(), z.unknown()),
-    dynamicInputTemplates: z.record(z.string(), zFieldInputTemplate).default({}),
+    dynamicInputTemplates: z.record(z.string(), zCompatibleFieldInputTemplate).default({}),
     isOpen: z.boolean(),
     isIntermediate: z.boolean(),
     useCache: z.boolean(),

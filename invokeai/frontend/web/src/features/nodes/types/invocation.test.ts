@@ -96,4 +96,38 @@ describe('zInvocationNodeData: extra-input scoping', () => {
     expect(parsed.inputs.z_image_seed_variance_enabled?.value).toBe(false);
     expect(parsed.inputs.z_image_seed_variance_strength?.value).toBe(0.1);
   });
+
+  it('normalizes webv2 dynamic input templates', () => {
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        board: {
+          batch: false,
+          cardinality: 'SINGLE',
+          description: 'Child board',
+          fieldKind: 'internal',
+          input: 'any',
+          name: 'board',
+          required: false,
+          title: 'Board',
+          type: { batch: false, cardinality: 'SINGLE', name: 'BoardField' },
+          uiChoiceLabels: null,
+          uiComponent: null,
+          uiHidden: false,
+          uiModelBase: null,
+          uiModelFormat: null,
+          uiModelType: null,
+          uiOrder: null,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.board).toMatchObject({
+      fieldKind: 'input',
+      name: 'board',
+      title: 'Board',
+      type: { name: 'BoardField' },
+      ui_hidden: false,
+    });
+  });
 });

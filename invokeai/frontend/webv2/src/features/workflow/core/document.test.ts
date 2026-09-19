@@ -423,6 +423,11 @@ describe('getProjectGraphUndoEntry', () => {
     expect(getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: true })).toEqual({
       label: 'Edit workflow field value',
     });
+    expect(
+      getProjectGraphUndoEntry({ fieldName: 'workflow_id', nodeId: 'n', type: 'setFieldValue', value: 'workflow-a' })
+    ).toEqual({
+      label: 'Edit workflow field value',
+    });
     expect(getProjectGraphUndoEntry({ nodeId: 'n', type: 'setNodeUseCache', useCache: false })).toEqual({
       label: 'Change workflow node caching',
     });

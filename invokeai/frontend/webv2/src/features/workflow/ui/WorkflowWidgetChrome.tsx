@@ -300,7 +300,7 @@ export const WorkflowDialogHost = () => {
         await updateLibraryWorkflow(workflowId, serialized, owner.signal);
         assertAccountScopeCurrent(owner);
         // The library dialog serves cached payloads and pages; a save changes both.
-        invalidateWorkflowLibraryCache();
+        invalidateWorkflowLibraryCache(workflowId);
       },
     });
 

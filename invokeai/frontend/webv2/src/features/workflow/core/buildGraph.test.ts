@@ -9,6 +9,7 @@ import {
   isSeedInputField,
   planWorkflowSubmission,
 } from './buildGraph';
+import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from './callSavedWorkflow';
 import {
   buildConnectorNode,
   buildInvocationNode,
@@ -324,7 +325,7 @@ describe('compileProjectGraph', () => {
     ]);
   });
 
-  it('preserves auto/none board sentinels and keeps explicit boards', () => {
+  it('omits auto/none board sentinels from ordinary nodes and keeps explicit boards', () => {
     const { doc, sinkId } = buildDocument();
     const withAutoBoard = projectGraphReducer(doc, {
       fieldName: 'board',
@@ -333,7 +334,7 @@ describe('compileProjectGraph', () => {
       value: 'auto',
     });
 
-    expect(compileProjectGraph(withAutoBoard, templates).backendGraph?.nodes[sinkId]).toMatchObject({ board: 'auto' });
+    expect(compileProjectGraph(withAutoBoard, templates).backendGraph?.nodes[sinkId]).not.toHaveProperty('board');
 
     const withNoneBoard = projectGraphReducer(doc, {
       fieldName: 'board',
@@ -342,7 +343,7 @@ describe('compileProjectGraph', () => {
       value: 'none',
     });
 
-    expect(compileProjectGraph(withNoneBoard, templates).backendGraph?.nodes[sinkId]).toMatchObject({ board: 'none' });
+    expect(compileProjectGraph(withNoneBoard, templates).backendGraph?.nodes[sinkId]).not.toHaveProperty('board');
 
     const withExplicitBoard = projectGraphReducer(doc, {
       fieldName: 'board',
@@ -353,6 +354,27 @@ describe('compileProjectGraph', () => {
 
     expect(compileProjectGraph(withExplicitBoard, templates).backendGraph?.nodes[sinkId]).toMatchObject({
       board: { board_id: 'board-1' },
+    });
+  });
+
+  it('preserves auto/none board sentinels only in Call Saved Workflow inputs', () => {
+    const callTemplate = template('call_saved_workflow', {
+      workflow_id: input('workflow_id', { type: { batch: false, cardinality: 'SINGLE', name: 'StringField' } }),
+    });
+    const callNode = buildInvocationNode(callTemplate, { x: 0, y: 0 });
+    const dynamicBoardName = `${CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX}${callNode.id}::board`;
+    callNode.data.dynamicInputTemplates = {
+      [dynamicBoardName]: input(dynamicBoardName, {
+        type: { batch: false, cardinality: 'SINGLE', name: 'BoardField' },
+      }),
+    };
+    callNode.data.inputs[dynamicBoardName] = { label: 'Board', name: dynamicBoardName, value: 'auto' };
+    const document = { ...createProjectGraph('call-saved-workflow-board'), nodes: [callNode] };
+    const graph = compileProjectGraph(document, { call_saved_workflow: callTemplate }).backendGraph;
+
+    expect(graph.nodes[callNode.id]).not.toHaveProperty(dynamicBoardName);
+    expect(graph.nodes[callNode.id]).toMatchObject({
+      workflow_inputs: { [dynamicBoardName]: 'auto' },
     });
   });
 

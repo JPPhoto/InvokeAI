@@ -13,9 +13,10 @@ const workflows = [
   {
     category: 'user' as const,
     call_saved_workflow_compatibility: { is_callable: true, message: null, reason: 'ok' },
-    description: '',
+    description: 'A landscape starter',
     is_public: false,
     name: 'Alpha Workflow',
+    tags: 'landscape,starter',
     workflow_id: 'workflow-a',
   },
   {
@@ -35,7 +36,12 @@ const workflows = [
 describe('savedWorkflowFieldUtils', () => {
   it('builds named picker options and disables incompatible workflows', () => {
     expect(buildSavedWorkflowOptions(workflows)).toEqual([
-      { disabled: false, label: 'Alpha Workflow', value: 'workflow-a' },
+      {
+        disabled: false,
+        label: 'Alpha Workflow',
+        searchText: 'A landscape starter landscape,starter',
+        value: 'workflow-a',
+      },
       { disabled: true, label: 'Beta Workflow', value: 'workflow-b' },
     ]);
   });

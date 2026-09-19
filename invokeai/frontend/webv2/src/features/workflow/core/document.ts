@@ -382,9 +382,11 @@ const getUndoMergeKey = (action: ProjectGraphAction): string | undefined => {
       return `${action.type}:${action.nodeId}:${action.fieldName}`;
     case 'setFieldValue':
       // Typed text and dragged numbers stream; a pick (model, board, switch) is one step of its own.
-      return typeof action.value === 'string' || typeof action.value === 'number'
-        ? `${action.type}:${action.nodeId}:${action.fieldName}`
-        : undefined;
+      return action.fieldName === 'workflow_id'
+        ? undefined
+        : typeof action.value === 'string' || typeof action.value === 'number'
+          ? `${action.type}:${action.nodeId}:${action.fieldName}`
+          : undefined;
     case 'setNodeLabel':
     case 'setNodeNotes':
       return `${action.type}:${action.nodeId}`;

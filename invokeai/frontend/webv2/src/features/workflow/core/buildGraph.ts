@@ -61,12 +61,8 @@ const getNodeInputTemplates = (
   template: InvocationTemplates[string]
 ): FieldInputTemplate[] => Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates });
 
-/**
- * Translates a board field value to the backend shape: `auto` and `none`
- * sentinels are passed through for backend board handling.
- */
 const toBoardGraphValue = (value: unknown): unknown => {
-  if (isEmptyValue(value)) {
+  if (isEmptyValue(value) || value === 'auto' || value === 'none') {
     return undefined;
   }
 
@@ -196,9 +192,13 @@ export const getProjectGraphReadiness = (
   return { canInvoke: reasons.length === 0, reasons };
 };
 
-const toGraphInputValue = (inputTemplate: FieldInputTemplate, value: unknown): unknown => {
+const toGraphInputValue = (
+  inputTemplate: FieldInputTemplate,
+  value: unknown,
+  options: { preserveBoardSentinel?: boolean } = {}
+): unknown => {
   if (inputTemplate.type.name === 'BoardField') {
-    return toBoardGraphValue(value);
+    return options.preserveBoardSentinel ? value : toBoardGraphValue(value);
   }
 
   return value;
@@ -238,13 +238,14 @@ export const compileProjectGraph = (
         continue;
       }
 
-      const value = toGraphInputValue(inputTemplate, instance.value);
+      const isSavedWorkflowInput =
+        node.data.type === 'call_saved_workflow' && instance.name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX);
+      const value = toGraphInputValue(inputTemplate, instance.value, {
+        preserveBoardSentinel: isSavedWorkflowInput,
+      });
 
       if (value !== undefined) {
-        if (
-          node.data.type === 'call_saved_workflow' &&
-          instance.name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX)
-        ) {
+        if (isSavedWorkflowInput) {
           workflowInputs[instance.name] = value;
         } else {
           graphNode[instance.name] = value;

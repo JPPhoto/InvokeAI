@@ -8,7 +8,7 @@ import type {
 } from './types';
 
 import { getResolvedWorkflowEdges } from './connectors';
-import { isDirectInputField } from './fields';
+import { isDirectInputField, isWorkflowFieldValueValid } from './fields';
 import { isInvocationNode } from './types';
 import { validateConnectionTypes } from './validation';
 
@@ -232,13 +232,21 @@ export const syncCallSavedWorkflowFields = (
   for (const field of uniqueFields) {
     const previous = node.data.inputs[field.fieldName];
     const previousTemplate = previousTemplates[field.fieldName];
-    const keepValue = previous && previousTemplate && sameFieldType(previousTemplate, field.fieldTemplate);
+    const keepValue =
+      previous &&
+      (previousTemplate
+        ? sameFieldType(previousTemplate, field.fieldTemplate)
+        : isWorkflowFieldValueValid(field.fieldTemplate, previous.value));
     const label =
-      keepValue && previous && previousTemplate && previous.label !== previousTemplate.title
+      keepValue && previous && (!previousTemplate ? previous.label !== '' : previous.label !== previousTemplate.title)
         ? previous.label
         : field.label;
     const description =
-      keepValue && previous && previousTemplate && (previous.description ?? '') !== previousTemplate.description
+      keepValue &&
+      previous &&
+      (!previousTemplate
+        ? (previous.description ?? '') !== ''
+        : (previous.description ?? '') !== previousTemplate.description)
         ? previous.description
         : field.description;
 

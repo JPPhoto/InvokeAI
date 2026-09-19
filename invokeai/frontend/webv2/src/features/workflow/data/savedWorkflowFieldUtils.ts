@@ -10,11 +10,18 @@ export type SavedWorkflowSelectionState =
   | { status: 'missing'; workflowId: string };
 
 export const buildSavedWorkflowOptions = (workflows: WorkflowLibraryListItem[]): ComboboxOption[] =>
-  workflows.map((workflow) => ({
-    disabled: workflow.call_saved_workflow_compatibility?.is_callable === false,
-    label: workflow.name,
-    value: workflow.workflow_id,
-  }));
+  workflows.map((workflow) => {
+    const searchText = [workflow.description, workflow.tags]
+      .filter((value): value is string => Boolean(value))
+      .join(' ');
+
+    return {
+      disabled: workflow.call_saved_workflow_compatibility?.is_callable === false,
+      label: workflow.name,
+      ...(searchText ? { searchText } : {}),
+      value: workflow.workflow_id,
+    };
+  });
 
 const baseSavedWorkflowPickerQuery = {
   page: 0,

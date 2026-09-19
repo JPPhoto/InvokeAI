@@ -1,9 +1,12 @@
+import type { ProjectGraphState } from '@features/workflow/core/types';
+import type { ParsedWorkflow } from '@features/workflow/core/workflowJson';
 import type { WorkflowRecordDTO } from '@features/workflow/data/api';
 
 import { onWorkflowLibraryCacheInvalidated } from '@features/workflow/data/libraryCache';
 import {
   getSavedWorkflowDetailQueryStatus,
   isSavedWorkflowDetailQueryKey,
+  savedWorkflowDetailQueryKey,
   savedWorkflowDetailQueryOptions,
   shouldFetchSavedWorkflowDetail,
 } from '@features/workflow/data/savedWorkflowQueries';
@@ -18,6 +21,28 @@ import {
 } from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+
+export const createSavedWorkflowDocumentParser = (
+  parse: (workflow: Record<string, unknown>) => ParsedWorkflow = parseWorkflowJson
+): ((workflow: Record<string, unknown>) => ProjectGraphState | undefined) => {
+  const cache = new WeakMap<object, ProjectGraphState | null>();
+
+  return (workflow) => {
+    if (cache.has(workflow)) {
+      return cache.get(workflow) ?? undefined;
+    }
+
+    try {
+      const document = parse(workflow).document;
+      cache.set(workflow, document);
+      return document;
+    } catch {
+      cache.set(workflow, null);
+      return undefined;
+    }
+  };
+};
 
 export const createDeferredCallSavedWorkflowReconciler = (reconcile: () => void) => {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -107,6 +132,8 @@ const needsDynamicFieldSync = (
 export const CallSavedWorkflowSyncRuntime = () => {
   const queryClient = useQueryClient();
   const { commands, project: projectPort } = useWorkflowUi();
+  const retryableDetailWorkflowIds = new Set<string>();
+  const parseChildWorkflow = useMemo(() => createSavedWorkflowDocumentParser(), []);
   const reconcile = () => {
     const templatesSnapshot = getInvocationTemplatesSnapshot();
 
@@ -157,11 +184,25 @@ export const CallSavedWorkflowSyncRuntime = () => {
       const detailOptions = savedWorkflowDetailQueryOptions(workflowId);
       const query = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
 
-      if (shouldFetchSavedWorkflowDetail(query)) {
-        setStatus(node.id, workflowId, 'loading');
-        void queryClient.ensureQueryData({ ...detailOptions, revalidateIfStale: true }).catch(() => {
-          setStatus(node.id, workflowId, 'error');
-        });
+      if (shouldFetchSavedWorkflowDetail(query, { retryErrors: retryableDetailWorkflowIds.has(workflowId) })) {
+        const hasExistingDetail = query?.state.data !== undefined && query.state.data !== null;
+
+        if (!hasExistingDetail) {
+          setStatus(node.id, workflowId, 'loading');
+        }
+
+        void queryClient
+          .ensureQueryData({ ...detailOptions, revalidateIfStale: true })
+          .then(() => {
+            retryableDetailWorkflowIds.delete(workflowId);
+          })
+          .catch(() => {
+            retryableDetailWorkflowIds.delete(workflowId);
+            const failedQuery = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
+            const hasUsableDetail = failedQuery?.state.data !== undefined && failedQuery.state.data !== null;
+
+            setStatus(node.id, workflowId, hasUsableDetail ? 'ready' : 'error');
+          });
         continue;
       }
 
@@ -185,13 +226,7 @@ export const CallSavedWorkflowSyncRuntime = () => {
         continue;
       }
 
-      let childDocument;
-
-      try {
-        childDocument = parseWorkflowJson(selectedWorkflow.workflow).document;
-      } catch {
-        childDocument = undefined;
-      }
+      const childDocument = parseChildWorkflow(selectedWorkflow.workflow);
 
       if (!childDocument) {
         setStatus(node.id, workflowId, 'error');
@@ -233,8 +268,27 @@ export const CallSavedWorkflowSyncRuntime = () => {
         reconciler.schedule();
       }
     });
-    const unsubscribeLibrary = onWorkflowLibraryCacheInvalidated(() => {
-      void queryClient.invalidateQueries({ queryKey: ['workflow', 'call-saved', 'detail'] });
+    const unsubscribeLibrary = onWorkflowLibraryCacheInvalidated((workflowId) => {
+      if (workflowId) {
+        retryableDetailWorkflowIds.add(workflowId);
+        void queryClient.invalidateQueries({
+          exact: true,
+          queryKey: savedWorkflowDetailQueryKey(workflowId),
+          refetchType: 'none',
+        });
+      } else {
+        for (const query of queryClient.getQueryCache().findAll({ queryKey: ['workflow', 'call-saved', 'detail'] })) {
+          if (isSavedWorkflowDetailQueryKey(query.queryKey)) {
+            retryableDetailWorkflowIds.add(query.queryKey[3]);
+          }
+        }
+
+        void queryClient.invalidateQueries({
+          queryKey: ['workflow', 'call-saved', 'detail'],
+          refetchType: 'none',
+        });
+      }
+
       reconciler.schedule();
     });
 

@@ -76,7 +76,7 @@ export const useSaveWorkflowToLibrary = (): {
 
       markLibraryGraphSynced(syncedSerialized);
       setWorkflowLibrarySyncStatus('saved');
-      invalidateWorkflowLibraryCache();
+      invalidateWorkflowLibraryCache(workflowId);
 
       return workflowId;
     } catch (error) {
@@ -103,7 +103,7 @@ export const useSaveWorkflowToLibrary = (): {
         const workflowId = await createLibraryWorkflow(serialized, owner.signal);
 
         assertAccountScopeCurrent(owner);
-        invalidateWorkflowLibraryCache();
+        invalidateWorkflowLibraryCache(workflowId);
 
         return workflowId;
       } catch (error) {

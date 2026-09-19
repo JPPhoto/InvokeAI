@@ -1,3 +1,4 @@
+import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -14,7 +15,7 @@ describe('saved workflow detail query policy', () => {
     expect(isSavedWorkflowDetailQueryKey(['workflow', 'call-saved', 'detail'])).toBe(false);
   });
 
-  it('fetches missing or invalidated detail queries but never retries an error from cache notifications', () => {
+  it('fetches missing or invalidated detail queries and only retries explicitly invalidated errors', () => {
     expect(shouldFetchSavedWorkflowDetail(undefined)).toBe(true);
     expect(
       shouldFetchSavedWorkflowDetail({ state: { fetchStatus: 'idle', isInvalidated: true, status: 'success' } })
@@ -28,6 +29,12 @@ describe('saved workflow detail query policy', () => {
     expect(
       shouldFetchSavedWorkflowDetail({ state: { fetchStatus: 'idle', isInvalidated: true, status: 'error' } })
     ).toBe(false);
+    expect(
+      shouldFetchSavedWorkflowDetail(
+        { state: { fetchStatus: 'idle', isInvalidated: true, status: 'error' } },
+        { retryErrors: true }
+      )
+    ).toBe(true);
   });
 
   it('classifies detail query state for reconciliation', () => {
@@ -43,9 +50,57 @@ describe('saved workflow detail query policy', () => {
         state: { data: { workflow_id: 'workflow-1' }, fetchStatus: 'idle', isInvalidated: false, status: 'success' },
       })
     ).toBe('ready');
+    expect(
+      getSavedWorkflowDetailQueryStatus({
+        state: { data: { workflow_id: 'workflow-1' }, fetchStatus: 'fetching', isInvalidated: true, status: 'success' },
+      })
+    ).toBe('ready');
+    expect(
+      getSavedWorkflowDetailQueryStatus({
+        state: { data: { workflow_id: 'workflow-1' }, fetchStatus: 'idle', isInvalidated: true, status: 'error' },
+      })
+    ).toBe('ready');
   });
 
   it('does not retry a failed detail lookup', () => {
     expect(savedWorkflowDetailQueryOptions('workflow-1').retry).toBe(false);
+  });
+
+  it('recovers an invalidated failed lookup with one authorized retry', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const detailOptions = savedWorkflowDetailQueryOptions('workflow-1');
+    let attempts = 0;
+    const options = {
+      ...detailOptions,
+      queryFn: () => {
+        attempts += 1;
+
+        if (attempts === 1) {
+          throw new Error('temporary failure');
+        }
+
+        return { workflow_id: 'workflow-1' } as never;
+      },
+    };
+
+    try {
+      await expect(queryClient.fetchQuery(options)).rejects.toThrow('temporary failure');
+      const failedQuery = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
+
+      expect(shouldFetchSavedWorkflowDetail(failedQuery)).toBe(false);
+
+      await queryClient.invalidateQueries({ exact: true, queryKey: detailOptions.queryKey, refetchType: 'none' });
+      const invalidatedQuery = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
+
+      expect(shouldFetchSavedWorkflowDetail(invalidatedQuery, { retryErrors: true })).toBe(true);
+      await queryClient.ensureQueryData({ ...options, revalidateIfStale: true });
+
+      expect(attempts).toBe(2);
+      expect(
+        getSavedWorkflowDetailQueryStatus(queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey }))
+      ).toBe('ready');
+    } finally {
+      queryClient.clear();
+    }
   });
 });

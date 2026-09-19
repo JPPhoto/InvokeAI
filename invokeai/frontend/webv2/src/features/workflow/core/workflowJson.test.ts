@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { InvocationTemplate } from './types';
+import type { FieldInputTemplate, InvocationTemplate } from './types';
 
 import {
   buildCurrentImageNode,
@@ -113,6 +113,37 @@ describe('workflow JSON round-trip', () => {
     expect(serialized.nodes[0]?.data).toHaveProperty('dynamicInputTemplates');
     expect(parseWorkflowJson(serialized).document.nodes[0]).toMatchObject({
       data: { dynamicInputTemplates: { runtime: template.inputs.prompt } },
+    });
+  });
+
+  it('round-trips internal BoardField dynamic templates for legacy readers', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    const boardTemplate: FieldInputTemplate = {
+      ...template.inputs.prompt!,
+      default: undefined,
+      fieldKind: 'internal',
+      name: 'board',
+      title: 'Board',
+      type: { batch: false, cardinality: 'SINGLE', name: 'BoardField' },
+    };
+    node.data.dynamicInputTemplates = { board: boardTemplate };
+    const document = projectGraphReducer(createProjectGraph('legacy-dynamic-board'), {
+      node,
+      type: 'addNode',
+    });
+
+    const serialized = serializeWorkflowJson(document) as {
+      nodes: Array<{ data: { dynamicInputTemplates: Record<string, Record<string, unknown>> } }>;
+    };
+    const persisted = serialized.nodes[0]?.data.dynamicInputTemplates.board;
+
+    expect(persisted).toMatchObject({
+      fieldKind: 'internal',
+      type: { name: 'BoardField' },
+      uiHidden: false,
+    });
+    expect(parseWorkflowJson(serialized).document.nodes[0]).toMatchObject({
+      data: { dynamicInputTemplates: { board: boardTemplate } },
     });
   });
 
