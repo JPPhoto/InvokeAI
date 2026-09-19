@@ -9769,6 +9769,45 @@ export type components = {
              */
             source_video?: components["schemas"]["VideoField"] | null;
             /**
+             * Source Video Start Frame
+             * @description The first frame (inclusive) of the source video that was kept
+             * @default null
+             */
+            source_video_start_frame?: number | null;
+            /**
+             * Source Video End Frame
+             * @description The last frame (inclusive) of the source video that was kept
+             * @default null
+             */
+            source_video_end_frame?: number | null;
+            /**
+             * Fps
+             * @description The frame rate of the generated video
+             * @default null
+             */
+            fps?: number | null;
+            /**
+             * Wan Guidance Scale Low Noise
+             * @description The classifier-free guidance scale used by the Wan low-noise expert, when it differed
+             * @default null
+             */
+            wan_guidance_scale_low_noise?: number | null;
+            /**
+             * @description The standalone UMT5-XXL encoder used with a single-file Wan main model
+             * @default null
+             */
+            wan_t5_encoder_model?: components["schemas"]["ModelIdentifierField"] | null;
+            /**
+             * @description The standalone low-noise expert used with a single-file Wan main model
+             * @default null
+             */
+            wan_transformer_low_noise?: components["schemas"]["ModelIdentifierField"] | null;
+            /**
+             * @description The Wan Diffusers install whose VAE and encoder served a single-file main model
+             * @default null
+             */
+            wan_component_source?: components["schemas"]["ModelIdentifierField"] | null;
+            /**
              * @description The single-file MiniMax H3 transformer used in place of the main model's transformer
              * @default null
              */
@@ -9778,6 +9817,22 @@ export type components = {
              * @default null
              */
             minimax_h3_text_encoder_model?: components["schemas"]["ModelIdentifierField"] | null;
+            /**
+             * @description The MiniMax H3 Diffusers install whose VAEs and encoder served a single-file transformer
+             * @default null
+             */
+            minimax_h3_component_source?: components["schemas"]["ModelIdentifierField"] | null;
+            /**
+             * @description The FL2VA transformer whose later blocks overlaid the Ref2VA transformer (the hybrid)
+             * @default null
+             */
+            minimax_h3_hybrid_base_model?: components["schemas"]["ModelIdentifierField"] | null;
+            /**
+             * Minimax H3 Hybrid Start Block
+             * @description The first transformer block taken from the hybrid base
+             * @default null
+             */
+            minimax_h3_hybrid_start_block?: number | null;
             /**
              * Minimax H3 References
              * @description The ordered Ref2VA references this generation was conditioned on (names and options only; the media is re-resolved from the gallery at recall time)
