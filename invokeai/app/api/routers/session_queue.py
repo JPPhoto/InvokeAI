@@ -150,7 +150,15 @@ def strip_missing_image_results(
 def _get_workflow_call_root_queue_item(queue_item: SessionQueueItem) -> SessionQueueItem:
     if queue_item.root_item_id is None:
         return queue_item
-    return ApiDependencies.invoker.services.session_queue.get_queue_item(queue_item.root_item_id)
+    return _get_queue_item_for_retry(queue_item.root_item_id)
+
+
+def _get_queue_item_for_retry(item_id: int) -> SessionQueueItem:
+    session_queue = ApiDependencies.invoker.services.session_queue
+    read_for_retry = getattr(session_queue, "_get_queue_item_for_retry", None)
+    if read_for_retry is not None:
+        return read_for_retry(item_id)
+    return session_queue.get_queue_item(item_id)
 
 
 # What a non-admin must not see on another user's queue item, and what each field is replaced
@@ -313,7 +321,7 @@ def list_all_queue_items(
 ) -> list[SessionQueueItem]:
     """Gets all queue items"""
     try:
-        items = ApiDependencies.invoker.services.session_queue.list_all_queue_items(
+        items = ApiDependencies.invoker.services.session_queue.list_all_queue_items_for_api(
             queue_id=queue_id,
             destination=destination,
         )
@@ -383,7 +391,7 @@ def get_queue_items_by_item_ids(
         queue_items: list[SessionQueueItem] = []
         for item_id in item_ids:
             try:
-                queue_item = session_queue_service.get_queue_item(item_id=item_id)
+                queue_item = session_queue_service.get_queue_item_for_api(item_id=item_id)
                 if queue_item.queue_id != queue_id:  # Auth protection for items from other queues
                     continue
                 # Sanitize item for non-admin users
@@ -669,7 +677,7 @@ def get_current_queue_item(
 ) -> Optional[SessionQueueItem]:
     """Gets the currently execution queue item"""
     try:
-        item = ApiDependencies.invoker.services.session_queue.get_current(queue_id, origin_prefix=origin_prefix)
+        item = ApiDependencies.invoker.services.session_queue.get_current_for_api(queue_id, origin_prefix=origin_prefix)
         if item is not None:
             item = sanitize_queue_item_for_user(item, current_user.user_id, current_user.is_admin)
         return item
@@ -715,7 +723,7 @@ def get_next_queue_item(
 ) -> Optional[SessionQueueItem]:
     """Gets the next queue item, without executing it"""
     try:
-        item = ApiDependencies.invoker.services.session_queue.get_next(queue_id, origin_prefix=origin_prefix)
+        item = ApiDependencies.invoker.services.session_queue.get_next_for_api(queue_id, origin_prefix=origin_prefix)
         if item is not None:
             item = sanitize_queue_item_for_user(item, current_user.user_id, current_user.is_admin)
         return item
@@ -792,7 +800,7 @@ def get_queue_item(
 ) -> SessionQueueItem:
     """Gets a queue item"""
     try:
-        queue_item = ApiDependencies.invoker.services.session_queue.get_queue_item(item_id=item_id)
+        queue_item = ApiDependencies.invoker.services.session_queue.get_queue_item_for_api(item_id=item_id)
         if queue_item.queue_id != queue_id:
             raise HTTPException(status_code=404, detail=f"Queue item with id {item_id} not found in queue {queue_id}")
         # Sanitize item for non-admin users

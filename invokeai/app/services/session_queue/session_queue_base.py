@@ -75,10 +75,18 @@ class SessionQueueBase(ABC):
         """Gets the currently-executing session queue item"""
         pass
 
+    def get_current_for_api(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
+        """Gets the current item in the response projection used by API reads."""
+        return self.get_current(queue_id=queue_id, origin_prefix=origin_prefix)
+
     @abstractmethod
     def get_next(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
         """Gets the next session queue item (does not dequeue it)"""
         pass
+
+    def get_next_for_api(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
+        """Gets the next item in the response projection used by API reads."""
+        return self.get_next(queue_id=queue_id, origin_prefix=origin_prefix)
 
     @abstractmethod
     def clear(self, queue_id: str, user_id: Optional[str] = None) -> ClearResult:
@@ -242,6 +250,14 @@ class SessionQueueBase(ABC):
         """Gets all queue items that match the given parameters"""
         pass
 
+    def list_all_queue_items_for_api(
+        self,
+        queue_id: str,
+        destination: Optional[str] = None,
+    ) -> list[SessionQueueItem]:
+        """Gets queue items for API serialization without changing the service read contract."""
+        return self.list_all_queue_items(queue_id=queue_id, destination=destination)
+
     @abstractmethod
     def get_queue_item_ids(
         self,
@@ -262,6 +278,10 @@ class SessionQueueBase(ABC):
     def get_queue_item(self, item_id: int) -> SessionQueueItem:
         """Gets a session queue item by ID for a given queue"""
         pass
+
+    def get_queue_item_for_api(self, item_id: int) -> SessionQueueItem:
+        """Gets a queue item in the response projection used by API reads."""
+        return self.get_queue_item(item_id=item_id)
 
     @abstractmethod
     def set_queue_item_session(self, item_id: int, session: GraphExecutionState) -> SessionQueueItem:

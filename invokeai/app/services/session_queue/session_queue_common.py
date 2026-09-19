@@ -2,7 +2,7 @@ import datetime
 import json
 from collections.abc import Mapping
 from itertools import chain, product
-from typing import Generator, Literal, Optional, TypeAlias, Union
+from typing import Any, Generator, Literal, Optional, TypeAlias, Union
 
 from pydantic import (
     AliasChoices,
@@ -237,6 +237,25 @@ def get_session(queue_item_dict: dict) -> GraphExecutionState:
     return load_execution_state(session_payload)
 
 
+def _normalize_queue_read_effects(payload: dict[str, Any], *, normalize_effects: bool) -> None:
+    if normalize_effects and "execution_effects" in payload:
+        payload["execution_effects"] = normalize_persisted_execution_effects(payload["execution_effects"])
+
+    child_payload = payload.get("waiting_workflow_call_child_session")
+    if not isinstance(child_payload, Mapping):
+        return
+
+    child_payload = dict(child_payload)
+    child_state = child_payload.get("state")
+    if isinstance(child_payload.get("version"), int) and isinstance(child_state, Mapping):
+        child_state = dict(child_state)
+        _normalize_queue_read_effects(child_state, normalize_effects=normalize_effects)
+        child_payload["state"] = child_state
+    else:
+        _normalize_queue_read_effects(child_payload, normalize_effects=normalize_effects)
+    payload["waiting_workflow_call_child_session"] = child_payload
+
+
 def get_session_for_queue_read(queue_item_dict: dict) -> GraphExecutionState:
     """Build a response-shaped session without rehydrating runtime execution state."""
     session_raw = queue_item_dict.get("session", "{}")
@@ -256,9 +275,6 @@ def get_session_for_queue_read(queue_item_dict: dict) -> GraphExecutionState:
                 f"{CURRENT_EXECUTION_STATE_VERSION}"
             )
 
-    if version != 0 and "execution_effects" in session_payload:
-        normalize_persisted_execution_effects(session_payload["execution_effects"])
-
     graph_payload = session_payload.get("graph")
     if not isinstance(graph_payload, Mapping):
         raise ValueError("Queue session projection is missing a graph mapping")
@@ -266,6 +282,8 @@ def get_session_for_queue_read(queue_item_dict: dict) -> GraphExecutionState:
     execution_graph_payload = session_payload.get("execution_graph")
     if isinstance(execution_graph_payload, Mapping):
         session_payload["execution_graph"] = Graph.model_validate(execution_graph_payload, strict=False)
+    _normalize_queue_read_effects(session_payload, normalize_effects=version != 0)
+
     return GraphExecutionState.model_validate(session_payload, context={"queue_read_projection": True})
 
 
@@ -360,7 +378,12 @@ class SessionQueueItem(BaseModel):
     )
 
     @classmethod
-    def queue_item_from_dict(cls, queue_item_dict: dict, *, hydrate_runtime: bool = True) -> "SessionQueueItem":
+    def queue_item_from_dict(
+        cls,
+        queue_item_dict: dict,
+        *,
+        hydrate_runtime: bool = True,
+    ) -> "SessionQueueItem":
         # must parse these manually
         session_json = queue_item_dict.get("session") if isinstance(queue_item_dict.get("session"), str) else None
         queue_item_dict["field_values"] = get_field_values(queue_item_dict)

@@ -4,7 +4,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Sequence
-from typing import Any, Optional, Union, cast
+from typing import Any, Literal, Optional, Union, cast
 
 from pydantic_core import to_jsonable_python
 
@@ -626,11 +626,53 @@ class SqliteSessionQueue(SessionQueueBase):
             return self._make_unreadable_queue_item(raw_queue_item, exc), False
 
     def _project_queue_item_for_read(self, raw_queue_item: dict[str, Any]) -> SessionQueueItem:
-        """Read queue metadata and response results without rebuilding execution runtime state."""
+        """Read queue metadata and response results without rebuilding runtime execution state."""
         try:
             return SessionQueueItem.queue_item_from_dict(raw_queue_item, hydrate_runtime=False)
         except (TypeError, ValueError) as exc:
             return self._make_unreadable_queue_item(raw_queue_item, exc)
+
+    def _get_queue_item_for_read(
+        self,
+        item_id: int,
+        *,
+        cursor: sqlite3.Cursor | None = None,
+        hydrate_runtime: bool = False,
+    ) -> SessionQueueItem:
+        """Read queue metadata and response results without rebuilding execution runtime state."""
+        if cursor is None:
+            with self._db.transaction() as transaction_cursor:
+                return self._get_queue_item_for_read(
+                    item_id, cursor=transaction_cursor, hydrate_runtime=hydrate_runtime
+                )
+
+        cursor.execute(
+            """--sql
+            SELECT
+                sq.*,
+                u.display_name AS user_display_name,
+                u.email AS user_email
+            FROM session_queue sq
+            LEFT JOIN users u ON sq.user_id = u.user_id
+            WHERE sq.item_id = ?
+            """,
+            (item_id,),
+        )
+        result = cast(Union[sqlite3.Row, None], cursor.fetchone())
+        if result is None:
+            raise SessionQueueItemNotFoundError(f"No queue item with id {item_id}")
+        raw_queue_item = dict(result)
+        if hydrate_runtime:
+            return self._hydrate_queue_item(raw_queue_item, quarantine=False)[0]
+        return self._project_queue_item_for_read(raw_queue_item)
+
+    def _get_queue_item_for_api(self, item_id: int, *, cursor: sqlite3.Cursor | None = None) -> SessionQueueItem:
+        """Read one queue row with either full runtime hydration or response projection."""
+        return self._get_queue_item_for_read(item_id, cursor=cursor, hydrate_runtime=False)
+
+    def _get_queue_item_for_retry(self, item_id: int, *, cursor: sqlite3.Cursor | None = None) -> SessionQueueItem:
+        """Read the graph and retry metadata with full runtime hydration."""
+        return self._get_queue_item_for_read(item_id, cursor=cursor, hydrate_runtime=True)
 
     def _quarantine_unreadable_queue_item(self, raw_queue_item: dict[str, Any], error: Exception) -> SessionQueueItem:
         """Fail a pending row whose runtime snapshot is newer than this worker can read.
@@ -779,6 +821,40 @@ class SqliteSessionQueue(SessionQueueBase):
         if result is None:
             return None
         return self._hydrate_queue_item(dict(result), quarantine=False)[0]
+
+    def _get_queue_item_by_status_for_api(
+        self, queue_id: str, status: Literal["pending", "in_progress"], origin_prefix: Optional[str]
+    ) -> Optional[SessionQueueItem]:
+        query = """--sql
+            SELECT
+                sq.*,
+                u.display_name as user_display_name,
+                u.email as user_email
+            FROM session_queue sq
+            LEFT JOIN users u ON sq.user_id = u.user_id
+            WHERE
+                sq.queue_id = ?
+                AND sq.status = ?
+            """
+        params: list[str] = [queue_id, status]
+        if origin_prefix is not None:
+            query += " AND sq.origin LIKE ?"
+            params.append(f"{origin_prefix}%")
+        if status == "pending":
+            query += " ORDER BY sq.priority DESC, sq.created_at ASC"
+        query += " LIMIT 1"
+        with self._db.transaction() as cursor:
+            cursor.execute(query, params)
+            result = cast(Union[sqlite3.Row, None], cursor.fetchone())
+        if result is None:
+            return None
+        return self._project_queue_item_for_read(dict(result))
+
+    def get_current_for_api(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
+        return self._get_queue_item_by_status_for_api(queue_id, "in_progress", origin_prefix)
+
+    def get_next_for_api(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
+        return self._get_queue_item_by_status_for_api(queue_id, "pending", origin_prefix)
 
     def _set_queue_item_status(
         self,
@@ -1504,6 +1580,9 @@ class SqliteSessionQueue(SessionQueueBase):
     def get_queue_item(self, item_id: int) -> SessionQueueItem:
         return self._get_queue_item_with_load_status(item_id)[0]
 
+    def get_queue_item_for_api(self, item_id: int) -> SessionQueueItem:
+        return self._get_queue_item_for_api(item_id)
+
     def save_queue_item_session(self, item_id: int, session: GraphExecutionState) -> None:
         with self._db.transaction() as cursor:
             # Use exclude_none so we don't end up with a bunch of nulls in the graph - this can cause validation errors
@@ -1904,7 +1983,7 @@ class SqliteSessionQueue(SessionQueueBase):
             params.append(limit + 1)
             cursor_.execute(query, params)
             results = cast(list[sqlite3.Row], cursor_.fetchall())
-        items = [self._project_queue_item_for_read(dict(result)) for result in results]
+        items = [self._hydrate_queue_item(dict(result), quarantine=False)[0] for result in results]
         has_more = False
         if len(items) > limit:
             # remove the extra item
@@ -1912,12 +1991,11 @@ class SqliteSessionQueue(SessionQueueBase):
             has_more = True
         return CursorPaginatedResults(items=items, limit=limit, has_more=has_more)
 
-    def list_all_queue_items(
+    def _list_all_queue_item_rows(
         self,
         queue_id: str,
         destination: Optional[str] = None,
-    ) -> list[SessionQueueItem]:
-        """Gets all queue items that match the given parameters"""
+    ) -> list[sqlite3.Row]:
         with self._db.transaction() as cursor:
             query = """--sql
                 SELECT
@@ -1943,9 +2021,25 @@ class SqliteSessionQueue(SessionQueueBase):
                 ;
                 """
             cursor.execute(query, params)
-            results = cast(list[sqlite3.Row], cursor.fetchall())
-        items = [self._project_queue_item_for_read(dict(result)) for result in results]
-        return items
+            return cast(list[sqlite3.Row], cursor.fetchall())
+
+    def list_all_queue_items(
+        self,
+        queue_id: str,
+        destination: Optional[str] = None,
+    ) -> list[SessionQueueItem]:
+        """Gets all queue items with fully rehydrated runtime sessions."""
+        results = self._list_all_queue_item_rows(queue_id=queue_id, destination=destination)
+        return [self._hydrate_queue_item(dict(result), quarantine=False)[0] for result in results]
+
+    def list_all_queue_items_for_api(
+        self,
+        queue_id: str,
+        destination: Optional[str] = None,
+    ) -> list[SessionQueueItem]:
+        """Gets response-shaped queue items without rebuilding runtime execution state."""
+        results = self._list_all_queue_item_rows(queue_id=queue_id, destination=destination)
+        return [self._project_queue_item_for_read(dict(result)) for result in results]
 
     def get_queue_item_ids(
         self,
@@ -2202,6 +2296,7 @@ class SqliteSessionQueue(SessionQueueBase):
             retried_user_ids: list[str] = []
             retried_item_ids_by_user: dict[str, list[int]] = {}
             seen_root_item_ids: set[int] = set()
+            hydrated_queue_items: dict[int, SessionQueueItem] = {}
             max_new_queue_items = self.__invoker.services.configuration.max_queue_size - self._get_current_queue_size(
                 queue_id
             )
@@ -2210,10 +2305,14 @@ class SqliteSessionQueue(SessionQueueBase):
                 return RetryItemsResult(queue_id=queue_id, retried_item_ids=[])
 
             for item_id in item_ids:
-                try:
-                    queue_item = self.get_queue_item(item_id)
-                except SessionQueueItemNotFoundError:
-                    continue
+                if item_id in hydrated_queue_items:
+                    queue_item = hydrated_queue_items[item_id]
+                else:
+                    try:
+                        queue_item = self._get_queue_item_for_retry(item_id, cursor=cursor)
+                    except SessionQueueItemNotFoundError:
+                        continue
+                    hydrated_queue_items[item_id] = queue_item
                 if queue_item.queue_id != queue_id:
                     continue
 
@@ -2225,7 +2324,11 @@ class SqliteSessionQueue(SessionQueueBase):
                     continue
                 seen_root_item_ids.add(root_item_id)
 
-                root_queue_item = self.get_queue_item(root_item_id)
+                if root_item_id in hydrated_queue_items:
+                    root_queue_item = hydrated_queue_items[root_item_id]
+                else:
+                    root_queue_item = self._get_queue_item_for_retry(root_item_id, cursor=cursor)
+                    hydrated_queue_items[root_item_id] = root_queue_item
                 if not root_queue_item._snapshot_readable:
                     continue
                 if root_queue_item.status not in ("failed", "canceled"):
@@ -2245,7 +2348,12 @@ class SqliteSessionQueue(SessionQueueBase):
                     if root_queue_item.workflow
                     else None
                 )
-                cloned_session = GraphExecutionState(graph=root_queue_item.session.graph)
+                # Validate the graph before dumping a fresh empty execution state. The full retry read above already
+                # rehydrated runtime state for contract-compatible validation and recovery semantics.
+                root_graph = Graph.model_validate(
+                    root_queue_item.session.graph.model_dump(mode="python", warnings=False), strict=False
+                )
+                cloned_session = GraphExecutionState(graph=root_graph)
                 cloned_session_json = json.dumps(dump_execution_state(cloned_session), default=to_jsonable_python)
 
                 retried_from_item_id = (
