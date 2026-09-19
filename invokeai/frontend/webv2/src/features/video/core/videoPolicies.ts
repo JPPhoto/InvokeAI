@@ -443,9 +443,7 @@ export const getVideoPromptPolicy = (
   return {
     negativeVisible: config.negativePrompt.visible,
     negativeUsedInGraph,
-    ...(config.negativePrompt.usage === 'cfg-gated'
-      ? { negativeHelpText: 'Used only when CFG is greater than 1.' }
-      : {}),
+    ...(config.negativePrompt.usage === 'cfg-gated' ? { negativeHelpTextKey: 'widgets.video.negativeCfgHelp' } : {}),
   };
 };
 
@@ -468,7 +466,8 @@ export interface VideoModelPolicy {
   prompt: {
     negativeVisible: boolean;
     negativeUsedInGraph: boolean;
-    negativeHelpText?: string;
+    /** Translation key for the negative prompt's inline help; absent when the field needs none. */
+    negativeHelpTextKey?: string;
   };
   /** Ref2VA reference caps; null unless the effective variant has a reference mode. */
   references: { maxVideos: number; maxImages: number; extend?: boolean } | null;
@@ -960,7 +959,8 @@ export interface VideoComponentSlotPolicy {
   label: string;
   modelTypes: readonly ModelTaxonomyType[];
   valueKind: 'component' | 'vae' | 'main';
-  helpText?: string;
+  /** Translation key for the slot's inline help. The core is UI-free, so the section resolves it. */
+  helpTextKey?: string;
   filter?: (candidate: ModelConfig, ctx: VideoComponentPolicyContext) => boolean;
   required?: (ctx: VideoComponentPolicyContext) => boolean;
   missingMessage?: string;
@@ -1062,6 +1062,12 @@ const isWanVaeForMain = (candidate: ModelConfig, ctx: VideoComponentPolicyContex
   return latentChannels === (isTi2v5b(ctx.model.variant) ? 48 : 16);
 };
 
+// Both spelled out as `…Key` properties so the translation-key scan sees them.
+const H3_DIFFUSERS_TEXT_ENCODER_HELP = {
+  optionalKey: 'widgets.video.componentSlots.h3TextEncoderOptionalHelp',
+  requiredKey: 'widgets.video.componentSlots.h3TextEncoderRequiredHelp',
+} as const;
+
 export const getVideoComponentSectionPolicy = (
   model: MainModelConfig | undefined,
   _settings: VideoSettings
@@ -1082,7 +1088,7 @@ export const getVideoComponentSectionPolicy = (
             {
               filter: (candidate: ModelConfig, ctx: VideoComponentPolicyContext) =>
                 isDiffusersMainForBase('wan')(candidate) && candidate.key !== ctx.model.key,
-              helpText: 'Select a Diffusers Wan model to provide VAE and text-encoder components.',
+              helpTextKey: 'widgets.video.componentSlots.wanComponentSourceHelp',
               key: 'componentSourceModel',
               label: 'Component source',
               modelTypes: ['main'],
@@ -1091,7 +1097,7 @@ export const getVideoComponentSectionPolicy = (
           ]),
       {
         filter: isWanVaeForMain,
-        helpText: 'Required unless a Diffusers component source is available.',
+        helpTextKey: 'widgets.video.componentSlots.wanOptionalWithSourceHelp',
         key: 'vae',
         label: 'VAE',
         missingMessage: 'Video needs a VAE for Wan models.',
@@ -1101,7 +1107,7 @@ export const getVideoComponentSectionPolicy = (
       },
       {
         filter: (candidate) => candidate.type === 'wan_t5_encoder',
-        helpText: 'Required unless a Diffusers component source is available.',
+        helpTextKey: 'widgets.video.componentSlots.wanOptionalWithSourceHelp',
         key: 'wanT5EncoderModel',
         label: 'Wan T5 Encoder',
         missingMessage: 'Video needs a Wan T5 Encoder for Wan models.',
@@ -1117,7 +1123,7 @@ export const getVideoComponentSectionPolicy = (
     if (config.cfg.lowNoiseVisible && model.format !== 'diffusers') {
       slots.push({
         filter: isWanLowNoiseExpertCandidate,
-        helpText: 'Optional second A14B expert. Without it the high-noise expert runs the whole schedule.',
+        helpTextKey: 'widgets.video.componentSlots.wanLowNoiseHelp',
         key: 'wanLowNoiseModel',
         label: 'Transformer (Low Noise)',
         modelTypes: ['main'],
@@ -1147,9 +1153,9 @@ export const getVideoComponentSectionPolicy = (
     return createComponentPolicy(componentsOnly, [
       {
         filter: (candidate) => candidate.type === 'qwen3_vl_encoder' && candidate.base === 'minimax-h3',
-        helpText: componentsOnly
-          ? 'Required: this install has no text-encoder weights, so the text encoder must come from a single-file Qwen3-VL checkpoint.'
-          : 'Optional single-file Qwen3-VL encoder used in place of the main model’s text encoder.',
+        helpTextKey: componentsOnly
+          ? H3_DIFFUSERS_TEXT_ENCODER_HELP.requiredKey
+          : H3_DIFFUSERS_TEXT_ENCODER_HELP.optionalKey,
         key: 'h3TextEncoderModel',
         label: 'Text encoder (single file)',
         missingMessage: `${model.name} is a components-only install — select a single-file Text encoder.`,
@@ -1164,8 +1170,7 @@ export const getVideoComponentSectionPolicy = (
     {
       filter: (candidate) =>
         candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'diffusers',
-      helpText:
-        'Required: a Diffusers MiniMax H3 install (full or components-only) provides the tokenizer, processor, and VAEs the single-file transformer does not carry.',
+      helpTextKey: 'widgets.video.componentSlots.h3ComponentSourceHelp',
       key: 'componentSourceModel',
       label: 'Model components',
       missingMessage: `${model.name} is a single-file transformer — select a Diffusers MiniMax H3 install under Model Components.`,
@@ -1175,8 +1180,7 @@ export const getVideoComponentSectionPolicy = (
     },
     {
       filter: (candidate) => candidate.type === 'qwen3_vl_encoder' && candidate.base === 'minimax-h3',
-      helpText:
-        'Required when the Model Components install is components-only (no text-encoder weights); a full install provides its own.',
+      helpTextKey: 'widgets.video.componentSlots.h3TextEncoderCheckpointHelp',
       key: 'h3TextEncoderModel',
       label: 'Text encoder (single file)',
       missingMessage:
@@ -1194,8 +1198,7 @@ export const getVideoComponentSectionPolicy = (
       ? [
           {
             filter: isH3HybridBaseCandidate,
-            helpText:
-              'Optional: an FL2VA transformer to run with this Ref2VA model’s AdaLN projections (the per-block time-conditioning layers) from the chosen block onward — FL2VA’s output quality, references still routed. Same file kind as the model (pruned with pruned).',
+            helpTextKey: 'widgets.video.componentSlots.h3HybridBaseHelp',
             key: 'h3HybridBaseModel',
             label: 'Hybrid quality base (FL2VA)',
             modelTypes: ['main'],
