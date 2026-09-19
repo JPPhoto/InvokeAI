@@ -20,6 +20,7 @@ from starlette.requests import ClientDisconnect
 
 from invokeai.app.api.auth_dependencies import CurrentMediaUserOrDefault, CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
+from invokeai.app.api.extract_metadata import extract_metadata_from_video
 from invokeai.app.api.routers._access import (
     assert_board_read_access as _assert_board_read_access,
 )
@@ -52,6 +53,7 @@ from invokeai.app.services.videos.videos_common import (
     VideoDTO,
     VideoUrlsDTO,
 )
+from invokeai.app.util.mp4_metadata import read_ftyp_major_brand
 from invokeai.app.util.video_ingest import VideoIngestError, ingest_media_to_mp4, probe_media_streams
 from invokeai.app.util.video_thumbnails import (
     VideoDecodeTimeoutError,
@@ -121,7 +123,8 @@ MAX_UPLOAD_REQUEST_SIZE = MAX_UPLOAD_SIZE + 10 * 1024 * 1024
 MAX_UPLOAD_METADATA_SIZE = 1024 * 1024
 # Global bound on concurrent video uploads — each in-flight upload holds one full-size copy
 # of the file in temp storage until probe/thumbnail/create finish with it, and a second (also
-# capped at MAX_UPLOAD_SIZE) while the ingest converter is writing its output.
+# capped at MAX_UPLOAD_SIZE) while the ingest converter is writing its output or, inside
+# create(), while the metadata remux writes its replacement next to the stored file.
 MAX_CONCURRENT_VIDEO_UPLOADS = 2
 # Per-user bound (multiuser mode only): keeps one tenant's slow uploads from holding
 # every global slot and starving the other users into 429s.
@@ -353,30 +356,10 @@ async def _stream_video_upload(request: Request, destination: BinaryIO) -> _Vide
 
 def _is_mp4_file(path: Path) -> bool:
     try:
-        with open(path, "rb") as video_file:
-            search_limit = min(path.stat().st_size, 64 * 1024)
-            position = 0
-            while position + 8 <= search_limit:
-                video_file.seek(position)
-                header = video_file.read(8)
-                box_size = int.from_bytes(header[:4], byteorder="big")
-                box_type = header[4:8]
-                header_size = 8
-                if box_size == 1:
-                    extended_size = video_file.read(8)
-                    if len(extended_size) != 8:
-                        return False
-                    box_size = int.from_bytes(extended_size, byteorder="big")
-                    header_size = 16
-                if box_size < header_size:
-                    return False
-                if box_type == b"ftyp":
-                    major_brand = video_file.read(4)
-                    return len(major_brand) == 4 and major_brand != b"qt  "
-                position += box_size
+        major_brand = read_ftyp_major_brand(path)
     except OSError:
         return False
-    return False
+    return major_brand is not None and major_brand != b"qt  "
 
 
 def _probe_decodable_video(path: Path) -> tuple[tuple[int, int, float, Optional[float]], Optional[PILImage.Image]]:
@@ -474,14 +457,33 @@ async def upload_video(
         tmp.close()
 
         upload_kind = upload.upload_kind
-        metadata = upload.metadata
-        if metadata is not None:
+        if upload.metadata is not None:
             try:
-                MetadataFieldValidator.validate_json(metadata)
+                MetadataFieldValidator.validate_json(upload.metadata)
             except ValidationError as e:
                 raise HTTPException(status_code=422, detail="Metadata must be a JSON object") from e
 
-        # Already-compliant H.264 MP4s pass through byte-identical (the historical path);
+        # An MP4 that InvokeAI produced carries its metadata, workflow and graph as keyed metadata, the way a
+        # PNG carries text chunks. Read them from the file as uploaded: the ingest remux below does not
+        # preserve keyed metadata. As for images, client-supplied metadata wins over the embedded copy, while
+        # workflow and graph are never client-overridable.
+        extracted = await run_in_threadpool(
+            extract_metadata_from_video,
+            tmp_path,
+            upload.metadata,
+            None,
+            None,
+            ApiDependencies.invoker.services.logger,
+        )
+        metadata = extracted.invokeai_metadata
+        if metadata is not None and len(metadata.encode("utf-8")) > MAX_UPLOAD_METADATA_SIZE:
+            # The form field is capped while it streams; an embedded record gets the same bound
+            # before it reaches the database. Workflow and graph legitimately run larger.
+            ApiDependencies.invoker.services.logger.info("Ignoring oversized metadata embedded in uploaded video")
+            metadata = None
+
+        # Already-compliant H.264 MP4s skip conversion (their only rewrite is the metadata
+        # remux inside create(), and only when there is a record to embed);
         # everything else — foreign containers, foreign codecs, audio-only files — is
         # normalized by the ingest converter. The conversion runs inside this upload's
         # concurrency slot: a long HEVC transcode holds one of MAX_CONCURRENT_VIDEO_UPLOADS
@@ -537,8 +539,8 @@ async def upload_video(
                     session_id=session_id,
                     board_id=board_id,
                     metadata=metadata,
-                    workflow=None,
-                    graph=None,
+                    workflow=extracted.invokeai_workflow,
+                    graph=extracted.invokeai_graph,
                     is_intermediate=is_intermediate,
                     user_id=current_user.user_id,
                 )

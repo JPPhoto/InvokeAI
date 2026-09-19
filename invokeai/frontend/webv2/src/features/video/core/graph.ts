@@ -18,6 +18,7 @@ import { getCompatibleDiffusersComponentSource } from '@features/generation/sett
 
 import type { VideoGenerationMode, VideoReferenceItem, VideoSettings, VideoSourceClip } from './types';
 
+import { MINIMAX_H3_FPS } from './dimensions';
 import { MINIMAX_H3_HYBRID_BLOCK_RANGE, resolveVideoMode } from './settings';
 import { getVideoDimensions, getVideoModelPolicy, getVideoValidationReasons } from './videoPolicies';
 
@@ -460,12 +461,14 @@ const buildWanVideoGraph = (settings: VideoSettings, model: MainModelConfig): Ba
       // the one user-settable Wan parameter recall could never restore.
       fps: extendParts && settings.sourceVideo ? Math.round(settings.sourceVideo.fps) : settings.fps,
       ...(policy.ui.cfgLowNoiseVisible && settings.cfgScaleLowNoise !== null
-        ? { guidance_scale_low_noise: settings.cfgScaleLowNoise }
+        ? { wan_guidance_scale_low_noise: settings.cfgScaleLowNoise }
         : {}),
       ...(settings.vae ? { vae: settings.vae } : {}),
-      ...(settings.wanT5EncoderModel ? { wan_t5_encoder: settings.wanT5EncoderModel } : {}),
+      ...(settings.wanT5EncoderModel ? { wan_t5_encoder_model: settings.wanT5EncoderModel } : {}),
       ...(sourceModel ? { wan_component_source: sourceModel } : {}),
-      ...(isSingleFileMain && settings.wanLowNoiseModel ? { transformer_low_noise: settings.wanLowNoiseModel } : {}),
+      ...(isSingleFileMain && settings.wanLowNoiseModel
+        ? { wan_transformer_low_noise: settings.wanLowNoiseModel }
+        : {}),
     },
     generationMode: WAN_GENERATION_MODES[mode] ?? 'wan_t2v',
     graph,
@@ -662,6 +665,8 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
 
   const metadata = addVideoMetadata({
     extras: {
+      // H3 always delivers its fixed rate; recording it keeps the record self-describing.
+      fps: MINIMAX_H3_FPS,
       ...(componentSource ? { minimax_h3_component_source: componentSource } : {}),
       ...(settings.h3TextEncoderModel ? { minimax_h3_text_encoder_model: settings.h3TextEncoderModel } : {}),
       ...(hybridBase

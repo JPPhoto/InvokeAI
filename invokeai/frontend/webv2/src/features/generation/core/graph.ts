@@ -1434,11 +1434,11 @@ const buildWanGraph = (
   addEdge(graph, seed, 'value', denoise, 'seed');
   addEdge(graph, denoise, 'latents', output, 'latents');
   addMetadata(graph, output, settings, model, 'wan_txt2img', projectSettings, {
-    guidance_scale_low_noise: settings.wanGuidanceScaleLowNoise ?? undefined,
-    transformer_low_noise: settings.wanLowNoiseModel ?? undefined,
     vae: vaeModel ?? undefined,
     wan_component_source: sourceModel,
-    wan_t5_encoder: wanT5EncoderModel ?? undefined,
+    wan_guidance_scale_low_noise: settings.wanGuidanceScaleLowNoise ?? undefined,
+    wan_t5_encoder_model: wanT5EncoderModel ?? undefined,
+    wan_transformer_low_noise: settings.wanLowNoiseModel ?? undefined,
   });
 
   return graph;
