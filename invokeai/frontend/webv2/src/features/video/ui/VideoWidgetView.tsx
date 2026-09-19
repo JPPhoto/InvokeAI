@@ -504,7 +504,7 @@ export const VideoWidgetView = () => {
       <VideoPromptFields
         loras={values.loras}
         model={values.model}
-        negativeHelpText={policy.prompt.negativeHelpText}
+        negativeHelpText={policy.prompt.negativeHelpTextKey ? t(policy.prompt.negativeHelpTextKey) : undefined}
         negativePrompt={values.negativePrompt}
         negativePromptEnabled={values.negativePromptEnabled}
         negativePromptHeightPx={values.negativePromptHeightPx}
