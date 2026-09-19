@@ -24,13 +24,25 @@ import { SEED_MAX } from '@platform/core/seed';
 
 /**
  * Pure mapping from a video's recorded `core_metadata` to a Video-panel
- * patch — the sibling of `imageRecall.ts`. Model resolution is by KEY against
- * the installed catalog; an uninstalled model skips the model field and
+ * patch — the sibling of `imageRecall.ts`. Models resolve against the
+ * installed catalog by key, then hash, then name+base+type (see
+ * `resolveRecordedModel`); an unresolvable model skips the model field and
  * everything downstream validates against the current model instead. The
  * conditioning mode is never recalled directly: the panel derives it from
  * which media fields are filled, so recall restores the media and lets the
  * mode fall out.
  */
+
+/**
+ * Canonical record key → the names earlier writers used for the same value.
+ * The record format is versioned (`metadata_version`); these are read-only
+ * aliases for pre-1.0 records and are never written again.
+ */
+const METADATA_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  wan_guidance_scale_low_noise: ['guidance_scale_low_noise'],
+  wan_t5_encoder_model: ['wan_t5_encoder'],
+  wan_transformer_low_noise: ['transformer_low_noise'],
+};
 
 /** The generation_mode strings the video graphs stamp; anything else is not video metadata. */
 const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
@@ -83,32 +95,35 @@ export interface VideoRecallResult {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-const getRecord = (value: unknown, key: string): Record<string, unknown> | null => {
-  if (!isRecord(value)) {
-    return null;
+/** The recorded value under `key`, or under the first present alias of it; `undefined` when absent. */
+const readKey = (metadata: unknown, key: string): unknown => {
+  if (!isRecord(metadata)) {
+    return undefined;
   }
 
-  const child = value[key];
+  for (const candidate of [key, ...(METADATA_KEY_ALIASES[key] ?? [])]) {
+    if (candidate in metadata) {
+      return metadata[candidate];
+    }
+  }
+
+  return undefined;
+};
+
+const getRecord = (value: unknown, key: string): Record<string, unknown> | null => {
+  const child = readKey(value, key);
 
   return isRecord(child) ? child : null;
 };
 
 const getString = (metadata: unknown, key: string): string | null => {
-  if (!isRecord(metadata)) {
-    return null;
-  }
-
-  const value = metadata[key];
+  const value = readKey(metadata, key);
 
   return typeof value === 'string' ? value : null;
 };
 
 const getNullableString = (metadata: unknown, key: string): string | null | undefined => {
-  if (!isRecord(metadata)) {
-    return undefined;
-  }
-
-  const value = metadata[key];
+  const value = readKey(metadata, key);
 
   if (value === null) {
     return null;
@@ -118,11 +133,7 @@ const getNullableString = (metadata: unknown, key: string): string | null | unde
 };
 
 const getNumber = (metadata: unknown, key: string): number | null => {
-  if (!isRecord(metadata)) {
-    return null;
-  }
-
-  const value = metadata[key];
+  const value = readKey(metadata, key);
 
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 };
@@ -145,20 +156,71 @@ export const isVideoGenerationMetadata = (metadata: unknown): boolean => {
   return mode !== null && VIDEO_GENERATION_MODE_IDS.has(mode);
 };
 
-const getMetadataModelKey = (metadata: unknown, key: string): string | null => {
-  const model = getRecord(metadata, key);
+/** A recorded `ModelIdentifier` — `{ key, hash, name, base, type }` — with every field optional on read. */
+interface RecordedModelRef {
+  key: string | null;
+  hash: string | null;
+  name: string | null;
+  base: string | null;
+  type: string | null;
+}
 
-  return typeof model?.key === 'string' ? model.key : null;
-};
-
-const getSupportedVideoMetadataModel = (metadata: unknown, models: readonly ModelConfig[]): MainModelConfig | null => {
-  const modelKey = getMetadataModelKey(metadata, 'model');
-
-  if (!modelKey) {
+const toRecordedModelRef = (value: unknown): RecordedModelRef | null => {
+  if (!isRecord(value)) {
     return null;
   }
 
-  const installed = models.find((model) => model.key === modelKey);
+  const field = (name: string) => (typeof value[name] === 'string' ? (value[name] as string) : null);
+  const ref: RecordedModelRef = {
+    base: field('base'),
+    hash: field('hash'),
+    key: field('key'),
+    name: field('name'),
+    type: field('type'),
+  };
+
+  // Only a ref that at least one rung of `resolveRecordedModel` can act on counts as recorded;
+  // anything less would advertise a recall that can never resolve.
+  return ref.key || ref.hash || (ref.name && ref.base && ref.type) ? ref : null;
+};
+
+const getMetadataModelRef = (metadata: unknown, key: string): RecordedModelRef | null =>
+  toRecordedModelRef(getRecord(metadata, key));
+
+/**
+ * The installed catalog entry a recorded model refers to. Keys are minted per
+ * install, so a record that travelled with a downloaded file names keys this
+ * catalog has never seen; the hash is the content identity and resolves the
+ * same weights wherever they are installed. Name+base+type is the last
+ * resort for records without a hash (or a re-quantized copy), and the only
+ * step that can pick a different file of the same model.
+ */
+const resolveRecordedModel = <T extends ModelConfig>(ref: RecordedModelRef | null, models: readonly T[]): T | null => {
+  if (!ref) {
+    return null;
+  }
+
+  const byKey = ref.key ? models.find((model) => model.key === ref.key) : undefined;
+  if (byKey) {
+    return byKey;
+  }
+
+  const byHash = ref.hash ? models.find((model) => model.hash === ref.hash) : undefined;
+  if (byHash) {
+    return byHash;
+  }
+
+  if (ref.name && ref.base && ref.type) {
+    return (
+      models.find((model) => model.name === ref.name && model.base === ref.base && model.type === ref.type) ?? null
+    );
+  }
+
+  return null;
+};
+
+const getSupportedVideoMetadataModel = (metadata: unknown, models: readonly ModelConfig[]): MainModelConfig | null => {
+  const installed = resolveRecordedModel(getMetadataModelRef(metadata, 'model'), models);
 
   return installed && isSupportedVideoModel(installed) ? (installed as MainModelConfig) : null;
 };
@@ -207,28 +269,30 @@ export const getRecallableMediaNames = (
   };
 };
 
-const getMetadataLoras = (metadata: unknown): { key: string; weight: number }[] => {
+const getMetadataLoras = (metadata: unknown): { model: RecordedModelRef; weight: number }[] => {
   if (!isRecord(metadata) || !Array.isArray(metadata.loras)) {
     return [];
   }
 
   return metadata.loras.flatMap((entry) => {
-    if (!isRecord(entry) || !isRecord(entry.model) || typeof entry.model.key !== 'string') {
+    const model = isRecord(entry) ? toRecordedModelRef(entry.model) : null;
+
+    if (!model) {
       return [];
     }
 
     const weight = typeof entry.weight === 'number' && Number.isFinite(entry.weight) ? entry.weight : 1;
 
-    return [{ key: entry.model.key, weight }];
+    return [{ model, weight }];
   });
 };
 
-/** Metadata component slot → widget-values key, with the recorded value's key resolved against the catalog. */
+/** Metadata component slot → widget-values key, with the recorded model resolved against the catalog. */
 const VIDEO_COMPONENT_METADATA_KEYS = [
   ['vae', 'vae'],
-  ['wan_t5_encoder', 'wanT5EncoderModel'],
+  ['wan_t5_encoder_model', 'wanT5EncoderModel'],
   ['wan_component_source', 'componentSourceModel'],
-  ['transformer_low_noise', 'wanLowNoiseModel'],
+  ['wan_transformer_low_noise', 'wanLowNoiseModel'],
   ['minimax_h3_transformer_model', 'h3TransformerModel'],
   ['minimax_h3_component_source', 'componentSourceModel'],
   ['minimax_h3_text_encoder_model', 'h3TextEncoderModel'],
@@ -311,7 +375,7 @@ export const getVideoRecallCapabilities = (metadata: unknown): VideoRecallCapabi
   const media = getRecallableMediaNames(metadata);
   const hasNonSeed =
     prompts ||
-    getMetadataModelKey(metadata, 'model') !== null ||
+    getMetadataModelRef(metadata, 'model') !== null ||
     getInteger(metadata, 'num_frames') !== null ||
     getInteger(metadata, 'steps') !== null ||
     getNumber(metadata, 'cfg_scale') !== null ||
@@ -496,7 +560,7 @@ export const buildVideoRecallSettings = ({
   }
 
   const cfgScale = getNumber(metadata, 'cfg_scale');
-  const cfgScaleLowNoise = getNumber(metadata, 'guidance_scale_low_noise');
+  const cfgScaleLowNoise = getNumber(metadata, 'wan_guidance_scale_low_noise');
   const policy = getVideoModelPolicy(model, values);
 
   if (policy.ui.cfgVisible && cfgScale !== null && cfgScale >= 1) {
@@ -514,8 +578,8 @@ export const buildVideoRecallSettings = ({
 
   const fps = getInteger(metadata, 'fps');
 
-  // Wan records the delivered frame rate (H3 is fixed at 24 and records
-  // none). Recalling it into an extend-mode panel is harmless: the fps field
+  // Wan records the delivered frame rate (H3 records its fixed 24, which its
+  // policy never lets the panel edit). Recalling it into an extend-mode panel is harmless: the fps field
   // is display-only there and the compiled graph re-inherits the clip's rate.
   if (policy.fps.editable && fps !== null && fps >= 1 && fps <= 120) {
     if (fps !== values.fps) {
@@ -537,13 +601,7 @@ export const buildVideoRecallSettings = ({
   let hybridBaseRecalled = false;
 
   for (const [metadataKey, valuesKey] of VIDEO_COMPONENT_METADATA_KEYS) {
-    const recordedKey = getMetadataModelKey(metadata, metadataKey);
-
-    if (!recordedKey) {
-      continue;
-    }
-
-    const installed = models.find((candidate) => candidate.key === recordedKey);
+    const installed = resolveRecordedModel(getMetadataModelRef(metadata, metadataKey), models);
 
     if (installed) {
       values = { ...values, [valuesKey]: installed };
@@ -620,7 +678,7 @@ export const buildVideoRecallSettings = ({
 
   const recordedLoras = getMetadataLoras(metadata);
   const resolvedLoras = recordedLoras.flatMap((entry) => {
-    const installed = models.find((candidate) => candidate.key === entry.key);
+    const installed = resolveRecordedModel(entry.model, models);
 
     return installed && isLoraModelConfig(installed) && isLoraCompatibleWithModel(installed, model)
       ? [{ isEnabled: true, model: installed as LoraModelConfig, weight: entry.weight }]

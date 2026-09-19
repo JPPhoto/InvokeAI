@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from invokeai.app.api.extract_metadata_from_image import ExtractedMetadata, extract_metadata_from_image
+from invokeai.app.api.extract_metadata import ExtractedMetadata, extract_metadata_from_image
 
 
 @pytest.fixture
@@ -46,7 +46,7 @@ def test_extract_valid_metadata_from_image(mock_logger, valid_metadata, valid_wo
 
             # Assert correct calls to validators
             mock_workflow_validate.assert_called_once_with(valid_workflow)
-            # TODO(psyche): The extract_metadata_from_image does not validate the graph correctly. See note in `extract_metadata_from_image.py`.
+            # TODO(psyche): The extract_metadata_from_image does not validate the graph correctly. See note in `extract_metadata.py`.
             # Skipping this.
             # _mock_graph_validate.assert_called_once_with(valid_graph)
 
@@ -221,3 +221,89 @@ def test_empty_string_overrides_do_not_fall_back_to_image_metadata(
     assert result.invokeai_metadata is None
     assert result.invokeai_workflow is None
     assert result.invokeai_graph is None
+
+
+# --- MP4 sources -----------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def tagged_mp4(tmp_path_factory: pytest.TempPathFactory):
+    """A real MP4 carrying the three keys the way DiskVideoFileStorage writes them."""
+    import numpy as np
+
+    from invokeai.app.util.mp4_metadata import write_mp4_tags
+    from invokeai.app.util.video_encoding import make_mp4_writer
+
+    folder = tmp_path_factory.mktemp("tagged")
+    plain = folder / "plain.mp4"
+    writer = make_mp4_writer(plain, fps=8.0)
+    try:
+        for _ in range(2):
+            writer.append_data(np.zeros((16, 16, 3), dtype=np.uint8))
+    finally:
+        writer.close()
+    tagged = folder / "tagged.mp4"
+    tags = {
+        "invokeai_metadata": json.dumps({"seed": 42, "generation_mode": "wan_t2v"}),
+        "invokeai_workflow": json.dumps(MINIMAL_WORKFLOW),
+        "invokeai_graph": json.dumps({"nodes": {}, "edges": []}),
+    }
+    write_mp4_tags(plain, tagged, tags)
+    return tagged, plain, tags
+
+
+MINIMAL_WORKFLOW = {
+    "name": "wf",
+    "author": "",
+    "description": "",
+    "version": "",
+    "contact": "",
+    "tags": "",
+    "notes": "",
+    "exposedFields": [],
+    "meta": {"version": "3.0.0", "category": "user"},
+    "nodes": [],
+    "edges": [],
+    "form": {"elements": {}, "rootElementId": "root"},
+}
+
+
+def test_extract_from_tagged_video_returns_the_embedded_strings(mock_logger, tagged_mp4):
+    """Through the real workflow validator: the video entry point is not mocked."""
+    from invokeai.app.api.extract_metadata import extract_metadata_from_video
+
+    tagged, _plain, tags = tagged_mp4
+    result = extract_metadata_from_video(tagged, None, None, None, mock_logger)
+
+    assert result == ExtractedMetadata(
+        invokeai_metadata=tags["invokeai_metadata"],
+        invokeai_workflow=tags["invokeai_workflow"],
+        invokeai_graph=tags["invokeai_graph"],
+    )
+
+
+def test_extract_from_video_prefers_the_client_metadata_over_the_embedded_copy(mock_logger, tagged_mp4):
+    from invokeai.app.api.extract_metadata import extract_metadata_from_video
+
+    tagged, _plain, tags = tagged_mp4
+    override = '{"seed": 7}'
+    result = extract_metadata_from_video(tagged, override, None, None, mock_logger)
+
+    assert result.invokeai_metadata == override
+    # Workflow and graph still come from the file.
+    assert result.invokeai_workflow == tags["invokeai_workflow"]
+    assert result.invokeai_graph == tags["invokeai_graph"]
+
+
+def test_extract_from_untagged_or_non_mp4_video_is_all_none(mock_logger, tagged_mp4, tmp_path):
+    from invokeai.app.api.extract_metadata import extract_metadata_from_video
+
+    _tagged, plain, _tags = tagged_mp4
+    assert extract_metadata_from_video(plain, None, None, None, mock_logger) == ExtractedMetadata(None, None, None)
+
+    garbage = tmp_path / "garbage.mp4"
+    garbage.write_bytes(b"\x00\x00\x00\x18ftypmp42 not a real mp4")
+    assert extract_metadata_from_video(garbage, None, None, None, mock_logger) == ExtractedMetadata(None, None, None)
+
+    missing = tmp_path / "missing.mp4"
+    assert extract_metadata_from_video(missing, "{}", None, None, mock_logger) == ExtractedMetadata("{}", None, None)

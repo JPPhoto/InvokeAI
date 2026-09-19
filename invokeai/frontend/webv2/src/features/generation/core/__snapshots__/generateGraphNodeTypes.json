@@ -616,7 +616,7 @@
         ],
         "vae": [],
         "wan_component_source": [],
-        "wan_t5_encoder": [],
+        "wan_t5_encoder_model": [],
         "width": [
           1024,
           512,
