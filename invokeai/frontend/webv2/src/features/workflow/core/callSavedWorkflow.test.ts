@@ -424,3 +424,30 @@ describe('Call Saved Workflow dynamic fields', () => {
     ).toBe(false);
   });
 });
+
+describe('Call Saved Workflow labels across a reload', () => {
+  // Consequence of the dropped `labelOverride`: on a parent whose dynamic
+  // templates were never persisted, the first reconcile after a reload resets
+  // the user's label to the child's generated one, and the library autosaver
+  // then writes that loss back with no user action.
+  it('keeps a user label when a template-less parent is saved and reloaded', () => {
+    const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
+
+    callNode.id = 'call-1';
+    callNode.data.inputs[dynamicFieldName('a')] = {
+      label: 'My Addend',
+      labelOverride: true,
+      name: dynamicFieldName('a'),
+      value: 99,
+    };
+
+    const reloaded = parseWorkflowJson(
+      serializeWorkflowJson({ ...createProjectGraph('legacy-parent'), nodes: [callNode] })
+    ).document;
+    const fields = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates);
+    const synced = syncCallSavedWorkflowFields(reloaded, callNode.id, fields, []);
+    const node = synced.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
+
+    expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({ label: 'My Addend', value: 99 });
+  });
+});

@@ -1,3 +1,4 @@
+import { parseOpenApiToTemplates } from '@features/workflow/data/templates';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { FieldInputTemplate, InvocationTemplate, InvocationTemplatesSnapshot, ProjectGraphState } from './types';
@@ -810,5 +811,82 @@ describe('seed inputs', () => {
     expect(getWorkflowFieldSeedMode({})).toBe('fixed');
     expect(getWorkflowFieldSeedMode({ seedMode: 'shuffle' as never })).toBe('fixed');
     expect(getWorkflowFieldSeedMode({ seedMode: 'decrement' })).toBe('decrement');
+  });
+});
+
+describe('integer Literal enum values in the compiled graph', () => {
+  const literalEnumSchema = {
+    components: {
+      schemas: {
+        IntegerOutput: {
+          class: 'output',
+          properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+          type: 'object',
+        },
+        MaxSeqLenInvocation: {
+          class: 'invocation',
+          output: { $ref: '#/components/schemas/IntegerOutput' },
+          properties: {
+            max_seq_len: {
+              default: 512,
+              enum: [256, 512],
+              field_kind: 'input',
+              orig_required: false,
+              title: 'Max Seq Length',
+              type: 'integer',
+            },
+            type: { default: 'max_seq_len_invocation' },
+          },
+          title: 'MaxSeqLen',
+          type: 'object',
+        },
+      },
+    },
+  };
+
+  // End-to-end companion to the template test: whatever shape the template
+  // takes, the value that reaches the backend has to be the number the
+  // `Literal[256, 512]` annotation accepts.
+  it('sends a numeric Literal enum value', () => {
+    const parsedTemplates = parseOpenApiToTemplates(literalEnumSchema);
+    const parsedTemplate = parsedTemplates.max_seq_len_invocation;
+
+    if (!parsedTemplate) {
+      throw new Error('fixture template was not parsed');
+    }
+
+    const node = buildInvocationNode(parsedTemplate, { x: 0, y: 0 });
+    const doc = projectGraphReducer(createProjectGraph('literal-enum'), { node, type: 'addNode' });
+
+    expect(compileProjectGraph(doc, parsedTemplates).backendGraph?.nodes[node.id]).toMatchObject({
+      max_seq_len: 512,
+    });
+  });
+
+  // The default is only half the wire path: whatever the field widget offers
+  // has to compile to a number too, otherwise picking an option from the
+  // dropdown reintroduces the rejected string.
+  it('sends a numeric value for the option the field widget offers', () => {
+    const parsedTemplates = parseOpenApiToTemplates(literalEnumSchema);
+    const parsedTemplate = parsedTemplates.max_seq_len_invocation;
+    const firstOption = parsedTemplate?.inputs.max_seq_len?.options?.[0];
+
+    if (!parsedTemplate || firstOption === undefined) {
+      throw new Error('fixture template was not parsed');
+    }
+
+    const node = buildInvocationNode(parsedTemplate, { x: 0, y: 0 });
+    let doc = projectGraphReducer(createProjectGraph('literal-enum-pick'), { node, type: 'addNode' });
+
+    doc = projectGraphReducer(doc, {
+      fieldName: 'max_seq_len',
+      nodeId: node.id,
+      type: 'setFieldValue',
+      value: firstOption,
+    });
+
+    expect(compileProjectGraph(doc, parsedTemplates).backendGraph?.nodes[node.id]).toMatchObject({
+      max_seq_len: 256,
+    });
   });
 });

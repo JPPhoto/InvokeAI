@@ -137,3 +137,17 @@ describe('saved workflow detail query policy', () => {
     }
   });
 });
+
+describe('detail queries built without a fetch', () => {
+  // React Query builds a query during render even when the observer is
+  // `enabled: false`, and a cancelled fetch reverts to the same state. Picking
+  // a workflow that is already in the picker list therefore leaves the detail
+  // query pending/idle with no data and nobody fetching it; with
+  // `gcTime: Infinity` nothing evicts it either, so the node is pinned at
+  // 'loading' and Invoke stays disabled until a page reload.
+  it('fetches a query that was built but never fetched', () => {
+    expect(
+      shouldFetchSavedWorkflowDetail({ state: { fetchStatus: 'idle', isInvalidated: false, status: 'pending' } })
+    ).toBe(true);
+  });
+});

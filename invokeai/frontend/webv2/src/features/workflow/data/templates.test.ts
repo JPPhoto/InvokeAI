@@ -332,3 +332,78 @@ describe('parseFieldType', () => {
     expect(parseFieldType('nonsense')).toBeNull();
   });
 });
+
+describe('integer Literal enum templates', () => {
+  // The backend types these fields as `Literal[256, 512]`, so the template
+  // default has to stay numeric: pydantic rejects the string "512" with
+  // `literal_error`. Both shapes below are taken from shipped schemas, and
+  // they reach the default through different branches.
+  it('keeps a numeric Literal default numeric', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+          MaxSeqLenInvocation: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              max_seq_len: {
+                default: 512,
+                enum: [256, 512],
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Max Seq Length',
+                type: 'integer',
+              },
+              type: { default: 'max_seq_len_invocation' },
+            },
+            title: 'MaxSeqLen',
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.max_seq_len_invocation?.inputs.max_seq_len?.default).toBe(512);
+  });
+
+  // `flux_text_encoder.t5_max_seq_len` is `Optional[Literal[256, 512]]` and
+  // required, so its schema default is null and the template falls back to the
+  // first option instead of the `String(property.default)` branch above. Legacy
+  // resolves the same fallback to a number.
+  it('keeps a nullable Literal fallback default numeric', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+          NullableMaxSeqLenInvocation: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              t5_max_seq_len: {
+                anyOf: [{ enum: [256, 512], type: 'integer' }, { type: 'null' }],
+                default: null,
+                field_kind: 'input',
+                orig_required: true,
+                title: 'T5 Max Seq Length',
+              },
+              type: { default: 'nullable_max_seq_len_invocation' },
+            },
+            title: 'NullableMaxSeqLen',
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.nullable_max_seq_len_invocation?.inputs.t5_max_seq_len?.default).toBe(256);
+  });
+});

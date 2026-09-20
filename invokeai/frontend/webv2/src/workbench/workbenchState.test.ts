@@ -3437,6 +3437,67 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       expect(readNodeSeed(state)).toBe(48);
     });
 
+    it('omits the embedded workflow when the backend would reject it', () => {
+      // `WorkflowWithoutID` rejects more than one `workflow_return` node, and
+      // the batch is validated before the enqueue route body, so attaching
+      // such a workflow turns the whole run into a 422. Legacy validates first
+      // and sends no workflow rather than failing the run.
+      const returnTemplate = {
+        category: 'workflow',
+        classification: 'stable',
+        description: '',
+        inputs: {},
+        nodePack: 'invokeai',
+        outputType: 'workflow_return_output',
+        outputs: {},
+        tags: [],
+        title: 'Workflow Return',
+        type: 'workflow_return',
+        useCache: true,
+        version: '1.0.0',
+      };
+      let state = primeWorkflow(42, 'fixed');
+
+      workflowTemplatesMock.snapshot = {
+        error: null,
+        status: 'loaded',
+        templates: { noise: seedTemplate, workflow_return: returnTemplate },
+      };
+
+      for (const id of ['return-1', 'return-2']) {
+        state = workbenchReducer(state, {
+          action: {
+            node: {
+              data: {
+                inputs: {},
+                isIntermediate: true,
+                isOpen: true,
+                label: '',
+                nodePack: 'invokeai',
+                notes: '',
+                type: 'workflow_return',
+                useCache: true,
+                version: '1.0.0',
+              },
+              id,
+              position: { x: 0, y: 0 },
+              type: 'invocation',
+            },
+            type: 'addNode',
+          },
+          type: 'applyProjectGraphAction',
+        });
+      }
+
+      const submission = readSubmission(submitWorkflow(state));
+
+      // `kind` guards the assertion below: a graph that fails to compile also
+      // yields an object with no `workflow` key, which would pass for the
+      // wrong reason.
+      expect(submission).toMatchObject({ kind: 'workflow' });
+      expect(submission).not.toHaveProperty('workflow');
+    });
+
     it('holds a fixed seed as a graph constant and repeats the graph for every run', () => {
       // Generate's own iteration count no longer leaks into workflow runs.
       const state = submitWorkflow(

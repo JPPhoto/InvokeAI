@@ -425,3 +425,28 @@ describe('seed modes in workflow JSON', () => {
     expect(degraded?.type === 'invocation' && degraded.data.inputs.prompt).not.toHaveProperty('seedMode');
   });
 });
+
+describe('field label overrides', () => {
+  // `serializeInvocationNode` writes `labelOverride` (it structuredClones the
+  // node data) but `parseWorkflowJson` rebuilds each instance from an explicit
+  // field list that omits it, so the flag is written and never read back.
+  it('round-trips an explicit label override', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    let doc = createProjectGraph('label-override');
+
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+    doc = projectGraphReducer(doc, {
+      fieldName: 'prompt',
+      label: 'My label',
+      nodeId: node.id,
+      type: 'setFieldLabel',
+    });
+
+    const reloaded = parseWorkflowJson(serializeWorkflowJson(doc)).document.nodes[0];
+
+    expect(reloaded?.type === 'invocation' ? reloaded.data.inputs.prompt : undefined).toMatchObject({
+      label: 'My label',
+      labelOverride: true,
+    });
+  });
+});
