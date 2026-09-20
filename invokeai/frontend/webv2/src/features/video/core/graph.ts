@@ -16,12 +16,23 @@ import {
 } from '@features/generation/graph';
 import { getCompatibleDiffusersComponentSource } from '@features/generation/settings';
 
-import type { VideoGenerationMode, VideoReferenceItem, VideoSettings, VideoSourceClip } from './types';
+import type {
+  Ltx2TargetResolution,
+  VideoGenerationMode,
+  VideoReferenceItem,
+  VideoSettings,
+  VideoSourceClip,
+} from './types';
 import type { SupportedVideoBase } from './videoPolicies';
 
-import { MINIMAX_H3_FPS } from './dimensions';
+import { getLtx2StageCanvases, isLtx2TwoStage, MINIMAX_H3_FPS } from './dimensions';
 import { MINIMAX_H3_HYBRID_BLOCK_RANGE, resolveVideoMode } from './settings';
-import { getVideoDimensions, getVideoModelPolicy, getVideoValidationReasons } from './videoPolicies';
+import {
+  getVideoDimensions,
+  getVideoModelPolicy,
+  getVideoTargetResolution,
+  getVideoValidationReasons,
+} from './videoPolicies';
 
 /**
  * Video graph compilation: one builder per model family, mirroring the shape
@@ -747,6 +758,23 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     throw new Error('LTX-2 needs its Gemma-4 text encoder selected under Model Components.');
   }
 
+  // A two-stage preset generates at half the canvas and refines an upscaled latent, so the base
+  // pass runs at `stages.base` and everything downstream of the upscaler at `stages.final`. Single
+  // stage returns the same canvas twice, which is what lets one code path build both.
+  // The same coercion `getVideoDimensions` applied: a settings record can hold a preset this model
+  // does not offer, and reading the raw value here would describe a different run than the canvas
+  // above was resolved from -- an unknown preset has no short edge, which makes every dimension NaN.
+  const targetResolution = getVideoTargetResolution(model, settings.targetResolution) as Ltx2TargetResolution;
+  const stages = getLtx2StageCanvases(dimensions.width, dimensions.height, targetResolution);
+
+  if (!stages) {
+    throw new Error('Video dimensions could not be derived from the current settings.');
+  }
+
+  // Asked of the preset rather than recovered by comparing the two canvases: equal widths would say
+  // "one stage" for a preset that is two, and NaN widths compare unequal, so a degenerate canvas
+  // would claim to be two.
+  const twoStage = isLtx2TwoStage(targetResolution);
   const graph: BackendGraphContract = { edges: [], id: createId('ltx2_video_graph'), nodes: {} };
   const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
   const modelLoader = addNode(graph, {
@@ -788,7 +816,7 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
 
   const denoise = addNode(graph, {
     fps: settings.fps,
-    height: dimensions.height,
+    height: stages.base.height,
     id: 'denoise_latents',
     num_frames: settings.numFrames,
     // 'auto' rather than the panel's own reading of the variant: the loader
@@ -797,7 +825,7 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     schedule: 'auto',
     steps: settings.steps,
     type: 'ltx2_denoise',
-    width: dimensions.width,
+    width: stages.base.width,
     ...guidance,
   });
 
@@ -813,16 +841,75 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       throw new Error('A first frame is required for image-to-video generation.');
     }
 
+    // The base pass's canvas: the refine pass inherits the anchored first frame through the
+    // latents it is handed, and an encode made here could not be re-applied at twice the size.
     const imageConditioning = addNode(graph, {
-      height: dimensions.height,
+      height: stages.base.height,
       id: 'image_conditioning',
       image: toImageField(settings.firstFrameImage),
       type: 'ltx2_image_conditioning',
-      width: dimensions.width,
+      width: stages.base.width,
     });
 
     addEdge(graph, modelLoader, 'vae', imageConditioning, 'vae');
     addEdge(graph, imageConditioning, 'video_conditioning', denoise, 'video_conditioning');
+  }
+
+  // The pass whose latents are decoded: the refine pass when there is one. Audio bypasses the
+  // upscaler -- it has no spatial extent -- but still goes through the refine denoise, which
+  // re-noises both modalities to one level so the transformer reads a single pair of timesteps.
+  let finalDenoise = denoise;
+
+  if (twoStage) {
+    const upsample = addNode(graph, { id: 'latent_upsample', type: 'ltx2_latent_upsample' });
+
+    addEdge(graph, denoise, 'video_latents', upsample, 'video_latents');
+    addEdge(graph, modelLoader, 'latent_upsampler', upsample, 'latent_upsampler');
+    addEdge(graph, modelLoader, 'vae', upsample, 'vae');
+
+    const refine = addNode(graph, {
+      fps: settings.fps,
+      height: stages.final.height,
+      id: 'refine_latents',
+      num_frames: settings.numFrames,
+      schedule: 'auto',
+      // The refine pass enters the schedule partway down and samples its tail, so a variant that
+      // pays four forwards a step gets a budget of its own rather than the base pass's. Never more
+      // than the base pass, though: shortening Steps for a quick probe must not leave the expensive
+      // half of the run longer than the half the user just cut.
+      steps: Math.min(policy.refineSteps ?? settings.steps, settings.steps),
+      type: 'ltx2_denoise',
+      width: stages.final.width,
+      ...guidance,
+    });
+
+    addEdge(graph, modelLoader, 'transformer', refine, 'transformer');
+    addEdge(graph, textEncoder, 'conditioning', refine, 'positive_conditioning');
+    if (negativeWired) {
+      addEdge(graph, textEncoder, 'negative_conditioning', refine, 'negative_conditioning');
+    }
+    addEdge(graph, seed, 'value', refine, 'seed');
+    addEdge(graph, upsample, 'latents', refine, 'latents');
+    addEdge(graph, denoise, 'audio_latents', refine, 'audio_latents');
+
+    if (mode === 'first-frame' && settings.firstFrameImage) {
+      // A second encode, at the refine canvas. The refine pass re-noises every token including
+      // frame 0, so the base pass's anchor does not survive into it -- and the base pass's encode
+      // is half this size, so it cannot be re-used. Without this, two-stage image-to-video would
+      // regenerate the first frame from the prompt alone.
+      const refineConditioning = addNode(graph, {
+        height: stages.final.height,
+        id: 'refine_image_conditioning',
+        image: toImageField(settings.firstFrameImage),
+        type: 'ltx2_image_conditioning',
+        width: stages.final.width,
+      });
+
+      addEdge(graph, modelLoader, 'vae', refineConditioning, 'vae');
+      addEdge(graph, refineConditioning, 'video_conditioning', refine, 'video_conditioning');
+    }
+
+    finalDenoise = refine;
   }
 
   const output = addNode(graph, {
@@ -833,8 +920,8 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     use_cache: false,
   });
 
-  addEdge(graph, denoise, 'video_latents', output, 'video_latents');
-  addEdge(graph, denoise, 'audio_latents', output, 'audio_latents');
+  addEdge(graph, finalDenoise, 'video_latents', output, 'video_latents');
+  addEdge(graph, finalDenoise, 'audio_latents', output, 'audio_latents');
   addEdge(graph, modelLoader, 'vae', output, 'vae');
   addEdge(graph, modelLoader, 'audio_vae', output, 'audio_vae');
   addEdge(graph, modelLoader, 'vocoder', output, 'vocoder');
@@ -848,6 +935,13 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       ...(policy.ui.audioCfgVisible ? { ltx2_audio_cfg_scale: guidance.audio_cfg_scale } : {}),
       ...(policy.ui.stgVisible ? { ltx2_stg_scale: guidance.stg_scale } : {}),
       ...(policy.ui.modalityVisible ? { ltx2_modality_scale: guidance.modality_scale } : {}),
+      // Informational, not load-bearing: recall recovers the preset by matching the recorded
+      // width/height against each one, and a two-stage preset's canvas is unique among them. These
+      // are here for someone reading a clip's metadata, to whom "1792x1024" alone does not say that
+      // it was reached by refining an 896x512 pass rather than generated at size.
+      ...(twoStage
+        ? { ltx2_base_height: stages.base.height, ltx2_base_width: stages.base.width, ltx2_two_stage: true }
+        : {}),
     },
     generationMode: LTX2_GENERATION_MODES[mode] ?? 'ltx2_t2v',
     graph,

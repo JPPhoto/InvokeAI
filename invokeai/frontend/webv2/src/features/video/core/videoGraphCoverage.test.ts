@@ -25,7 +25,7 @@ import type { BackendGraphContract } from '@features/generation/core/contracts';
 
 import { describe, expect, it } from 'vitest';
 
-import type { VideoGenerationMode, VideoSettings, VideoSourceClip } from './types';
+import type { VideoGenerationMode, VideoSettings, VideoSourceClip, VideoTargetResolution } from './types';
 import type { VideoComponentPolicyContext, VideoComponentSlotPolicy, VideoComponentValueKey } from './videoPolicies';
 
 import { compileVideoGraph } from './graph';
@@ -150,6 +150,8 @@ interface Case {
   variant: string;
   mode: VideoGenerationMode;
   format: 'diffusers' | 'checkpoint';
+  /** A preset to override the variant's default with; absent runs the default. */
+  targetResolution?: VideoTargetResolution;
   label: string;
 }
 
@@ -171,19 +173,31 @@ const createModel = (testCase: Case): MainModelConfig =>
  * but not runnable as the model, and hard-coding that would go stale.
  */
 const cases: Case[] = SUPPORTED_VIDEO_BASES.flatMap((base) =>
-  Object.entries(VIDEO_GENERATION[base].variants).flatMap(([variant, config]) =>
-    config.modes.flatMap((mode) =>
-      (['diffusers', 'checkpoint'] as const)
-        .map((format) => ({
-          base,
-          format,
-          label: `${base} / ${variant} / ${mode} / ${format}`,
-          mode,
-          variant,
-        }))
-        .filter((testCase) => isVideoModelSelectable(createModel(testCase)))
-    )
-  )
+  Object.entries(VIDEO_GENERATION[base].variants).flatMap(([variant, config]) => {
+    // A multi-stage preset builds a different graph -- more denoise passes, and the nodes between
+    // them -- so each one is its own case. Every one of them, not just the first: the fixture
+    // records the literal values written into each field as well as the node types, and the widest
+    // canvas is exactly the one a future bound on those fields would reject.
+    const presets: (VideoTargetResolution | undefined)[] = [
+      undefined,
+      ...config.targetResolutions.filter((option) => option.stages !== undefined).map((option) => option.id),
+    ];
+
+    return config.modes.flatMap((mode) =>
+      presets.flatMap((targetResolution) =>
+        (['diffusers', 'checkpoint'] as const)
+          .map((format) => ({
+            base,
+            format,
+            label: `${base} / ${variant} / ${mode} / ${format}${targetResolution ? ` / ${targetResolution}` : ''}`,
+            mode,
+            ...(targetResolution ? { targetResolution } : {}),
+            variant,
+          }))
+          .filter((testCase) => isVideoModelSelectable(createModel(testCase)))
+      )
+    );
+  })
 );
 
 const compileForCase = (testCase: Case): { filled: VideoComponentValueKey[]; graph: BackendGraphContract } => {
@@ -194,6 +208,7 @@ const compileForCase = (testCase: Case): { filled: VideoComponentValueKey[]; gra
     positivePrompt: 'a test prompt',
     seed: 1,
     seedMode: 'fixed',
+    ...(testCase.targetResolution ? { targetResolution: testCase.targetResolution } : {}),
   });
 
   // Compiling an invalid selection throws only the first reason; asserting here reports every

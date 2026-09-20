@@ -5,6 +5,7 @@ import torch
 
 from invokeai.backend.ltx2.packing import (
     audio_latent_count,
+    base_canvas,
     latent_frame_count,
     pack_audio_latents,
     pack_video_latents,
@@ -107,3 +108,32 @@ def test_a_transformer_that_patches_differently_is_refused_before_anything_is_pa
     require_patch_geometry(SimpleNamespace(patch_size=1, patch_size_t=1))
     with pytest.raises(ValueError, match="patches the latent grid"):
         require_patch_geometry(SimpleNamespace(patch_size=2, patch_size_t=1))
+
+
+@pytest.mark.parametrize(
+    ("aspect", "expected"),
+    [((16, 9), (1792, 1024)), ((1, 1), (1024, 1024)), ((9, 16), (1024, 1792))],
+)
+def test_a_two_stage_canvas_lands_where_halving_it_stays_on_the_grid(
+    aspect: tuple[int, int], expected: tuple[int, int]
+) -> None:
+    """The 64 grid exists for one reason: the base pass runs at half the canvas, and half of a
+    32-grid number is not always one."""
+    height, width = resolve_canvas(aspect[0], aspect[1], 1024, multiple=64)
+
+    assert (width, height) == expected
+    base_height, base_width = base_canvas(height, width)
+    assert (base_width * 2, base_height * 2) == (width, height)
+    assert base_width % 32 == 0 and base_height % 32 == 0
+
+
+def test_a_canvas_that_cannot_be_halved_onto_the_grid_is_refused() -> None:
+    # 1248x704 is a legitimate single-stage canvas, and its *width* is what refuses: 1248 % 64 is
+    # 32, so halving it gives 624, which is not on the 32 grid. (704 halves to 352, which is.)
+    with pytest.raises(ValueError, match="multiple of 64"):
+        base_canvas(704, 1248)
+
+
+def test_a_grid_that_is_not_a_multiple_of_the_canvas_one_is_refused() -> None:
+    with pytest.raises(ValueError, match="canvas grid"):
+        resolve_canvas(16, 9, 1024, multiple=48)

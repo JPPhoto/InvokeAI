@@ -34,9 +34,10 @@ from invokeai.backend.ltx2.constants import (
     LTX2_DISTILLED_STEPS,
     LTX2_GUIDANCE_RESCALE,
     LTX2_MODALITY_SCALE,
+    LTX2_STAGE_2_NOISE_SCALE,
     LTX2_STG_SCALE,
 )
-from invokeai.backend.ltx2.denoise import build_denoise_state, denoise, preview_latent_frame
+from invokeai.backend.ltx2.denoise import build_denoise_state, build_refine_state, denoise, preview_latent_frame
 from invokeai.backend.ltx2.guidance import LTX2Guidance
 from invokeai.backend.ltx2.packing import (
     require_patch_geometry,
@@ -75,7 +76,7 @@ class LTX2DenoiseOutput(BaseInvocationOutput):
     title="Denoise - LTX-2",
     tags=["ltx", "ltx2", "video", "audio", "denoise"],
     category="latents",
-    version="1.0.0",
+    version="1.1.0",
     classification=Classification.Prototype,
 )
 class LTX2DenoiseInvocation(BaseInvocation):
@@ -157,6 +158,28 @@ class LTX2DenoiseInvocation(BaseInvocation):
         ui_choice_labels=LTX2_SCHEDULE_LABELS,
     )
     seed: int = InputField(default=0, ge=0, le=SEED_MAX, description="Randomness seed for reproducibility.")
+    latents: LatentsField | None = InputField(
+        default=None,
+        description="Upscaled video latents to refine, from Upscale Latents - LTX-2. Present only on the "
+        "second pass of a two-stage run; leave unwired to generate from noise.",
+        input=Input.Connection,
+        title="Video Latents",
+    )
+    audio_latents: LatentsField | None = InputField(
+        default=None,
+        description="The base pass's audio latents, carried into the refine pass unchanged. Required "
+        "whenever video latents are wired.",
+        input=Input.Connection,
+        title="Audio Latents",
+    )
+    noise_scale: float = InputField(
+        default=LTX2_STAGE_2_NOISE_SCALE,
+        gt=0.0,
+        lt=1.0,
+        description="Where the refine pass re-enters the schedule: the noise level the upscaled latents are "
+        "taken back to, and the highest level it samples. Lower keeps more of the base pass. Ignored "
+        "without wired video latents.",
+    )
 
     @staticmethod
     def _estimate_working_memory(video_rows: int, audio_rows: int) -> int:
@@ -173,14 +196,21 @@ class LTX2DenoiseInvocation(BaseInvocation):
         peak; the per-pass x0 predictions that are all live at the combine are one float32 row each
         and are inside the constants below.
 
-        Measured on a W7900 (gfx1100, released int8-convrot dev transformer, four guidance passes),
-        as peak *reserved* minus the resident model: 0.46 GiB at 320 video rows (512x320x9) and
-        2.81 GiB at 13728 (1248x704x121), which fits a 0.18 MiB/row line through a 0.40 GiB
-        intercept. The constants round that up, and the base additionally covers block weights
-        arriving on device under partial loading, which a fully resident measurement does not see.
+        Measured on a W7900 (gfx1100, released int8-convrot transformer), as peak *reserved* minus
+        the resident model: 0.46 GiB at 320 video rows (512x320x9), 2.81 at 13728 (1248x704x121),
+        5.73 at 28672 (1792x1024x121) and 13.34 at 66048 (2752x1536x121). Guidance does not move the
+        peak -- the passes run one after another -- and the last two were taken on the refine pass of
+        a two-stage run, which is where the largest row counts occur.
+
+        The slope is fitted to the *top* of that range, where the reservation has to hold: the four
+        points imply about 0.21 MiB/row between the widest two, and 1/4.5 MiB rounds that up to a
+        uniform margin (+15% at 66048 rows, wider below). A slope fitted to the narrow end instead
+        looks generous at small canvases and converges on the measurement exactly where running out
+        would be most expensive. The base additionally covers block weights arriving on device under
+        partial loading, which a fully resident measurement does not see.
         """
         MiB = 1024**2
-        return video_rows * (MiB // 5) + audio_rows * (MiB // 10) + 1024**3
+        return video_rows * int(MiB // 4.5) + audio_rows * (MiB // 10) + 1024**3
 
     def _resolve_distilled(self) -> bool:
         if self.schedule != "auto":
@@ -237,6 +267,20 @@ class LTX2DenoiseInvocation(BaseInvocation):
         # `build_denoise_state` checks both again for callers that do not come through this node.
         validate_num_frames(self.num_frames)
 
+        # Refused here, beside the frame grid, rather than where the state is built: a half-wired
+        # refine pass is a graph mistake, and finding it after the 22B transformer has loaded is the
+        # difference between a message and a wasted minute. (The prompt encode is a separate node
+        # and has already run by now; only the transformer load is saved.)
+        if self.latents is not None and self.audio_latents is None:
+            raise ValueError(
+                "The refine pass needs the base pass's audio latents as well as its video: wire both "
+                "outputs of the first LTX-2 denoise node through."
+            )
+        if self.latents is None and self.audio_latents is not None:
+            raise ValueError(
+                "Audio latents were wired without video latents. The refine pass takes both or neither; "
+                "a base pass generates its own audio."
+            )
         distilled = self._resolve_distilled()
         guidance = self._resolve_guidance(context, distilled)
         if distilled and self.steps != LTX2_DISTILLED_STEPS:
@@ -255,17 +299,36 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 )
             negative = self._load_conditioning(context, self.negative_conditioning)
 
-        state = build_denoise_state(
-            num_frames=self.num_frames,
-            height=self.height,
-            width=self.width,
-            fps=self.fps,
-            seed=self.seed,
-            distilled=distilled,
-            num_steps=self.steps,
-            image_latents=self._load_image_latents(context),
-            conditioning_strength=self.video_conditioning.strength if self.video_conditioning else 1.0,
-        )
+        if self.latents is not None:
+            state = build_refine_state(
+                video_latents=context.tensors.load(self.latents.latents_name),
+                audio_latents=context.tensors.load(self.audio_latents.latents_name),
+                num_frames=self.num_frames,
+                height=self.height,
+                width=self.width,
+                fps=self.fps,
+                seed=self.seed,
+                distilled=distilled,
+                num_steps=self.steps,
+                noise_scale=self.noise_scale,
+                # Encoded at *this* pass's canvas: the refine pass re-noises frame 0 along with
+                # everything else, so an anchor has to be re-applied here or image-to-video would
+                # mean something different on a two-stage preset.
+                image_latents=self._load_image_latents(context),
+                conditioning_strength=self.video_conditioning.strength if self.video_conditioning else 1.0,
+            )
+        else:
+            state = build_denoise_state(
+                num_frames=self.num_frames,
+                height=self.height,
+                width=self.width,
+                fps=self.fps,
+                seed=self.seed,
+                distilled=distilled,
+                num_steps=self.steps,
+                image_latents=self._load_image_latents(context),
+                conditioning_strength=self.video_conditioning.strength if self.video_conditioning else 1.0,
+            )
 
         device = TorchDevice.choose_torch_device()
         inference_dtype = TorchDevice.choose_bfloat16_safe_dtype(device)
@@ -281,8 +344,13 @@ class LTX2DenoiseInvocation(BaseInvocation):
 
         with transformer_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, transformer):
             require_patch_geometry(transformer.config)
-            context.util.signal_progress("Denoising LTX-2 audio-video")
-            progress = tqdm(total=state.num_steps, desc=f"Denoising LTX-2 ({self.num_frames} frames)")
+            # Named per stage: a two-stage run drives this bar to 100%, then starts a second one
+            # from 0 with the upscale in between, which reads as a restart unless it says otherwise.
+            context.util.signal_progress(
+                "Refining LTX-2 audio-video" if self.latents is not None else "Denoising LTX-2 audio-video"
+            )
+            stage = "Refining" if self.latents is not None else "Denoising"
+            progress = tqdm(total=state.num_steps, desc=f"{stage} LTX-2 ({self.num_frames} frames)")
 
             def step_callback(step: int, total_steps: int, video_x0: torch.Tensor) -> None:
                 progress.update(1)

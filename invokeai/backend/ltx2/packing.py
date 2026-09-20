@@ -24,6 +24,7 @@ from invokeai.backend.ltx2.constants import (
     LTX2_PATCH_SIZE_T,
     LTX2_SPATIAL_COMPRESSION,
     LTX2_TEMPORAL_COMPRESSION,
+    LTX2_TWO_STAGE_CANVAS_MULTIPLE,
 )
 
 
@@ -151,25 +152,45 @@ def denormalize_audio_latents(
     return latents * latents_std.to(latents.device, latents.dtype) + latents_mean.to(latents.device, latents.dtype)
 
 
-def resolve_canvas(source_width: float, source_height: float, short_edge: int) -> tuple[int, int]:
+def resolve_canvas(
+    source_width: float, source_height: float, short_edge: int, *, multiple: int = LTX2_CANVAS_MULTIPLE
+) -> tuple[int, int]:
     """``(height, width)`` for a source aspect ratio with its short edge pinned to ``short_edge``.
 
-    Both axes are rounded to the canvas multiple, half to even so a ratio exactly between two grid
-    points does not systematically grow. Only the ratio of the inputs matters.
+    Both axes are rounded to ``multiple``, half to even so a ratio exactly between two grid points
+    does not systematically grow. Only the ratio of the inputs matters. A two-stage run passes
+    ``LTX2_TWO_STAGE_CANVAS_MULTIPLE`` so the canvas it returns can be halved onto the plain grid.
     """
     if source_width <= 0 or source_height <= 0:
         raise ValueError(f"Source dimensions must be positive; got {source_width}x{source_height}.")
-    if short_edge <= 0 or short_edge % LTX2_CANVAS_MULTIPLE:
-        raise ValueError(f"Short edge must be a positive multiple of {LTX2_CANVAS_MULTIPLE}; got {short_edge}.")
+    if multiple <= 0 or multiple % LTX2_CANVAS_MULTIPLE:
+        raise ValueError(f"The canvas grid must be a positive multiple of {LTX2_CANVAS_MULTIPLE}; got {multiple}.")
+    if short_edge <= 0 or short_edge % multiple:
+        raise ValueError(f"Short edge must be a positive multiple of {multiple}; got {short_edge}.")
 
     aspect = source_width / source_height
     if aspect >= 1.0:
         height, width = float(short_edge), short_edge * aspect
     else:
         height, width = short_edge / aspect, float(short_edge)
-    return _snap_axis(height), _snap_axis(width)
+    return _snap_axis(height, multiple), _snap_axis(width, multiple)
 
 
-def _snap_axis(value: float) -> int:
+def base_canvas(height: int, width: int) -> tuple[int, int]:
+    """The base pass's canvas for a two-stage run's final one: exactly half of each axis.
+
+    Not a resize. The x2 latent upscaler doubles a latent grid exactly, so the refine pass's canvas
+    is whatever the base pass's was times two -- this is that relation read backwards, and it is why
+    a two-stage canvas is chosen on the 64 grid.
+    """
+    if height % LTX2_TWO_STAGE_CANVAS_MULTIPLE or width % LTX2_TWO_STAGE_CANVAS_MULTIPLE:
+        raise ValueError(
+            f"A two-stage canvas must be a multiple of {LTX2_TWO_STAGE_CANVAS_MULTIPLE} on both axes so the "
+            f"base pass lands on the {LTX2_CANVAS_MULTIPLE} grid; got {width}x{height}."
+        )
+    return height // 2, width // 2
+
+
+def _snap_axis(value: float, multiple: int = LTX2_CANVAS_MULTIPLE) -> int:
     # round() is half-to-even, which is the behaviour the frontend's resolver mirrors.
-    return max(LTX2_CANVAS_MULTIPLE, round(value / LTX2_CANVAS_MULTIPLE) * LTX2_CANVAS_MULTIPLE)
+    return max(multiple, round(value / multiple) * multiple)

@@ -78,6 +78,12 @@ export type VideoNegativePromptUsage = 'always' | 'cfg-gated' | 'never';
 export interface VideoTargetResolutionOption {
   id: VideoTargetResolution;
   label: string;
+  /**
+   * How many denoise passes the preset runs. Absent means one. A two-stage preset generates at half
+   * this canvas, upscales the latent x2 and refines it, which is what buys detail no single pass at
+   * this size would reach -- and it costs two passes, the second at four times the token count.
+   */
+  stages?: 2;
 }
 
 /**
@@ -131,6 +137,15 @@ interface VideoVariantConfig {
   modes: readonly VideoGenerationMode[];
   pixelMultiple: number;
   targetResolutions: readonly VideoTargetResolutionOption[];
+  /**
+   * The step budget the refine pass of a two-stage preset runs at, when this variant needs one of
+   * its own. The schedule is entered partway down and truncated, so a budget here buys fewer refine
+   * steps than the same number would in a base pass: measured on a W7900, a guided dev step at the
+   * 1024p canvas is 262 s, so inheriting `defaults.steps` (30 -> 17 refine steps) would be 74
+   * minutes there and over eight hours at 1536p. Absent leaves the base pass's budget alone, which
+   * is right for the distilled checkpoint: its schedule is fixed and a budget is ignored.
+   */
+  refineSteps?: number;
   defaults: {
     targetResolution: VideoTargetResolution;
     steps: number;
@@ -307,10 +322,15 @@ const MINIMAX_H3_REF2VA: VideoVariantConfig = {
   references: { extend: true, maxImages: 9, maxVideos: 3 },
 };
 
+/** Below this the refine pass cannot enter its schedule anywhere near the level it asks for. */
+export const LTX2_MIN_TWO_STAGE_STEPS = 2;
+
 const LTX2_TARGET_RESOLUTION_OPTIONS: readonly VideoTargetResolutionOption[] = [
   { id: '512p', label: '512p (fastest)' },
   { id: '704p', label: '704p' },
   { id: '768p', label: '768p (sharpest)' },
+  { id: '1024p', label: '1024p (2-stage)', stages: 2 },
+  { id: '1536p', label: '1536p (2-stage, very slow)', stages: 2 },
 ];
 
 const LTX2_FRAMES: VideoFramesGridPolicy = {
@@ -359,6 +379,10 @@ const LTX2_DEV: VideoVariantConfig = {
   },
   guidance: { audioVisible: true, modalityVisible: true, stgVisible: true },
   negativePrompt: { usage: 'cfg-gated', visible: true },
+  // Dev pays four forwards a step -- cond, uncond, STG and modality -- so the refine pass gets a
+  // budget of its own rather than the 30 the base pass runs. This is the count the pass actually
+  // samples, not a schedule resolution it is truncated out of.
+  refineSteps: 8,
   stepsEditable: true,
 };
 
@@ -492,6 +516,18 @@ const coerceTargetResolution = (
     ? targetResolution
     : config.defaults.targetResolution;
 
+/**
+ * The preset a model will actually run, which is not always the one the settings hold: a record
+ * persisted under another family keeps its own preset (`normalizeVideoSettings` accepts any
+ * family's), and only a model *selection* re-coerces it. Every consumer has to agree on this one
+ * answer -- `getVideoDimensions` resolves its canvas from it, so a caller reading the raw value
+ * would be describing a different run than the dimensions it was handed.
+ */
+export const getVideoTargetResolution = (
+  model: MainModelConfig | undefined,
+  targetResolution: VideoTargetResolution
+): VideoTargetResolution => coerceTargetResolution(getVideoConfig(model), targetResolution);
+
 export const snapVideoNumFrames = (model: MainModelConfig | undefined, numFrames: number): number => {
   const frames = getVideoConfig(model).frames;
 
@@ -605,6 +641,8 @@ export interface VideoModelPolicy {
   minSteps: number;
   aspectRatioOptions: readonly VideoAspectRatioId[];
   targetResolutions: readonly VideoTargetResolutionOption[];
+  /** Steps for a two-stage preset's refine pass; absent when the base pass's budget serves. */
+  refineSteps?: number;
   frames: VideoFramesPolicy;
   fps: VideoFpsPolicy;
   defaults: {
@@ -658,6 +696,7 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     pixelMultiple: config.pixelMultiple,
     prompt: getVideoPromptPolicy(model, settings),
     references: config.references ?? null,
+    ...(config.refineSteps === undefined ? {} : { refineSteps: config.refineSteps }),
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
@@ -2093,6 +2132,18 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
 
   if (!Number.isInteger(settings.steps) || settings.steps < config.minSteps) {
     reasons.push(`Steps must be a whole number of at least ${config.minSteps}.`);
+  }
+
+  // A two-stage preset caps the refine pass at the base pass's budget, and a refine of one step can
+  // only re-enter its schedule at the bottom -- which the backend refuses, after the base pass and
+  // the upscale have already run. Refused here so the cost is never paid.
+  const preset = config.targetResolutions.find((option) => option.id === settings.targetResolution);
+
+  if (preset?.stages === 2 && Number.isInteger(settings.steps) && settings.steps < LTX2_MIN_TWO_STAGE_STEPS) {
+    reasons.push(
+      `A two-stage target resolution needs at least ${LTX2_MIN_TWO_STAGE_STEPS} steps; the second pass ` +
+        `refines what the first produced and cannot run in one.`
+    );
   }
 
   if (config.cfg.visible && (!Number.isFinite(settings.cfgScale) || settings.cfgScale < 1)) {

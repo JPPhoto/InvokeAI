@@ -1,11 +1,11 @@
 import type { GenerationModelCatalogItem, MainModelConfig } from '@features/generation/contracts';
 
 import { architectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
-import { LTX2_DEFAULT_NEGATIVE_PROMPT } from '@features/video/core/dimensions';
+import { isLtx2TwoStage, LTX2_DEFAULT_NEGATIVE_PROMPT } from '@features/video/core/dimensions';
 import { isVideoTargetResolution, normalizeVideoSettings } from '@features/video/core/settings';
 import { describe, expect, it } from 'vitest';
 
-import type { VideoSettings } from './types';
+import type { Ltx2TargetResolution, VideoSettings } from './types';
 
 import {
   findMiniMaxH3TurboLora,
@@ -1602,6 +1602,40 @@ describe('LTX-2 policy', () => {
     const toDev = getVideoModelSelectionResult({ currentSettings: onWan, model: ltx2('ltx2_dev'), models: catalog });
 
     expect(toDev.settings.negativePrompt).toBe('');
+  });
+
+  it('keeps the policy and the canvas resolver agreeing on which presets are two-stage', () => {
+    // Two places encode the stage count: the option's `stages` flag, which the panel and the graph
+    // read, and `LTX2_TWO_STAGE_RESOLUTIONS`, which decides the 64 grid. A preset in one and not the
+    // other snaps to the wrong grid or silently renders one pass -- with no error either way.
+    for (const variant of ['ltx2_dev', 'ltx2_distilled']) {
+      const model = ltx2(variant);
+      const policy = getVideoModelPolicy(model, getDefaultVideoSettings(model));
+
+      for (const option of policy.targetResolutions) {
+        expect(
+          isLtx2TwoStage(option.id as Ltx2TargetResolution),
+          `${variant}/${option.id}: stages=${String(option.stages)}`
+        ).toBe(option.stages === 2);
+      }
+    }
+  });
+
+  it('offers the two-stage presets and gives only dev a refine budget', () => {
+    // The distilled schedule is fixed, so a refine budget would be ignored; dev pays four forwards
+    // a step and would otherwise run its full 30 at four times the base pass's token count.
+    const dev = getVideoModelPolicy(ltx2('ltx2_dev'), getDefaultVideoSettings(ltx2('ltx2_dev')));
+    const distilled = getVideoModelPolicy(ltx2('ltx2_distilled'), getDefaultVideoSettings(ltx2('ltx2_distilled')));
+
+    for (const policy of [dev, distilled]) {
+      const twoStage = policy.targetResolutions.filter((option) => option.stages === 2);
+
+      expect(twoStage.map((option) => option.id)).toEqual(['1024p', '1536p']);
+    }
+    expect(dev.refineSteps).toBe(8);
+    expect(distilled.refineSteps).toBeUndefined();
+    // The default stays a single pass: two-stage is a deliberate choice, not what a fresh panel does.
+    expect(dev.targetResolutions.find((option) => option.id === dev.defaults.targetResolution)?.stages).toBeUndefined();
   });
 
   it("takes dev's steps and CFG from a panel that was never shown them", () => {

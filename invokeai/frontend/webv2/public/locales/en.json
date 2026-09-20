@@ -3860,6 +3860,7 @@
       "steps": "Steps",
       "swapAspectRatio": "Swap orientation",
       "targetResolution": "Target Resolution",
+      "twoStageHelp": "Two passes: generates at {{baseWidth}}×{{baseHeight}}, then upscales and refines to {{width}}×{{height}}. The refine pass runs at 4× the tokens, so it dominates the render time.",
       "dimensionSource": {
         "aspect-ratio": "from the aspect-ratio preset",
         "first-frame": "from the first frame",

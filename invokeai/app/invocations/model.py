@@ -239,6 +239,12 @@ class LTX2VocoderField(BaseModel):
     vocoder: ModelIdentifierField = Field(description="Info to load vocoder submodel")
 
 
+class LTX2LatentUpsamplerField(BaseModel):
+    """Latent upsampler field for LTX-2: the x2 spatial upscaler the refine pass runs on top of."""
+
+    latent_upsampler: ModelIdentifierField = Field(description="Info to load the latent upsampler submodel")
+
+
 class VAEField(BaseModel):
     vae: ModelIdentifierField = Field(description="Info to load vae submodel")
     seamless_axes: List[str] = Field(default_factory=list, description='Axes("x" and "y") to which apply seamless')

@@ -4,10 +4,21 @@ import math
 
 import pytest
 import torch
+from diffusers.pipelines.ltx2.utils import STAGE_2_DISTILLED_SIGMA_VALUES
 
-from invokeai.backend.ltx2.constants import LTX2_DISTILLED_SIGMAS, LTX2_MAX_SEQ_LEN
+from invokeai.backend.ltx2.constants import (
+    LTX2_DISTILLED_SIGMAS,
+    LTX2_MAX_SEQ_LEN,
+    LTX2_STAGE_2_NOISE_SCALE,
+)
 from invokeai.backend.ltx2.packing import video_sequence_length
-from invokeai.backend.ltx2.sampling import LTX2_SHIFT_TERMINAL, build_sigmas, calculate_shift, flow_step
+from invokeai.backend.ltx2.sampling import (
+    LTX2_SHIFT_TERMINAL,
+    build_refine_sigmas,
+    build_sigmas,
+    calculate_shift,
+    flow_step,
+)
 
 
 def test_the_distilled_schedule_is_the_released_one_with_a_terminal_zero() -> None:
@@ -27,6 +38,53 @@ def test_a_dev_schedule_starts_at_one_descends_and_ends_on_the_terminal(num_step
     assert sigmas[-1] == 0.0
     assert (sigmas[:-1] - sigmas[1:] > 0).all()
     assert sigmas[-2] == pytest.approx(LTX2_SHIFT_TERMINAL)
+
+
+def test_the_refine_pass_reproduces_the_released_second_stage_exactly() -> None:
+    """The reason the refine pass truncates a schedule instead of carrying its own.
+
+    Upstream publishes the distilled second stage as a literal list. Entering the distilled
+    schedule at ``LTX2_STAGE_2_NOISE_SCALE`` has to *be* that list -- if this ever stops holding,
+    the truncation rule has stopped describing the release and the dev half of it, which has no
+    published list to check against, loses its justification too.
+    """
+    refine = build_sigmas(distilled=True, num_steps=8, video_seq_len=4096, start_sigma=LTX2_STAGE_2_NOISE_SCALE)
+
+    # Compared against upstream's own list rather than our re-export of it: a constant we copied
+    # would make this a check that two of our own lines agree.
+    assert refine.tolist() == pytest.approx([*STAGE_2_DISTILLED_SIGMA_VALUES, 0.0])
+
+
+@pytest.mark.parametrize("start_sigma", [0.909375, 0.7, 0.42, 0.11])
+def test_a_truncated_dev_schedule_is_the_tail_of_the_whole_one(start_sigma: float) -> None:
+    """The shape of the run is a property of the whole schedule, so the stretch onto the terminal
+    level happens before truncation: a refine pass samples levels the base pass would have, not a
+    schedule rescaled onto a shorter interval."""
+    seq_len = video_sequence_length(121, 1024, 1792)
+    whole = build_sigmas(distilled=False, num_steps=30, video_seq_len=seq_len)
+    refine = build_sigmas(distilled=False, num_steps=30, video_seq_len=seq_len, start_sigma=start_sigma)
+
+    # Compared against a hand-written slice rather than the implementation's own mask, so flipping
+    # `<=` to `<` in `_truncate` cannot satisfy both sides at once.
+    sampled = [float(x) for x in whole[:-1]]
+    expected = [x for x in sampled if x <= start_sigma]
+    assert [float(x) for x in refine[:-1]] == pytest.approx(expected)
+    assert float(refine[-1]) == 0.0
+    assert float(refine[0]) <= start_sigma
+    # Every level the refine samples is one the whole schedule sampled, at its own spacing.
+    assert {float(x) for x in refine[:-1]} <= set(sampled)
+
+
+def test_a_refine_level_below_the_whole_schedule_is_refused_by_name() -> None:
+    # Silently returning an empty schedule would denoise nothing and hand back the noised input.
+    with pytest.raises(ValueError, match="at or below"):
+        build_sigmas(distilled=False, num_steps=30, video_seq_len=4096, start_sigma=0.01)
+
+
+@pytest.mark.parametrize("start_sigma", [0.0, -0.5, 1.5])
+def test_a_refine_level_outside_the_unit_interval_is_refused(start_sigma: float) -> None:
+    with pytest.raises(ValueError, match="re-enter the schedule"):
+        build_sigmas(distilled=False, num_steps=30, video_seq_len=4096, start_sigma=start_sigma)
 
 
 def test_a_single_step_schedule_is_just_the_two_endpoints() -> None:
@@ -132,3 +190,43 @@ def test_the_shifted_schedule_matches_the_reference_transformation() -> None:
 
     sigmas = build_sigmas(distilled=False, num_steps=num_steps, video_seq_len=seq_len)
     assert sigmas[:-1].tolist() == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("refine_steps", [2, 3, 4, 6, 8, 12, 30])
+def test_a_refine_budget_buys_that_many_steps_near_the_level_it_asks_for(refine_steps: int) -> None:
+    """Truncating a schedule built *at* the budget made the entry level a function of the budget --
+    not monotonically, either: 4 steps entered at 0.867 and 6 at 0.861. Worse, 2 steps entered at
+    0.100, so the "refine" re-noised almost to clean and ran one step that returned its own input,
+    at four times the base pass's token cost. The budget is the step count; the resolution that
+    delivers it is solved for."""
+    sigmas = build_refine_sigmas(
+        distilled=False, refine_steps=refine_steps, video_seq_len=24576, noise_scale=LTX2_STAGE_2_NOISE_SCALE
+    )
+
+    assert sigmas.numel() - 1 == refine_steps
+    assert float(sigmas[0]) <= LTX2_STAGE_2_NOISE_SCALE
+    # Near the level asked for, not merely at or below it.
+    assert float(sigmas[0]) > 0.75 * LTX2_STAGE_2_NOISE_SCALE
+    assert float(sigmas[-1]) == 0.0
+
+
+def test_a_refine_budget_too_small_to_reach_its_level_is_refused() -> None:
+    with pytest.raises(ValueError, match="far below"):
+        build_refine_sigmas(distilled=False, refine_steps=1, video_seq_len=24576, noise_scale=LTX2_STAGE_2_NOISE_SCALE)
+
+
+def test_the_distilled_refine_ignores_the_budget_as_its_base_pass_does() -> None:
+    for refine_steps in (2, 8, 30):
+        sigmas = build_refine_sigmas(
+            distilled=True, refine_steps=refine_steps, video_seq_len=24576, noise_scale=LTX2_STAGE_2_NOISE_SCALE
+        )
+        assert sigmas.tolist() == pytest.approx([*STAGE_2_DISTILLED_SIGMA_VALUES, 0.0])
+
+
+@pytest.mark.parametrize("noise_scale", [1.0, 0.99999999, 0.999999999999])
+def test_a_refine_entering_at_the_top_of_the_schedule_is_refused(noise_scale: float) -> None:
+    """`lerp(x0, noise, 1.0)` is pure noise: the base pass and the upscale would be generated and
+    then discarded. Values a hair under 1 round up to exactly 1 in the schedule's float32, so the
+    guard is on the level that survives truncation rather than on the value requested."""
+    with pytest.raises(ValueError, match="discard the base pass|re-enter the schedule"):
+        build_sigmas(distilled=True, num_steps=8, video_seq_len=24576, start_sigma=noise_scale)

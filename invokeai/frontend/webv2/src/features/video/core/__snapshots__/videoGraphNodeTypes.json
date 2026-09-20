@@ -11,6 +11,7 @@
         "integer",
         "ltx2_denoise",
         "ltx2_image_conditioning",
+        "ltx2_latent_upsample",
         "ltx2_latents_to_video",
         "ltx2_model_loader",
         "ltx2_text_encoder",
@@ -118,6 +119,8 @@
           "wan_t2v"
         ],
         "height": [
+          1024,
+          1536,
           704,
           720,
           768
@@ -129,6 +132,14 @@
         "ltx2_audio_cfg_scale": [
           7
         ],
+        "ltx2_base_height": [
+          512,
+          768
+        ],
+        "ltx2_base_width": [
+          1376,
+          896
+        ],
         "ltx2_component_source": [],
         "ltx2_modality_scale": [
           3
@@ -137,6 +148,9 @@
           1
         ],
         "ltx2_text_encoder_model": [],
+        "ltx2_two_stage": [
+          true
+        ],
         "minimax_h3_component_source": [],
         "minimax_h3_references": [],
         "minimax_h3_text_encoder_model": [],
@@ -170,7 +184,9 @@
         "width": [
           1248,
           1280,
-          1344
+          1344,
+          1792,
+          2752
         ]
       },
       "outputs": [
@@ -240,6 +256,8 @@
     },
     "ltx2_denoise": {
       "inputs": [
+        "audio_latents",
+        "latents",
         "negative_conditioning",
         "positive_conditioning",
         "seed",
@@ -259,7 +277,11 @@
           24
         ],
         "height": [
-          704
+          1024,
+          1536,
+          512,
+          704,
+          768
         ],
         "is_intermediate": [
           true
@@ -286,7 +308,11 @@
           true
         ],
         "width": [
-          1248
+          1248,
+          1376,
+          1792,
+          2752,
+          896
         ]
       },
       "outputs": [
@@ -300,7 +326,11 @@
       ],
       "literalInputs": {
         "height": [
-          704
+          1024,
+          1536,
+          512,
+          704,
+          768
         ],
         "image": [],
         "is_intermediate": [
@@ -310,11 +340,33 @@
           true
         ],
         "width": [
-          1248
+          1248,
+          1376,
+          1792,
+          2752,
+          896
         ]
       },
       "outputs": [
         "video_conditioning"
+      ]
+    },
+    "ltx2_latent_upsample": {
+      "inputs": [
+        "latent_upsampler",
+        "vae",
+        "video_latents"
+      ],
+      "literalInputs": {
+        "is_intermediate": [
+          true
+        ],
+        "use_cache": [
+          true
+        ]
+      },
+      "outputs": [
+        "latents"
       ]
     },
     "ltx2_latents_to_video": {
@@ -354,6 +406,7 @@
       },
       "outputs": [
         "audio_vae",
+        "latent_upsampler",
         "text_encoder",
         "transformer",
         "vae",
