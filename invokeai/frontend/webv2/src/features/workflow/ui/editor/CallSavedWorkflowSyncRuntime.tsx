@@ -216,10 +216,11 @@ export const CallSavedWorkflowSyncRuntime = () => {
       }
 
       if (
-        node.data.callSavedWorkflowStatus === 'loading' &&
-        previousWorkflowId === workflowId &&
-        previousStatus === 'error' &&
-        query?.state.status === 'error'
+        (previousWorkflowId !== undefined && previousWorkflowId !== workflowId) ||
+        (node.data.callSavedWorkflowStatus === 'loading' &&
+          previousWorkflowId === workflowId &&
+          previousStatus === 'error' &&
+          query?.state.status === 'error')
       ) {
         retryableDetailWorkflowIds.current.set(node.id, workflowId);
       }
