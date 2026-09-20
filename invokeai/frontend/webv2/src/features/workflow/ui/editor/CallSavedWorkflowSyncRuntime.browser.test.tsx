@@ -219,6 +219,38 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
     await expectSettled(readGraph, ['error', 'error'], 1);
   });
 
+  it('refetches an invalidated workflow once for multiple call nodes', async () => {
+    const { readGraph } = await mountWith([
+      buildCallNode('call-1'),
+      buildCallNode('call-2'),
+      buildCallNode('call-3'),
+    ]);
+
+    await expectSettled(readGraph, ['error', 'error', 'error'], 1);
+
+    invalidateWorkflowLibraryCache(MISSING_WORKFLOW_ID);
+    await settle(250);
+
+    expect(getLibraryWorkflowRecordMock).toHaveBeenCalledTimes(2);
+    expect(readStatuses(readGraph())).toEqual(['error', 'error', 'error']);
+  });
+
+  it('keeps an invalidation retry available when the first matching node changes', async () => {
+    const attempts = mockWorkflowThatRecoversAfterOneFailure(MISSING_WORKFLOW_ID);
+    const { readGraph, updateGraph } = await mountWith([
+      buildCallNode('call-1'),
+      buildCallNode('call-2'),
+    ]);
+
+    await settle(60);
+    invalidateWorkflowLibraryCache(MISSING_WORKFLOW_ID);
+    selectWorkflow(readGraph, updateGraph, 'other-workflow');
+    await settle(60);
+
+    expect(attempts.filter((id) => id === MISSING_WORKFLOW_ID)).toHaveLength(2);
+    expect(readStatuses(readGraph())).toEqual(['error', 'ready']);
+  });
+
   it('keeps recalled dynamic fields visible when the child workflow is unavailable', async () => {
     const { readGraph } = await mountWith([buildCallNode('call-1', MISSING_WORKFLOW_ID, true)]);
 
