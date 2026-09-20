@@ -128,9 +128,25 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
     widgets.open({ region: 'left', widgetId: 'workflow' });
     widgets.patchValues('workflow', { editTab: 'details', panelMode: 'edit' });
   }, [widgets]);
-  const exportWorkflow = useCallback(() => downloadWorkflowJson(getProjectGraph()), [getProjectGraph]);
+  const exportWorkflow = useCallback(() => {
+    const projectGraph = getProjectGraph();
+
+    if (hasMultipleWorkflowReturnNodes(projectGraph)) {
+      notify.error(t('projects.exportFailed'), t('workflowLibrary.multipleWorkflowReturnNodesForTransfer'));
+      return;
+    }
+
+    downloadWorkflowJson(projectGraph);
+  }, [getProjectGraph, notify, t]);
   const copyWorkflow = useCallback(() => {
-    copyWorkflowJson(getProjectGraph())
+    const projectGraph = getProjectGraph();
+
+    if (hasMultipleWorkflowReturnNodes(projectGraph)) {
+      notify.error(t('widgets.workflow.copyJsonFailed'), t('workflowLibrary.multipleWorkflowReturnNodesForTransfer'));
+      return;
+    }
+
+    copyWorkflowJson(projectGraph)
       .then(() => notify.success(t('widgets.workflow.copyJsonSuccess')))
       .catch(() => notify.error(t('widgets.workflow.copyJsonFailed')));
   }, [getProjectGraph, notify, t]);
@@ -248,6 +264,9 @@ export const WorkflowDialogHost = () => {
   const { editGraph, replace } = useProjectGraphCommands();
   const { project: projectStore } = useWorkflowUi();
   const notify = useWorkflowNotifications();
+  const { t } = useTranslation();
+  const notifyRef = useRef(notify);
+  const translationRef = useRef(t);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const addNodeConnection = workflowUiStore.useSelector((snapshot) => snapshot.addNodeConnection);
   const addNodePosition = workflowUiStore.useSelector((snapshot) => snapshot.addNodePosition);
@@ -256,6 +275,11 @@ export const WorkflowDialogHost = () => {
   const isLibraryOpen = workflowUiStore.useSelector((snapshot) => snapshot.isLibraryOpen);
   const isNewWorkflowConfirmOpen = workflowUiStore.useSelector((snapshot) => snapshot.isNewWorkflowConfirmOpen);
   const lastImportRequestRef = useRef(importRequestCount);
+
+  useEffect(() => {
+    notifyRef.current = notify;
+    translationRef.current = t;
+  }, [notify, t]);
 
   // Library autosave: bound graphs save themselves back after edits settle.
   //
@@ -297,12 +321,16 @@ export const WorkflowDialogHost = () => {
       save: async (workflowId, serialized) => {
         // Same scope discipline as the manual save paths: never let a
         // debounced write land in the next account's library.
-        const owner = captureAccountScope();
+        assertAccountScopeCurrent(hostScope);
         if (hasMultipleWorkflowReturnNodes(projectStore.getSnapshot().projectGraph)) {
+          notifyRef.current.error(
+            translationRef.current('workflowLibrary.saveFailed'),
+            translationRef.current('workflowLibrary.multipleWorkflowReturnNodes')
+          );
           throw new Error('Workflow contains multiple workflow_return nodes.');
         }
-        await updateLibraryWorkflow(workflowId, serialized, owner.signal);
-        assertAccountScopeCurrent(owner);
+        await updateLibraryWorkflow(workflowId, serialized, hostScope.signal);
+        assertAccountScopeCurrent(hostScope);
         // The library dialog serves cached payloads and pages; a save changes both.
         invalidateWorkflowLibraryCache(workflowId);
       },

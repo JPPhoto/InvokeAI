@@ -190,6 +190,27 @@ describe('zInvocationNodeData: extra-input scoping', () => {
       },
     });
 
-    expect(parsed.dynamicInputTemplates.fidelity).toMatchObject({ options: ['low', 'high'] });
+    expect(parsed.dynamicInputTemplates.fidelity).toMatchObject({ default: 'low', options: ['low', 'high'] });
+  });
+
+  it('accepts an optional enum dynamic template with no options at the legacy boundary', () => {
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        empty: {
+          description: 'Empty enum',
+          fieldKind: 'input',
+          input: 'any',
+          name: 'empty',
+          options: [],
+          required: false,
+          title: 'Empty enum',
+          type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
+          uiHidden: false,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.empty).toMatchObject({ default: '', options: [] });
   });
 });

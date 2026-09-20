@@ -2,6 +2,7 @@ import type { ProjectGraphState, WorkflowNode } from '@features/workflow/core/ty
 import type { WorkflowUiAdapter } from '@features/workflow/ui/WorkflowUiContext';
 import type { ProjectGraphAction } from '@features/workflow/utility';
 
+import { invalidateWorkflowLibraryCache } from '@features/workflow/data/libraryCache';
 import { createProjectGraph, projectGraphReducer } from '@features/workflow/utility';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
@@ -32,11 +33,34 @@ import { CallSavedWorkflowSyncRuntime } from './CallSavedWorkflowSyncRuntime';
 const MISSING_WORKFLOW_ID = 'missing-workflow';
 
 /** A call node as `parseWorkflowJson` produces it for a reloaded parent: an id, and status `loading`. */
-const buildCallNode = (id: string, workflowId: string = MISSING_WORKFLOW_ID): WorkflowNode =>
+const buildCallNode = (
+  id: string,
+  workflowId: string = MISSING_WORKFLOW_ID,
+  withCapturedFields = false
+): WorkflowNode =>
   ({
     data: {
       callSavedWorkflowStatus: 'loading',
-      inputs: { workflow_id: { label: '', name: 'workflow_id', value: workflowId } },
+      inputs: {
+        ...(withCapturedFields ? { captured: { label: 'Captured', name: 'captured', value: 'persisted' } } : {}),
+        workflow_id: { label: '', name: 'workflow_id', value: workflowId },
+      },
+      ...(withCapturedFields
+        ? {
+            dynamicInputTemplates: {
+              captured: {
+                description: 'Captured field',
+                fieldKind: 'input',
+                input: 'any',
+                name: 'captured',
+                required: false,
+                title: 'Captured',
+                type: { batch: false, cardinality: 'SINGLE', name: 'StringField' },
+                uiHidden: false,
+              },
+            },
+          }
+        : {}),
       isIntermediate: false,
       isOpen: true,
       label: '',
@@ -147,16 +171,28 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
       );
     });
 
-    return () => graph;
+    return {
+      readGraph: () => graph,
+      updateGraph: (nextGraph: ProjectGraphState) => {
+        graph = nextGraph;
+        current = snapshot();
+        for (const listener of listeners) {
+          listener();
+        }
+      },
+    };
   };
 
   /** Every node reports the failure, and no further requests go out once they do. */
-  const expectSettled = async (readGraph: () => ProjectGraphState, expected: string[]) => {
+  const expectSettled = async (readGraph: () => ProjectGraphState, expected: string[], expectedCalls?: number) => {
     await settle(250);
 
     expect(readStatuses(readGraph())).toEqual(expected);
 
     const settledCalls = getLibraryWorkflowRecordMock.mock.calls.length;
+    if (expectedCalls !== undefined) {
+      expect(settledCalls).toBe(expectedCalls);
+    }
 
     await settle(250);
 
@@ -164,7 +200,7 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
   };
 
   it('settles a single node', async () => {
-    const readGraph = await mountWith([buildCallNode('call-1')]);
+    const { readGraph } = await mountWith([buildCallNode('call-1')]);
 
     await expectSettled(readGraph, ['error']);
   });
@@ -172,14 +208,57 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
   // The contrast that pins the cause: the same two nodes, but distinct ids, so
   // the shared retry flag is never contended.
   it('settles two nodes naming different unreachable workflows', async () => {
-    const readGraph = await mountWith([buildCallNode('call-1', 'missing-a'), buildCallNode('call-2', 'missing-b')]);
+    const { readGraph } = await mountWith([buildCallNode('call-1', 'missing-a'), buildCallNode('call-2', 'missing-b')]);
 
     await expectSettled(readGraph, ['error', 'error']);
   });
 
   it('settles two nodes naming the same unreachable workflow', async () => {
-    const readGraph = await mountWith([buildCallNode('call-1'), buildCallNode('call-2')]);
+    const { readGraph } = await mountWith([buildCallNode('call-1'), buildCallNode('call-2')]);
 
-    await expectSettled(readGraph, ['error', 'error']);
+    await expectSettled(readGraph, ['error', 'error'], 1);
+  });
+
+  it('keeps recalled dynamic fields visible when the child workflow is unavailable', async () => {
+    const { readGraph } = await mountWith([buildCallNode('call-1', MISSING_WORKFLOW_ID, true)]);
+
+    await expectSettled(readGraph, ['error']);
+
+    const node = readGraph().nodes[0];
+    expect(node.type === 'invocation' && node.data.dynamicInputTemplates).toHaveProperty('captured');
+    expect(node.type === 'invocation' && node.data.inputs.captured?.value).toBe('persisted');
+  });
+
+  it('keeps a switched workflow retryable when the previous request settles late', async () => {
+    let rejectWorkflowA: ((error: Error) => void) | undefined;
+    getLibraryWorkflowRecordMock.mockImplementation((workflowId: string) => {
+      if (workflowId === 'workflow-a') {
+        return new Promise((_resolve, reject) => {
+          rejectWorkflowA = reject;
+        });
+      }
+
+      return Promise.reject(new Error('not found'));
+    });
+
+    const { readGraph, updateGraph } = await mountWith([buildCallNode('call-1', 'workflow-a')]);
+    await settle(25);
+
+    updateGraph(
+      projectGraphReducer(readGraph(), {
+        fieldName: 'workflow_id',
+        nodeId: 'call-1',
+        type: 'setFieldValue',
+        value: 'workflow-b',
+      })
+    );
+    await settle(25);
+    expect(readStatuses(readGraph())).toEqual(['error']);
+
+    invalidateWorkflowLibraryCache('workflow-b');
+    rejectWorkflowA?.(new Error('workflow A settled late'));
+    await settle(25);
+
+    expect(getLibraryWorkflowRecordMock).toHaveBeenCalledTimes(3);
   });
 });

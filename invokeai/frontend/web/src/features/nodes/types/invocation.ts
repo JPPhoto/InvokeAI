@@ -44,6 +44,10 @@ const zWebv2DynamicInputTemplate = z.preprocess((value) => {
 
   const template = result.data;
   const options = template.options?.map(String);
+  const defaultValue =
+    template.type.name === 'EnumField' && (template.default === undefined || template.default === null)
+      ? (options?.[0] ?? '')
+      : template.default;
   return {
     ...template,
     fieldKind: 'input' as const,
@@ -55,9 +59,9 @@ const zWebv2DynamicInputTemplate = z.preprocess((value) => {
     multipleOf: template.multipleOf ?? undefined,
     options: options ?? undefined,
     default:
-      template.type.name === 'EnumField' && template.default !== undefined && template.default !== null
-        ? String(template.default)
-        : template.default,
+      template.type.name === 'EnumField' && defaultValue !== undefined && defaultValue !== null
+        ? String(defaultValue)
+        : defaultValue,
     originalType: template.type.originalType,
     type: template.type,
     ui_choice_labels: template.uiChoiceLabels ?? undefined,

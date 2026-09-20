@@ -504,7 +504,9 @@ export const serializeWorkflowJsonForSubmission = (document: ProjectGraphState):
         }
 
         const { dynamicInputTemplates: _dynamicInputTemplates, ...data } = node.data;
-        return { ...node, data };
+        return node.data.type === 'call_saved_workflow' && isRecord(_dynamicInputTemplates)
+          ? { ...node, data: { ...data, dynamicInputTemplates: _dynamicInputTemplates } }
+          : { ...node, data };
       }),
   };
 };

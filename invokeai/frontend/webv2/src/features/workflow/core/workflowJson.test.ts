@@ -119,17 +119,29 @@ describe('workflow JSON round-trip', () => {
     });
   });
 
-  it('omits runtime templates from the embedded submission workflow', () => {
+  it('keeps Call Saved Workflow templates for image recall but strips other runtime templates', () => {
     const node = buildInvocationNode(template, { x: 0, y: 0 });
     node.data.dynamicInputTemplates = { runtime: template.inputs.prompt! };
+    const callNode = buildInvocationNode(template, { x: 1, y: 1 });
+    callNode.data = {
+      ...callNode.data,
+      dynamicInputTemplates: { runtime: template.inputs.prompt! },
+      type: 'call_saved_workflow',
+    };
     let doc = createProjectGraph('submission-runtime-fields');
     doc = projectGraphReducer(doc, { node, type: 'addNode' });
+    doc = projectGraphReducer(doc, { node: callNode, type: 'addNode' });
 
     const serialized = serializeWorkflowJsonForSubmission(doc) as {
       nodes: Array<{ data: Record<string, unknown> }>;
     };
 
-    expect(serialized.nodes[0]?.data).not.toHaveProperty('dynamicInputTemplates');
+    expect(
+      serialized.nodes.find((candidate) => candidate.data.type !== 'call_saved_workflow')?.data
+    ).not.toHaveProperty('dynamicInputTemplates');
+    expect(serialized.nodes.find((candidate) => candidate.data.type === 'call_saved_workflow')?.data).toHaveProperty(
+      'dynamicInputTemplates'
+    );
   });
 
   it('omits current-image nodes and their edges from embedded workflows', () => {

@@ -237,12 +237,10 @@ export const syncCallSavedWorkflowFields = (
       (!previousTemplate || sameFieldType(previousTemplate, field.fieldTemplate)) &&
       isWorkflowFieldValueValid(field.fieldTemplate, previous.value);
     const labelOverridden =
-      keepValue &&
       previous &&
       (previous.labelOverride === true ||
         (previousTemplate !== undefined && previous.label !== previousTemplate.title));
     const descriptionOverridden =
-      keepValue &&
       previous &&
       (previous.descriptionOverride === true ||
         (previousTemplate !== undefined

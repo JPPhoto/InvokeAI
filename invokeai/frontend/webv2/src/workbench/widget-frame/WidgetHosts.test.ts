@@ -42,4 +42,13 @@ describe('projectHasWidgetType', () => {
       })
     ).toBe(false);
   });
+
+  it('keeps the workflow host for a library-bound graph after its last call node is removed', () => {
+    expect(
+      projectNeedsWorkflowHost({
+        ...project([]),
+        projectGraph: { libraryWorkflowId: 'library-workflow-1', nodes: [] },
+      })
+    ).toBe(true);
+  });
 });

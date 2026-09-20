@@ -1,3 +1,5 @@
+import type { ProjectGraphState } from '@features/workflow/core/types';
+
 import { ChakraProvider } from '@chakra-ui/react';
 import { createProjectGraph } from '@features/workflow/utility';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
@@ -61,6 +63,15 @@ const createMutablePort = <Snapshot,>(initialSnapshot: Snapshot) => {
     },
   };
 };
+
+const createGraphWithDuplicateWorkflowReturns = (): ProjectGraphState => ({
+  ...createProjectGraph('workflow-1'),
+  libraryWorkflowId: 'library-workflow-1',
+  nodes: [
+    { data: { type: 'workflow_return' }, id: 'return-1', position: { x: 0, y: 0 }, type: 'invocation' },
+    { data: { type: 'workflow_return' }, id: 'return-2', position: { x: 100, y: 0 }, type: 'invocation' },
+  ] as unknown as ProjectGraphState['nodes'],
+});
 
 /**
  * Regression coverage for the StrictMode autosaver-disposal bug: the
@@ -174,6 +185,65 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     // The library dialog must not keep serving the pre-save payload.
     expect(cacheInvalidated).toHaveBeenCalledTimes(1);
     stopListening();
+  });
+
+  it('rejects an autosave when the graph has duplicate workflow returns', async () => {
+    const boundGraph = createGraphWithDuplicateWorkflowReturns();
+    const project = createMutablePort({
+      galleryValues: {},
+      id: 'project-1',
+      isWorkflowRunning: false,
+      projectGraph: boundGraph,
+      workflowValues: {},
+    });
+    const notifications = { error: vi.fn(), info: vi.fn(), success: vi.fn() };
+
+    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
+    const adapter = {
+      commands: {
+        bindLibraryWorkflow: vi.fn(),
+        editGraph: vi.fn(),
+        redo: vi.fn(),
+        replace: vi.fn(),
+        undo: vi.fn(),
+      },
+      getProjectGraph: () => project.port.getSnapshot().projectGraph,
+      notifications,
+      project: project.port,
+      widgets: { open: vi.fn(), patchValues: vi.fn() },
+    } as unknown as WorkflowUiAdapter;
+
+    root = createRoot(host);
+
+    await act(() => {
+      root.render(
+        <StrictMode>
+          <ChakraProvider value={system}>
+            <QueryClientProvider client={queryClient}>
+              <WorkflowUiProvider adapter={adapter}>
+                <WorkflowDialogHost />
+              </WorkflowUiProvider>
+            </QueryClientProvider>
+          </ChakraProvider>
+        </StrictMode>
+      );
+    });
+
+    await act(() => {
+      project.setSnapshot({
+        ...project.port.getSnapshot(),
+        projectGraph: { ...boundGraph, name: 'Invalid duplicate-return edit' },
+      });
+    });
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 2100);
+        })
+    );
+
+    expect(updateLibraryWorkflowMock).not.toHaveBeenCalled();
+    expect(notifications.error).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -355,6 +425,68 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
       });
 
       expect(workflowLibrarySyncStore.getSnapshot().status).toBe('idle');
+    } finally {
+      accountLifecycle.invalidate();
+    }
+  });
+
+  it('does not flush a pending old-account edit after the account switches', async () => {
+    const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
+    const project = createMutablePort({
+      galleryValues: {},
+      id: 'project-1',
+      isWorkflowRunning: false,
+      projectGraph: boundGraph,
+      workflowValues: {},
+    });
+    const notifications = { error: vi.fn(), info: vi.fn(), success: vi.fn() };
+
+    accountLifecycle.activate('workflow-dialog-host-old-account', ':user:workflow-dialog-host-old-account');
+
+    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
+    const adapter = {
+      commands: {
+        bindLibraryWorkflow: vi.fn(),
+        editGraph: vi.fn(),
+        redo: vi.fn(),
+        replace: vi.fn(),
+        undo: vi.fn(),
+      },
+      getProjectGraph: () => project.port.getSnapshot().projectGraph,
+      notifications,
+      project: project.port,
+      widgets: { open: vi.fn(), patchValues: vi.fn() },
+    } as unknown as WorkflowUiAdapter;
+
+    root = createRoot(host);
+
+    try {
+      await act(() => {
+        root.render(
+          <StrictMode>
+            <ChakraProvider value={system}>
+              <QueryClientProvider client={queryClient}>
+                <WorkflowUiProvider adapter={adapter}>
+                  <WorkflowDialogHost />
+                </WorkflowUiProvider>
+              </QueryClientProvider>
+            </ChakraProvider>
+          </StrictMode>
+        );
+      });
+
+      await act(() => {
+        project.setSnapshot({
+          ...project.port.getSnapshot(),
+          projectGraph: { ...boundGraph, name: 'Old account edit' },
+        });
+      });
+
+      accountLifecycle.activate('workflow-dialog-host-new-account', ':user:workflow-dialog-host-new-account');
+      await act(() => root.render(null));
+      await Promise.resolve();
+
+      expect(updateLibraryWorkflowMock).not.toHaveBeenCalled();
     } finally {
       accountLifecycle.invalidate();
     }

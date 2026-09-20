@@ -3992,6 +3992,7 @@
     "loading": "Loading workflows…",
     "loadingMore": "Loading more…",
     "multipleWorkflowReturnNodes": "The workflow must contain exactly one workflow return node before it can be saved.",
+    "multipleWorkflowReturnNodesForTransfer": "The workflow must contain exactly one workflow return node before it can be exported or copied.",
     "moreActions": "More actions",
     "nodeCount_one": "{{count}} node",
     "nodeCount_other": "{{count}} nodes",

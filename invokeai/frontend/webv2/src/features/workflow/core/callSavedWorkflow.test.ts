@@ -210,6 +210,52 @@ describe('Call Saved Workflow dynamic fields', () => {
     expect(changedNode?.type === 'invocation' && changedNode.data.inputs[dynamicFieldName('a')]?.value).toBe(3);
   });
 
+  it('preserves presentation overrides when an incompatible value is reset', () => {
+    const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
+    callNode.id = 'call-1';
+    const fields = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates);
+    let document = syncCallSavedWorkflowFields(
+      { ...createProjectGraph('parent'), nodes: [callNode] },
+      callNode.id,
+      fields,
+      []
+    );
+    document = projectGraphReducer(document, {
+      fieldName: dynamicFieldName('a'),
+      nodeId: callNode.id,
+      type: 'setFieldValue',
+      value: 99,
+    });
+    document = projectGraphReducer(document, {
+      fieldName: dynamicFieldName('a'),
+      label: 'Custom label',
+      nodeId: callNode.id,
+      type: 'setFieldLabel',
+    });
+    document = projectGraphReducer(document, {
+      description: 'Custom description',
+      fieldName: dynamicFieldName('a'),
+      nodeId: callNode.id,
+      type: 'setFieldDescription',
+    });
+
+    const narrowedFields = fields.map((field) =>
+      field.fieldName === dynamicFieldName('a')
+        ? { ...field, fieldTemplate: { ...field.fieldTemplate, maximum: 10 }, initialValue: 5 }
+        : field
+    );
+    const resynced = syncCallSavedWorkflowFields(document, callNode.id, narrowedFields, []);
+    const node = resynced.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
+
+    expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({
+      description: 'Custom description',
+      descriptionOverride: true,
+      label: 'Custom label',
+      labelOverride: true,
+      value: 5,
+    });
+  });
+
   it('honors explicit presentation overrides even when they match the old generated value', () => {
     const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
     callNode.id = 'call-1';

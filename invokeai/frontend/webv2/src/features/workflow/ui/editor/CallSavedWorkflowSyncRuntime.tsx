@@ -137,8 +137,9 @@ const needsDynamicFieldSync = (
 export const CallSavedWorkflowSyncRuntime = () => {
   const queryClient = useQueryClient();
   const { commands, project: projectPort } = useWorkflowUi();
-  const retryableDetailWorkflowIds = useRef(new Set<string>());
+  const retryableDetailWorkflowIds = useRef(new Map<string, string>());
   const previousDetailWorkflowIds = useRef(new Map<string, string>());
+  const previousDetailStatuses = useRef(new Map<string, 'loading' | 'ready' | 'error'>());
   const parseChildWorkflow = useMemo(() => createSavedWorkflowDocumentParser(), []);
   const reconcile = () => {
     const templatesSnapshot = getInvocationTemplatesSnapshot();
@@ -148,6 +149,20 @@ export const CallSavedWorkflowSyncRuntime = () => {
     }
 
     const document = projectPort.getSnapshot().projectGraph;
+    const currentNodeIds = new Set(document.nodes.map((node) => node.id));
+
+    for (const nodeId of retryableDetailWorkflowIds.current.keys()) {
+      if (!currentNodeIds.has(nodeId)) {
+        retryableDetailWorkflowIds.current.delete(nodeId);
+      }
+    }
+
+    for (const nodeId of previousDetailStatuses.current.keys()) {
+      if (!currentNodeIds.has(nodeId)) {
+        previousDetailStatuses.current.delete(nodeId);
+      }
+    }
+
     const setStatus = (nodeId: string, workflowId: string, status: 'loading' | 'ready' | 'error') => {
       const currentDocument = projectPort.getSnapshot().projectGraph;
       const currentNode = currentDocument.nodes.find((candidate) => candidate.id === nodeId);
@@ -170,10 +185,12 @@ export const CallSavedWorkflowSyncRuntime = () => {
       const workflowId =
         typeof node.data.inputs.workflow_id?.value === 'string' ? node.data.inputs.workflow_id.value : '';
       const previousWorkflowId = previousDetailWorkflowIds.current.get(node.id);
+      const previousStatus = previousDetailStatuses.current.get(node.id);
+      const currentStatus = node.data.callSavedWorkflowStatus ?? (workflowId ? 'loading' : 'ready');
+      const detailOptions = workflowId ? savedWorkflowDetailQueryOptions(workflowId) : undefined;
+      const query = detailOptions ? queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey }) : undefined;
 
-      if (workflowId && workflowId !== previousWorkflowId) {
-        retryableDetailWorkflowIds.current.add(workflowId);
-      }
+      previousDetailStatuses.current.set(node.id, currentStatus);
 
       previousDetailWorkflowIds.current.set(node.id, workflowId);
 
@@ -194,18 +211,24 @@ export const CallSavedWorkflowSyncRuntime = () => {
         continue;
       }
 
-      const detailOptions = savedWorkflowDetailQueryOptions(workflowId);
-      const query = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
-
-      if (node.data.callSavedWorkflowStatus === 'loading' && query?.state.status === 'error') {
-        retryableDetailWorkflowIds.current.add(workflowId);
+      if (!detailOptions) {
+        continue;
       }
 
-      const retryWasAuthorized = retryableDetailWorkflowIds.current.has(workflowId);
+      if (
+        node.data.callSavedWorkflowStatus === 'loading' &&
+        previousWorkflowId === workflowId &&
+        previousStatus === 'error' &&
+        query?.state.status === 'error'
+      ) {
+        retryableDetailWorkflowIds.current.set(node.id, workflowId);
+      }
+
+      const retryWasAuthorized = retryableDetailWorkflowIds.current.get(node.id) === workflowId;
 
       if (
         shouldFetchSavedWorkflowDetail(query, {
-          retryErrors: retryableDetailWorkflowIds.current.has(workflowId),
+          retryErrors: retryWasAuthorized,
         })
       ) {
         const hasExistingDetail = query?.state.data !== undefined && query.state.data !== null;
@@ -217,12 +240,24 @@ export const CallSavedWorkflowSyncRuntime = () => {
         void queryClient
           .fetchQuery(detailOptions)
           .then(() => {
-            retryableDetailWorkflowIds.current.delete(workflowId);
+            if (retryableDetailWorkflowIds.current.get(node.id) === workflowId) {
+              retryableDetailWorkflowIds.current.delete(node.id);
+            }
           })
           .catch(() => {
-            retryableDetailWorkflowIds.current.delete(workflowId);
+            if (retryableDetailWorkflowIds.current.get(node.id) === workflowId) {
+              retryableDetailWorkflowIds.current.delete(node.id);
+            }
             const failedQuery = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
+            const currentNode = projectPort
+              .getSnapshot()
+              .projectGraph.nodes.find((candidate) => candidate.id === node.id);
+            const isCurrentWorkflow =
+              currentNode?.type === 'invocation' &&
+              currentNode.data.type === 'call_saved_workflow' &&
+              currentNode.data.inputs.workflow_id?.value === workflowId;
             if (
+              isCurrentWorkflow &&
               shouldRetrySavedWorkflowDetailAfterFailure(
                 retryWasAuthorized,
                 failedQuery?.state.data !== undefined && failedQuery.state.data !== null
@@ -231,7 +266,7 @@ export const CallSavedWorkflowSyncRuntime = () => {
               // Keep the node blocked while stale data is being retried. This
               // permits transient revalidation failures to recover without
               // allowing a deleted child workflow to enqueue stale inputs.
-              retryableDetailWorkflowIds.current.add(workflowId);
+              retryableDetailWorkflowIds.current.set(node.id, workflowId);
             }
             setStatus(node.id, workflowId, 'error');
           });
@@ -302,7 +337,15 @@ export const CallSavedWorkflowSyncRuntime = () => {
     });
     const unsubscribeLibrary = onWorkflowLibraryCacheInvalidated((workflowId) => {
       if (workflowId) {
-        retryableDetailWorkflowIds.current.add(workflowId);
+        for (const node of projectPort.getSnapshot().projectGraph.nodes) {
+          if (
+            node.type === 'invocation' &&
+            node.data.type === 'call_saved_workflow' &&
+            node.data.inputs.workflow_id?.value === workflowId
+          ) {
+            retryableDetailWorkflowIds.current.set(node.id, workflowId);
+          }
+        }
         void queryClient.invalidateQueries({
           exact: true,
           queryKey: savedWorkflowDetailQueryKey(workflowId),
@@ -311,7 +354,15 @@ export const CallSavedWorkflowSyncRuntime = () => {
       } else {
         for (const query of queryClient.getQueryCache().findAll({ queryKey: ['workflow', 'call-saved', 'detail'] })) {
           if (isSavedWorkflowDetailQueryKey(query.queryKey)) {
-            retryableDetailWorkflowIds.current.add(query.queryKey[3]);
+            for (const node of projectPort.getSnapshot().projectGraph.nodes) {
+              if (
+                node.type === 'invocation' &&
+                node.data.type === 'call_saved_workflow' &&
+                node.data.inputs.workflow_id?.value === query.queryKey[3]
+              ) {
+                retryableDetailWorkflowIds.current.set(node.id, query.queryKey[3]);
+              }
+            }
           }
         }
 

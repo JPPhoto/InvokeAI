@@ -6,7 +6,7 @@ import { WidgetFailureBoundary } from './WidgetFailureBoundary';
 
 type WidgetHostProject = {
   floatingWidgets?: Record<string, unknown>;
-  projectGraph?: { nodes: unknown[] };
+  projectGraph?: { libraryWorkflowId?: unknown; nodes: unknown[] };
   widgetInstances: Record<string, { typeId?: string }>;
   widgetRegions: Record<string, { instanceIds: string[] }>;
 };
@@ -24,6 +24,7 @@ export const projectHasWidgetType = (project: WidgetHostProject, widgetTypeId: s
 
 export const projectNeedsWorkflowHost = (project: WidgetHostProject): boolean =>
   projectHasWidgetType(project, 'workflow') ||
+  (typeof project.projectGraph?.libraryWorkflowId === 'string' && project.projectGraph.libraryWorkflowId.length > 0) ||
   (project.projectGraph?.nodes.some((node) => {
     if (typeof node !== 'object' || node === null) {
       return false;

@@ -15,6 +15,7 @@ import { buildConnectorNode, buildInvocationNode, createProjectGraph } from './d
 import {
   buildLayerWorkflowGraph,
   getDefaultLayerWorkflowSelection,
+  getLayerWorkflowInjectedInput,
   getLayerWorkflowInputs,
   getLayerWorkflowOutputs,
   getRunnableLayerWorkflowInputs,
@@ -322,6 +323,22 @@ describe('layer workflow dialog selection', () => {
 });
 
 describe('buildLayerWorkflowGraph', () => {
+  it('preserves an explicit description override when injecting the layer image', () => {
+    expect(
+      getLayerWorkflowInjectedInput(
+        { description: '', descriptionOverride: true, label: 'Layer image', name: 'image', value: undefined },
+        'image',
+        'layer.png'
+      )
+    ).toEqual({
+      description: '',
+      descriptionOverride: true,
+      label: 'Layer image',
+      name: 'image',
+      value: { image_name: 'layer.png' },
+    });
+  });
+
   it('injects a direct-capable input before readiness without mutating the document', () => {
     const processorTemplate = template(
       'processor',
