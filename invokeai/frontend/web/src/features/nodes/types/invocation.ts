@@ -123,8 +123,7 @@ export const zInvocationNodeData = z
           ? (rawInput as { value?: unknown }).value
           : undefined;
       const normalizedInput =
-        dynamicTemplate?.type.name === 'EnumField' &&
-        (typeof rawValue === 'number' || typeof rawValue === 'boolean')
+        dynamicTemplate?.type.name === 'EnumField' && (typeof rawValue === 'number' || typeof rawValue === 'boolean')
           ? { ...(rawInput as Record<string, unknown>), value: String(rawValue) }
           : rawInput;
       const result = instanceSchema.safeParse(normalizedInput);
