@@ -2,12 +2,12 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 890088,
+        "brotliBytes": 890252,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 888921,
+        "gzipBytes": 889073,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2112711,
+        "initialRawBytes": 2113079,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 87580,
@@ -318,15 +318,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1221807,
+        "brotliBytes": 1223010,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1215778,
+        "gzipBytes": 1216850,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3128227,
+        "initialRawBytes": 3131717,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 140321,
+        "ownedRawBytes": 140961,
         "requestCount": 86,
         "scriptRequestCount": 70,
         "sourceOwners": [
@@ -446,6 +446,7 @@
           "source:src/app/AppProviders.tsx",
           "source:src/app/BootWidgetHintController.tsx",
           "source:src/app/FeatureHintsProvider.tsx",
+          "source:src/app/GalleryRealtimeRuntime.tsx",
           "source:src/app/GalleryUiAdapter.tsx",
           "source:src/app/GenerateWidgetSyncRuntime.tsx",
           "source:src/app/GenerationUiAdapter.tsx",
@@ -482,6 +483,7 @@
           "source:src/features/gallery/data/imageUrls.ts",
           "source:src/features/gallery/data/queries.ts",
           "source:src/features/gallery/data/queryCache.ts",
+          "source:src/features/gallery/data/realtimeRuntime.ts",
           "source:src/features/gallery/data/videoUrls.ts",
           "source:src/features/gallery/picker.ts",
           "source:src/features/gallery/queries.ts",
@@ -1030,7 +1032,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-19",
+  "capturedAt": "2026-09-20",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
@@ -1075,7 +1077,9 @@
       "src/features/queue/ui/launchpad/QueueStatusBand.tsx",
       "src/workbench/launchpad/home/livePanels.ts"
     ],
-    "editorForbiddenInitialChunkNames": ["ag-psd"],
+    "editorForbiddenInitialChunkNames": [
+      "ag-psd"
+    ],
     "inactiveWidgetGateOwner": "deepen-widget-registry-loading"
   }
 }
