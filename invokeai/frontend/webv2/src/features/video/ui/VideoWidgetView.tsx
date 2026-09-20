@@ -458,6 +458,24 @@ export const VideoWidgetView = () => {
     !canPlaceReferenceExtendAnchor(values.references, values.sourceVideo?.video_name, maxVideoReferences);
   const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
+  // Media pins the canvas to its own proportions, so the stored preset is not what the output will
+  // be: leaving it on the trigger of a disabled control states a ratio the render will not use. The
+  // preset itself is kept, not rewritten -- it is what the panel goes back to when the media is
+  // removed -- and the trigger names the source instead. Deliberately not the nearest standard
+  // preset: media rarely lands exactly on one, so that would swap one wrong ratio for another.
+  // Truncating, like the Generate panel's own aspect-ratio trigger: the slot clips its value text
+  // rather than wrapping it, so a phrase wider than the control ends mid-word in a docked panel
+  // instead of in an ellipsis.
+  const dimensionSource = dimensions?.source;
+  const derivedSourceValueText = useMemo(
+    () =>
+      dimensionSource && dimensionSource !== 'aspect-ratio' ? (
+        <Text as="span" fontSize="xs" truncate>
+          {t(`widgets.video.dimensionSourceValue.${dimensionSource}`)}
+        </Text>
+      ) : undefined,
+    [dimensionSource, t]
+  );
   const derivedSizeText = dimensions
     ? `${t('widgets.video.derivedSize', { height: dimensions.height, width: dimensions.width })}${
         derivedSourceText ? ` — ${derivedSourceText}` : ''
@@ -614,6 +632,7 @@ export const VideoWidgetView = () => {
                 flex="1"
                 size="xs"
                 value={aspectRatioValue}
+                valueText={derivedSourceValueText}
                 onValueChange={set.aspectRatio}
               />
               <IconButton
