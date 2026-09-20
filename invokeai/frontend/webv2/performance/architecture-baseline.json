@@ -2,12 +2,12 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 889734,
+        "brotliBytes": 890011,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 888487,
+        "gzipBytes": 888798,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2111810,
+        "initialRawBytes": 2112432,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 87580,
@@ -318,15 +318,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1216517,
+        "brotliBytes": 1220168,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1210216,
+        "gzipBytes": 1214071,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3109003,
+        "initialRawBytes": 3121862,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 139420,
+        "ownedRawBytes": 140544,
         "requestCount": 86,
         "scriptRequestCount": 70,
         "sourceOwners": [
@@ -446,6 +446,7 @@
           "source:src/app/AppProviders.tsx",
           "source:src/app/BootWidgetHintController.tsx",
           "source:src/app/FeatureHintsProvider.tsx",
+          "source:src/app/GalleryRealtimeRuntime.tsx",
           "source:src/app/GalleryUiAdapter.tsx",
           "source:src/app/GenerateWidgetSyncRuntime.tsx",
           "source:src/app/GenerationUiAdapter.tsx",
@@ -482,6 +483,7 @@
           "source:src/features/gallery/data/imageUrls.ts",
           "source:src/features/gallery/data/queries.ts",
           "source:src/features/gallery/data/queryCache.ts",
+          "source:src/features/gallery/data/realtimeRuntime.ts",
           "source:src/features/gallery/data/videoUrls.ts",
           "source:src/features/gallery/picker.ts",
           "source:src/features/gallery/queries.ts",
@@ -1028,7 +1030,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-18",
+  "capturedAt": "2026-09-19",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
