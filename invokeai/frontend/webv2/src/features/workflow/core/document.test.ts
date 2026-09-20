@@ -213,10 +213,12 @@ describe('projectGraphReducer', () => {
     };
 
     expect(getInstance(next)?.description).toBe('Custom help text');
+    expect(getInstance(next)?.descriptionOverride).toBe(true);
 
     next = projectGraphReducer(next, { description: '', fieldName: 'a', nodeId: nodeAId, type: 'setFieldDescription' });
 
     expect(getInstance(next)?.description).toBeUndefined();
+    expect(getInstance(next)?.descriptionOverride).toBe(true);
   });
 
   it('exposing a field twice is a no-op, and form elements reorder', () => {

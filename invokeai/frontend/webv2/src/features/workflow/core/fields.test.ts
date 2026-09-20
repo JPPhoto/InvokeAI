@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { FieldInputTemplate, FieldType } from './types';
 
 import {
+  getEffectiveWorkflowFieldDescription,
   getWorkflowFieldInvalidReason,
   isDirectInputField,
   isLoraFieldCollectionEntry,
@@ -46,6 +47,18 @@ const input = (overrides: Partial<FieldInputTemplate> = {}): FieldInputTemplate 
 });
 
 describe('workflow field validation', () => {
+  it('honors an explicitly cleared description before falling back to a template', () => {
+    const template = input({ description: 'Inherited description' });
+    expect(
+      getEffectiveWorkflowFieldDescription(
+        { name: 'value', label: '', description: '', descriptionOverride: true },
+        template
+      )
+    ).toBe('');
+    expect(getEffectiveWorkflowFieldDescription({ name: 'value', label: '', description: '' }, template)).toBe(
+      'Inherited description'
+    );
+  });
   it('flags missing required direct values and ignores optional fields', () => {
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: undefined })).toBe(
       'Required value.'

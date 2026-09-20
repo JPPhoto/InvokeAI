@@ -90,7 +90,7 @@ import {
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SeedInput } from '@platform/ui/SeedInput';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-react';
+import { FilmIcon, ImageIcon, ImagePlusIcon, RotateCcwIcon, Trash2Icon, XIcon } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -343,10 +343,11 @@ const SelectInput = ({
   value: unknown;
 }) => {
   const collection = useMemo(() => createListCollection({ items: options }), [options]);
-  const selectedValue = useMemo(
-    () => (typeof value === 'string' && options.some((option) => option.value === value) ? [value] : []),
-    [options, value]
-  );
+  const selectedValue = useMemo(() => {
+    const key =
+      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : null;
+    return key !== null && options.some((option) => option.value === key) ? [key] : [];
+  }, [options, value]);
   const selectIds = useMemo(() => (id ? { trigger: `${id}-select` } : undefined), [id]);
   const onSelectValueChange = useCallback(
     ({ value: next }: { value: string[] }) => {
@@ -379,10 +380,17 @@ const EnumInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInpu
   const options = useMemo(
     () =>
       (template.options ?? []).map((option) => ({
-        label: template.uiChoiceLabels?.[option] ?? option,
-        value: option,
+        label: template.uiChoiceLabels?.[String(option)] ?? String(option),
+        value: String(option),
       })),
     [template.options, template.uiChoiceLabels]
+  );
+  const onOptionChange = useCallback(
+    (nextValue: string) => {
+      const option = template.options?.find((candidate) => String(candidate) === nextValue);
+      onChange(option ?? nextValue);
+    },
+    [onChange, template.options]
   );
 
   if (template.name === 'scheduler') {
@@ -395,13 +403,20 @@ const EnumInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInpu
         options={options}
         size="xs"
         value={typeof value === 'string' ? value : null}
-        onValueChange={onChange}
+        onValueChange={onOptionChange}
       />
     );
   }
 
   return (
-    <SelectInput id={id} invalid={invalid} options={options} title={template.title} value={value} onChange={onChange} />
+    <SelectInput
+      id={id}
+      invalid={invalid}
+      options={options}
+      title={template.title}
+      value={value}
+      onChange={onOptionChange}
+    />
   );
 };
 
@@ -1533,8 +1548,9 @@ const CONNECTION_ONLY_FALLBACK = (
   </Text>
 );
 
-const SavedWorkflowInput = ({ onChange, template, value }: WorkflowFieldInputProps) => {
+const SavedWorkflowInput = ({ nodeId, onChange, template, value }: WorkflowFieldInputProps) => {
   const { t } = useTranslation();
+  const { commands } = useWorkflowUi();
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(search);
   const ownedParams = useMemo(() => getSavedWorkflowPickerOwnedQuery(deferredSearch), [deferredSearch]);
@@ -1573,6 +1589,22 @@ const SavedWorkflowInput = ({ onChange, template, value }: WorkflowFieldInputPro
   }, [items, selectedOption]);
   const displayState = getSavedWorkflowDisplayState(selectionState);
   const clearSelection = useCallback(() => onChange(''), [onChange]);
+  const onWorkflowChange = useCallback(
+    (nextValue: string | null) => {
+      if (nodeId && nextValue === workflowId && workflowId) {
+        commands.editGraph({ nodeId, type: 'retryCallSavedWorkflow' });
+        return;
+      }
+
+      onChange(nextValue);
+    },
+    [commands, nodeId, onChange, workflowId]
+  );
+  const retrySelection = useCallback(() => {
+    if (nodeId && workflowId) {
+      commands.editGraph({ nodeId, type: 'retryCallSavedWorkflow' });
+    }
+  }, [commands, nodeId, workflowId]);
   const fetchNextPage = useCallback(() => {
     if (shouldFetchNextSavedWorkflowPickerPage(ownedQuery)) {
       void ownedQuery.fetchNextPage();
@@ -1602,9 +1634,21 @@ const SavedWorkflowInput = ({ onChange, template, value }: WorkflowFieldInputPro
           searchPlaceholder={isLoading ? t('nodes.savedWorkflowListLoading') : t('nodes.savedWorkflowSearch')}
           value={selectedOption?.value ?? null}
           onInputValueChange={setSearch}
+          onItemReselect={retrySelection}
           onListScrollToBottom={fetchNextPage}
-          onValueChange={onChange}
+          onValueChange={onWorkflowChange}
         />
+        {nodeId && workflowId && detailQuery.isError ? (
+          <IconButton
+            aria-label={t('common.retry')}
+            className="nodrag"
+            size="xs"
+            variant="ghost"
+            onClick={retrySelection}
+          >
+            <RotateCcwIcon />
+          </IconButton>
+        ) : null}
         {workflowId ? (
           <IconButton
             aria-label={t('nodes.savedWorkflowClear')}

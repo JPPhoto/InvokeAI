@@ -18,7 +18,7 @@ const zWebv2DynamicInputTemplateSource = z.object({
   minimum: z.number().nullable().optional(),
   multipleOf: z.number().nullable().optional(),
   name: z.string(),
-  options: z.array(z.string()).nullable().optional(),
+  options: z.array(z.unknown()).nullable().optional(),
   required: z.boolean(),
   title: z.string(),
   type: z.object({
@@ -43,6 +43,7 @@ const zWebv2DynamicInputTemplate = z.preprocess((value) => {
   }
 
   const template = result.data;
+  const options = template.options?.map(String);
   return {
     ...template,
     fieldKind: 'input' as const,
@@ -52,7 +53,11 @@ const zWebv2DynamicInputTemplate = z.preprocess((value) => {
     maximum: template.maximum ?? undefined,
     minimum: template.minimum ?? undefined,
     multipleOf: template.multipleOf ?? undefined,
-    options: template.options ?? undefined,
+    options: options ?? undefined,
+    default:
+      template.type.name === 'EnumField' && template.default !== undefined && template.default !== null
+        ? String(template.default)
+        : template.default,
     originalType: template.type.originalType,
     type: template.type,
     ui_choice_labels: template.uiChoiceLabels ?? undefined,
@@ -112,7 +117,17 @@ export const zInvocationNodeData = z
     const instanceSchema = nodeAcceptsExtraInputs(data.type) ? zFieldInputInstanceWithExtras : zFieldInputInstance;
     const inputs: Record<string, FieldInputInstance> = {};
     for (const [name, rawInput] of Object.entries(data.inputs)) {
-      const result = instanceSchema.safeParse(rawInput);
+      const dynamicTemplate = data.dynamicInputTemplates[name];
+      const rawValue =
+        rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)
+          ? (rawInput as { value?: unknown }).value
+          : undefined;
+      const normalizedInput =
+        dynamicTemplate?.type.name === 'EnumField' &&
+        (typeof rawValue === 'number' || typeof rawValue === 'boolean')
+          ? { ...(rawInput as Record<string, unknown>), value: String(rawValue) }
+          : rawInput;
+      const result = instanceSchema.safeParse(normalizedInput);
       if (!result.success) {
         ctx.addIssue({
           code: 'custom',

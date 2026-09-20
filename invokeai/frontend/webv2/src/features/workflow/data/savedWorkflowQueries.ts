@@ -33,13 +33,20 @@ export interface SavedWorkflowDetailFetchOptions {
   retryErrors?: boolean;
 }
 
+/** Authorizes one recovery fetch after an unrequested stale-detail revalidation failure. */
+export const shouldRetrySavedWorkflowDetailAfterFailure = (
+  retryWasAuthorized: boolean,
+  hasExistingDetail: boolean
+): boolean => !retryWasAuthorized && hasExistingDetail;
+
 export const shouldFetchSavedWorkflowDetail = (
   query: SavedWorkflowDetailQueryLike | undefined,
   options: SavedWorkflowDetailFetchOptions = {}
 ): boolean =>
   query === undefined ||
   (query.state.fetchStatus === 'idle' &&
-    ((query.state.isInvalidated && query.state.status === 'success') ||
+    ((query.state.status === 'pending' && query.state.data === undefined) ||
+      (query.state.isInvalidated && query.state.status === 'success') ||
       (options.retryErrors === true && query.state.status === 'error')));
 
 export const getSavedWorkflowDetailQueryStatus = (

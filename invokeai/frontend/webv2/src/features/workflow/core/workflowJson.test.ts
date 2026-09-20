@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import type { FieldInputTemplate, InvocationTemplate } from './types';
+import type { FieldInputTemplate, InvocationTemplate, ProjectGraphState } from './types';
 
+import { compileProjectGraph } from './buildGraph';
 import {
   buildCurrentImageNode,
   buildConnectorNode,
@@ -11,7 +12,9 @@ import {
   getFormChildren,
   projectGraphReducer,
 } from './document';
-import { parseWorkflowJson, serializeWorkflowJson } from './workflowJson';
+import validForLoop from './fixtures/for-loop-valid.json';
+import { validateForLoopGraph } from './forLoops';
+import { parseWorkflowJson, serializeWorkflowJson, serializeWorkflowJsonForSubmission } from './workflowJson';
 
 const template: InvocationTemplate = {
   category: 'test',
@@ -113,6 +116,70 @@ describe('workflow JSON round-trip', () => {
     expect(serialized.nodes[0]?.data).toHaveProperty('dynamicInputTemplates');
     expect(parseWorkflowJson(serialized).document.nodes[0]).toMatchObject({
       data: { dynamicInputTemplates: { runtime: template.inputs.prompt } },
+    });
+  });
+
+  it('omits runtime templates from the embedded submission workflow', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    node.data.dynamicInputTemplates = { runtime: template.inputs.prompt! };
+    let doc = createProjectGraph('submission-runtime-fields');
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+
+    const serialized = serializeWorkflowJsonForSubmission(doc) as {
+      nodes: Array<{ data: Record<string, unknown> }>;
+    };
+
+    expect(serialized.nodes[0]?.data).not.toHaveProperty('dynamicInputTemplates');
+  });
+
+  it('omits current-image nodes and their edges from embedded workflows', () => {
+    const invocation = buildInvocationNode(template, { x: 0, y: 0 });
+    const currentImage = buildCurrentImageNode({ x: 1, y: 1 });
+    let doc = createProjectGraph('submission-legacy-shape');
+    doc = projectGraphReducer(doc, { node: invocation, type: 'addNode' });
+    doc = projectGraphReducer(doc, { node: currentImage, type: 'addNode' });
+    doc.edges = [
+      {
+        id: 'current-image-edge',
+        source: currentImage.id,
+        sourceHandle: 'image',
+        target: invocation.id,
+        targetHandle: 'prompt',
+        type: 'loop_linkage',
+      },
+    ];
+
+    const serialized = serializeWorkflowJsonForSubmission(doc) as {
+      edges: Array<Record<string, unknown>>;
+      nodes: Array<Record<string, unknown>>;
+    };
+
+    expect(serialized.nodes.some((node) => node.type === 'current_image')).toBe(false);
+    expect(serialized.edges).toEqual([]);
+  });
+
+  it('preserves direct loop linkage when embedding a workflow for image recall', () => {
+    const doc: ProjectGraphState = {
+      ...createProjectGraph('embedded-loop'),
+      nodes: validForLoop.nodes as ProjectGraphState['nodes'],
+      edges: validForLoop.edges as ProjectGraphState['edges'],
+    };
+    expect(validateForLoopGraph(doc)).toBeNull();
+
+    const recalled = parseWorkflowJson(serializeWorkflowJsonForSubmission(doc)).document;
+
+    expect(recalled.edges.find((edge) => edge.id === 'linkage')?.type).toBe('loop_linkage');
+    expect(validateForLoopGraph(recalled)).toBeNull();
+    const compiled = compileProjectGraph(recalled, {
+      for: { ...template, type: 'for' },
+      for_return: { ...template, type: 'for_return' },
+      integer: { ...template, type: 'integer' },
+      workflow_return: { ...template, type: 'workflow_return' },
+    });
+    expect(compiled.backendGraph.edges).toContainEqual({
+      destination: { field: 'loop_linkage', node_id: 'return' },
+      source: { field: 'loop_linkage', node_id: 'for' },
+      type: 'loop_linkage',
     });
   });
 

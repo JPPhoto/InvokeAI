@@ -14,6 +14,7 @@ import {
   createWorkflowId,
   getCompatibleInputTemplate,
   getCompatibleOutputTemplate,
+  hasMultipleWorkflowReturnNodes,
   LOOP_LINKAGE_FIELD,
   resolveConnectorSource,
   shouldAddForReturnLoopLinkage,
@@ -297,6 +298,9 @@ export const WorkflowDialogHost = () => {
         // Same scope discipline as the manual save paths: never let a
         // debounced write land in the next account's library.
         const owner = captureAccountScope();
+        if (hasMultipleWorkflowReturnNodes(projectStore.getSnapshot().projectGraph)) {
+          throw new Error('Workflow contains multiple workflow_return nodes.');
+        }
         await updateLibraryWorkflow(workflowId, serialized, owner.signal);
         assertAccountScopeCurrent(owner);
         // The library dialog serves cached payloads and pages; a save changes both.

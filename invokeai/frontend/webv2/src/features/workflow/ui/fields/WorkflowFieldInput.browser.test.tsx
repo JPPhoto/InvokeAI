@@ -20,6 +20,7 @@ const resolveItemMock = vi.fn();
 
 const pickerState = vi.hoisted(() => ({ accept: null as readonly string[] | null }));
 const workflowApiMock = vi.hoisted(() => ({ apiFetch: vi.fn(), apiFetchJson: vi.fn() }));
+const workflowCommandsMock = vi.hoisted(() => ({ editGraph: vi.fn() }));
 
 vi.mock('@platform/transport/http', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -112,7 +113,7 @@ const projectSnapshot = {
 
 vi.mock('@features/workflow/ui/WorkflowUiContext', () => ({
   useWorkflowProjectSelector: (selector: (project: typeof projectSnapshot) => unknown) => selector(projectSnapshot),
-  useWorkflowUi: () => ({ project: { getSnapshot: () => projectSnapshot } }),
+  useWorkflowUi: () => ({ commands: workflowCommandsMock, project: { getSnapshot: () => projectSnapshot } }),
 }));
 
 const TEXTAREA_TEMPLATE = {
@@ -152,6 +153,13 @@ const SAVED_WORKFLOW_TEMPLATE = {
   name: 'workflow_id',
   title: 'Workflow',
   type: { batch: false, cardinality: 'SINGLE', name: 'SavedWorkflowField' },
+} as unknown as FieldInputTemplate;
+
+const NUMERIC_ENUM_TEMPLATE = {
+  name: 'max_seq_len',
+  options: [256, 512],
+  title: 'Maximum sequence length',
+  type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
 } as unknown as FieldInputTemplate;
 
 const makeFrameNode = (videoValue: { video_name: string } | undefined) => ({
@@ -208,6 +216,7 @@ beforeEach(() => {
   resolveItemMock.mockResolvedValue(SELECTED_GALLERY_VIDEO);
   workflowApiMock.apiFetch.mockReset().mockResolvedValue(new Response());
   workflowApiMock.apiFetchJson.mockReset();
+  workflowCommandsMock.editGraph.mockReset();
   // Module-level capture: without this the next test's wait is satisfied by the previous test's
   // props and asserts against a picker that is no longer mounted.
   modelSelectState.props = null;
@@ -331,7 +340,92 @@ describe('WorkflowFieldInput textarea', () => {
   });
 });
 
+describe('WorkflowFieldInput typed enums', () => {
+  it.each([
+    { label: 'numeric', options: [256, 512], selected: 512, next: 256 },
+    { label: 'boolean', options: [false, true], selected: false, next: true },
+    { label: 'string', options: ['small', 'large'], selected: 'large', next: 'small' },
+  ])('shows the selected $label value and preserves its type when changed', async ({ options, selected, next }) => {
+    const onChange = vi.fn();
+    await renderField({ ...NUMERIC_ENUM_TEMPLATE, options }, selected, onChange);
+
+    const trigger = host.querySelector<HTMLElement>('[data-scope="select"][data-part="trigger"]');
+    expect(trigger?.textContent).toContain(String(selected));
+
+    if (!trigger) {
+      throw new Error('Numeric enum trigger not rendered');
+    }
+    await act(() => userEvent.click(trigger));
+
+    const option = Array.from(document.querySelectorAll<HTMLElement>('[data-scope="select"][data-part="item"]')).find(
+      (item) => item.textContent?.includes(String(next))
+    );
+    if (!option) {
+      throw new Error('Numeric enum option not rendered');
+    }
+    await act(() => userEvent.click(option));
+    expect(onChange).toHaveBeenCalledWith(next);
+  });
+});
+
 describe('WorkflowFieldInput saved workflows', () => {
+  it('retries a failed child when its already-selected workflow is picked again', async () => {
+    const selectedWorkflow = {
+      category: 'user',
+      call_saved_workflow_compatibility: { is_callable: true, message: null, reason: 'ok' },
+      description: '',
+      is_public: false,
+      name: 'Selected child',
+      workflow_id: 'selected-child',
+    };
+    workflowApiMock.apiFetchJson.mockImplementation((path: string) =>
+      path.includes('/i/')
+        ? Promise.reject(new Error('Temporary detail failure'))
+        : Promise.resolve({ items: [selectedWorkflow], page: 0, pages: 1, total: 1 })
+    );
+    const onChange = vi.fn();
+    await renderField(SAVED_WORKFLOW_TEMPLATE, 'selected-child', onChange, 'call-node');
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.value).toBe('Selected child')
+    );
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLButtonElement>('button[aria-label="common.retry"]')).not.toBeNull()
+    );
+
+    const input = host.querySelector<HTMLInputElement>('input[role="combobox"]');
+    if (!input) {
+      throw new Error('Saved workflow combobox not rendered');
+    }
+    await act(() => userEvent.click(input));
+    const selectedItem = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-scope="combobox"][data-part="item"]')
+    ).find((item) => item.textContent?.includes('Selected child'));
+    if (!selectedItem) {
+      throw new Error('Selected workflow option not rendered');
+    }
+    await act(() => userEvent.click(selectedItem));
+
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledWith({
+      nodeId: 'call-node',
+      type: 'retryCallSavedWorkflow',
+    });
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+
+    workflowCommandsMock.editGraph.mockClear();
+    const retryButton = host.querySelector<HTMLButtonElement>('button[aria-label="common.retry"]');
+    if (!retryButton) {
+      throw new Error('Saved workflow retry button not rendered');
+    }
+    await act(() => userEvent.click(retryButton));
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledOnce();
+
+    workflowCommandsMock.editGraph.mockClear();
+    await act(() => userEvent.click(input));
+    await act(() => userEvent.keyboard('{ArrowDown}{Enter}'));
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledOnce();
+  });
+
   it('uses plural loading copy while the workflow list is loading', async () => {
     workflowApiMock.apiFetchJson.mockImplementation(() => new Promise(() => {}));
 

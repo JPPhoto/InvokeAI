@@ -308,8 +308,50 @@ describe('parseOpenApiToTemplates', () => {
 
     expect(parsed.literal_invocation?.inputs.text?.options).toEqual(['fast', 'slow']);
     expect(parsed.literal_invocation?.inputs.text?.default).toBe('slow');
-    expect(parsed.literal_invocation?.inputs.number?.options).toEqual(['2']);
-    expect(parsed.literal_invocation?.inputs.number?.default).toBe('2');
+    expect(parsed.literal_invocation?.inputs.number?.options).toEqual([2]);
+    expect(parsed.literal_invocation?.inputs.number?.default).toBe(2);
+  });
+
+  it('leaves optional null enum defaults unset and rejects malformed enum shapes', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          OptionalEnums: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              type: { default: 'optional_enums' },
+              provider: {
+                default: null,
+                enum: ['openai', 'gemini'],
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Provider',
+                type: 'string',
+              },
+              malformed: {
+                enum: 'not-an-array',
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Malformed',
+                type: 'string',
+                ui_type: 'EnumField',
+              },
+            },
+            title: 'Optional enums',
+            type: 'object',
+          },
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.optional_enums?.inputs.provider?.default).toBeUndefined();
+    expect(parsed.optional_enums?.inputs.malformed?.options).toEqual([]);
   });
 });
 

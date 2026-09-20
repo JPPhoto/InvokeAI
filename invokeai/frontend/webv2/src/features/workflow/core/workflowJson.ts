@@ -28,6 +28,7 @@ const zXYPosition = z.object({ x: z.number().catch(0), y: z.number().catch(0) })
 // legacy behaviour rather than a corrupted value.
 const zFieldInstance = z.object({
   description: z.string().optional().catch(undefined),
+  descriptionOverride: z.boolean().optional().catch(undefined),
   label: z.string().catch(''),
   labelOverride: z.boolean().optional().catch(undefined),
   name: z.string(),
@@ -336,7 +337,9 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
     for (const [name, instance] of Object.entries(node.data.inputs)) {
       inputs[name] = {
         description: instance.description,
+        ...(instance.descriptionOverride === undefined ? {} : { descriptionOverride: instance.descriptionOverride }),
         label: instance.label,
+        ...(instance.labelOverride === undefined ? {} : { labelOverride: instance.labelOverride }),
         name: instance.name || name,
         ...(instance.seedMode === undefined ? {} : { seedMode: instance.seedMode }),
         value: instance.value,
@@ -463,3 +466,45 @@ export const serializeWorkflowJson = (document: ProjectGraphState): Record<strin
   tags: document.tags,
   version: document.workflowVersion,
 });
+
+/** True when the legacy WorkflowWithoutID schema can accept the workflow's output contract. */
+export const hasMultipleWorkflowReturnNodes = (document: ProjectGraphState): boolean =>
+  document.nodes.filter((node) => node.type === 'invocation' && node.data.type === 'workflow_return').length > 1;
+
+/**
+ * Serializes the queue/image-metadata projection of a document.
+ * Runtime-only dynamic templates and current-image decorations must not
+ * leak into the workflow embedded in a submission. Loop linkage remains
+ * intact so webv2 can recall the workflow from generated images.
+ */
+export const serializeWorkflowJsonForSubmission = (document: ProjectGraphState): Record<string, unknown> => {
+  const serialized = serializeWorkflowJson(document);
+  const currentImageNodeIds = new Set(
+    document.nodes.filter((node) => node.type === 'current_image').map((node) => node.id)
+  );
+  const nodes = Array.isArray(serialized.nodes) ? serialized.nodes : [];
+  const edges = Array.isArray(serialized.edges) ? serialized.edges : [];
+
+  return {
+    ...serialized,
+    edges: edges
+      .filter((edge): edge is Record<string, unknown> => isRecord(edge))
+      .filter(
+        (edge) =>
+          typeof edge.source !== 'string' ||
+          typeof edge.target !== 'string' ||
+          (!currentImageNodeIds.has(edge.source) && !currentImageNodeIds.has(edge.target))
+      ),
+    nodes: nodes
+      .filter((node): node is Record<string, unknown> => isRecord(node))
+      .filter((node) => node.type !== 'current_image')
+      .map((node) => {
+        if (!isRecord(node.data) || node.type !== 'invocation') {
+          return node;
+        }
+
+        const { dynamicInputTemplates: _dynamicInputTemplates, ...data } = node.data;
+        return { ...node, data };
+      }),
+  };
+};

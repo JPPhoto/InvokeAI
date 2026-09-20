@@ -40,8 +40,8 @@ export interface FieldInputTemplate {
   uiOrder: number | null;
   uiComponent: 'slider' | 'textarea' | 'video-frame-index' | null;
   uiChoiceLabels: Record<string, string> | null;
-  /** Enum choices when the field is an EnumField. */
-  options: string[] | null;
+  /** Enum choices when the field is an EnumField. Values retain backend types. */
+  options: unknown[] | null;
   minimum: number | null;
   maximum: number | null;
   exclusiveMinimum: number | null;
@@ -91,6 +91,8 @@ export interface WorkflowFieldInstance {
   labelOverride?: boolean;
   /** User override of the template's field description (shown in the Linear UI). */
   description?: string;
+  /** True when the description was explicitly changed by the user, including clearing it. */
+  descriptionOverride?: boolean;
   /**
    * How a seed input (`isSeedInputField`) moves between queued runs. Absent means
    * fixed: what every document authored before seed modes did, and what a legacy

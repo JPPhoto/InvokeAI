@@ -1,6 +1,14 @@
 import { SEED_MAX } from '@platform/core/seed';
 
-import type { FieldInputTemplate, FieldType } from './types';
+import type { FieldInputTemplate, FieldType, WorkflowFieldInstance } from './types';
+
+export const getEffectiveWorkflowFieldDescription = (
+  instance: WorkflowFieldInstance | undefined,
+  template: FieldInputTemplate | undefined
+): string =>
+  instance?.descriptionOverride === true
+    ? (instance.description ?? '')
+    : instance?.description || template?.description || '';
 
 /**
  * Field-kind helpers shared by the node editor and the Linear UI panel:
@@ -238,7 +246,16 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
     case 'BooleanField':
       return typeof value === 'boolean';
     case 'EnumField':
-      return isNonEmptyString(value) && (template.options === null || template.options.includes(value));
+      if (value === undefined || value === null) {
+        return !template.required;
+      }
+
+      return (
+        (isNonEmptyString(value) ||
+          (typeof value === 'number' && Number.isFinite(value)) ||
+          typeof value === 'boolean') &&
+        (template.options === null || template.options.includes(value))
+      );
     case 'ModelIdentifierField':
       return hasNonEmptyStringProp(value, 'key');
     case 'LoRAField':

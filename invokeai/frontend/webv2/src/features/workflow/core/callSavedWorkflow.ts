@@ -8,7 +8,7 @@ import type {
 } from './types';
 
 import { getResolvedWorkflowEdges } from './connectors';
-import { isDirectInputField, isWorkflowFieldValueValid } from './fields';
+import { getEffectiveWorkflowFieldDescription, isDirectInputField, isWorkflowFieldValueValid } from './fields';
 import { isInvocationNode } from './types';
 import { validateConnectionTypes } from './validation';
 
@@ -110,7 +110,7 @@ export const getSavedWorkflowDynamicFields = (
 
     seenFieldNames.add(dynamicFieldName);
     const label = field.label || fieldTemplate.title || fieldName;
-    const description = field.description || fieldTemplate.description || '';
+    const description = getEffectiveWorkflowFieldDescription(field, fieldTemplate);
 
     dynamicFields.push({
       description,
@@ -233,30 +233,31 @@ export const syncCallSavedWorkflowFields = (
     const previous = node.data.inputs[field.fieldName];
     const previousTemplate = previousTemplates[field.fieldName];
     const keepValue =
-      previous &&
-      (previousTemplate
-        ? sameFieldType(previousTemplate, field.fieldTemplate)
-        : isWorkflowFieldValueValid(field.fieldTemplate, previous.value));
-    const label =
+      previous !== undefined &&
+      (!previousTemplate || sameFieldType(previousTemplate, field.fieldTemplate)) &&
+      isWorkflowFieldValueValid(field.fieldTemplate, previous.value);
+    const labelOverridden =
       keepValue &&
       previous &&
-      (!previousTemplate ? previous.labelOverride === true : previous.label !== previousTemplate.title)
-        ? previous.label
-        : field.label;
-    const description =
+      (previous.labelOverride === true ||
+        (previousTemplate !== undefined && previous.label !== previousTemplate.title));
+    const descriptionOverridden =
       keepValue &&
       previous &&
-      (!previousTemplate
-        ? (previous.description ?? '') !== ''
-        : (previous.description ?? '') !== previousTemplate.description)
-        ? previous.description
-        : field.description;
+      (previous.descriptionOverride === true ||
+        (previousTemplate !== undefined
+          ? (previous.description ?? '') !== previousTemplate.description
+          : (previous.description ?? '') !== ''));
+    const label = labelOverridden && previous ? previous.label : field.label;
+    const description = descriptionOverridden && previous ? previous.description : field.description;
 
     nextTemplates[field.fieldName] = field.fieldTemplate;
     nextInputs[field.fieldName] = {
       ...(keepValue ? previous : {}),
       description,
+      ...(descriptionOverridden ? { descriptionOverride: true } : {}),
       label,
+      ...(labelOverridden ? { labelOverride: true } : {}),
       name: field.fieldName,
       value: keepValue ? previous.value : field.initialValue,
     };

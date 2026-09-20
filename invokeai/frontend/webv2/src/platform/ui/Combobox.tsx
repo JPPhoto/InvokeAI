@@ -43,6 +43,7 @@ export interface ComboboxProps extends Omit<
   searchPlaceholder?: string;
   value: string | null;
   onInputValueChange?: (value: string) => void;
+  onItemReselect?: (value: string) => void;
   onListScrollToBottom?: () => void;
   onValueChange: (value: string) => void;
 }
@@ -53,6 +54,7 @@ export const Combobox = ({
   inputProps,
   noResultsText,
   onValueChange,
+  onItemReselect,
   options,
   onInputValueChange,
   onListScrollToBottom,
@@ -140,6 +142,14 @@ export const Combobox = ({
     },
     [onValueChange]
   );
+  const handleSelect = useCallback(
+    ({ itemValue }: { itemValue: string }) => {
+      if (itemValue === value) {
+        onItemReselect?.(itemValue);
+      }
+    },
+    [onItemReselect, value]
+  );
 
   return (
     <ChakraCombobox.Root
@@ -157,6 +167,7 @@ export const Combobox = ({
       value={selectedValues}
       onInputValueChange={handleInputValueChange}
       onOpenChange={handleOpenChange}
+      onSelect={onItemReselect ? handleSelect : undefined}
       onValueChange={handleValueChange}
     >
       <ChakraCombobox.Control>

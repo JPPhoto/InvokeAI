@@ -11,7 +11,7 @@ import {
   useWorkflowProjectSelector,
   useWorkflowUi,
 } from '@features/workflow/ui/WorkflowUiContext';
-import { serializeWorkflowJson } from '@features/workflow/utility';
+import { hasMultipleWorkflowReturnNodes, serializeWorkflowJson } from '@features/workflow/utility';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -45,6 +45,11 @@ export const useSaveWorkflowToLibrary = (): {
     const owner = captureAccountScope();
 
     try {
+      if (hasMultipleWorkflowReturnNodes(projectGraph)) {
+        notify.error(t('workflowLibrary.saveFailed'), t('workflowLibrary.multipleWorkflowReturnNodes'));
+        return null;
+      }
+
       const serialized = serializeWorkflowJson(projectGraph);
       let workflowId: string;
       let syncedSerialized = serialized;
@@ -99,6 +104,11 @@ export const useSaveWorkflowToLibrary = (): {
       const owner = captureAccountScope();
 
       try {
+        if (hasMultipleWorkflowReturnNodes(document)) {
+          notify.error(t('workflowLibrary.saveFailed'), t('workflowLibrary.multipleWorkflowReturnNodes'));
+          return null;
+        }
+
         const serialized = serializeWorkflowJson(document);
         const workflowId = await createLibraryWorkflow(serialized, owner.signal);
 

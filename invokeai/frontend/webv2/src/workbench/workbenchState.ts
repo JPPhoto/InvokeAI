@@ -145,9 +145,10 @@ import {
   cloneProjectGraph,
   createProjectGraph,
   getProjectGraphUndoEntry,
+  hasMultipleWorkflowReturnNodes,
   normalizeProjectGraph,
   projectGraphReducer,
-  serializeWorkflowJson,
+  serializeWorkflowJsonForSubmission,
   type ProjectGraphAction,
 } from '@features/workflow/utility';
 
@@ -2516,9 +2517,14 @@ const compileInvocationSnapshot = (
     const { graph, ...workflow } = planWorkflowSubmission(project.projectGraph, templatesSnapshot.templates, {
       batchCount: sanitizeBatchCount(widgetStates.workflow?.values.batchCount),
     });
-    const { id: _id, ...workflowJson } = serializeWorkflowJson(project.projectGraph);
+    const { id: _id, ...workflowJson } = serializeWorkflowJsonForSubmission(project.projectGraph);
 
-    return { graph, widgetStates, workflow, workflowJson };
+    return {
+      graph,
+      widgetStates,
+      workflow,
+      ...(hasMultipleWorkflowReturnNodes(project.projectGraph) ? {} : { workflowJson }),
+    };
   }
 
   if (route.sourceId === 'upscale') {

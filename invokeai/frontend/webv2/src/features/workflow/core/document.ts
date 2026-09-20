@@ -314,6 +314,7 @@ export type ProjectGraphAction =
       status?: 'loading' | 'ready' | 'error';
     }
   | { type: 'setCallSavedWorkflowStatus'; nodeId: string; status: 'loading' | 'ready' | 'error' }
+  | { type: 'retryCallSavedWorkflow'; nodeId: string }
   | { type: 'setFieldLabel'; nodeId: string; fieldName: string; label: string }
   | { type: 'setFieldDescription'; nodeId: string; fieldName: string; description: string }
   | { type: 'setFieldSeedMode'; nodeId: string; fieldName: string; seedMode: SeedMode }
@@ -633,6 +634,9 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
     case 'setCallSavedWorkflowStatus': {
       return setCallSavedWorkflowStatus(document, action.nodeId, action.status);
     }
+    case 'retryCallSavedWorkflow': {
+      return setCallSavedWorkflowStatus(document, action.nodeId, 'loading');
+    }
     case 'setFieldLabel': {
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
@@ -641,10 +645,10 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       }));
     }
     case 'setFieldDescription': {
-      // An emptied override falls back to the template description.
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
         description: action.description || undefined,
+        descriptionOverride: true,
       }));
     }
     case 'setFieldSeedMode': {

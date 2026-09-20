@@ -37,6 +37,7 @@ import {
   CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   cloneWorkflowFieldDefault,
   formatOutputFieldValue,
+  getEffectiveWorkflowFieldDescription,
   getFieldTypeLabel,
   getOutputFieldNamesByScope,
   getOutputFieldRows,
@@ -503,7 +504,7 @@ const InputFieldRow = ({
             positioning={{ placement: 'top-start' }}
             content={
               <InputFieldTooltip
-                description={instance?.description || template.description}
+                description={getEffectiveWorkflowFieldDescription(instance, template)}
                 isConnected={isConnected}
                 isExposed={isExposed}
                 label={label}

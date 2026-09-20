@@ -176,8 +176,8 @@ const getStringArrayOrNull = (value: unknown): string[] | null =>
   Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null;
 
 const getEnumValues = (property: JsonObject): unknown[] | null => {
-  if (Array.isArray(property.enum)) {
-    return property.enum;
+  if (property.enum !== undefined) {
+    return Array.isArray(property.enum) ? property.enum : [];
   }
 
   if (property.const !== undefined) {
@@ -197,7 +197,7 @@ const getEnumValues = (property: JsonObject): unknown[] | null => {
   return null;
 };
 
-const getDefaultValueForType = (type: FieldType, options: string[] | null): unknown => {
+const getDefaultValueForType = (type: FieldType, options: unknown[] | null): unknown => {
   if (type.cardinality === 'COLLECTION') {
     return undefined;
   }
@@ -225,9 +225,14 @@ const buildInputTemplate = (
 ): FieldInputTemplate => {
   const enumValues = getEnumValues(property);
   const options = enumValues
-    ? enumValues
-        .filter((value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
-        .map(String)
+    ? enumValues.every(
+        (value) =>
+          typeof value === 'string' ||
+          (typeof value === 'number' && Number.isFinite(value)) ||
+          typeof value === 'boolean'
+      )
+      ? enumValues
+      : []
     : null;
   const input = property.input === 'connection' || property.input === 'direct' ? property.input : 'any';
   const uiChoiceLabels = isJsonObject(property.ui_choice_labels)
@@ -240,9 +245,11 @@ const buildInputTemplate = (
 
   return {
     default:
-      type.name === 'EnumField' && property.default !== undefined && property.default !== null
-        ? String(property.default)
-        : (property.default ?? getDefaultValueForType(type, options)),
+      type.name === 'EnumField' && property.default === null && property.orig_required !== true
+        ? undefined
+        : property.default !== undefined && property.default !== null
+          ? property.default
+          : getDefaultValueForType(type, options),
     description: typeof property.description === 'string' ? property.description : '',
     exclusiveMaximum: getNumberOrNull(property.exclusiveMaximum),
     exclusiveMinimum: getNumberOrNull(property.exclusiveMinimum),

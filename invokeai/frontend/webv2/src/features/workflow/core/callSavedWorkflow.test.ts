@@ -120,6 +120,20 @@ describe('Call Saved Workflow dynamic fields', () => {
     expect(fields[0]?.fieldTemplate.input).toBe('any');
   });
 
+  it('keeps an explicitly cleared child description empty in the parent signature', () => {
+    const child = projectGraphReducer(buildChildWorkflow(), {
+      description: '',
+      fieldName: 'a',
+      nodeId: 'node-1',
+      type: 'setFieldDescription',
+    });
+
+    const fields = getSavedWorkflowDynamicFields(child, templates);
+
+    expect(fields[0]?.description).toBe('');
+    expect(fields[0]?.fieldTemplate.description).toBe('');
+  });
+
   it('preserves compatible dynamic values and resets incompatible values', () => {
     const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
     callNode.id = 'call-1';
@@ -150,6 +164,100 @@ describe('Call Saved Workflow dynamic fields', () => {
 
     expect(node?.data.inputs[dynamicFieldName('a')]?.value).toBe('new default');
     expect(node?.data.inputs[dynamicFieldName('b')]?.value).toBe(2);
+  });
+
+  it('resets dynamic values when same-type bounds or enum options become incompatible', () => {
+    const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
+    callNode.id = 'call-1';
+    const fields = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates);
+    const first = syncCallSavedWorkflowFields(
+      { ...createProjectGraph('parent'), nodes: [callNode] },
+      callNode.id,
+      fields,
+      []
+    );
+    const narrowerFields = fields.map((field) =>
+      field.fieldName === dynamicFieldName('a')
+        ? { ...field, fieldTemplate: { ...field.fieldTemplate, maximum: 10 }, initialValue: 5 }
+        : field
+    );
+    const narrowed = syncCallSavedWorkflowFields(first, callNode.id, narrowerFields, []);
+    const narrowedNode = narrowed.nodes.find((node) => node.id === callNode.id);
+    expect(narrowedNode?.type === 'invocation' && narrowedNode.data.inputs[dynamicFieldName('a')]?.value).toBe(5);
+
+    const enumField = {
+      ...fields[0]!,
+      fieldTemplate: {
+        ...fields[0]!.fieldTemplate,
+        options: [1, 2],
+        type: { batch: false, cardinality: 'SINGLE' as const, name: 'EnumField' },
+      },
+      initialValue: 2,
+    };
+    const withEnum = syncCallSavedWorkflowFields(
+      { ...createProjectGraph('enum-parent'), nodes: [callNode] },
+      callNode.id,
+      [enumField],
+      []
+    );
+    const changedEnum = syncCallSavedWorkflowFields(
+      withEnum,
+      callNode.id,
+      [{ ...enumField, fieldTemplate: { ...enumField.fieldTemplate, options: [3, 4] }, initialValue: 3 }],
+      []
+    );
+    const changedNode = changedEnum.nodes.find((node) => node.id === callNode.id);
+    expect(changedNode?.type === 'invocation' && changedNode.data.inputs[dynamicFieldName('a')]?.value).toBe(3);
+  });
+
+  it('honors explicit presentation overrides even when they match the old generated value', () => {
+    const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
+    callNode.id = 'call-1';
+    const initial = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates).map((field) =>
+      field.fieldName === dynamicFieldName('a')
+        ? { ...field, description: '', fieldTemplate: { ...field.fieldTemplate, description: '' } }
+        : field
+    );
+    let parent = syncCallSavedWorkflowFields(
+      { ...createProjectGraph('parent'), nodes: [callNode] },
+      callNode.id,
+      initial,
+      []
+    );
+    parent = projectGraphReducer(parent, {
+      description: '',
+      fieldName: dynamicFieldName('a'),
+      nodeId: callNode.id,
+      type: 'setFieldDescription',
+    });
+    parent = projectGraphReducer(parent, {
+      fieldName: dynamicFieldName('a'),
+      label: 'Left Addend',
+      nodeId: callNode.id,
+      type: 'setFieldLabel',
+    });
+    const refreshed = syncCallSavedWorkflowFields(
+      parent,
+      callNode.id,
+      initial.map((field) =>
+        field.fieldName === dynamicFieldName('a')
+          ? {
+              ...field,
+              description: 'New child description',
+              fieldTemplate: { ...field.fieldTemplate, description: 'New child description', title: 'New child label' },
+              label: 'New child label',
+            }
+          : field
+      ),
+      []
+    );
+    const node = refreshed.nodes.find((candidate) => candidate.id === callNode.id);
+    expect(node?.type === 'invocation' && node.data.inputs[dynamicFieldName('a')]).toMatchObject({
+      description: undefined,
+      descriptionOverride: true,
+      label: 'Left Addend',
+      labelOverride: true,
+    });
   });
 
   it('preserves dynamic values and user presentation overrides after JSON reload', () => {
@@ -247,6 +355,54 @@ describe('Call Saved Workflow dynamic fields', () => {
     const node = document.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
 
     expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({ label: 'Custom label', labelOverride: true });
+  });
+
+  it('refreshes generated descriptions but preserves an explicit cleared description', () => {
+    const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
+    callNode.id = 'call-1';
+    const initialFields = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates);
+    let document = syncCallSavedWorkflowFields(
+      { ...createProjectGraph('parent'), nodes: [callNode] },
+      callNode.id,
+      initialFields,
+      []
+    );
+    const updatedFields = initialFields.map((field) =>
+      field.fieldName === dynamicFieldName('a')
+        ? {
+            ...field,
+            description: 'Updated child description',
+            fieldTemplate: { ...field.fieldTemplate, description: 'Updated child description' },
+          }
+        : field
+    );
+
+    document = syncCallSavedWorkflowFields(document, callNode.id, updatedFields, []);
+    let node = document.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
+    expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({ description: 'Updated child description' });
+
+    document = projectGraphReducer(document, {
+      description: '',
+      fieldName: dynamicFieldName('a'),
+      nodeId: callNode.id,
+      type: 'setFieldDescription',
+    });
+    const changedAgain = updatedFields.map((field) =>
+      field.fieldName === dynamicFieldName('a')
+        ? {
+            ...field,
+            description: 'Another child description',
+            fieldTemplate: { ...field.fieldTemplate, description: 'Another child description' },
+          }
+        : field
+    );
+
+    document = syncCallSavedWorkflowFields(document, callNode.id, changedAgain, []);
+    node = document.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
+    expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({
+      description: undefined,
+      descriptionOverride: true,
+    });
   });
 
   it('deduplicates duplicate child form fields before syncing', () => {
@@ -422,6 +578,18 @@ describe('Call Saved Workflow dynamic fields', () => {
     expect(
       Object.keys(node?.data.inputs ?? {}).some((name) => name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX))
     ).toBe(false);
+  });
+
+  it('retries a failed selection when the same workflow is chosen again', () => {
+    const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
+    callNode.id = 'call-1';
+    callNode.data.callSavedWorkflowStatus = 'error';
+    const document = { ...createProjectGraph('parent'), nodes: [callNode] };
+
+    const retried = projectGraphReducer(document, { nodeId: callNode.id, type: 'retryCallSavedWorkflow' });
+    const node = retried.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
+
+    expect(node?.data.callSavedWorkflowStatus).toBe('loading');
   });
 });
 

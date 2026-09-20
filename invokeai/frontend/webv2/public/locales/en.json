@@ -3991,6 +3991,7 @@
     "loadedLabel": "Loaded \"{{name}}\" from library",
     "loading": "Loading workflows…",
     "loadingMore": "Loading more…",
+    "multipleWorkflowReturnNodes": "The workflow must contain exactly one workflow return node before it can be saved.",
     "moreActions": "More actions",
     "nodeCount_one": "{{count}} node",
     "nodeCount_other": "{{count}} nodes",

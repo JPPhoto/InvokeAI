@@ -6,18 +6,33 @@ import { WidgetFailureBoundary } from './WidgetFailureBoundary';
 
 type WidgetHostProject = {
   floatingWidgets?: Record<string, unknown>;
+  projectGraph?: { nodes: unknown[] };
   widgetInstances: Record<string, { typeId?: string }>;
   widgetRegions: Record<string, { instanceIds: string[] }>;
 };
 
 export const projectHasWidgetType = (project: WidgetHostProject, widgetTypeId: string): boolean => {
-  const regionInstanceIds = Object.values(project.widgetRegions).flatMap((region) => region.instanceIds);
-  const floatingInstanceIds = Object.keys(project.floatingWidgets ?? {});
-
-  return [...regionInstanceIds, ...floatingInstanceIds].some(
-    (instanceId) => project.widgetInstances[instanceId]?.typeId === widgetTypeId
+  return (
+    Object.values(project.widgetRegions).some((region) =>
+      region.instanceIds.some((instanceId) => project.widgetInstances[instanceId]?.typeId === widgetTypeId)
+    ) ||
+    Object.keys(project.floatingWidgets ?? {}).some(
+      (instanceId) => project.widgetInstances[instanceId]?.typeId === widgetTypeId
+    )
   );
 };
+
+export const projectNeedsWorkflowHost = (project: WidgetHostProject): boolean =>
+  projectHasWidgetType(project, 'workflow') ||
+  (project.projectGraph?.nodes.some((node) => {
+    if (typeof node !== 'object' || node === null) {
+      return false;
+    }
+
+    const candidate = node as { type?: unknown; data?: { type?: unknown } };
+    return candidate.type === 'invocation' && candidate.data?.type === 'call_saved_workflow';
+  }) ??
+    false);
 
 const WidgetHost = ({ widget }: { widget: ReturnType<typeof getWidgetHosts>[number] }) => {
   const Host = use(widget.host!.load());
@@ -54,7 +69,7 @@ const WidgetHostBoundary = ({ widget }: { widget: ReturnType<typeof getWidgetHos
 };
 
 export const WidgetHosts = () => {
-  const hasWorkflowWidget = useActiveProjectSelector((project) => projectHasWidgetType(project, 'workflow'));
+  const hasWorkflowWidget = useActiveProjectSelector(projectNeedsWorkflowHost);
   const widgets = getWidgetHosts().filter((widget) => widget.manifest.id !== 'workflow' || hasWorkflowWidget);
 
   return (

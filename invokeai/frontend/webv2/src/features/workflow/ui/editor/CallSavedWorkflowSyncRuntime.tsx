@@ -8,6 +8,7 @@ import {
   isSavedWorkflowDetailQueryKey,
   savedWorkflowDetailQueryKey,
   savedWorkflowDetailQueryOptions,
+  shouldRetrySavedWorkflowDetailAfterFailure,
   shouldFetchSavedWorkflowDetail,
 } from '@features/workflow/data/savedWorkflowQueries';
 import { getInvocationTemplatesSnapshot, subscribeInvocationTemplates } from '@features/workflow/data/templates';
@@ -196,6 +197,12 @@ export const CallSavedWorkflowSyncRuntime = () => {
       const detailOptions = savedWorkflowDetailQueryOptions(workflowId);
       const query = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
 
+      if (node.data.callSavedWorkflowStatus === 'loading' && query?.state.status === 'error') {
+        retryableDetailWorkflowIds.current.add(workflowId);
+      }
+
+      const retryWasAuthorized = retryableDetailWorkflowIds.current.has(workflowId);
+
       if (
         shouldFetchSavedWorkflowDetail(query, {
           retryErrors: retryableDetailWorkflowIds.current.has(workflowId),
@@ -215,11 +222,18 @@ export const CallSavedWorkflowSyncRuntime = () => {
           .catch(() => {
             retryableDetailWorkflowIds.current.delete(workflowId);
             const failedQuery = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
-            setStatus(
-              node.id,
-              workflowId,
-              getSavedWorkflowDetailQueryStatus(failedQuery) === 'error' ? 'error' : 'loading'
-            );
+            if (
+              shouldRetrySavedWorkflowDetailAfterFailure(
+                retryWasAuthorized,
+                failedQuery?.state.data !== undefined && failedQuery.state.data !== null
+              )
+            ) {
+              // Keep the node blocked while stale data is being retried. This
+              // permits transient revalidation failures to recover without
+              // allowing a deleted child workflow to enqueue stale inputs.
+              retryableDetailWorkflowIds.current.add(workflowId);
+            }
+            setStatus(node.id, workflowId, 'error');
           });
         continue;
       }

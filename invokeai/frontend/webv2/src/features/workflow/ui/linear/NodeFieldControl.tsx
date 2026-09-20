@@ -8,6 +8,7 @@ import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldIn
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import {
   cloneWorkflowFieldDefault,
+  getEffectiveWorkflowFieldDescription,
   getRandomWorkflowFieldValue,
   getResolvedWorkflowEdges,
   getWorkflowFieldInvalidReason,
@@ -67,7 +68,7 @@ export const NodeFieldControl = ({
     (edge) => edge.target === nodeId && edge.targetHandle === fieldName
   );
   const label = instance?.label || template?.title || '';
-  const description = instance?.description || template?.description;
+  const description = getEffectiveWorkflowFieldDescription(instance, template);
   const invalidReason = template
     ? getWorkflowFieldInvalidReason({ isConnected, template, value: instance?.value })
     : null;

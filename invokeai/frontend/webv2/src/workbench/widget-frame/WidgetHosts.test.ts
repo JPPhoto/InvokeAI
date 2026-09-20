@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { projectHasWidgetType } from './WidgetHosts';
+import { projectHasWidgetType, projectNeedsWorkflowHost } from './WidgetHosts';
 
 const project = (instanceIds: string[], floatingIds: string[] = []) => ({
   floatingWidgets: Object.fromEntries(floatingIds.map((id) => [id, {}])),
@@ -23,5 +23,23 @@ describe('projectHasWidgetType', () => {
 
   it('finds widget types mounted in floating windows', () => {
     expect(projectHasWidgetType(project([], ['workflow-1']), 'workflow')).toBe(true);
+  });
+
+  it('mounts the workflow host for a call-saved-workflow graph without a workflow widget', () => {
+    expect(
+      projectNeedsWorkflowHost({
+        ...project([]),
+        projectGraph: { nodes: [{ data: { type: 'call_saved_workflow' }, type: 'invocation' }] },
+      })
+    ).toBe(true);
+  });
+
+  it('does not mount the workflow host for unrelated graphs', () => {
+    expect(
+      projectNeedsWorkflowHost({
+        ...project([]),
+        projectGraph: { nodes: [{ data: { type: 'noise' }, type: 'invocation' }] },
+      })
+    ).toBe(false);
   });
 });

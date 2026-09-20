@@ -5,6 +5,7 @@ import {
   getSavedWorkflowDetailQueryStatus,
   isSavedWorkflowDetailQueryKey,
   savedWorkflowDetailQueryOptions,
+  shouldRetrySavedWorkflowDetailAfterFailure,
   savedWorkflowPickerQueryOptions,
   shouldFetchSavedWorkflowDetail,
 } from './savedWorkflowQueries';
@@ -79,6 +80,12 @@ describe('saved workflow detail query policy', () => {
     expect(savedWorkflowDetailQueryOptions('workflow-1').retry).toBe(false);
     expect(savedWorkflowDetailQueryOptions('workflow-1').gcTime).toBe(Infinity);
     expect(savedWorkflowPickerQueryOptions({ isPublic: true, page: 0 }).staleTime).toBe(30_000);
+  });
+
+  it('allows one stale-detail recovery retry without retrying indefinitely', () => {
+    expect(shouldRetrySavedWorkflowDetailAfterFailure(false, true)).toBe(true);
+    expect(shouldRetrySavedWorkflowDetailAfterFailure(true, true)).toBe(false);
+    expect(shouldRetrySavedWorkflowDetailAfterFailure(false, false)).toBe(false);
   });
 
   it('recovers an invalidated failed lookup with one authorized retry', async () => {

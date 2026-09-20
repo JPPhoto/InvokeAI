@@ -341,10 +341,10 @@ export const isSeedInputField = (template: FieldInputTemplate): boolean =>
   // The modes walk and wrap over 0…SEED_MAX in steps of one, so the template has to
   // accept every value on that walk; a tighter range or step keeps its plain control.
   template.maximum === SEED_MAX &&
-  (template.minimum === null || template.minimum <= 0) &&
-  template.exclusiveMinimum === null &&
-  template.exclusiveMaximum === null &&
-  (template.multipleOf === null || template.multipleOf === 1) &&
+  ((template.minimum ?? null) === null || (template.minimum ?? 0) <= 0) &&
+  (template.exclusiveMinimum ?? null) === null &&
+  (template.exclusiveMaximum ?? null) === null &&
+  ((template.multipleOf ?? null) === null || template.multipleOf === 1) &&
   isDirectInputField(template);
 
 export const getWorkflowFieldSeedMode = (instance: Pick<WorkflowFieldInstance, 'seedMode'> | undefined): SeedMode =>
