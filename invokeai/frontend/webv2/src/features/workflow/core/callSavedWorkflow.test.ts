@@ -120,7 +120,7 @@ describe('Call Saved Workflow dynamic fields', () => {
     expect(fields[0]?.fieldTemplate.input).toBe('any');
   });
 
-  it('keeps an explicitly cleared child description empty in the parent signature', () => {
+  it('uses the child description after clearing a parent description', () => {
     const child = projectGraphReducer(buildChildWorkflow(), {
       description: '',
       fieldName: 'a',
@@ -130,8 +130,8 @@ describe('Call Saved Workflow dynamic fields', () => {
 
     const fields = getSavedWorkflowDynamicFields(child, templates);
 
-    expect(fields[0]?.description).toBe('');
-    expect(fields[0]?.fieldTemplate.description).toBe('');
+    expect(fields[0]?.description).toBe('The a field');
+    expect(fields[0]?.fieldTemplate.description).toBe('The a field');
   });
 
   it('preserves compatible dynamic values and resets incompatible values', () => {
@@ -256,7 +256,7 @@ describe('Call Saved Workflow dynamic fields', () => {
     });
   });
 
-  it('honors explicit presentation overrides even when they match the old generated value', () => {
+  it('honors explicit label overrides while restoring a cleared description', () => {
     const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
     callNode.id = 'call-1';
     const initial = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates).map((field) =>
@@ -299,8 +299,8 @@ describe('Call Saved Workflow dynamic fields', () => {
     );
     const node = refreshed.nodes.find((candidate) => candidate.id === callNode.id);
     expect(node?.type === 'invocation' && node.data.inputs[dynamicFieldName('a')]).toMatchObject({
-      description: undefined,
-      descriptionOverride: true,
+      description: 'New child description',
+      descriptionOverride: false,
       label: 'Left Addend',
       labelOverride: true,
     });
@@ -403,7 +403,7 @@ describe('Call Saved Workflow dynamic fields', () => {
     expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({ label: 'Custom label', labelOverride: true });
   });
 
-  it('refreshes generated descriptions but preserves an explicit cleared description', () => {
+  it('refreshes generated descriptions after clearing an explicit description', () => {
     const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
     callNode.id = 'call-1';
     const initialFields = getSavedWorkflowDynamicFields(buildChildWorkflow(), templates);
@@ -446,8 +446,8 @@ describe('Call Saved Workflow dynamic fields', () => {
     document = syncCallSavedWorkflowFields(document, callNode.id, changedAgain, []);
     node = document.nodes.find((candidate): candidate is WorkflowInvocationNode => candidate.id === callNode.id);
     expect(node?.data.inputs[dynamicFieldName('a')]).toMatchObject({
-      description: undefined,
-      descriptionOverride: true,
+      description: 'Another child description',
+      descriptionOverride: false,
     });
   });
 

@@ -218,7 +218,7 @@ describe('projectGraphReducer', () => {
     next = projectGraphReducer(next, { description: '', fieldName: 'a', nodeId: nodeAId, type: 'setFieldDescription' });
 
     expect(getInstance(next)?.description).toBeUndefined();
-    expect(getInstance(next)?.descriptionOverride).toBe(true);
+    expect(getInstance(next)?.descriptionOverride).toBe(false);
   });
 
   it('exposing a field twice is a no-op, and form elements reorder', () => {

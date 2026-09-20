@@ -243,9 +243,10 @@ export const syncCallSavedWorkflowFields = (
     const descriptionOverridden =
       previous &&
       (previous.descriptionOverride === true ||
-        (previousTemplate !== undefined
-          ? (previous.description ?? '') !== previousTemplate.description
-          : (previous.description ?? '') !== ''));
+        (previous.descriptionOverride === undefined &&
+          (previousTemplate !== undefined
+            ? (previous.description ?? '') !== previousTemplate.description
+            : (previous.description ?? '') !== '')));
     const label = labelOverridden && previous ? previous.label : field.label;
     const description = descriptionOverridden && previous ? previous.description : field.description;
 

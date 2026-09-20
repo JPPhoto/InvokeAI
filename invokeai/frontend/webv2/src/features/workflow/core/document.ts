@@ -648,7 +648,7 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
         description: action.description || undefined,
-        descriptionOverride: true,
+        descriptionOverride: action.description !== '',
       }));
     }
     case 'setFieldSeedMode': {
