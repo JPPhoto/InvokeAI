@@ -154,4 +154,42 @@ describe('zInvocationNodeData: extra-input scoping', () => {
 
     expect(parsed.dynamicInputTemplates.literal).toMatchObject({ default: '2', options: ['2'] });
   });
+
+  it('accepts an enum dynamic template whose optional default is unset', () => {
+    // webv2 leaves `default` unset for an optional enum whose backend default is
+    // null, so the backend receives `None` rather than an invented choice. JSON
+    // drops the undefined key, so the template arrives here without it. Legacy's
+    // `zEnumFieldInputTemplate.default` is a required `z.string()`, and
+    // `zWorkflowV3.parse` throws rather than dropping one template, so the whole
+    // workflow fails to open in this editor.
+    const parsed = zInvocationNodeData.parse({
+      ...buildNodeData('call_saved_workflow', {}),
+      dynamicInputTemplates: {
+        fidelity: {
+          description: 'Input fidelity',
+          exclusiveMaximum: null,
+          exclusiveMinimum: null,
+          fieldKind: 'input',
+          input: 'any',
+          maximum: null,
+          minimum: null,
+          multipleOf: null,
+          name: 'fidelity',
+          options: ['low', 'high'],
+          required: false,
+          title: 'Input Fidelity',
+          type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
+          uiChoiceLabels: null,
+          uiComponent: null,
+          uiHidden: false,
+          uiModelBase: null,
+          uiModelFormat: null,
+          uiModelType: null,
+          uiOrder: null,
+        },
+      },
+    });
+
+    expect(parsed.dynamicInputTemplates.fidelity).toMatchObject({ options: ['low', 'high'] });
+  });
 });
