@@ -16,6 +16,7 @@ export type ModelBaseColorPalette =
   | 'green'
   | 'ice'
   | 'lavender'
+  | 'mint'
   | 'orange'
   | 'periwinkle'
   | 'pink'
@@ -131,7 +132,7 @@ export const MODEL_BASES = {
   'ltx-2': {
     base: 'ltx-2',
     label: 'LTX-2',
-    colorPalette: 'steel',
+    colorPalette: 'mint',
     description: 'Video architecture that generates video with synchronized audio.',
   },
   any: {
