@@ -44,6 +44,9 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     left.steps === right.steps &&
     left.cfgScale === right.cfgScale &&
     left.cfgScaleLowNoise === right.cfgScaleLowNoise &&
+    left.audioCfgScale === right.audioCfgScale &&
+    left.stgScale === right.stgScale &&
+    left.modalityScale === right.modalityScale &&
     left.acceleratorEnabled === right.acceleratorEnabled &&
     stableStringify(left.acceleratorLoraKeys) === stableStringify(right.acceleratorLoraKeys) &&
     left.seed === right.seed &&
@@ -60,6 +63,7 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     stableStringify(left.componentSourceModel) === stableStringify(right.componentSourceModel) &&
     stableStringify(left.h3TransformerModel) === stableStringify(right.h3TransformerModel) &&
     stableStringify(left.h3TextEncoderModel) === stableStringify(right.h3TextEncoderModel) &&
+    stableStringify(left.ltx2TextEncoderModel) === stableStringify(right.ltx2TextEncoderModel) &&
     stableStringify(left.h3HybridBaseModel) === stableStringify(right.h3HybridBaseModel) &&
     left.h3HybridStartBlock === right.h3HybridStartBlock
   );

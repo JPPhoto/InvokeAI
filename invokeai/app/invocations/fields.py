@@ -193,6 +193,11 @@ class FieldDescriptions:
     minimax_h3_audio_vae = "Audio VAE (stereo, 32 kHz) for MiniMax H3"
     minimax_h3_reference_media = "One ordered Ref2VA reference (image or video) for MiniMax H3"
     minimax_h3_reference_conditioning = "Ordered, VAE-encoded Ref2VA reference conditioning for MiniMax H3"
+    ltx2_model = "LTX-2 model (Transformer) to load"
+    ltx2_text_encoder = "Gemma-4 tokenizer and text encoder, and the LTX-2 text connectors"
+    ltx2_audio_vae = "Audio VAE (mel spectrogram) for LTX-2"
+    ltx2_vocoder = "Vocoder (48 kHz stereo) for LTX-2"
+    ltx2_video_conditioning = "First-frame (VAE-latent) conditioning for LTX-2"
     sdxl_main_model = "SDXL Main model (UNet, VAE, CLIP1, CLIP2) to load"
     sdxl_refiner_model = "SDXL Refiner Main Modde (UNet, VAE, CLIP2) to load"
     onnx_main_model = "ONNX Main model (UNet, VAE, CLIP) to load"
@@ -460,6 +465,29 @@ class MiniMaxH3ConditioningField(BaseModel):
     """
 
     conditioning_name: str = Field(description="The name of conditioning tensor")
+
+
+class LTX2ConditioningField(BaseModel):
+    """An LTX-2 conditioning primitive value.
+
+    LTX-2 conditioning is a pair of prompt streams, one per modality, already projected by the
+    text connectors, plus the token mask the connectors emit alongside them.
+    """
+
+    conditioning_name: str = Field(description="The name of conditioning tensor")
+
+
+class LTX2VideoConditioningField(BaseModel):
+    """First-frame (VAE-latent) conditioning for LTX-2 image-to-video.
+
+    The canvas the frame was encoded at rides along so the denoise node can reject a mismatch
+    with a named error rather than a shape failure inside the transformer.
+    """
+
+    latents_name: str = Field(description="Name of the saved [1, 128, 1, H/32, W/32] latent tensor.")
+    width: int = Field(description="Pixel width the frame was encoded at (matches denoise width).")
+    height: int = Field(description="Pixel height the frame was encoded at (matches denoise height).")
+    strength: float = Field(default=1.0, description="How strongly the frame is held, 0 (ignored) to 1 (kept exactly).")
 
 
 class MiniMaxH3FrameConditioningField(BaseModel):

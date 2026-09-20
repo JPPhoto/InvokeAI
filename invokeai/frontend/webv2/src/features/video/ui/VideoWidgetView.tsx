@@ -12,6 +12,7 @@ import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
   canPlaceReferenceExtendAnchor,
+  isVideoTargetResolution,
   pinReferenceExtendAnchor,
   normalizeVideoWidgetValues,
   resolveVideoMode,
@@ -59,9 +60,7 @@ const ASPECT_RATIO_COLLECTION = createListCollection({
 });
 
 const toTargetResolution = (value: string | undefined): VideoWidgetValues['targetResolution'] | null =>
-  value === '480p' || value === '720p' || value === '1080p' || value === '768 highres' || value === '768 lowres'
-    ? value
-    : null;
+  isVideoTargetResolution(value) ? value : null;
 
 const DURATION_FORMATTER = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
@@ -251,6 +250,9 @@ export const VideoWidgetView = () => {
       },
       cfgScale: (cfgScale: number) => patch({ cfgScale }),
       cfgScaleLowNoise: (cfgScaleLowNoise: number) => patch({ cfgScaleLowNoise }),
+      audioCfgScale: (audioCfgScale: number) => patch({ audioCfgScale }),
+      modalityScale: (modalityScale: number) => patch({ modalityScale }),
+      stgScale: (stgScale: number) => patch({ stgScale }),
       fps: (fps: number) => patch({ fps }),
       steps: (steps: number) => patch({ steps }),
       targetResolution: ({ value }: { value: string[] }) => {
@@ -430,8 +432,14 @@ export const VideoWidgetView = () => {
   const framesSlider = useMemo(
     () =>
       policy.frames.kind === 'grid'
-        ? { max: policy.frames.max, min: policy.frames.min, step: policy.frames.step }
+        ? {
+            inputMax: policy.frames.max,
+            max: policy.frames.sliderMax ?? policy.frames.max,
+            min: policy.frames.min,
+            step: policy.frames.step,
+          }
         : {
+            inputMax: policy.frames.choices[policy.frames.choices.length - 1] ?? 0,
             max: policy.frames.choices[policy.frames.choices.length - 1] ?? 0,
             min: policy.frames.choices[0] ?? 0,
             step:
@@ -440,6 +448,7 @@ export const VideoWidgetView = () => {
     [policy.frames]
   );
 
+  const hasAdvancedGuidance = policy.ui.audioCfgVisible || policy.ui.stgVisible || policy.ui.modalityVisible;
   const mode = resolveVideoMode(values);
   const supportsFirstFrame = policy.modes.includes('first-frame') || policy.modes.includes('first-last');
   const supportsLastFrame = policy.modes.includes('first-last') || policy.modes.includes('last-frame');
@@ -637,6 +646,7 @@ export const VideoWidgetView = () => {
           </Field>
           <ScrubberField
             helpText={durationText}
+            inputMax={framesSlider.inputMax}
             label={t('widgets.video.frames')}
             max={framesSlider.max}
             min={framesSlider.min}
@@ -683,16 +693,23 @@ export const VideoWidgetView = () => {
               </Switch.Root>
             </Field>
           ) : null}
-          <ScrubberField
-            hint="steps"
-            inputMax={500}
-            label={t('widgets.video.steps')}
-            max={100}
-            min={policy.minSteps}
-            step={1}
-            value={values.steps}
-            onChange={set.steps}
-          />
+          {policy.ui.stepsEditable ? (
+            <ScrubberField
+              defaultValue={policy.defaults.steps}
+              hint="steps"
+              inputMax={500}
+              label={t('widgets.video.steps')}
+              max={100}
+              min={policy.minSteps}
+              step={1}
+              value={values.steps}
+              onChange={set.steps}
+            />
+          ) : (
+            <Text color="fg.muted" fontSize="2xs">
+              {t('widgets.video.stepsFixed', { steps: policy.defaults.steps })}
+            </Text>
+          )}
           {policy.ui.cfgVisible ? (
             <ScrubberField
               hint="cfgScale"
@@ -726,6 +743,52 @@ export const VideoWidgetView = () => {
           />
         </Stack>
       </GenerationSettingsSection>
+
+      {hasAdvancedGuidance ? (
+        <GenerationSettingsSection label={t('widgets.video.advancedGuidance')} sectionId="video-guidance">
+          <Stack gap="3" p="2">
+            {policy.ui.audioCfgVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.audioCfgScale ?? undefined}
+                helpText={t('widgets.video.audioCfgHelp')}
+                inputMax={100}
+                label={t('widgets.video.audioCfg')}
+                max={15}
+                min={1}
+                step={0.1}
+                value={values.audioCfgScale ?? policy.defaults.audioCfgScale ?? 1}
+                onChange={set.audioCfgScale}
+              />
+            ) : null}
+            {policy.ui.stgVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.stgScale ?? undefined}
+                helpText={t('widgets.video.stgHelp')}
+                inputMax={10}
+                label={t('widgets.video.stg')}
+                max={3}
+                min={0}
+                step={0.1}
+                value={values.stgScale ?? policy.defaults.stgScale ?? 0}
+                onChange={set.stgScale}
+              />
+            ) : null}
+            {policy.ui.modalityVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.modalityScale ?? undefined}
+                helpText={t('widgets.video.modalityHelp')}
+                inputMax={10}
+                label={t('widgets.video.modality')}
+                max={5}
+                min={1}
+                step={0.1}
+                value={values.modalityScale ?? policy.defaults.modalityScale ?? 1}
+                onChange={set.modalityScale}
+              />
+            ) : null}
+          </Stack>
+        </GenerationSettingsSection>
+      ) : null}
 
       <VideoConceptsSection loras={values.loras} model={values.model} onChangeLoras={setLoras} />
       <VideoComponentsSection values={values} onPatch={patch} />

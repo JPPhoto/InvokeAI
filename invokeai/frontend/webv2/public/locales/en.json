@@ -3901,6 +3901,8 @@
         "h3TextEncoderCheckpointHelp": "Required when the Model Components install is components-only (no text-encoder weights); a full install provides its own.",
         "h3TextEncoderOptionalHelp": "Optional single-file Qwen3-VL encoder used in place of the main model’s text encoder.",
         "h3TextEncoderRequiredHelp": "Required: this install has no text-encoder weights, so the text encoder must come from a single-file Qwen3-VL checkpoint.",
+        "ltx2ComponentSourceHelp": "The LTX-2 components install supplying the VAEs, vocoder and text connectors.",
+        "ltx2TextEncoderHelp": "LTX-2’s Gemma-4 text encoder. Required: no LTX-2 model carries one.",
         "wanComponentSourceHelp": "Select a Diffusers Wan model to provide VAE and text-encoder components.",
         "wanLowNoiseHelp": "Optional second A14B expert. Without it the high-noise expert runs the whole schedule.",
         "wanOptionalWithSourceHelp": "Required unless a Diffusers component source is available."
@@ -3945,7 +3947,15 @@
       "referencesHelp": "Add up to 3 videos and 9 images to condition the generation. A video reference can contribute its image track, its soundtrack, or both. In the text prompt, refer to the conditionings as <Picture 1>, <Video 1>, <Audio 1> and so forth.",
       "removeReference": "Remove reference",
       "staleReferences": "References are set but the selected model cannot use them.",
-      "uploadVideoReference": "Upload video or audio"
+      "uploadVideoReference": "Upload video or audio",
+      "advancedGuidance": "Advanced guidance",
+      "audioCfg": "Audio CFG",
+      "audioCfgHelp": "How hard the soundtrack follows the prompt. LTX-2 guides audio far harder than picture.",
+      "stg": "STG",
+      "stgHelp": "Spatio-temporal guidance sharpens motion by steering away from a pass with one attention block skipped. 0 turns it off and saves a forward per step.",
+      "modality": "Modality guidance",
+      "modalityHelp": "How tightly the picture and its soundtrack are held to each other. 1 turns it off and saves a forward per step.",
+      "stepsFixed": "This checkpoint samples a fixed schedule of {{steps}} steps."
     }
   },
   "workflowLibrary": {

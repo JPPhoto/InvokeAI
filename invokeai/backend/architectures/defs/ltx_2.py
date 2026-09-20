@@ -15,13 +15,14 @@ register(
     BaseModelType.LTX2,
     LatentSpaceFacet(LTX2_128),
     ConditioningFacet(LTX2ConditioningInfo),
-    # Dev samples a guided ~40-step flow schedule (video CFG 3.0); Distilled runs a fixed 8-sigma
-    # schedule with guidance off, so cfg_scale 1.0 means "none". 1280x704 is a 32-multiple 16:9
-    # canvas that a 121-frame clip fits on one 48 GB card at.
+    # Dev samples a guided 30-step shifted schedule at video CFG 3.0; Distilled runs a fixed
+    # 8-sigma schedule with guidance off, so cfg_scale 1.0 means "none". Both are the released
+    # pipeline's values for this generation. 1248x704 is the 32-multiple 16:9 canvas a 121-frame
+    # clip fits on one 48 GB card at.
     DefaultSettingsFacet(
         {
-            LTX2VariantType.Distilled: MainModelDefaultSettings(steps=8, cfg_scale=1.0, width=1280, height=704),
-            None: MainModelDefaultSettings(steps=40, cfg_scale=3.0, width=1280, height=704),
+            LTX2VariantType.Distilled: MainModelDefaultSettings(steps=8, cfg_scale=1.0, width=1248, height=704),
+            None: MainModelDefaultSettings(steps=30, cfg_scale=3.0, width=1248, height=704),
         }
     ),
     # Video only in this version: text-to-video and first-frame image-to-video, with synchronized
@@ -34,8 +35,9 @@ register(
         # The VAE's 32x spatial compression at patch size 1.
         dimension_grid=32,
         guidance_label="CFG",
-        # No guidance range yet: `ltx2_denoise` (and the slider that reaches it) lands with the
-        # generation nodes, which is where the range is declared and checked.
+        # ltx2_denoise.cfg_scale is ge=1.0 with no ceiling; the audio, STG and modality scales are
+        # separate fields with their own controls, not this slider.
+        guidance_min=1.0,
     ),
     VariantFacet({ModelType.Main: LTX2VariantType}),
 )

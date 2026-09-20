@@ -15,17 +15,34 @@ import {
 } from '@features/generation/settings';
 import { SEED_MAX } from '@platform/core/seed';
 
-import type { VideoAspectRatioId, VideoGenerationMode, VideoSettings, VideoTargetResolution } from './types';
+import type {
+  Ltx2TargetResolution,
+  VideoAspectRatioId,
+  VideoGenerationMode,
+  VideoSettings,
+  VideoTargetResolution,
+} from './types';
 
 import {
   getVideoAspectRatioParts,
+  LTX2_CANVAS_MULTIPLE,
+  LTX2_DEFAULT_NEGATIVE_PROMPT,
+  LTX2_FPS_DEFAULT,
+  LTX2_FPS_MAX,
+  LTX2_FPS_MIN,
+  LTX2_NUM_FRAMES_DEFAULT,
+  LTX2_NUM_FRAMES_MAX,
+  LTX2_NUM_FRAMES_MIN,
+  LTX2_NUM_FRAMES_SLIDER_MAX,
+  LTX2_NUM_FRAMES_STEP,
   MINIMAX_H3_FPS,
   MINIMAX_H3_NUM_FRAMES_CHOICES,
   MINIMAX_H3_NUM_FRAMES_DEFAULT,
+  resolveLtx2Canvas,
   resolveMiniMaxH3Canvas,
   scaleAndSnapWanDimensions,
-  snapMiniMaxH3NumFrames,
-  snapWanNumFrames,
+  snapNumFramesToChoices,
+  snapNumFramesToGrid,
   WAN_A14B_PIXEL_MULTIPLE,
   WAN_FPS_DEFAULT,
   WAN_FPS_MAX,
@@ -36,6 +53,8 @@ import {
   WAN_NUM_FRAMES_STEP,
   WAN_TI2V_PIXEL_MULTIPLE,
   type VideoDimensions,
+  type VideoFramesChoices,
+  type VideoFramesGrid,
 } from './dimensions';
 import {
   applyReferenceExtendSourceVideo,
@@ -52,7 +71,7 @@ import {
 // enough. Display identity stays in @features/models; graph topology will stay
 // explicit in graph.ts.
 
-export type SupportedVideoBase = 'wan' | 'minimax-h3';
+export type SupportedVideoBase = 'wan' | 'minimax-h3' | 'ltx-2';
 
 export type VideoNegativePromptUsage = 'always' | 'cfg-gated' | 'never';
 
@@ -61,19 +80,21 @@ export interface VideoTargetResolutionOption {
   label: string;
 }
 
-export interface VideoFramesGridPolicy {
+/**
+ * Extends the shape `snapNumFramesToGrid` takes, so the two cannot drift: the snapper is the
+ * production consumer of this policy, and a field added here has to remain assignable to it.
+ */
+export interface VideoFramesGridPolicy extends VideoFramesGrid {
   kind: 'grid';
-  min: number;
-  max: number;
-  /** Valid counts are `min + k * step` (Wan: 4k + 1, from the VAE's temporal compression). */
-  step: number;
-  defaultValue: number;
+  /**
+   * Where the slider stops, when that is below `max`. The field still accepts
+   * anything up to `max`: the cap is a recommendation about cost, not a limit.
+   */
+  sliderMax?: number;
 }
 
-export interface VideoFramesChoicesPolicy {
+export interface VideoFramesChoicesPolicy extends VideoFramesChoices {
   kind: 'choices';
-  choices: readonly number[];
-  defaultValue: number;
 }
 
 export type VideoFramesPolicy = VideoFramesGridPolicy | VideoFramesChoicesPolicy;
@@ -115,17 +136,30 @@ interface VideoVariantConfig {
     steps: number;
     cfgScale: number;
     cfgScaleLowNoise: number | null;
+    audioCfgScale: number | null;
+    stgScale: number | null;
+    modalityScale: number | null;
   };
   minSteps: number;
+  /** False when the checkpoint's schedule is fixed and the step count is not the user's to set. */
+  stepsEditable: boolean;
   frames: VideoFramesPolicy;
   fps: VideoFpsPolicy;
   cfg: { visible: boolean; lowNoiseVisible: boolean };
+  /** The guidance terms beyond the primary CFG scale that this family exposes. */
+  guidance: { audioVisible: boolean; stgVisible: boolean; modalityVisible: boolean };
+  /** What a fresh panel seeds the negative prompt with, when the family ships one. */
+  defaultNegativePrompt?: string;
   negativePrompt: { visible: boolean; usage: VideoNegativePromptUsage };
   accelerator: VideoAcceleratorConfig | null;
   audioOutput: boolean;
   /** Ref2VA reference caps; present only on variants whose modes include 'reference'. */
   references?: { maxVideos: number; maxImages: number; extend?: boolean };
 }
+
+/** A family whose only guidance control is the primary CFG scale. */
+const NO_EXTRA_GUIDANCE = { audioVisible: false, modalityVisible: false, stgVisible: false } as const;
+const NO_EXTRA_GUIDANCE_DEFAULTS = { audioCfgScale: null, modalityScale: null, stgScale: null } as const;
 
 export const WAN_LIGHTNING_ACCELERATOR: VideoAcceleratorConfig = {
   cfgScale: 1,
@@ -187,10 +221,18 @@ const WAN_FPS: VideoFpsPolicy = { defaultValue: WAN_FPS_DEFAULT, editable: true,
 const WAN_A14B_COMMON = {
   accelerator: WAN_LIGHTNING_ACCELERATOR,
   cfg: { lowNoiseVisible: true, visible: true },
-  defaults: { cfgScale: 5, cfgScaleLowNoise: 4, steps: 40, targetResolution: '720p' as const },
+  defaults: {
+    ...NO_EXTRA_GUIDANCE_DEFAULTS,
+    cfgScale: 5,
+    cfgScaleLowNoise: 4,
+    steps: 40,
+    targetResolution: '720p' as const,
+  },
   fps: WAN_FPS,
   frames: WAN_FRAMES,
+  guidance: NO_EXTRA_GUIDANCE,
   minSteps: 1,
+  stepsEditable: true,
   audioOutput: false,
   negativePrompt: { usage: 'cfg-gated' as const, visible: true },
   pixelMultiple: WAN_A14B_PIXEL_MULTIPLE,
@@ -211,7 +253,13 @@ const WAN_VARIANTS: Record<string, VideoVariantConfig> = {
     ...WAN_A14B_COMMON,
     accelerator: null,
     cfg: { lowNoiseVisible: false, visible: true },
-    defaults: { cfgScale: 5, cfgScaleLowNoise: null, steps: 40, targetResolution: '720p' },
+    defaults: {
+      ...NO_EXTRA_GUIDANCE_DEFAULTS,
+      cfgScale: 5,
+      cfgScaleLowNoise: null,
+      steps: 40,
+      targetResolution: '720p',
+    },
     modes: ['txt2vid', 'first-frame', 'extend'],
     pixelMultiple: WAN_TI2V_PIXEL_MULTIPLE,
   },
@@ -229,10 +277,18 @@ const MINIMAX_H3_FL2VA: VideoVariantConfig = {
   accelerator: MINIMAX_H3_TURBO_ACCELERATOR,
   audioOutput: true,
   cfg: { lowNoiseVisible: false, visible: false },
-  defaults: { cfgScale: 1, cfgScaleLowNoise: null, steps: 50, targetResolution: '768 highres' },
+  defaults: {
+    ...NO_EXTRA_GUIDANCE_DEFAULTS,
+    cfgScale: 1,
+    cfgScaleLowNoise: null,
+    steps: 50,
+    targetResolution: '768 highres',
+  },
   fps: { defaultValue: MINIMAX_H3_FPS, editable: false, max: MINIMAX_H3_FPS, min: MINIMAX_H3_FPS },
   frames: { choices: MINIMAX_H3_NUM_FRAMES_CHOICES, defaultValue: MINIMAX_H3_NUM_FRAMES_DEFAULT, kind: 'choices' },
+  guidance: NO_EXTRA_GUIDANCE,
   minSteps: 2,
+  stepsEditable: true,
   modes: ['txt2vid', 'first-frame', 'last-frame', 'first-last', 'extend'],
   negativePrompt: { usage: 'never', visible: false },
   pixelMultiple: 32,
@@ -251,12 +307,91 @@ const MINIMAX_H3_REF2VA: VideoVariantConfig = {
   references: { extend: true, maxImages: 9, maxVideos: 3 },
 };
 
+const LTX2_TARGET_RESOLUTION_OPTIONS: readonly VideoTargetResolutionOption[] = [
+  { id: '512p', label: '512p (fastest)' },
+  { id: '704p', label: '704p' },
+  { id: '768p', label: '768p (sharpest)' },
+];
+
+const LTX2_FRAMES: VideoFramesGridPolicy = {
+  defaultValue: LTX2_NUM_FRAMES_DEFAULT,
+  kind: 'grid',
+  max: LTX2_NUM_FRAMES_MAX,
+  min: LTX2_NUM_FRAMES_MIN,
+  sliderMax: LTX2_NUM_FRAMES_SLIDER_MAX,
+  step: LTX2_NUM_FRAMES_STEP,
+};
+
+const LTX2_COMMON = {
+  accelerator: null,
+  audioOutput: true,
+  cfg: { lowNoiseVisible: false, visible: true },
+  fps: { defaultValue: LTX2_FPS_DEFAULT, editable: true, max: LTX2_FPS_MAX, min: LTX2_FPS_MIN },
+  frames: LTX2_FRAMES,
+  minSteps: 1,
+  // Text-to-video and first-frame image-to-video, both with a generated
+  // soundtrack. Keyframes, extension and the audio-conditioned modes follow.
+  modes: ['txt2vid', 'first-frame'] as const,
+  pixelMultiple: LTX2_CANVAS_MULTIPLE,
+  targetResolutions: LTX2_TARGET_RESOLUTION_OPTIONS,
+};
+
+/**
+ * The dev checkpoint: a guided 30-step schedule with all four of LTX-2's
+ * guidance terms. The scales are the released pipeline's for this generation
+ * (ltx-pipelines `PipelineParams`), including an audio CFG far above the
+ * video's — audio follows the prompt much less readily.
+ */
+const LTX2_DEV: VideoVariantConfig = {
+  ...LTX2_COMMON,
+  // The release guides against this list, not against an empty string: it is as much a part of the
+  // recipe as the scales are. Mirrors LTX2_DEFAULT_NEGATIVE_PROMPT in
+  // invokeai/backend/ltx2/constants.py, which is the node's own default.
+  defaultNegativePrompt: LTX2_DEFAULT_NEGATIVE_PROMPT,
+  defaults: {
+    audioCfgScale: 7,
+    cfgScale: 3,
+    cfgScaleLowNoise: null,
+    modalityScale: 3,
+    steps: 30,
+    stgScale: 1,
+    targetResolution: '704p',
+  },
+  guidance: { audioVisible: true, modalityVisible: true, stgVisible: true },
+  negativePrompt: { usage: 'cfg-gated', visible: true },
+  stepsEditable: true,
+};
+
+/**
+ * The guidance-distilled checkpoint: eight fixed noise levels, one forward per
+ * step, and no guidance at all — the denoise node ignores the scales rather
+ * than letting them wreck the output, so the panel offers none of them and
+ * shows the step count as the fixed value it is.
+ */
+const LTX2_DISTILLED: VideoVariantConfig = {
+  ...LTX2_COMMON,
+  cfg: { lowNoiseVisible: false, visible: false },
+  defaults: {
+    ...NO_EXTRA_GUIDANCE_DEFAULTS,
+    cfgScale: 1,
+    cfgScaleLowNoise: null,
+    steps: 8,
+    targetResolution: '704p',
+  },
+  guidance: NO_EXTRA_GUIDANCE,
+  negativePrompt: { usage: 'never', visible: false },
+  stepsEditable: false,
+};
+
 export const VIDEO_GENERATION: Record<
   SupportedVideoBase,
   { variants: Record<string, VideoVariantConfig>; fallback: VideoVariantConfig }
 > = {
   // ref2va is REGISTERED, never the fallback: an unknown future variant may fall back to
   // fl2va's config, but a known ref2va transformer must not silently get fl2va's modes.
+  // Dev is the fallback: an unrecognised variant gets the guided schedule, which
+  // is merely slow on a distilled checkpoint, where the reverse produces noise.
+  'ltx-2': { fallback: LTX2_DEV, variants: { ltx2_dev: LTX2_DEV, ltx2_distilled: LTX2_DISTILLED } },
   'minimax-h3': { fallback: MINIMAX_H3_FL2VA, variants: { fl2va: MINIMAX_H3_FL2VA, ref2va: MINIMAX_H3_REF2VA } },
   wan: { fallback: WAN_FALLBACK_VARIANT, variants: WAN_VARIANTS },
 };
@@ -276,7 +411,8 @@ export const isSupportedVideoModel = <T extends { base: string; type: string; fo
 ): model is T & MainModelConfig =>
   model.type === 'main' &&
   (model.base === 'wan' ||
-    (model.base === 'minimax-h3' && (model.format === 'diffusers' || model.format === 'checkpoint')));
+    ((model.base === 'minimax-h3' || model.base === 'ltx-2') &&
+      (model.format === 'diffusers' || model.format === 'checkpoint')));
 
 /**
  * What the top model selector offers — like the image Generate panel, the top
@@ -290,7 +426,7 @@ export const isSupportedVideoModel = <T extends { base: string; type: string; fo
  */
 export const isVideoModelSelectable = <T extends ModelConfig>(model: T): boolean =>
   isSupportedVideoModel(model) &&
-  !isComponentsOnlyH3Main(model) &&
+  !isComponentsOnlyVideoMain(model) &&
   !(model.base === 'minimax-h3' && model.format === 'diffusers' && model.variant === 'ref2va');
 
 /**
@@ -299,11 +435,13 @@ export const isVideoModelSelectable = <T extends ModelConfig>(model: T): boolean
  * `components_only` on the config precisely so the UI can require the
  * single-file overrides up front instead of failing mid-generation.
  */
-export const isComponentsOnlyH3Main = (model: MainModelConfig): boolean =>
+export const isComponentsOnlyVideoMain = (model: MainModelConfig): boolean =>
   // Demand the full config, not a Pick: a narrowed object would type-check
   // here but silently read `components_only` as absent — a false negative
   // that re-opens the fail-mid-generation hole this helper exists to close.
-  model.base === 'minimax-h3' && model.format === 'diffusers' && model.components_only === true;
+  (model.base === 'minimax-h3' || model.base === 'ltx-2') &&
+  model.format === 'diffusers' &&
+  model.components_only === true;
 
 const getVideoVariantConfig = (
   model: Pick<MainModelConfig, 'base' | 'type' | 'variant' | 'format'> | undefined
@@ -357,8 +495,12 @@ const coerceTargetResolution = (
 export const snapVideoNumFrames = (model: MainModelConfig | undefined, numFrames: number): number => {
   const frames = getVideoConfig(model).frames;
 
-  return frames.kind === 'grid' ? snapWanNumFrames(numFrames) : snapMiniMaxH3NumFrames(numFrames);
+  return frames.kind === 'grid' ? snapNumFramesToGrid(frames, numFrames) : snapNumFramesToChoices(frames, numFrames);
 };
+
+/** How a grid family states its rule, e.g. "8·n + 1" — the form the backend node rejects on. */
+export const describeVideoFramesGrid = (frames: VideoFramesGridPolicy): string =>
+  `${frames.step}·n + ${frames.min - frames.step}`;
 
 export const isValidVideoNumFrames = (model: MainModelConfig | undefined, numFrames: number): boolean => {
   const frames = getVideoConfig(model).frames;
@@ -412,19 +554,24 @@ export const getVideoDimensions = (
   const dimensions =
     model?.base === 'minimax-h3'
       ? resolveMiniMaxH3Canvas(inputs.width, inputs.height, targetResolution as '768 highres' | '768 lowres')
-      : scaleAndSnapWanDimensions(
-          inputs.width,
-          inputs.height,
-          targetResolution as '480p' | '720p' | '1080p',
-          config.pixelMultiple
-        );
+      : model?.base === 'ltx-2'
+        ? resolveLtx2Canvas(inputs.width, inputs.height, targetResolution as Ltx2TargetResolution)
+        : scaleAndSnapWanDimensions(
+            inputs.width,
+            inputs.height,
+            targetResolution as '480p' | '720p' | '1080p',
+            config.pixelMultiple
+          );
 
   return dimensions ? { ...dimensions, source: inputs.source } : null;
 };
 
 export const getVideoPromptPolicy = (
   model: MainModelConfig | undefined,
-  settings: Pick<VideoSettings, 'cfgScale' | 'cfgScaleLowNoise' | 'negativePromptEnabled' | 'wanLowNoiseModel'>
+  settings: Pick<
+    VideoSettings,
+    'audioCfgScale' | 'cfgScale' | 'cfgScaleLowNoise' | 'negativePromptEnabled' | 'wanLowNoiseModel'
+  >
 ) => {
   const config = getVideoConfig(model);
   // Mirrors wan_video_denoise's do_cfg: negative conditioning is also consumed
@@ -435,10 +582,13 @@ export const getVideoPromptPolicy = (
     (model?.format === 'diffusers' || settings.wanLowNoiseModel !== null) &&
     settings.cfgScaleLowNoise !== null &&
     settings.cfgScaleLowNoise > 1;
+  // And LTX-2's audio stream is guided on its own scale, off one shared unconditional pass
+  // (`LTX2Guidance.passes`): audio CFG above 1 consumes the negative prompt even at video CFG 1.
+  const audioCfgActive = config.guidance.audioVisible && settings.audioCfgScale !== null && settings.audioCfgScale > 1;
   const negativeUsedInGraph =
     settings.negativePromptEnabled &&
     (config.negativePrompt.usage === 'always' ||
-      (config.negativePrompt.usage === 'cfg-gated' && (settings.cfgScale > 1 || lowNoiseCfgActive)));
+      (config.negativePrompt.usage === 'cfg-gated' && (settings.cfgScale > 1 || lowNoiseCfgActive || audioCfgActive)));
 
   return {
     negativeVisible: config.negativePrompt.visible,
@@ -462,6 +612,9 @@ export interface VideoModelPolicy {
     steps: number;
     cfgScale: number;
     cfgScaleLowNoise: number | null;
+    audioCfgScale: number | null;
+    stgScale: number | null;
+    modalityScale: number | null;
   };
   prompt: {
     negativeVisible: boolean;
@@ -474,7 +627,13 @@ export interface VideoModelPolicy {
   ui: {
     cfgVisible: boolean;
     cfgLowNoiseVisible: boolean;
+    /** LTX-2's per-modality guidance controls; all false on the other families. */
+    audioCfgVisible: boolean;
+    stgVisible: boolean;
+    modalityVisible: boolean;
     fpsVisible: boolean;
+    /** False when the schedule is fixed: the steps control shows the count read-only. */
+    stepsEditable: boolean;
     /** The family's distillation fast path, or null when it has none. */
     accelerator: VideoAcceleratorConfig | null;
     /** Steps for the fast path as currently configured, or null when it has none. */
@@ -502,6 +661,7 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
+      audioCfgVisible: config.guidance.audioVisible,
       // The step count the help text quotes is the one the *running*
       // accelerator LoRA was distilled for — with the 8-step LightX2V Turbo
       // LoRA on, "6 steps" would be a lie. It is deliberately NOT folded into
@@ -514,6 +674,9 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
       cfgLowNoiseVisible: config.cfg.lowNoiseVisible,
       cfgVisible: config.cfg.visible,
       fpsVisible: config.fps.editable,
+      modalityVisible: config.guidance.modalityVisible,
+      stepsEditable: config.stepsEditable,
+      stgVisible: config.guidance.stgVisible,
     },
   };
 };
@@ -946,7 +1109,8 @@ export type VideoComponentValueKey =
   | 'componentSourceModel'
   | 'h3TransformerModel'
   | 'h3TextEncoderModel'
-  | 'h3HybridBaseModel';
+  | 'h3HybridBaseModel'
+  | 'ltx2TextEncoderModel';
 
 export interface VideoComponentPolicyContext {
   model: MainModelConfig;
@@ -974,6 +1138,7 @@ export interface VideoComponentSectionPolicy {
 
 const VIDEO_COMPONENT_SETTING_LABELS: Record<VideoComponentValueKey, string> = {
   componentSourceModel: 'Component source',
+  ltx2TextEncoderModel: 'Gemma-4 encoder',
   h3HybridBaseModel: 'Hybrid quality base',
   h3TextEncoderModel: 'Text encoder (single file)',
   h3TransformerModel: 'Transformer (single file)',
@@ -1134,6 +1299,43 @@ export const getVideoComponentSectionPolicy = (
     return createComponentPolicy(model.format !== 'diffusers', slots);
   }
 
+  // LTX-2 is distributed as separate files, so a generation is assembled from up
+  // to three records: the transformer (the top selection), the component folder
+  // that supplies the VAEs, vocoder and text connectors, and the Gemma-4 encoder
+  // — which no LTX-2 main carries, making its slot required rather than an
+  // override.
+  if (model.base === 'ltx-2') {
+    const needsComponentSource = model.format !== 'diffusers' || isComponentsOnlyVideoMain(model);
+
+    return createComponentPolicy(needsComponentSource, [
+      ...(needsComponentSource
+        ? [
+            {
+              filter: (candidate: ModelConfig, ctx: VideoComponentPolicyContext) =>
+                isDiffusersMainForBase('ltx-2')(candidate) && candidate.key !== ctx.model.key,
+              helpTextKey: 'widgets.video.componentSlots.ltx2ComponentSourceHelp',
+              key: 'componentSourceModel',
+              label: 'Model components',
+              missingMessage: `${model.name} is a single-file transformer — select an LTX-2 components install under Model Components.`,
+              modelTypes: ['main'],
+              required: () => true,
+              valueKind: 'main',
+            } satisfies VideoComponentSlotPolicy,
+          ]
+        : []),
+      {
+        filter: (candidate) => candidate.type === 'gemma4_encoder' && candidate.base === 'ltx-2',
+        helpTextKey: 'widgets.video.componentSlots.ltx2TextEncoderHelp',
+        key: 'ltx2TextEncoderModel',
+        label: 'Gemma-4 encoder',
+        missingMessage: 'LTX-2 needs its Gemma-4 text encoder — no LTX-2 model carries one.',
+        modelTypes: ['gemma4_encoder'],
+        required: () => true,
+        valueKind: 'component',
+      },
+    ]);
+  }
+
   // MiniMax H3. The top model selection carries the task identity (its variant
   // decides the panel's generation mode); this section supplies what that
   // selection does not bundle:
@@ -1148,7 +1350,7 @@ export const getVideoComponentSectionPolicy = (
     // (it is no longer selectable); validation steers the user to pick a
     // single-file transformer as the model, and the encoder slot stays
     // required so the panel keeps showing what the install cannot provide.
-    const componentsOnly = isComponentsOnlyH3Main(model);
+    const componentsOnly = isComponentsOnlyVideoMain(model);
 
     return createComponentPolicy(componentsOnly, [
       {
@@ -1234,7 +1436,7 @@ const getH3ComponentSource = (ctx: VideoComponentPolicyContext): MainModelConfig
 const isH3TextEncoderSatisfied = (ctx: VideoComponentPolicyContext): boolean => {
   const source = getH3ComponentSource(ctx);
 
-  return source !== null && !isComponentsOnlyH3Main(source);
+  return source !== null && !isComponentsOnlyVideoMain(source);
 };
 
 const getVideoComponentPolicyContext = (
@@ -1245,6 +1447,7 @@ const getVideoComponentPolicyContext = (
   selectedComponents: {
     componentSourceModel: settings.componentSourceModel,
     h3HybridBaseModel: settings.h3HybridBaseModel,
+    ltx2TextEncoderModel: settings.ltx2TextEncoderModel,
     h3TextEncoderModel: settings.h3TextEncoderModel,
     h3TransformerModel: settings.h3TransformerModel,
     vae: settings.vae,
@@ -1329,8 +1532,19 @@ const findH3ComponentSource = (models: readonly ModelConfig[]): MainModelConfig 
       candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'diffusers'
   );
 
-  return candidates.find((candidate) => !isComponentsOnlyH3Main(candidate)) ?? candidates[0] ?? null;
+  return candidates.find((candidate) => !isComponentsOnlyVideoMain(candidate)) ?? candidates[0] ?? null;
 };
+
+/** The LTX-2 component folder a generation draws its VAEs, vocoder and connectors from. */
+const findLtx2ComponentSource = (models: readonly ModelConfig[]): MainModelConfig | null =>
+  models.find(
+    (candidate): candidate is ModelConfig & MainModelConfig =>
+      candidate.type === 'main' && candidate.base === 'ltx-2' && candidate.format === 'diffusers'
+  ) ?? null;
+
+/** The Gemma-4 encoder every LTX-2 generation needs; no main model carries one. */
+const findLtx2TextEncoder = (models: readonly ModelConfig[]): ModelConfig | null =>
+  models.find((candidate) => candidate.type === 'gemma4_encoder' && candidate.base === 'ltx-2') ?? null;
 
 export const getDefaultVideoSettings = (
   model?: MainModelConfig,
@@ -1348,8 +1562,13 @@ export const getDefaultVideoSettings = (
     // A single-file H3 main cannot run without a Diffusers install in the
     // Model Components slot, so defaults (and reset, which reuses them) seed
     // one from the catalog instead of starting un-invokable.
+    audioCfgScale: config.defaults.audioCfgScale,
     componentSourceModel:
-      model && model.base === 'minimax-h3' && model.format === 'checkpoint' ? findH3ComponentSource(models) : null,
+      model && model.base === 'minimax-h3' && model.format === 'checkpoint'
+        ? findH3ComponentSource(models)
+        : model && model.base === 'ltx-2' && model.format !== 'diffusers'
+          ? findLtx2ComponentSource(models)
+          : null,
     firstFrameImage: null,
     fps: config.fps.defaultValue,
     h3HybridBaseModel: null,
@@ -1358,8 +1577,11 @@ export const getDefaultVideoSettings = (
     h3TransformerModel: null,
     lastFrameImage: null,
     loras: [],
+    // Required, not an override: seeded so a picked LTX-2 model is invokable.
+    ltx2TextEncoderModel: model && model.base === 'ltx-2' ? findLtx2TextEncoder(models) : null,
+    modalityScale: config.defaults.modalityScale,
     modelKey: model?.key ?? '',
-    negativePrompt: '',
+    negativePrompt: config.defaultNegativePrompt ?? '',
     negativePromptEnabled: true,
     negativePromptHeightPx: 56,
     numFrames: config.frames.defaultValue,
@@ -1370,6 +1592,7 @@ export const getDefaultVideoSettings = (
     seedMode: 'random',
     sourceVideo: null,
     steps: config.defaults.steps,
+    stgScale: config.defaults.stgScale,
     targetResolution: config.defaults.targetResolution,
     vae: null,
     wanLowNoiseModel: null,
@@ -1406,6 +1629,7 @@ export const getVideoSettingsWithModelDefaults = (
     // The default-bearing layout/component choices reset too: a mispicked
     // VAE or expert is exactly what a user reaches for reset to undo.
     aspectRatioId: modelDefaults.aspectRatioId,
+    audioCfgScale: modelDefaults.audioCfgScale,
     cfgScale: modelDefaults.cfgScale,
     cfgScaleLowNoise: modelDefaults.cfgScaleLowNoise,
     componentSourceModel: modelDefaults.componentSourceModel,
@@ -1420,6 +1644,8 @@ export const getVideoSettingsWithModelDefaults = (
       ),
       ...modelDefaults.loras,
     ].map((lora) => (isLoraCompatibleWithModel(lora.model, model) ? lora : { ...lora, isEnabled: false })),
+    ltx2TextEncoderModel: modelDefaults.ltx2TextEncoderModel,
+    modalityScale: modelDefaults.modalityScale,
     modelKey: model.key,
     numFrames: modelDefaults.numFrames,
     // A reset clears the references list along with the components: on an
@@ -1428,6 +1654,7 @@ export const getVideoSettingsWithModelDefaults = (
     // untouched: they remain valid under the FL2VA policy.)
     references: modelDefaults.references,
     steps: modelDefaults.steps,
+    stgScale: modelDefaults.stgScale,
     targetResolution: modelDefaults.targetResolution,
     vae: modelDefaults.vae,
     wanLowNoiseModel: modelDefaults.wanLowNoiseModel,
@@ -1577,6 +1804,37 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'CFG (Low Noise)');
   }
 
+  // The per-modality guidance scales follow the same rule as CFG (Low Noise): a
+  // family that does not offer a control carries no value for it, and one that
+  // does starts from its own default rather than another family's number.
+  const guidanceTransitions = [
+    ['audioCfgScale', config.guidance.audioVisible],
+    ['stgScale', config.guidance.stgVisible],
+    ['modalityScale', config.guidance.modalityVisible],
+  ] as const;
+
+  for (const [key, visible] of guidanceTransitions) {
+    const wanted = visible ? (next[key] ?? config.defaults[key]) : null;
+
+    if (wanted !== next[key]) {
+      const dropped = next[key] !== null;
+
+      next[key] = wanted;
+      // Only a value the panel is taking away is a clearing; filling one in for a family that has
+      // the control is not. One label for the section rather than one per scale, because they
+      // live together under a collapsed "Advanced guidance" heading.
+      if (dropped) {
+        addClearedLabel(clearedLabels, 'Advanced guidance');
+      }
+    }
+  }
+
+  // A fixed-schedule checkpoint's step count is not the user's to carry over.
+  if (!config.stepsEditable && next.steps !== config.defaults.steps) {
+    next.steps = config.defaults.steps;
+    addClearedLabel(clearedLabels, 'Steps');
+  }
+
   const compatibleLoras = next.loras.filter((lora) => isLoraCompatibleWithModel(lora.model, model));
 
   if (compatibleLoras.length !== next.loras.length) {
@@ -1611,6 +1869,16 @@ export const getVideoModelSelectionResult = ({
   // overwritten.
   if (model.base === 'minimax-h3' && model.format === 'checkpoint' && !next.componentSourceModel) {
     next.componentSourceModel = findH3ComponentSource(models);
+  }
+
+  // Same for LTX-2, whose encoder slot is required on every model shape.
+  if (model.base === 'ltx-2') {
+    if (model.format !== 'diffusers' && !next.componentSourceModel) {
+      next.componentSourceModel = findLtx2ComponentSource(models);
+    }
+    if (!next.ltx2TextEncoderModel) {
+      next.ltx2TextEncoderModel = findLtx2TextEncoder(models);
+    }
   }
 
   return { clearedLabels, settings: next };
@@ -1666,9 +1934,11 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
 
   // Supported-but-not-selectable H3 shapes can reach the model slot as stored
   // or recalled state; name the actual fix instead of failing downstream.
-  if (isComponentsOnlyH3Main(model)) {
+  if (isComponentsOnlyVideoMain(model)) {
+    const family = model.base === 'ltx-2' ? 'LTX-2' : 'MiniMax H3';
+
     return [
-      `${model.name} is a components-only install. Select a single-file MiniMax H3 transformer as the model; this install then provides its components.`,
+      `${model.name} is a components-only install. Select a single-file ${family} transformer as the model; this install then provides its components.`,
     ];
   }
   if (model.base === 'minimax-h3' && model.format === 'diffusers' && model.variant === 'ref2va') {
@@ -1747,7 +2017,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
   if (!isValidVideoNumFrames(model, settings.numFrames)) {
     reasons.push(
       config.frames.kind === 'grid'
-        ? `Frame count must be between ${config.frames.min} and ${config.frames.max} in steps of ${config.frames.step} (4·n + 1).`
+        ? `Frame count must be between ${config.frames.min} and ${config.frames.max} in steps of ${config.frames.step} (${describeVideoFramesGrid(config.frames)}).`
         : `Frame count must be one of the ${model.name} grid values (17·n + 5, ${config.frames.choices[0]}–${config.frames.choices[config.frames.choices.length - 1]}).`
     );
   }
@@ -1772,6 +2042,20 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
 
   if (config.cfg.lowNoiseVisible && settings.cfgScaleLowNoise !== null && settings.cfgScaleLowNoise < 0) {
     reasons.push('CFG (Low Noise) must be at least 0.');
+  }
+
+  // The floors are the denoise node's own `ge`: a value below one fails
+  // pydantic validation at enqueue, after the graph has been built.
+  const guidanceBounds = [
+    { floor: 1, label: 'Audio CFG', value: config.guidance.audioVisible ? settings.audioCfgScale : null },
+    { floor: 0, label: 'STG', value: config.guidance.stgVisible ? settings.stgScale : null },
+    { floor: 1, label: 'Modality guidance', value: config.guidance.modalityVisible ? settings.modalityScale : null },
+  ];
+
+  for (const { floor, label, value } of guidanceBounds) {
+    if (value !== null && (!Number.isFinite(value) || value < floor)) {
+      reasons.push(`${label} must be at least ${floor}.`);
+    }
   }
 
   if (settings.acceleratorEnabled && !config.accelerator) {

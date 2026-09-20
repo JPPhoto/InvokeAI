@@ -11,11 +11,18 @@ import {
   resolveMiniMaxH3Canvas,
   resolveMiniMaxH3ReferenceImage,
   scaleAndSnapWanDimensions,
-  snapMiniMaxH3NumFrames,
-  snapWanNumFrames,
+  LTX2_NUM_FRAMES_DEFAULT,
+  LTX2_NUM_FRAMES_MAX,
+  LTX2_NUM_FRAMES_MIN,
+  LTX2_NUM_FRAMES_STEP,
+  resolveLtx2Canvas,
+  snapNumFramesToChoices,
+  snapNumFramesToGrid,
   WAN_A14B_PIXEL_MULTIPLE,
   WAN_NUM_FRAMES_DEFAULT,
   WAN_NUM_FRAMES_MAX,
+  WAN_NUM_FRAMES_MIN,
+  WAN_NUM_FRAMES_STEP,
   WAN_TI2V_PIXEL_MULTIPLE,
 } from './dimensions';
 
@@ -108,6 +115,20 @@ describe('aspect ratio helpers', () => {
   });
 });
 
+const WAN_GRID = {
+  defaultValue: WAN_NUM_FRAMES_DEFAULT,
+  max: WAN_NUM_FRAMES_MAX,
+  min: WAN_NUM_FRAMES_MIN,
+  step: WAN_NUM_FRAMES_STEP,
+};
+const snapWanFrames = (numFrames: number) => snapNumFramesToGrid(WAN_GRID, numFrames);
+
+const H3_CHOICES = {
+  choices: MINIMAX_H3_NUM_FRAMES_CHOICES,
+  defaultValue: MINIMAX_H3_NUM_FRAMES_DEFAULT,
+};
+const snapH3Frames = (numFrames: number) => snapNumFramesToChoices(H3_CHOICES, numFrames);
+
 describe('Wan frame counts', () => {
   it('accepts only 4n + 1 counts within bounds', () => {
     expect(isValidWanNumFrames(81)).toBe(true);
@@ -118,12 +139,12 @@ describe('Wan frame counts', () => {
   });
 
   it('snaps onto the grid and clamps to the slider bounds', () => {
-    expect(snapWanNumFrames(81)).toBe(81);
-    expect(snapWanNumFrames(80)).toBe(81);
-    expect(snapWanNumFrames(1)).toBe(5);
-    expect(snapWanNumFrames(10_000)).toBe(WAN_NUM_FRAMES_MAX);
-    expect(snapWanNumFrames(Number.NaN)).toBe(WAN_NUM_FRAMES_DEFAULT);
-    expect(isValidWanNumFrames(snapWanNumFrames(123.7))).toBe(true);
+    expect(snapWanFrames(81)).toBe(81);
+    expect(snapWanFrames(80)).toBe(81);
+    expect(snapWanFrames(1)).toBe(5);
+    expect(snapWanFrames(10_000)).toBe(WAN_NUM_FRAMES_MAX);
+    expect(snapWanFrames(Number.NaN)).toBe(WAN_NUM_FRAMES_DEFAULT);
+    expect(isValidWanNumFrames(snapWanFrames(123.7))).toBe(true);
   });
 });
 
@@ -143,11 +164,44 @@ describe('MiniMax H3 frame counts', () => {
   it('validates and snaps onto the choice list', () => {
     expect(isValidMiniMaxH3NumFrames(124)).toBe(true);
     expect(isValidMiniMaxH3NumFrames(120)).toBe(false);
-    expect(snapMiniMaxH3NumFrames(124)).toBe(124);
-    expect(snapMiniMaxH3NumFrames(100)).toBe(107);
-    expect(snapMiniMaxH3NumFrames(0)).toBe(90);
-    expect(snapMiniMaxH3NumFrames(10_000)).toBe(345);
-    expect(snapMiniMaxH3NumFrames(Number.NaN)).toBe(MINIMAX_H3_NUM_FRAMES_DEFAULT);
+    expect(snapH3Frames(124)).toBe(124);
+    expect(snapH3Frames(100)).toBe(107);
+    expect(snapH3Frames(0)).toBe(90);
+    expect(snapH3Frames(10_000)).toBe(345);
+    expect(snapH3Frames(Number.NaN)).toBe(MINIMAX_H3_NUM_FRAMES_DEFAULT);
+  });
+});
+
+describe('LTX-2 canvas and frame grid', () => {
+  it('pins the short edge and snaps both axes onto the 32 grid', () => {
+    // Independently: 704 short edge at 16:9 -> 1251.6 long -> 1248 on the grid.
+    expect(resolveLtx2Canvas(16, 9, '704p')).toEqual({ height: 704, width: 1248 });
+    expect(resolveLtx2Canvas(9, 16, '704p')).toEqual({ height: 1248, width: 704 });
+    expect(resolveLtx2Canvas(1, 1, '768p')).toEqual({ height: 768, width: 768 });
+    expect(resolveLtx2Canvas(1920, 1080, '512p')).toEqual({ height: 512, width: 896 });
+  });
+
+  it('rejects degenerate inputs rather than returning a canvas', () => {
+    expect(resolveLtx2Canvas(0, 100, '704p')).toBeNull();
+    expect(resolveLtx2Canvas(Number.NaN, 100, '704p')).toBeNull();
+  });
+
+  it('snaps frame counts onto the 8n + 1 grid, rounding a tie up', () => {
+    const grid = {
+      defaultValue: LTX2_NUM_FRAMES_DEFAULT,
+      max: LTX2_NUM_FRAMES_MAX,
+      min: LTX2_NUM_FRAMES_MIN,
+      step: LTX2_NUM_FRAMES_STEP,
+    };
+
+    expect(snapNumFramesToGrid(grid, 121)).toBe(121);
+    expect(snapNumFramesToGrid(grid, 122)).toBe(121);
+    // Halfway between 121 and 129: the longer clip is the better answer.
+    expect(snapNumFramesToGrid(grid, 125)).toBe(129);
+    expect(snapNumFramesToGrid(grid, 1)).toBe(LTX2_NUM_FRAMES_MIN);
+    expect(snapNumFramesToGrid(grid, 10_000)).toBe(LTX2_NUM_FRAMES_MAX);
+    expect(snapNumFramesToGrid(grid, Number.NaN)).toBe(LTX2_NUM_FRAMES_DEFAULT);
+    expect((LTX2_NUM_FRAMES_MAX - 1) % LTX2_NUM_FRAMES_STEP).toBe(0);
   });
 });
 

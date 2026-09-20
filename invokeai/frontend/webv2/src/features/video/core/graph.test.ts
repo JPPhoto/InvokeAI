@@ -737,3 +737,181 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     });
   });
 });
+
+const ltx2Model = (variant: string, format = 'checkpoint', key = `ltx2-${variant}-${format}`): MainModelConfig => ({
+  base: 'ltx-2',
+  format,
+  key,
+  name: `LTX-2 ${variant}`,
+  type: 'main',
+  variant,
+});
+
+const LTX2_COMPONENTS: MainModelConfig = {
+  base: 'ltx-2',
+  format: 'diffusers',
+  key: 'ltx2-components',
+  name: 'LTX-2.5 Components',
+  type: 'main',
+  variant: 'ltx2_dev',
+};
+const LTX2_ENCODER = { base: 'ltx-2', key: 'gemma4', name: 'LTX-2.5 Text Encoder', type: 'gemma4_encoder' as const };
+
+const ltx2SettingsFor = (model: MainModelConfig, overrides: Partial<VideoSettings> = {}): VideoSettings =>
+  settingsFor(model, {
+    componentSourceModel: model.format === 'diffusers' ? null : LTX2_COMPONENTS,
+    ltx2TextEncoderModel: LTX2_ENCODER,
+    ...overrides,
+  });
+
+describe('compileVideoGraph — LTX-2', () => {
+  it('assembles the generation from the transformer, the component folder and the Gemma-4 encoder', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const loader = nodeOfType(backendGraph, 'ltx2_model_loader');
+
+    expect(loader.model).toEqual(model);
+    expect(loader.component_source).toEqual(LTX2_COMPONENTS);
+    expect(loader.text_encoder_model).toEqual(LTX2_ENCODER);
+  });
+
+  it('decodes through the video VAE, the audio VAE and the vocoder', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const output = nodeOfType(backendGraph, 'ltx2_latents_to_video');
+
+    // The soundtrack is generated with the picture, so its whole decode chain has to be wired or
+    // the clip comes out silent.
+    expect(hasEdge(backendGraph, 'denoise_latents', 'video_latents', output.id, 'video_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'denoise_latents', 'audio_latents', output.id, 'audio_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', output.id, 'vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', output.id, 'audio_vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', output.id, 'vocoder')).toBe(true);
+  });
+
+  it('encodes the negative prompt whenever either classifier-free scale will consume it', () => {
+    const model = ltx2Model('ltx2_dev');
+    const isWired = (settings: Partial<VideoSettings>) => {
+      const graph = compileVideoGraph(ltx2SettingsFor(model, settings), model).backendGraph;
+
+      return {
+        denoise: nodeOfType(graph, 'ltx2_denoise'),
+        encodes: nodeOfType(graph, 'ltx2_text_encoder').encode_negative,
+        wired: hasEdge(graph, 'pos_cond', 'negative_conditioning', 'denoise_latents', 'negative_conditioning'),
+      };
+    };
+
+    const guided = isWired({ cfgScale: 3, audioCfgScale: 7 });
+
+    expect([guided.encodes, guided.wired]).toEqual([true, true]);
+
+    // One unconditional pass serves both streams, so audio guidance alone still consumes the
+    // negative prompt — and the node refuses an audio scale above 1 with nothing wired.
+    const audioOnly = isWired({ cfgScale: 1, audioCfgScale: 7 });
+
+    expect([audioOnly.encodes, audioOnly.wired]).toEqual([true, true]);
+
+    // Both at 1: no unconditional pass, so a 12B encode of the negative prompt would be wasted.
+    const unguided = isWired({ cfgScale: 1, audioCfgScale: 1 });
+
+    expect([unguided.encodes, unguided.wired]).toEqual([false, false]);
+  });
+
+  it('holds both classifier-free scales at 1 when the negative prompt is switched off', () => {
+    // Otherwise the panel's own switch queues a graph the denoise node refuses — after the 12B
+    // prompt encode and the 22B transformer load.
+    const model = ltx2Model('ltx2_dev');
+    const settings = ltx2SettingsFor(model, { negativePromptEnabled: false, cfgScale: 3, audioCfgScale: 7 });
+    const { backendGraph } = compileVideoGraph(settings, model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(nodeOfType(backendGraph, 'ltx2_text_encoder').encode_negative).toBe(false);
+    expect(denoise.cfg_scale).toBe(1);
+    expect(denoise.audio_cfg_scale).toBe(1);
+    // The other two passes steer against the positive conditioning, so they keep running.
+    expect(denoise.stg_scale).toBe(1);
+    expect(denoise.modality_scale).toBe(3);
+
+    // Metadata records the run, not the panel: recalling this video must not restore a CFG of 3
+    // that the generation never used.
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.cfg_scale).toBe(1);
+    expect(metadata.ltx2_audio_cfg_scale).toBe(1);
+  });
+
+  it('writes the guidance the dev schedule runs and lets the backend resolve the schedule itself', () => {
+    const model = ltx2Model('ltx2_dev');
+    const settings = ltx2SettingsFor(model);
+    const { backendGraph } = compileVideoGraph(settings, model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(denoise.cfg_scale).toBe(3);
+    expect(denoise.audio_cfg_scale).toBe(7);
+    expect(denoise.stg_scale).toBe(1);
+    expect(denoise.modality_scale).toBe(3);
+    expect(denoise.steps).toBe(30);
+    // The loader stamps the schedule from the checkpoint, which outranks the panel's own reading of
+    // a variant it may not recognise.
+    expect(denoise.schedule).toBe('auto');
+  });
+
+  it('collapses the guidance to its inert values on the distilled schedule', () => {
+    const model = ltx2Model('ltx2_distilled');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    // The node ignores the scales on a distilled checkpoint; the graph should say what runs.
+    expect(denoise.cfg_scale).toBe(1);
+    expect(denoise.audio_cfg_scale).toBe(1);
+    expect(denoise.stg_scale).toBe(0);
+    expect(denoise.modality_scale).toBe(1);
+    expect(denoise.steps).toBe(8);
+    expect(nodesOfType(backendGraph, 'ltx2_text_encoder')[0]?.encode_negative).toBe(false);
+  });
+
+  it('conditions on a first frame through the image-conditioning node at the denoise canvas', () => {
+    const model = ltx2Model('ltx2_dev');
+    const settings = ltx2SettingsFor(model, { firstFrameImage: FIRST_FRAME });
+    const { backendGraph } = compileVideoGraph(settings, model);
+    const conditioning = nodeOfType(backendGraph, 'ltx2_image_conditioning');
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(conditioning.image).toEqual({ image_name: FIRST_FRAME.image_name });
+    // A canvas mismatch is what the denoise node refuses, so the same dimensions must reach both.
+    expect(conditioning.width).toBe(denoise.width);
+    expect(conditioning.height).toBe(denoise.height);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', conditioning.id, 'vae')).toBe(true);
+    expect(hasEdge(backendGraph, conditioning.id, 'video_conditioning', denoise.id, 'video_conditioning')).toBe(true);
+    expect(nodeOfType(backendGraph, 'core_metadata').generation_mode).toBe('ltx2_i2v');
+  });
+
+  it('records what recall needs and nothing it can derive', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.generation_mode).toBe('ltx2_t2v');
+    expect(metadata.ltx2_component_source).toEqual(LTX2_COMPONENTS);
+    expect(metadata.ltx2_text_encoder_model).toEqual(LTX2_ENCODER);
+    expect(metadata.ltx2_audio_cfg_scale).toBe(7);
+    expect(metadata.ltx2_stg_scale).toBe(1);
+    expect(metadata.ltx2_modality_scale).toBe(3);
+    expect(metadata.fps).toBe(24);
+  });
+
+  it('needs no component folder when the model is a full install', () => {
+    const model = ltx2Model('ltx2_dev', 'diffusers');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+
+    expect(nodeOfType(backendGraph, 'ltx2_model_loader').component_source).toBeUndefined();
+  });
+
+  it('refuses to compile without the Gemma-4 encoder no LTX-2 model carries', () => {
+    const model = ltx2Model('ltx2_dev');
+
+    expect(() => compileVideoGraph(ltx2SettingsFor(model, { ltx2TextEncoderModel: null }), model)).toThrow(
+      /Gemma-4 text encoder/
+    );
+  });
+});
