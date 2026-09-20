@@ -246,6 +246,70 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     expect(notifications.error).toHaveBeenCalledTimes(1);
   });
 
+  it('does not repeat the duplicate-return autosave notification for every edit', async () => {
+    const boundGraph = createGraphWithDuplicateWorkflowReturns();
+    const project = createMutablePort({
+      galleryValues: {},
+      id: 'project-1',
+      isWorkflowRunning: false,
+      projectGraph: boundGraph,
+      workflowValues: {},
+    });
+    const notifications = { error: vi.fn(), info: vi.fn(), success: vi.fn() };
+
+    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
+    const adapter = {
+      commands: {
+        bindLibraryWorkflow: vi.fn(),
+        editGraph: vi.fn(),
+        redo: vi.fn(),
+        replace: vi.fn(),
+        undo: vi.fn(),
+      },
+      getProjectGraph: () => project.port.getSnapshot().projectGraph,
+      notifications,
+      project: project.port,
+      widgets: { open: vi.fn(), patchValues: vi.fn() },
+    } as unknown as WorkflowUiAdapter;
+
+    root = createRoot(host);
+
+    await act(() => {
+      root.render(
+        <StrictMode>
+          <ChakraProvider value={system}>
+            <QueryClientProvider client={queryClient}>
+              <WorkflowUiProvider adapter={adapter}>
+                <WorkflowDialogHost />
+              </WorkflowUiProvider>
+            </QueryClientProvider>
+          </ChakraProvider>
+        </StrictMode>
+      );
+    });
+
+    const editAndWaitForAutosave = async (name: string) => {
+      await act(() => {
+        project.setSnapshot({
+          ...project.port.getSnapshot(),
+          projectGraph: { ...boundGraph, name },
+        });
+      });
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 2100);
+          })
+      );
+    };
+
+    await editAndWaitForAutosave('First invalid edit');
+    await editAndWaitForAutosave('Second invalid edit');
+
+    expect(notifications.error).toHaveBeenCalledTimes(1);
+    expect(updateLibraryWorkflowMock).not.toHaveBeenCalled();
+  });
+
   /**
    * The host used to learn about graph edits through a selector
    * (`useWorkflowProjectSelector`) feeding a change-detecting effect, which

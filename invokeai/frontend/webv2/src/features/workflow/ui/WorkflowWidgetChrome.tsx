@@ -308,6 +308,8 @@ export const WorkflowDialogHost = () => {
   // never outlives the account it was captured for.
   useEffect(() => {
     const hostScope = captureAccountScope();
+    let autosaverActive = true;
+    let duplicateReturnNotificationShown = false;
     const autosaver = createLibraryAutosaver({
       onStatus: (status) => {
         if (isAccountScopeCurrent(hostScope)) {
@@ -322,13 +324,20 @@ export const WorkflowDialogHost = () => {
         // Same scope discipline as the manual save paths: never let a
         // debounced write land in the next account's library.
         assertAccountScopeCurrent(hostScope);
-        if (hasMultipleWorkflowReturnNodes(projectStore.getSnapshot().projectGraph)) {
-          notifyRef.current.error(
-            translationRef.current('workflowLibrary.saveFailed'),
-            translationRef.current('workflowLibrary.multipleWorkflowReturnNodes')
-          );
+        const hasDuplicateWorkflowReturns = hasMultipleWorkflowReturnNodes(projectStore.getSnapshot().projectGraph);
+
+        if (hasDuplicateWorkflowReturns) {
+          if (autosaverActive && !duplicateReturnNotificationShown) {
+            duplicateReturnNotificationShown = true;
+            notifyRef.current.error(
+              translationRef.current('workflowLibrary.saveFailed'),
+              translationRef.current('workflowLibrary.multipleWorkflowReturnNodes')
+            );
+          }
           throw new Error('Workflow contains multiple workflow_return nodes.');
         }
+
+        duplicateReturnNotificationShown = false;
         await updateLibraryWorkflow(workflowId, serialized, hostScope.signal);
         assertAccountScopeCurrent(hostScope);
         // The library dialog serves cached payloads and pages; a save changes both.
@@ -350,6 +359,7 @@ export const WorkflowDialogHost = () => {
     registerLibraryGraphSyncedHandler(handler);
 
     return () => {
+      autosaverActive = false;
       unsubscribe();
       releaseLibraryGraphSyncedHandler(handler);
       autosaver.dispose();
