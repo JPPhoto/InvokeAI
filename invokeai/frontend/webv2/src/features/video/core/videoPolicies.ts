@@ -1829,6 +1829,31 @@ export const getVideoModelSelectionResult = ({
     }
   }
 
+  // A family that guides against a list ships it as part of the recipe, exactly like the scales
+  // above -- and like them, the fill is from the "this panel carries none" sentinel rather than from
+  // any empty value. A variant whose negative prompt is never used hides the field and encodes
+  // nothing, so a panel arriving from one holds none to carry, and dev would otherwise guide against
+  // an empty string at CFG 3: the one part of the recipe left silently missing. A panel whose
+  // previous model cannot be resolved (never seeded, or the model was uninstalled under it) holds
+  // none for the same reason, so the automatic re-pick agrees with the manual switch.
+  //
+  // An empty box on a variant that does show the field is the user's own value and is left alone --
+  // that is also what keeps recall's contract that an empty recorded negative prompt does not
+  // disturb the panel's. The two cannot be told apart once a panel has passed through a variant that
+  // hides the field, so clearing the box, detouring through distilled and coming back restores the
+  // list; dev quietly running without it is the worse failure. Filling an empty field in is not a
+  // clearing, so it takes no label.
+  if (config.defaultNegativePrompt && next.negativePromptEnabled && !next.negativePrompt.trim()) {
+    const previous = models.find((entry) => entry.key === currentSettings.modelKey);
+    const previousCarriesNone = previous
+      ? isSupportedVideoModel(previous) && getVideoConfig(previous).negativePrompt.usage === 'never'
+      : true;
+
+    if (previousCarriesNone) {
+      next.negativePrompt = config.defaultNegativePrompt;
+    }
+  }
+
   // A fixed-schedule checkpoint's step count is not the user's to carry over.
   if (!config.stepsEditable && next.steps !== config.defaults.steps) {
     next.steps = config.defaults.steps;

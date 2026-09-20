@@ -529,10 +529,17 @@ export const buildVideoRecallSettings = ({
 
   if (recalledModel && recalledModel.key !== values.model?.key) {
     // The canonical family transition first, so frames/fps/resolution snap to
-    // the recalled model before its recorded values land on top.
+    // the recalled model before its recorded values land on top. Its negative
+    // prompt is held back: what the clip recorded is authoritative, and an
+    // empty recording deliberately leaves the panel's own alone (below), which
+    // a family default seeded on the way in would silently overrule -- the
+    // recalled clip would then be re-run against a list it never used.
+    const carriedNegativePrompt = values.negativePrompt;
+
     values = {
       ...getVideoModelSelectionResult({ currentSettings: values, model: recalledModel, models }).settings,
       model: recalledModel,
+      negativePrompt: carriedNegativePrompt,
     };
     fields.push('model');
   } else if (recalledModel) {

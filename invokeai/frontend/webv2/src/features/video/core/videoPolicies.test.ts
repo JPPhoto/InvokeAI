@@ -1571,6 +1571,91 @@ describe('LTX-2 policy', () => {
     expect(getDefaultVideoSettings(wanModel('t2v_a14b')).negativePrompt).toBe('');
   });
 
+  it("restores dev's negative prompt when arriving from a variant that carries none", () => {
+    // The distilled variant runs no unconditional pass and hides the field, so a panel used on it
+    // reaches dev with nothing to guide against -- and dev would then encode an empty string at
+    // CFG 3, which is the one part of the recipe silently missing.
+    const catalog = [ltx2('ltx2_distilled'), ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const onDistilled = {
+      ...getDefaultVideoSettings(ltx2('ltx2_distilled'), catalog),
+      negativePrompt: '',
+    };
+
+    const toDev = getVideoModelSelectionResult({
+      currentSettings: onDistilled,
+      model: ltx2('ltx2_dev'),
+      models: catalog,
+    });
+
+    expect(toDev.settings.negativePrompt).toBe(LTX2_DEFAULT_NEGATIVE_PROMPT);
+    // Filling an empty field in is not something the panel took away.
+    expect(toDev.clearedLabels).not.toContain('Negative prompt');
+  });
+
+  it('leaves an empty negative prompt alone when the panel came from a family that shows the field', () => {
+    // Wan shows the field, so an empty box there is a value the user chose. Overwriting it would
+    // also break recall, which relies on an empty recorded negative prompt leaving the panel's own
+    // negative prompt untouched.
+    const catalog = [wanModel('t2v_a14b'), ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const onWan = { ...getDefaultVideoSettings(wanModel('t2v_a14b'), catalog), negativePrompt: '' };
+
+    const toDev = getVideoModelSelectionResult({ currentSettings: onWan, model: ltx2('ltx2_dev'), models: catalog });
+
+    expect(toDev.settings.negativePrompt).toBe('');
+  });
+
+  it('seeds the list when the panel it came from can no longer be resolved', () => {
+    // The previous model was uninstalled under the panel, or the panel was never seeded at all. The
+    // automatic re-pick has to reach the same place the manual switch does, or dev runs at CFG 3
+    // against an empty string depending on how it was selected.
+    const catalog = [ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const orphaned = {
+      ...getDefaultVideoSettings(ltx2('ltx2_distilled'), catalog),
+      modelKey: 'uninstalled-key',
+      negativePrompt: '',
+    };
+
+    const toDev = getVideoModelSelectionResult({ currentSettings: orphaned, model: ltx2('ltx2_dev'), models: catalog });
+
+    expect(toDev.settings.negativePrompt).toBe(LTX2_DEFAULT_NEGATIVE_PROMPT);
+  });
+
+  it('does not put a list into a negative prompt field the user switched off', () => {
+    const catalog = [ltx2('ltx2_distilled'), ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const disabled = {
+      ...getDefaultVideoSettings(ltx2('ltx2_distilled'), catalog),
+      negativePrompt: '',
+      negativePromptEnabled: false,
+    };
+
+    const toDev = getVideoModelSelectionResult({ currentSettings: disabled, model: ltx2('ltx2_dev'), models: catalog });
+
+    expect(toDev.settings.negativePrompt).toBe('');
+    expect(toDev.settings.negativePromptEnabled).toBe(false);
+  });
+
+  it('carries a written negative prompt through a detour rather than overwriting it', () => {
+    const catalog = [ltx2('ltx2_distilled'), ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const written = 'shaky handheld footage, lens flare';
+    const onDev = {
+      ...getDefaultVideoSettings(ltx2('ltx2_dev'), catalog),
+      negativePrompt: written,
+    };
+
+    const toDistilled = getVideoModelSelectionResult({
+      currentSettings: onDev,
+      model: ltx2('ltx2_distilled'),
+      models: catalog,
+    });
+    const backToDev = getVideoModelSelectionResult({
+      currentSettings: toDistilled.settings,
+      model: ltx2('ltx2_dev'),
+      models: catalog,
+    });
+
+    expect(backToDev.settings.negativePrompt).toBe(written);
+  });
+
   it('keeps a hidden CFG so a detour through another family does not destroy it', () => {
     // MiniMax H3 hides CFG and never reads it; a value the user tuned for Wan has to survive
     // selecting H3 and coming back.

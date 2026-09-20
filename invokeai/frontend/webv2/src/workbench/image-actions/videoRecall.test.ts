@@ -881,6 +881,24 @@ describe('LTX-2 recall', () => {
     }
   });
 
+  it('reproduces a dev clip that ran without a negative prompt, from a distilled panel', () => {
+    // Switching to dev seeds the release's list into a panel that carries none -- which is right
+    // when the user picks the model, and wrong here: the clip recorded an empty negative prompt and
+    // a recall has to re-run what was generated, not what the panel would default to.
+    const onDistilled = createDefaultVideoWidgetValues([LTX2_DISTILLED]);
+
+    const result = buildVideoRecallSettings({
+      currentValues: onDistilled,
+      kind: 'all',
+      metadata: ltx2Metadata({ negative_prompt: '' }),
+      models: catalog,
+    });
+
+    expect(result?.values.model).toMatchObject({ key: LTX2_DEV.key });
+    expect(result?.values.cfgScale).toBe(3);
+    expect(result?.values.negativePrompt).toBe('');
+  });
+
   it('restores the model, both component slots and every guidance scale', () => {
     const result = buildVideoRecallSettings({ currentValues, kind: 'all', metadata: ltx2Metadata(), models: catalog });
 
