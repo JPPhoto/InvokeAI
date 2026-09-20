@@ -103,6 +103,36 @@ describe('workflow JSON round-trip', () => {
     expect(serialized).toHaveProperty('form');
   });
 
+  it('normalizes legacy cleared descriptions without changing other overrides during JSON reload', () => {
+    const cases = [
+      { description: undefined, descriptionOverride: true, expectedOverride: false },
+      { description: '', descriptionOverride: true, expectedOverride: false },
+      { description: 'Custom description', descriptionOverride: true, expectedOverride: true },
+      { description: 'Generated description', descriptionOverride: false, expectedOverride: false },
+    ] as const;
+
+    for (const { description, descriptionOverride, expectedOverride } of cases) {
+      const node = buildInvocationNode(template, { x: 0, y: 0 });
+      node.data.inputs.prompt = {
+        ...node.data.inputs.prompt!,
+        description,
+        descriptionOverride,
+      };
+      const document = projectGraphReducer(createProjectGraph('legacy-cleared-description'), {
+        node,
+        type: 'addNode',
+      });
+
+      const parsed = parseWorkflowJson(serializeWorkflowJson(document)).document;
+      const parsedNode = parsed.nodes[0];
+
+      expect(parsedNode?.type === 'invocation' && parsedNode.data.inputs.prompt).toMatchObject({
+        description,
+        descriptionOverride: expectedOverride,
+      });
+    }
+  });
+
   it('persists dynamic input templates needed to preserve Call Saved Workflow values', () => {
     const node = buildInvocationNode(template, { x: 0, y: 0 });
     node.data.dynamicInputTemplates = { runtime: template.inputs.prompt! };

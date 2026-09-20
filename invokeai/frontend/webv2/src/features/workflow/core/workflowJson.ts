@@ -335,9 +335,13 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
     const inputs: Record<string, WorkflowFieldInstance> = {};
 
     for (const [name, instance] of Object.entries(node.data.inputs)) {
+      const descriptionOverride =
+        instance.descriptionOverride === true && (instance.description === undefined || instance.description === '')
+          ? false
+          : instance.descriptionOverride;
       inputs[name] = {
         description: instance.description,
-        ...(instance.descriptionOverride === undefined ? {} : { descriptionOverride: instance.descriptionOverride }),
+        ...(descriptionOverride === undefined ? {} : { descriptionOverride }),
         label: instance.label,
         ...(instance.labelOverride === undefined ? {} : { labelOverride: instance.labelOverride }),
         name: instance.name || name,
