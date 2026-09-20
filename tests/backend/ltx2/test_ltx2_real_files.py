@@ -140,6 +140,28 @@ def test_the_gemma4_tower_runs_and_yields_all_forty_nine_hidden_states() -> None
     assert not torch.allclose(out.hidden_states[-1].float(), out.hidden_states[0].float(), atol=1.0)
 
 
+@pytest.mark.skipif(
+    SNAPSHOT is None or not (SNAPSHOT / "gemma4-12b-ltx-v1" / "tokenizer.json").exists(),
+    reason="the Gemma-4 tokenizer is not in the Hugging Face cache",
+)
+def test_the_released_tokenizer_keeps_the_words_the_mistral_fix_would_shatter() -> None:
+    """transformers advises the Mistral regex fix for this folder. Taking it prepends the Tekken
+    split regex to Gemma's pre-tokenizer, which fragments words this vocabulary has whole -- every
+    prompt would then encode differently from what the reference pipelines feed the tower. The
+    synthetic folder in the loader suite pins the warnings; this pins the tokenization itself."""
+    root = SNAPSHOT / "gemma4-12b-ltx-v1"
+    config = Gemma4Encoder_Gemma4Encoder_LTX2_Config.model_construct(
+        path=str(root), subfolder="", weight_file="gemma4-12b-ltx-v1_bf16.safetensors"
+    )
+    tokenizer = _loader(LTX2Gemma4EncoderModel)._load_model(config, SubModelType.Tokenizer)
+
+    tokens = tokenizer.convert_ids_to_tokens(
+        tokenizer("worst quality, inconsistent motion, blurry, jittery, distorted").input_ids
+    )
+    # Exactly the words the Mistral split shatters ("in"+"consistent", "bl"+"urry", "dist"+"orted").
+    assert {"\u2581inconsistent", "\u2581blurry", "\u2581distorted"} <= set(tokens)
+
+
 @requires_weights
 def test_the_mirror_s_nvfp4_transformer_is_refused_for_naming_no_layer() -> None:
     """WanGP's nvfp4 repack carries no marker and no header entry for its 1176 packed layers, so the
