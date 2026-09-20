@@ -310,6 +310,143 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     expect(updateLibraryWorkflowMock).not.toHaveBeenCalled();
   });
 
+  it('does not notify when disposing a pending duplicate-return autosave', async () => {
+    const boundGraph = createGraphWithDuplicateWorkflowReturns();
+    const project = createMutablePort({
+      galleryValues: {},
+      id: 'project-1',
+      isWorkflowRunning: false,
+      projectGraph: boundGraph,
+      workflowValues: {},
+    });
+    const notifications = { error: vi.fn(), info: vi.fn(), success: vi.fn() };
+
+    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
+    const adapter = {
+      commands: {
+        bindLibraryWorkflow: vi.fn(),
+        editGraph: vi.fn(),
+        redo: vi.fn(),
+        replace: vi.fn(),
+        undo: vi.fn(),
+      },
+      getProjectGraph: () => project.port.getSnapshot().projectGraph,
+      notifications,
+      project: project.port,
+      widgets: { open: vi.fn(), patchValues: vi.fn() },
+    } as unknown as WorkflowUiAdapter;
+
+    root = createRoot(host);
+
+    await act(() => {
+      root.render(
+        <StrictMode>
+          <ChakraProvider value={system}>
+            <QueryClientProvider client={queryClient}>
+              <WorkflowUiProvider adapter={adapter}>
+                <WorkflowDialogHost />
+              </WorkflowUiProvider>
+            </QueryClientProvider>
+          </ChakraProvider>
+        </StrictMode>
+      );
+    });
+
+    await act(() => {
+      project.setSnapshot({
+        ...project.port.getSnapshot(),
+        projectGraph: { ...boundGraph, name: 'Pending invalid edit' },
+      });
+    });
+    await act(() => root.render(null));
+
+    expect(notifications.error).not.toHaveBeenCalled();
+    expect(updateLibraryWorkflowMock).not.toHaveBeenCalled();
+  });
+
+  it('re-arms duplicate-return notifications after valid saves and deduped reverts', async () => {
+    const boundGraph = createGraphWithDuplicateWorkflowReturns();
+    const validGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
+    const project = createMutablePort({
+      galleryValues: {},
+      id: 'project-1',
+      isWorkflowRunning: false,
+      projectGraph: boundGraph,
+      workflowValues: {},
+    });
+    const notifications = { error: vi.fn(), info: vi.fn(), success: vi.fn() };
+
+    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- intentionally stable for this render lifetime
+    const adapter = {
+      commands: {
+        bindLibraryWorkflow: vi.fn(),
+        editGraph: vi.fn(),
+        redo: vi.fn(),
+        replace: vi.fn(),
+        undo: vi.fn(),
+      },
+      getProjectGraph: () => project.port.getSnapshot().projectGraph,
+      notifications,
+      project: project.port,
+      widgets: { open: vi.fn(), patchValues: vi.fn() },
+    } as unknown as WorkflowUiAdapter;
+
+    root = createRoot(host);
+
+    await act(() => {
+      root.render(
+        <StrictMode>
+          <ChakraProvider value={system}>
+            <QueryClientProvider client={queryClient}>
+              <WorkflowUiProvider adapter={adapter}>
+                <WorkflowDialogHost />
+              </WorkflowUiProvider>
+            </QueryClientProvider>
+          </ChakraProvider>
+        </StrictMode>
+      );
+    });
+
+    const waitForAutosave = async () => {
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 2100);
+          })
+      );
+    };
+
+    await act(() => {
+      project.setSnapshot({ ...project.port.getSnapshot(), projectGraph: { ...boundGraph, name: 'Invalid edit' } });
+    });
+    await waitForAutosave();
+
+    await act(() => {
+      project.setSnapshot({ ...project.port.getSnapshot(), projectGraph: validGraph });
+    });
+    await waitForAutosave();
+
+    await act(() => {
+      project.setSnapshot({ ...project.port.getSnapshot(), projectGraph: { ...boundGraph, name: 'Invalid again' } });
+    });
+    await waitForAutosave();
+
+    expect(notifications.error).toHaveBeenCalledTimes(2);
+
+    await act(() => {
+      project.setSnapshot({ ...project.port.getSnapshot(), projectGraph: validGraph });
+    });
+    await waitForAutosave();
+
+    await act(() => {
+      project.setSnapshot({ ...project.port.getSnapshot(), projectGraph: { ...boundGraph, name: 'Invalid after revert' } });
+    });
+    await waitForAutosave();
+
+    expect(notifications.error).toHaveBeenCalledTimes(3);
+    expect(updateLibraryWorkflowMock).toHaveBeenCalledTimes(1);
+  });
+
   /**
    * The host used to learn about graph edits through a selector
    * (`useWorkflowProjectSelector`) feeding a change-detecting effect, which

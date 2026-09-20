@@ -350,6 +350,9 @@ export const WorkflowDialogHost = () => {
       const graph = projectStore.getSnapshot().projectGraph;
       if (graph !== lastGraph) {
         lastGraph = graph;
+        if (!hasMultipleWorkflowReturnNodes(graph)) {
+          duplicateReturnNotificationShown = false;
+        }
         autosaver.notifyGraphChanged();
       }
     });
