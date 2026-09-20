@@ -33,10 +33,13 @@ from invokeai.app.api.routers._access import (
 from invokeai.app.api.routers._access import (
     assert_video_read_access as _assert_video_read_access,
 )
+from invokeai.app.api.routers._access import (
+    board_share_recipients as _board_share_recipients,
+)
 from invokeai.app.api.routers._limits import MAX_COPY_BATCH_SIZE
 from invokeai.app.api.routers.images import WorkflowAndGraphResponse
 from invokeai.app.invocations.fields import MetadataField, MetadataFieldValidator
-from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
+from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin, is_gallery_category
 from invokeai.app.services.shared.pagination import MAX_PAGE_SIZE, OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.video_records.video_records_common import (
@@ -442,7 +445,7 @@ async def upload_video(
 ) -> VideoDTO:
     """Uploads a video for the current user."""
     # Check board access for uploads to a specific board.
-    await run_in_threadpool(_assert_board_write_access, board_id, current_user)
+    board = await run_in_threadpool(_assert_board_write_access, board_id, current_user)
 
     # Stream the upload straight into a tmp file so we can probe it and then hand its path
     # to the service. Reading the full body into memory first risked exhausting RAM on
@@ -545,13 +548,19 @@ async def upload_video(
                     user_id=current_user.user_id,
                 )
             )
-
-            response.status_code = 201
-            response.headers["Location"] = video_dto.video_url
-            return video_dto
         except Exception:
             ApiDependencies.invoker.services.logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail="Failed to create video")
+
+        if not is_intermediate and is_gallery_category(video_category):
+            shared_user_ids = await run_in_threadpool(_board_share_recipients, board)
+            ApiDependencies.invoker.services.events.emit_video_uploaded(
+                video_dto, user_id=current_user.user_id, board=board, shared_user_ids=shared_user_ids
+            )
+
+        response.status_code = 201
+        response.headers["Location"] = video_dto.video_url
+        return video_dto
     finally:
         # If create() succeeded the file was moved; this unlink is a no-op then.
         try:

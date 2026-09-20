@@ -47107,6 +47107,88 @@
         "required": ["image_dto", "presigned_url"],
         "title": "ImageUploadEntry"
       },
+      "ImageUploadedEvent": {
+        "description": "Event model for image_uploaded",
+        "properties": {
+          "timestamp": {
+            "description": "The timestamp of the event",
+            "title": "Timestamp",
+            "type": "integer"
+          },
+          "user_id": {
+            "description": "The user who uploaded the media",
+            "title": "User Id",
+            "type": "string"
+          },
+          "board_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The board the media was added to, if any",
+            "title": "Board Id"
+          },
+          "board_owner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The owner of that board, who may differ from the uploader; None for no board",
+            "title": "Board Owner Id"
+          },
+          "board_visibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoardVisibility"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visibility of that board; None when the media landed on no board"
+          },
+          "shared_user_ids": {
+            "description": "Users a private board is explicitly shared with, who can see this media too",
+            "items": {
+              "type": "string"
+            },
+            "title": "Shared User Ids",
+            "type": "array"
+          },
+          "image_name": {
+            "description": "The name of the uploaded image",
+            "title": "Image Name",
+            "type": "string"
+          },
+          "image_category": {
+            "$ref": "#/components/schemas/ImageCategory",
+            "description": "The category of the uploaded image"
+          }
+        },
+        "required": [
+          "timestamp",
+          "user_id",
+          "board_id",
+          "board_owner_id",
+          "board_visibility",
+          "shared_user_ids",
+          "image_name",
+          "image_category"
+        ],
+        "title": "ImageUploadedEvent",
+        "type": "object"
+      },
       "ImageUrlsDTO": {
         "properties": {
           "image_name": {
@@ -99464,6 +99546,88 @@
         "type": "object",
         "title": "VideoRecordChanges",
         "description": "Allowed mutations on a video record."
+      },
+      "VideoUploadedEvent": {
+        "description": "Event model for video_uploaded",
+        "properties": {
+          "timestamp": {
+            "description": "The timestamp of the event",
+            "title": "Timestamp",
+            "type": "integer"
+          },
+          "user_id": {
+            "description": "The user who uploaded the media",
+            "title": "User Id",
+            "type": "string"
+          },
+          "board_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The board the media was added to, if any",
+            "title": "Board Id"
+          },
+          "board_owner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The owner of that board, who may differ from the uploader; None for no board",
+            "title": "Board Owner Id"
+          },
+          "board_visibility": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoardVisibility"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visibility of that board; None when the media landed on no board"
+          },
+          "shared_user_ids": {
+            "description": "Users a private board is explicitly shared with, who can see this media too",
+            "items": {
+              "type": "string"
+            },
+            "title": "Shared User Ids",
+            "type": "array"
+          },
+          "video_name": {
+            "description": "The name of the uploaded video",
+            "title": "Video Name",
+            "type": "string"
+          },
+          "video_category": {
+            "$ref": "#/components/schemas/ImageCategory",
+            "description": "The category of the uploaded video"
+          }
+        },
+        "required": [
+          "timestamp",
+          "user_id",
+          "board_id",
+          "board_owner_id",
+          "board_visibility",
+          "shared_user_ids",
+          "video_name",
+          "video_category"
+        ],
+        "title": "VideoUploadedEvent",
+        "type": "object"
       },
       "VideoUrlsDTO": {
         "properties": {
