@@ -236,7 +236,7 @@ describe('getVideoPromptPolicy', () => {
 
     expect(atCfg5).toMatchObject({ negativeUsedInGraph: true, negativeVisible: true });
     expect(atCfg1).toMatchObject({ negativeUsedInGraph: false, negativeVisible: true });
-    expect(atCfg1.negativeHelpText).toMatch(/CFG/);
+    expect(atCfg1.negativeHelpTextKey).toBe('widgets.video.negativeCfgHelp');
   });
 
   it('counts low-noise CFG > 1 as CFG in use, matching wan_video_denoise do_cfg', () => {
