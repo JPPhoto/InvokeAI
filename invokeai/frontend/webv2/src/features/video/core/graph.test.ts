@@ -318,9 +318,9 @@ describe('compileVideoGraph — Wan 2.2', () => {
       wan_t5_encoder_model: { key: 'umt5' },
     });
     expect(nodeOfType(backendGraph, 'core_metadata')).toMatchObject({
-      transformer_low_noise: { key: 'low-expert' },
       vae: { key: 'wan-vae' },
-      wan_t5_encoder: { key: 'umt5' },
+      wan_t5_encoder_model: { key: 'umt5' },
+      wan_transformer_low_noise: { key: 'low-expert' },
     });
 
     const diffusers = wanModel('i2v_a14b', 'diffusers');
@@ -376,7 +376,7 @@ describe('compileVideoGraph — MiniMax H3', () => {
     expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', 'video_output', 'audio_vae')).toBe(true);
 
     expect(nodesOfType(backendGraph, 'minimax_h3_frame_conditioning')).toHaveLength(0);
-    expect(nodeOfType(backendGraph, 'core_metadata').generation_mode).toBe('minimax_h3_t2v');
+    expect(nodeOfType(backendGraph, 'core_metadata')).toMatchObject({ fps: 24, generation_mode: 'minimax_h3_t2v' });
     // H3 has no negative prompt; the metadata must not claim one.
     expect(hasEdge(backendGraph, 'negative_prompt', 'value', 'core_metadata', 'negative_prompt')).toBe(false);
   });

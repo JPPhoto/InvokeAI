@@ -26397,6 +26397,122 @@
             "orig_default": null,
             "orig_required": false
           },
+          "source_video_start_frame": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The first frame (inclusive) of the source video that was kept",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Source Video Start Frame"
+          },
+          "source_video_end_frame": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The last frame (inclusive) of the source video that was kept",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Source Video End Frame"
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The frame rate of the generated video",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Fps"
+          },
+          "wan_guidance_scale_low_noise": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The classifier-free guidance scale used by the Wan low-noise expert, when it differed",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Wan Guidance Scale Low Noise"
+          },
+          "wan_t5_encoder_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The standalone UMT5-XXL encoder used with a single-file Wan main model",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "wan_transformer_low_noise": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The standalone low-noise expert used with a single-file Wan main model",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "wan_component_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The Wan Diffusers install whose VAE and encoder served a single-file main model",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
           "minimax_h3_transformer_model": {
             "anyOf": [
               {
@@ -26428,6 +26544,55 @@
             "input": "any",
             "orig_default": null,
             "orig_required": false
+          },
+          "minimax_h3_component_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The MiniMax H3 Diffusers install whose VAEs and encoder served a single-file transformer",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "minimax_h3_hybrid_base_model": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The FL2VA transformer whose later blocks overlaid the Ref2VA transformer (the hybrid)",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "minimax_h3_hybrid_start_block": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The first transformer block taken from the hybrid base",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Minimax H3 Hybrid Start Block"
           },
           "minimax_h3_references": {
             "anyOf": [
@@ -26664,7 +26829,7 @@
         "tags": ["metadata"],
         "title": "Core Metadata",
         "type": "object",
-        "version": "2.5.0",
+        "version": "2.6.0",
         "output": {
           "$ref": "#/components/schemas/MetadataOutput"
         }
