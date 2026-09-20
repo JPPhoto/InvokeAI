@@ -14,7 +14,9 @@ map labels a small gallery as all noise.
 
 import hashlib
 import json
+import time
 import warnings
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -126,47 +128,81 @@ MAX_NEIGHBOR_PAIRS = 50_000_000
 MIN_BUDGETED_EPS = 1e-6
 
 
-def _shrink_eps_to_pair_budget(coords: np.ndarray, eps: float) -> float:
+def _shrink_eps_to_pair_budget(coords: np.ndarray, eps: float) -> tuple[float, Optional[int]]:
     """Shrink eps until DBSCAN's neighbor-pair count fits MAX_NEIGHBOR_PAIRS.
 
     The span clamp alone cannot bound memory: a dense blob concentrates most
     pairs in a small region, so a modest eps on a wide map can still
     materialize billions of pairs. Counting pairs with a KD-tree is cheap.
+
+    Returns the eps and the pair count AT that eps (None when there is nothing
+    to count), so a caller reporting diagnostics does not repeat the walk.
     """
     if coords.shape[0] < 2:
-        return eps
+        return eps, None
 
     from sklearn.neighbors import KDTree
 
     tree = KDTree(coords)
+    pairs = int(tree.query_radius(coords, r=eps, count_only=True).sum())
     # Iterate until the budget is met rather than a fixed count: 12 rounds of
     # 0.7 only covers a 71x reduction, and a tight blob can need far more.
     # Bounded below by MIN_BUDGETED_EPS so a fully coincident map terminates.
-    while eps > MIN_BUDGETED_EPS:
-        pairs = int(tree.query_radius(coords, r=eps, count_only=True).sum())
-        if pairs <= MAX_NEIGHBOR_PAIRS:
-            return eps
+    while pairs > MAX_NEIGHBOR_PAIRS and eps > MIN_BUDGETED_EPS:
         eps *= 0.7
-    return eps
+        pairs = int(tree.query_radius(coords, r=eps, count_only=True).sum())
+    return eps, pairs
+
+
+@dataclass(frozen=True)
+class EpsResolution:
+    """Every step of `resolve_cluster_eps`, for callers that report why.
+
+    Each field is a gate that can silently turn a real clustering into an
+    all-noise map, so the resolution keeps them rather than only its result.
+    """
+
+    requested_eps: Optional[float]
+    """What the caller asked for; None means the adaptive default was used."""
+    adaptive_eps: Optional[float]
+    """Median k-distance, before the 2.0 cap. Only computed when requested_eps is None."""
+    coord_span: float
+    """Widest coordinate extent of the projection; 0.0 for a single point."""
+    span_clamped_eps: float
+    """After the MAX_EPS_SPAN_FRACTION clamp, before the floor."""
+    floored_eps: float
+    """After the 0.01 floor. Reported apart from the clamp because the two are
+    separate causes of an over-tight eps, and a single number cannot say which
+    one produced it."""
+    resolved_eps: float
+    """What DBSCAN will actually run with, after the neighbor-pair budget."""
+    neighbor_pairs: Optional[int]
+    """Pair count at resolved_eps; None when there was nothing to count."""
 
 
 def resolve_cluster_eps(
     coords: np.ndarray,
     eps: Optional[float] = None,
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
-) -> float:
-    """The eps compute_clusters will actually use for these coordinates.
+) -> EpsResolution:
+    """The eps clustering will actually use for these coordinates, and every
+    intermediate value it passed through.
 
     Resolution order: adaptive default when eps is None, then the span clamp,
-    then the neighbor-pair budget. Exposed so callers (the /points endpoint)
-    can report the effective eps and other callers can reuse it verbatim.
+    then the 0.01 floor, then the neighbor-pair budget. The intermediates are
+    returned rather than discarded because each one is a gate that can leave a
+    map entirely unclustered, and the resolved value alone does not say which
+    one bound it.
     """
+    requested_eps = eps
+    adaptive_eps: Optional[float] = None
     if eps is None:
         # Cap at the API's own upper bound (le=2.0) so a reported adaptive
         # eps can always be passed back explicitly. Values that large only
         # arise on sparse structureless maps, where a smaller eps just means
         # more (correct) noise.
-        eps = min(adaptive_cluster_eps(coords, min_samples), 2.0)
+        adaptive_eps = adaptive_cluster_eps(coords, min_samples)
+        eps = min(adaptive_eps, 2.0)
     span = float(np.ptp(coords, axis=0).max()) if coords.shape[0] > 1 else 0.0
     if span > 0:
         eps = min(eps, span * MAX_EPS_SPAN_FRACTION)
@@ -176,7 +212,18 @@ def resolve_cluster_eps(
     # computed, which is how a near-coincident map reached 400M pairs against
     # a 50M budget (~4GB). The budget bounds memory and therefore wins; an eps
     # below the API's floor is a cosmetic pass-back wart, an OOM is not.
-    return _shrink_eps_to_pair_budget(coords, max(eps, 0.01))
+    span_clamped_eps = eps
+    floored_eps = max(span_clamped_eps, 0.01)
+    resolved_eps, neighbor_pairs = _shrink_eps_to_pair_budget(coords, floored_eps)
+    return EpsResolution(
+        requested_eps=requested_eps,
+        adaptive_eps=adaptive_eps,
+        coord_span=span,
+        span_clamped_eps=span_clamped_eps,
+        floored_eps=floored_eps,
+        resolved_eps=resolved_eps,
+        neighbor_pairs=neighbor_pairs,
+    )
 
 
 def compute_clusters(
@@ -190,47 +237,125 @@ def compute_clusters(
     live-adjustable without recomputing the UMAP. When eps is None it is
     derived from the data with adaptive_cluster_eps; see resolve_cluster_eps
     for the clamps applied either way. Clustering is skipped entirely above
-    MAX_CLUSTERED_POINTS.
+    MAX_CLUSTERED_POINTS. Callers that need to know WHY the labels came out as
+    they did call cluster_with_diagnostics, which this delegates to.
     """
-    if coords.shape[0] == 0:
-        return np.empty((0,), dtype=np.int64)
-    if coords.shape[0] > MAX_CLUSTERED_POINTS:
-        return np.full((coords.shape[0],), -1, dtype=np.int64)
-
-    return cluster_at_eps(coords, resolve_cluster_eps(coords, eps, min_samples), min_samples)
+    return cluster_with_diagnostics(coords, eps, min_samples)[0]
 
 
-def cluster_at_eps(
+def _g(value: Optional[float]) -> str:
+    """One float format for the whole diagnostic line, so its columns line up."""
+    return "None" if value is None else f"{value:.6g}"
+
+
+@dataclass(frozen=True)
+class ClusterDiagnostics:
+    """Why a clustering came out the way it did.
+
+    Four gates can turn a real clustering into an all-noise map — the point
+    cap, the span clamp, the pair budget, and an eps floored at 0.01 — and the
+    served response shows none of them: every point simply reads
+    "unclustered". This records what each gate saw, so that outcome can be
+    explained from a log line instead of a reproduction.
+    """
+
+    n_points: int
+    min_samples: int
+    skipped: Optional[str]
+    """Why DBSCAN did not run at all; None when it did."""
+    eps: Optional[EpsResolution]
+    """None when the run was skipped before eps was resolved."""
+    cluster_count: int
+    largest_cluster: int
+    smallest_cluster: int
+    unclustered: int
+    duration_ms: float
+
+    @property
+    def resolved_eps(self) -> Optional[float]:
+        return self.eps.resolved_eps if self.eps is not None else None
+
+    def signature(self) -> str:
+        """Greppable key=value line, timing excluded.
+
+        Timing is what changes between two otherwise identical runs, so a
+        caller that logs one line per distinct outcome compares this.
+        """
+        fields = [f"points={self.n_points}", f"min_samples={self.min_samples}"]
+        if self.eps is None:
+            fields.append("eps=unresolved")
+        else:
+            fields += [
+                f"requested_eps={_g(self.eps.requested_eps)}",
+                f"adaptive_eps={_g(self.eps.adaptive_eps)}",
+                f"coord_span={_g(self.eps.coord_span)}",
+                f"span_clamped_eps={_g(self.eps.span_clamped_eps)}",
+                f"floored_eps={_g(self.eps.floored_eps)}",
+                f"resolved_eps={_g(self.eps.resolved_eps)}",
+                f"neighbor_pairs={self.eps.neighbor_pairs}",
+            ]
+        fields += [
+            f"clusters={self.cluster_count}",
+            f"largest={self.largest_cluster}",
+            f"smallest={self.smallest_cluster}",
+            f"unclustered={self.unclustered}",
+        ]
+        if self.skipped is not None:
+            fields.append(f"skipped={self.skipped!r}")
+        return " ".join(fields)
+
+    def summary(self) -> str:
+        return f"{self.signature()} took={self.duration_ms:.1f}ms"
+
+
+def cluster_with_diagnostics(
     coords: np.ndarray,
-    eps: float,
+    eps: Optional[float] = None,
     min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES,
-) -> np.ndarray:
-    """DBSCAN at an eps `resolve_cluster_eps` has ALREADY produced.
+) -> tuple[np.ndarray, ClusterDiagnostics]:
+    """`compute_clusters`, plus a record of every gate the run passed through.
 
-    Split out so a caller that needs to report the effective eps can resolve it
-    once and cluster at exactly that value. Passing a resolved eps back into
-    compute_clusters instead would re-resolve it — and since resolution floors
-    at 0.01 before applying the neighbour-pair budget, a budget-shrunk eps comes
-    back out different, so the reported value would not be the one used.
+    The single implementation of the resolve-then-cluster sequence, so the
+    pair count the eps resolution already produced is also the one that
+    decides the pair-budget skip rather than being measured a second time.
     """
-    if coords.shape[0] == 0:
-        return np.empty((0,), dtype=np.int64)
-    if coords.shape[0] > MAX_CLUSTERED_POINTS:
-        return np.full((coords.shape[0],), -1, dtype=np.int64)
+    started = time.perf_counter()
+    n_points = coords.shape[0]
+
+    def finish(labels: np.ndarray, resolution: Optional[EpsResolution], skipped: Optional[str]):
+        _, sizes = np.unique(labels[labels >= 0], return_counts=True)
+        return labels, ClusterDiagnostics(
+            n_points=n_points,
+            min_samples=min_samples,
+            skipped=skipped,
+            eps=resolution,
+            cluster_count=int(sizes.size),
+            largest_cluster=int(sizes.max()) if sizes.size else 0,
+            smallest_cluster=int(sizes.min()) if sizes.size else 0,
+            unclustered=int((labels < 0).sum()),
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
+    if n_points == 0:
+        return finish(np.empty((0,), dtype=np.int64), None, None)
+    if n_points > MAX_CLUSTERED_POINTS:
+        return finish(
+            np.full((n_points,), -1, dtype=np.int64),
+            None,
+            f"point count above MAX_CLUSTERED_POINTS={MAX_CLUSTERED_POINTS}",
+        )
+
+    resolution = resolve_cluster_eps(coords, eps, min_samples)
+    if resolution.neighbor_pairs is not None and resolution.neighbor_pairs > MAX_NEIGHBOR_PAIRS:
+        return finish(
+            np.full((n_points,), -1, dtype=np.int64),
+            resolution,
+            f"neighbor pairs above MAX_NEIGHBOR_PAIRS={MAX_NEIGHBOR_PAIRS} at the pair budget's floor",
+        )
 
     from sklearn.cluster import DBSCAN
-    from sklearn.neighbors import KDTree
 
-    if coords.shape[0] > 1:
-        # The shrink bottoms out at MIN_BUDGETED_EPS, which a fully coincident
-        # map cannot satisfy at any positive radius. Skip clustering rather
-        # than hand DBSCAN a neighborhood it would materialize into GBs — same
-        # response shape as the MAX_CLUSTERED_POINTS skip above.
-        pairs = int(KDTree(coords).query_radius(coords, r=eps, count_only=True).sum())
-        if pairs > MAX_NEIGHBOR_PAIRS:
-            return np.full((coords.shape[0],), -1, dtype=np.int64)
-
-    return DBSCAN(eps=eps, min_samples=min_samples).fit(coords).labels_
+    return finish(DBSCAN(eps=resolution.resolved_eps, min_samples=min_samples).fit(coords).labels_, resolution, None)
 
 
 def scope_hash(model_id: str, items: list[IndexedItem]) -> str:

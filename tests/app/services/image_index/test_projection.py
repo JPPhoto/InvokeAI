@@ -7,7 +7,10 @@ import numpy as np
 from invokeai.app.services.image_index.image_index_common import IndexedItem
 from invokeai.app.services.image_index.projection import (
     DEFAULT_CLUSTER_EPS,
+    MAX_CLUSTERED_POINTS,
+    MAX_EPS_SPAN_FRACTION,
     adaptive_cluster_eps,
+    cluster_with_diagnostics,
     compute_clusters,
     compute_umap,
     projection_params,
@@ -119,9 +122,9 @@ def test_eps_shrinks_to_fit_neighbor_pair_budget(monkeypatch) -> None:
     sparse = rng.uniform(-50.0, 50.0, size=(120, 2))
     coords = np.vstack([dense, sparse]).astype(np.float32)
 
-    unbudgeted = resolve_cluster_eps(coords)
+    unbudgeted = resolve_cluster_eps(coords).resolved_eps
     monkeypatch.setattr(projection, "MAX_NEIGHBOR_PAIRS", 5_000)
-    budgeted = resolve_cluster_eps(coords)
+    budgeted = resolve_cluster_eps(coords).resolved_eps
 
     assert budgeted < unbudgeted
     # And the budgeted eps is what the default clustering path actually uses:
@@ -134,8 +137,8 @@ def test_resolve_cluster_eps_is_idempotent() -> None:
     # clustering; resolving an already-resolved eps must not change it.
     rng = np.random.default_rng(5)
     coords = rng.normal(size=(200, 2)).astype(np.float32) * 10
-    resolved = resolve_cluster_eps(coords)
-    assert resolve_cluster_eps(coords, eps=resolved) == resolved
+    resolved = resolve_cluster_eps(coords).resolved_eps
+    assert resolve_cluster_eps(coords, eps=resolved).resolved_eps == resolved
 
 
 def test_compute_clusters_clamps_eps_to_span_fraction() -> None:
@@ -148,8 +151,6 @@ def test_compute_clusters_clamps_eps_to_span_fraction() -> None:
 
 
 def test_compute_clusters_skips_huge_point_sets() -> None:
-    from invokeai.app.services.image_index.projection import MAX_CLUSTERED_POINTS
-
     coords = np.zeros((MAX_CLUSTERED_POINTS + 1, 2), dtype=np.float32)
     labels = compute_clusters(coords, eps=0.2, min_samples=2)
     assert set(labels) == {-1}
@@ -180,14 +181,16 @@ def test_projection_params_is_stable_json() -> None:
     assert projection_params(n_points=100) == projection_params(n_points=100)
 
 
-def test_cluster_at_eps_clusters_at_exactly_the_eps_it_is_given(monkeypatch) -> None:
-    """The router resolves eps once so it can report the effective value, then clusters.
+def test_clustering_reports_the_eps_dbscan_actually_ran_at(monkeypatch) -> None:
+    """One clustering resolves eps once, and reports the value it used.
 
-    Routing that value back through compute_clusters would resolve it a SECOND time —
-    re-running the k-distance fit and the whole KD-tree budget shrink (measured at ~65%
-    of a 50k-point request), and re-applying the 0.01 floor, which re-inflates a
-    budget-shrunk eps onto a different shrink grid so the number reported to the client
-    is not the number DBSCAN used.
+    The endpoints report `cluster_eps` out of this call so a later request can
+    reproduce the clustering. Resolving a second time — which routing the
+    reported value back through the entry point would do — re-runs the
+    k-distance fit and the whole KD-tree budget shrink (measured at ~65% of a
+    50k-point request), and re-applies the 0.01 floor, which re-inflates a
+    budget-shrunk eps onto a different shrink grid: the number reported would
+    not be the number DBSCAN used.
     """
     import invokeai.app.services.image_index.projection as projection
 
@@ -212,15 +215,120 @@ def test_cluster_at_eps_clusters_at_exactly_the_eps_it_is_given(monkeypatch) -> 
     monkeypatch.setattr(sklearn.cluster, "DBSCAN", recording_dbscan)
 
     coords = _blob_coords()
-    resolved = real_resolve(coords, None, 2)
+    _, diagnostics = cluster_with_diagnostics(coords, eps=None, min_samples=2)
 
-    projection.cluster_at_eps(coords, resolved, 2)
-    assert calls["resolve"] == 0, "clustering at an already-resolved eps must not resolve again"
-    assert captured["eps"] == resolved, "DBSCAN must run at exactly the eps the caller reports"
+    assert calls["resolve"] == 1, "one clustering must resolve eps exactly once"
+    assert captured["eps"] == diagnostics.resolved_eps, "DBSCAN must run at exactly the eps reported"
 
-    # compute_clusters keeps resolving for callers that pass a raw/None eps.
-    projection.compute_clusters(coords, eps=None, min_samples=2)
-    assert calls["resolve"] == 1
+
+def test_diagnostics_count_the_clusters_that_were_found() -> None:
+    coords = _blob_coords()
+    labels, diagnostics = cluster_with_diagnostics(coords, min_samples=2)
+
+    sizes = sorted(int((labels == cluster).sum()) for cluster in set(labels) if cluster >= 0)
+    assert sizes, "the blob fixture must cluster, or this asserts nothing"
+    assert diagnostics.cluster_count == len(sizes)
+    assert diagnostics.largest_cluster == sizes[-1]
+    assert diagnostics.smallest_cluster == sizes[0]
+    assert diagnostics.unclustered == int((labels < 0).sum())
+    assert diagnostics.skipped is None
+    assert diagnostics.eps is not None and diagnostics.eps.adaptive_eps is not None
+
+
+def test_diagnostics_name_the_point_cap_that_left_a_map_unclustered() -> None:
+    """The gate a 170k-image gallery hits: every point noise, nothing in the response saying why."""
+    coords = np.zeros((MAX_CLUSTERED_POINTS + 1, 2), dtype=np.float32)
+    labels, diagnostics = cluster_with_diagnostics(coords, eps=0.2, min_samples=2)
+
+    assert set(labels) == {-1}
+    assert diagnostics.skipped is not None and "MAX_CLUSTERED_POINTS" in diagnostics.skipped
+    assert diagnostics.unclustered == coords.shape[0]
+    assert diagnostics.cluster_count == 0
+    # Nothing was resolved, so nothing about eps may be reported as if it had been.
+    assert diagnostics.eps is None and diagnostics.resolved_eps is None
+    assert "MAX_CLUSTERED_POINTS" in diagnostics.summary()
+
+
+def test_diagnostics_name_the_pair_budget_when_the_shrink_bottoms_out(monkeypatch) -> None:
+    # Coincident points are every other point's neighbor at any radius, so no
+    # eps meets the budget and the shrink stops at its floor.
+    import invokeai.app.services.image_index.projection as projection
+
+    monkeypatch.setattr(projection, "MAX_NEIGHBOR_PAIRS", 100)
+    coords = np.zeros((100, 2), dtype=np.float32)
+    labels, diagnostics = cluster_with_diagnostics(coords, min_samples=2)
+
+    assert set(labels) == {-1}
+    assert diagnostics.skipped is not None and "MAX_NEIGHBOR_PAIRS" in diagnostics.skipped
+    # eps resolution DID run here, so the shrink it bottomed out on is reported.
+    assert diagnostics.eps is not None
+    assert diagnostics.eps.neighbor_pairs == coords.shape[0] ** 2
+    assert diagnostics.resolved_eps is not None and diagnostics.resolved_eps <= projection.MIN_BUDGETED_EPS
+
+
+def test_diagnostics_report_each_link_of_the_eps_chain() -> None:
+    """A wrong chain is worse than none: it misdirects the next investigation."""
+    # Span 30, so the clamp (5% of span = 1.5) binds an eps of 5.0.
+    coords = np.array([[0.0, 0.0], [30.0, 30.0], [10.0, 10.0], [20.0, 20.0]], dtype=np.float32)
+    resolution = resolve_cluster_eps(coords, eps=5.0, min_samples=2)
+
+    assert resolution.requested_eps == 5.0
+    assert resolution.adaptive_eps is None, "an explicit eps must not be reported as an adaptive one"
+    assert resolution.coord_span == 30.0
+    assert resolution.span_clamped_eps == 30.0 * MAX_EPS_SPAN_FRACTION
+    assert resolution.floored_eps == resolution.span_clamped_eps, "1.5 is above the floor; the floor must not move it"
+    assert resolution.resolved_eps == resolution.floored_eps, "6 pairs is under any budget"
+
+
+def test_diagnostics_separate_the_span_clamp_from_the_eps_floor() -> None:
+    """Both can produce a too-tight eps, and the log has to say which one did."""
+    # Span 0.08, so the clamp gives 0.004 and the 0.01 floor then lifts it.
+    coords = np.array([[0.0, 0.0], [0.08, 0.0], [0.04, 0.0]], dtype=np.float32)
+    resolution = resolve_cluster_eps(coords, eps=2.0, min_samples=2)
+
+    assert resolution.span_clamped_eps < 0.01
+    assert resolution.floored_eps == 0.01
+    assert (
+        "span_clamped_eps=0.004 floored_eps=0.01"
+        in cluster_with_diagnostics(coords, eps=2.0, min_samples=2)[1].signature()
+    )
+
+
+def test_the_pair_budget_shrink_can_succeed_short_of_its_floor(monkeypatch) -> None:
+    """The shrink's successful exit — clusters at a reduced eps, rather than giving up."""
+    import invokeai.app.services.image_index.projection as projection
+
+    rng = np.random.default_rng(11)
+    coords = np.concatenate([rng.normal(scale=0.05, size=(200, 2)) + c for c in ([0.0, 0.0], [10.0, 10.0])]).astype(
+        np.float32
+    )
+    monkeypatch.setattr(projection, "MAX_NEIGHBOR_PAIRS", 20_000)
+    labels, diagnostics = cluster_with_diagnostics(coords, eps=2.0, min_samples=2)
+
+    assert diagnostics.skipped is None, "the shrink met the budget, so DBSCAN must have run"
+    assert diagnostics.eps is not None
+    assert diagnostics.resolved_eps < diagnostics.eps.floored_eps, "the budget must have shrunk eps"
+    assert diagnostics.resolved_eps > projection.MIN_BUDGETED_EPS, "it must have stopped short of the floor"
+    assert diagnostics.eps.neighbor_pairs <= 20_000
+    assert diagnostics.cluster_count > 0, "a met budget must still cluster, not degrade to noise"
+    # The reported histogram describes the labels that were actually served.
+    sizes = sorted(int((labels == cluster).sum()) for cluster in set(labels) if cluster >= 0)
+    assert [diagnostics.cluster_count, diagnostics.largest_cluster, diagnostics.smallest_cluster] == [
+        len(sizes),
+        sizes[-1],
+        sizes[0],
+    ]
+
+
+def test_diagnostics_signature_is_stable_across_identical_runs() -> None:
+    """The endpoint logs one line per distinct outcome, so timing must stay out of the key."""
+    coords = _blob_coords()
+    first = cluster_with_diagnostics(coords, min_samples=2)[1]
+    second = cluster_with_diagnostics(coords, min_samples=2)[1]
+
+    assert first.signature() == second.signature()
+    assert first.signature() in first.summary()
+    assert cluster_with_diagnostics(coords, min_samples=3)[1].signature() != first.signature()
 
 
 def _blob_coords() -> np.ndarray:
