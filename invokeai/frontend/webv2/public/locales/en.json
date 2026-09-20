@@ -3993,6 +3993,8 @@
     "loadingMore": "Loading more…",
     "multipleWorkflowReturnNodes": "The workflow must contain exactly one workflow return node before it can be saved.",
     "multipleWorkflowReturnNodesForTransfer": "The workflow must contain exactly one workflow return node before it can be exported or copied.",
+    "workflowMetadataOmitted": "Workflow metadata omitted",
+    "workflowMetadataOmittedBody": "Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.",
     "moreActions": "More actions",
     "nodeCount_one": "{{count}} node",
     "nodeCount_other": "{{count}} nodes",

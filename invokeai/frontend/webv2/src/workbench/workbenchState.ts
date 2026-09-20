@@ -522,14 +522,18 @@ const createNotification = ({
   category,
   kind,
   message,
+  messageKey,
   projectId,
   title,
+  titleKey,
 }: {
   category?: WorkbenchNotificationCategory;
   kind: WorkbenchNotificationKind;
   message?: string;
+  messageKey?: string;
   projectId?: string;
   title: string;
+  titleKey?: string;
 }): WorkbenchNotification => ({
   category,
   createdAt: now(),
@@ -537,8 +541,10 @@ const createNotification = ({
   isRead: false,
   kind,
   message,
+  messageKey,
   projectId,
   title,
+  titleKey,
 });
 
 const addNotification = (state: WorkbenchState, notification: WorkbenchNotification): WorkbenchState => {
@@ -588,6 +594,24 @@ const withEnqueueNotification = (
   }
 
   const queueItem = after.queue.items[0];
+
+  if (
+    queueItem?.snapshot.sourceId === 'workflow' &&
+    queueItem.snapshot.backendSubmission.kind === 'workflow' &&
+    !queueItem.snapshot.backendSubmission.workflow
+  ) {
+    return addNotification(
+      nextState,
+      createNotification({
+        kind: 'info',
+        message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
+        messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
+        projectId: after.id,
+        title: 'Workflow metadata omitted',
+        titleKey: 'workflowLibrary.workflowMetadataOmitted',
+      })
+    );
+  }
 
   return addNotification(
     nextState,

@@ -3437,7 +3437,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       expect(readNodeSeed(state)).toBe(48);
     });
 
-    it('omits the embedded workflow when the backend would reject it', () => {
+    it('notifies when the queued workflow omits metadata the backend would reject', () => {
       // `WorkflowWithoutID` rejects more than one `workflow_return` node, and
       // the batch is validated before the enqueue route body, so attaching
       // such a workflow turns the whole run into a 422. Legacy validates first
@@ -3489,13 +3489,27 @@ describe('workbenchReducer Phase 5 generation flow', () => {
         });
       }
 
-      const submission = readSubmission(submitWorkflow(state));
+      const nextState = submitWorkflow(state);
+      const submission = readSubmission(nextState);
 
       // `kind` guards the assertion below: a graph that fails to compile also
       // yields an object with no `workflow` key, which would pass for the
       // wrong reason.
       expect(submission).toMatchObject({ kind: 'workflow' });
       expect(submission).not.toHaveProperty('workflow');
+      expect(nextState.notifications[0]).toMatchObject({
+        kind: 'info',
+        message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
+        messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
+        title: 'Workflow metadata omitted',
+        titleKey: 'workflowLibrary.workflowMetadataOmitted',
+      });
+
+      const repeatedState = submitWorkflow(nextState);
+
+      expect(
+        repeatedState.notifications.filter((notification) => notification.title === 'Workflow metadata omitted')
+      ).toHaveLength(2);
     });
 
     it('holds a fixed seed as a graph constant and repeats the graph for every run', () => {
