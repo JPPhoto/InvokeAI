@@ -261,4 +261,75 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
 
     expect(getLibraryWorkflowRecordMock).toHaveBeenCalledTimes(3);
   });
+
+  /**
+   * `savedWorkflowDetailQueryOptions` sets `gcTime: Infinity` and `retry: false`,
+   * so an errored cache entry never expires and is never revalidated on its own.
+   * Selecting that workflow again is an explicit user gesture and has to attempt
+   * the request, otherwise a blip poisons the id for the rest of the session and
+   * the node blocks Invoke with no way back.
+   */
+  const mockWorkflowThatRecoversAfterOneFailure = (workflowId: string) => {
+    const attempts: string[] = [];
+
+    getLibraryWorkflowRecordMock.mockImplementation((requestedId: string) => {
+      attempts.push(requestedId);
+      const hasFailedOnce = attempts.filter((id) => id === workflowId).length > 1;
+
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          if (requestedId === workflowId && hasFailedOnce) {
+            resolve({ name: 'Recovered', workflow: { edges: [], nodes: [] }, workflow_id: requestedId });
+            return;
+          }
+
+          reject(new Error('not found'));
+        }, 10);
+      });
+    });
+
+    return attempts;
+  };
+
+  const selectWorkflow = (
+    readGraph: () => ProjectGraphState,
+    updateGraph: (next: ProjectGraphState) => void,
+    value: string
+  ) => {
+    updateGraph(
+      projectGraphReducer(readGraph(), { fieldName: 'workflow_id', nodeId: 'call-1', type: 'setFieldValue', value })
+    );
+  };
+
+  it('retries a workflow that errored earlier when it is selected again', async () => {
+    const attempts = mockWorkflowThatRecoversAfterOneFailure(MISSING_WORKFLOW_ID);
+    const { readGraph, updateGraph } = await mountWith([buildCallNode('call-1')]);
+
+    await settle(60);
+
+    selectWorkflow(readGraph, updateGraph, 'other-workflow');
+    await settle(60);
+
+    selectWorkflow(readGraph, updateGraph, MISSING_WORKFLOW_ID);
+    await settle(60);
+
+    expect(attempts.filter((id) => id === MISSING_WORKFLOW_ID)).toHaveLength(2);
+    expect(readStatuses(readGraph())).toEqual(['ready']);
+  });
+
+  it('retries a workflow that errored earlier after the selection is cleared and remade', async () => {
+    const attempts = mockWorkflowThatRecoversAfterOneFailure(MISSING_WORKFLOW_ID);
+    const { readGraph, updateGraph } = await mountWith([buildCallNode('call-1')]);
+
+    await settle(60);
+
+    selectWorkflow(readGraph, updateGraph, '');
+    await settle(60);
+
+    selectWorkflow(readGraph, updateGraph, MISSING_WORKFLOW_ID);
+    await settle(60);
+
+    expect(attempts.filter((id) => id === MISSING_WORKFLOW_ID)).toHaveLength(2);
+    expect(readStatuses(readGraph())).toEqual(['ready']);
+  });
 });
