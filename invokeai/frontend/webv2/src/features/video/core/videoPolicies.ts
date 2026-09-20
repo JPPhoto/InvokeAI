@@ -1843,11 +1843,11 @@ export const getVideoModelSelectionResult = ({
   // hides the field, so clearing the box, detouring through distilled and coming back restores the
   // list; dev quietly running without it is the worse failure. Filling an empty field in is not a
   // clearing, so it takes no label.
+  const previousModel = models.find((entry) => entry.key === currentSettings.modelKey);
+  const previousConfig = previousModel && isSupportedVideoModel(previousModel) ? getVideoConfig(previousModel) : null;
+
   if (config.defaultNegativePrompt && next.negativePromptEnabled && !next.negativePrompt.trim()) {
-    const previous = models.find((entry) => entry.key === currentSettings.modelKey);
-    const previousCarriesNone = previous
-      ? isSupportedVideoModel(previous) && getVideoConfig(previous).negativePrompt.usage === 'never'
-      : true;
+    const previousCarriesNone = previousModel ? previousConfig?.negativePrompt.usage === 'never' : true;
 
     if (previousCarriesNone) {
       next.negativePrompt = config.defaultNegativePrompt;
@@ -1858,6 +1858,40 @@ export const getVideoModelSelectionResult = ({
   if (!config.stepsEditable && next.steps !== config.defaults.steps) {
     next.steps = config.defaults.steps;
     addClearedLabel(clearedLabels, 'Steps');
+  }
+
+  // Steps and CFG have no "carries none" sentinel like the scales above, so a control the previous
+  // variant did not offer stands in for one: the user cannot have chosen a number they were never
+  // shown, and if it is still that variant's own recommendation it is not one they carried in
+  // either. Both conditions are needed. The fixed-schedule variant pins 8 steps at CFG 1, and
+  // without this dev arrives holding them -- dev with no guidance at all, which is the recipe that
+  // produces washed-out output.
+  //
+  // Compared against the variant's static recipe, never `getDefaultVideoSettings`: that applies an
+  // installed accelerator's numbers, so on a machine with the Lightning LoRAs a Wan panel's
+  // "default" is 4/1, and comparing against it would both miss real carry-overs and rewrite a step
+  // count the user typed. A control the previous variant *did* show is the user's and is never
+  // touched, whatever it holds.
+  //
+  // Skipped while the accelerator is on: the fast path owns steps and CFG and restores the model's
+  // own when it turns off, so its numbers are not a variant's recommendation to compare. An
+  // unresolvable previous model leaves both alone -- unlike the blank negative prompt above, where
+  // seeding only adds, guessing here would rewrite tuned values on any panel whose model is missing
+  // from the catalog. Placed after the fixed-schedule reset so a step count the user did choose is
+  // still reported as taken away; adopting a recommendation they never set is not a clearing, and
+  // both numbers are on screen.
+  //
+  // Known gap: a value the user deliberately set to exactly the hiding variant's own default (CFG 1
+  // on dev, say) is indistinguishable from one carried in and is replaced. Telling them apart needs
+  // a real sentinel on both fields, which is a change to the persisted settings across every family.
+  if (!next.acceleratorEnabled && previousConfig) {
+    if (!previousConfig.stepsEditable && next.steps === previousConfig.defaults.steps) {
+      next.steps = config.defaults.steps;
+    }
+
+    if (!previousConfig.cfg.visible && next.cfgScale === previousConfig.defaults.cfgScale) {
+      next.cfgScale = config.defaults.cfgScale;
+    }
   }
 
   const compatibleLoras = next.loras.filter((lora) => isLoraCompatibleWithModel(lora.model, model));

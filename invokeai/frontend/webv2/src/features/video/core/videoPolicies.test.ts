@@ -1604,6 +1604,99 @@ describe('LTX-2 policy', () => {
     expect(toDev.settings.negativePrompt).toBe('');
   });
 
+  it("takes dev's steps and CFG from a panel that was never shown them", () => {
+    // The distilled variant pins 8 steps at CFG 1 and hides both controls, and only the scales
+    // refill on their own, so dev used to arrive at 8/1 -- dev with no guidance at all, which is
+    // the recipe that produces washed-out output.
+    const catalog = [ltx2('ltx2_distilled'), ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+
+    const result = getVideoModelSelectionResult({
+      currentSettings: getDefaultVideoSettings(ltx2('ltx2_distilled'), catalog),
+      model: ltx2('ltx2_dev'),
+      models: catalog,
+    });
+
+    expect({ cfgScale: result.settings.cfgScale, steps: result.settings.steps }).toEqual({ cfgScale: 3, steps: 30 });
+  });
+
+  it("leaves another family's own numbers alone when its panel was showing them", () => {
+    // The deliberate boundary: Wan shows steps and CFG, so 40/5 on screen is the user's to change
+    // and LTX-2 dev does not overrule it. Only a control the previous variant never showed is
+    // treated as a recommendation the panel was merely holding.
+    const catalog = [wanModel('t2v_a14b'), ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const onWan = getDefaultVideoSettings(wanModel('t2v_a14b'), catalog);
+
+    const toDev = getVideoModelSelectionResult({ currentSettings: onWan, model: ltx2('ltx2_dev'), models: catalog });
+
+    expect({ cfgScale: toDev.settings.cfgScale, steps: toDev.settings.steps }).toEqual({
+      cfgScale: onWan.cfgScale,
+      steps: onWan.steps,
+    });
+    expect(onWan.steps).not.toBe(30);
+  });
+
+  it('never rewrites steps or CFG the previous panel put on screen, whatever they hold', () => {
+    // Wan shows both controls, so its numbers are the user's whatever they are -- including numbers
+    // that happen to match a default. The comparison is against the variant's static recipe for
+    // this reason: getDefaultVideoSettings applies an installed accelerator, so with the Lightning
+    // pair in the catalog Wan's "default" is the 4-step fast path, and a hand-typed 4 at CFG 1
+    // would read as a carried-over default and be rewritten to 40/5.
+    const catalog = [wanModel('t2v_a14b'), ltx2('ltx2_dev'), LIGHTNING_T2V_HIGH, LIGHTNING_T2V_LOW, LTX2_COMPONENTS];
+    const typed = {
+      ...getDefaultVideoSettings(wanModel('t2v_a14b'), catalog),
+      acceleratorEnabled: false,
+      acceleratorLoraKeys: [],
+      cfgScale: 1,
+      loras: [],
+      steps: 4,
+    };
+
+    const toDev = getVideoModelSelectionResult({ currentSettings: typed, model: ltx2('ltx2_dev'), models: catalog });
+
+    expect({ cfgScale: toDev.settings.cfgScale, steps: toDev.settings.steps }).toEqual({ cfgScale: 1, steps: 4 });
+  });
+
+  it('keeps a tuned CFG across a detour through the fixed-schedule variant', () => {
+    // The mirror of the rule above: a number the user chose is not the previous model's
+    // recommendation, so it survives a variant that hides the control. The step count cannot --
+    // distilled pins it on the way in and says so -- but it must land on dev's 30, not distilled's 8.
+    const catalog = [ltx2('ltx2_distilled'), ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const tuned = { ...getDefaultVideoSettings(ltx2('ltx2_dev'), catalog), cfgScale: 6, steps: 45 };
+
+    const toDistilled = getVideoModelSelectionResult({
+      currentSettings: tuned,
+      model: ltx2('ltx2_distilled'),
+      models: catalog,
+    });
+
+    expect(toDistilled.settings.cfgScale).toBe(6);
+    expect(toDistilled.clearedLabels).toContain('Steps');
+
+    const back = getVideoModelSelectionResult({
+      currentSettings: toDistilled.settings,
+      model: ltx2('ltx2_dev'),
+      models: catalog,
+    });
+
+    expect({ cfgScale: back.settings.cfgScale, steps: back.settings.steps }).toEqual({ cfgScale: 6, steps: 30 });
+  });
+
+  it('leaves steps and CFG alone when the panel it came from cannot be resolved', () => {
+    // Without the previous model there is nothing to compare against, and guessing would clobber
+    // tuned values on any panel whose model is missing from the catalog.
+    const catalog = [ltx2('ltx2_dev'), LTX2_COMPONENTS, LTX2_ENCODER];
+    const orphaned = {
+      ...getDefaultVideoSettings(ltx2('ltx2_distilled'), catalog),
+      cfgScale: 6,
+      modelKey: 'uninstalled-key',
+      steps: 45,
+    };
+
+    const toDev = getVideoModelSelectionResult({ currentSettings: orphaned, model: ltx2('ltx2_dev'), models: catalog });
+
+    expect({ cfgScale: toDev.settings.cfgScale, steps: toDev.settings.steps }).toEqual({ cfgScale: 6, steps: 45 });
+  });
+
   it('seeds the list when the panel it came from can no longer be resolved', () => {
     // The previous model was uninstalled under the panel, or the panel was never seeded at all. The
     // automatic re-pick has to reach the same place the manual switch does, or dev runs at CFG 3
