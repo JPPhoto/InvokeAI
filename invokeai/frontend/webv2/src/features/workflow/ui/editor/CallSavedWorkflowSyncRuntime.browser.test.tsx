@@ -231,6 +231,37 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
     expect(readStatuses(readGraph())).toEqual(['error', 'error', 'error']);
   });
 
+  it('keeps an invalidation armed while an existing detail request settles', async () => {
+    let resolveFirstRequest:
+      | ((record: { name: string; workflow: { edges: never[]; nodes: never[] }; workflow_id: string }) => void)
+      | undefined;
+    let attempts = 0;
+    getLibraryWorkflowRecordMock.mockImplementation((workflowId: string) => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        return new Promise((resolve) => {
+          resolveFirstRequest = resolve;
+        });
+      }
+
+      return Promise.resolve({ name: workflowId, workflow: { edges: [], nodes: [] }, workflow_id: workflowId });
+    });
+
+    const { readGraph } = await mountWith([buildCallNode('call-1')]);
+    await settle(20);
+    invalidateWorkflowLibraryCache(MISSING_WORKFLOW_ID);
+    resolveFirstRequest?.({
+      name: MISSING_WORKFLOW_ID,
+      workflow: { edges: [], nodes: [] },
+      workflow_id: MISSING_WORKFLOW_ID,
+    });
+    await settle(80);
+
+    expect(getLibraryWorkflowRecordMock).toHaveBeenCalledTimes(2);
+    expect(readStatuses(readGraph())).toEqual(['ready']);
+  });
+
   it('keeps an invalidation retry available when the first matching node changes', async () => {
     const attempts = mockWorkflowThatRecoversAfterOneFailure(MISSING_WORKFLOW_ID);
     const { readGraph, updateGraph } = await mountWith([buildCallNode('call-1'), buildCallNode('call-2')]);

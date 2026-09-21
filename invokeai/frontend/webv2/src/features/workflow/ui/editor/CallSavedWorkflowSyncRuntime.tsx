@@ -83,6 +83,8 @@ export const pruneStaleCallSavedWorkflowNodeState = <T,>(
   }
 };
 
+type RetryableDetailWorkflowNode = { token: number; workflowId: string };
+
 const hasSameFieldType = (left: unknown, right: unknown): boolean => {
   if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
     return false;
@@ -148,11 +150,18 @@ const needsDynamicFieldSync = (
 export const CallSavedWorkflowSyncRuntime = () => {
   const queryClient = useQueryClient();
   const { commands, project: projectPort } = useWorkflowUi();
-  const retryableDetailWorkflowIds = useRef(new Map<string, string>());
-  const retryableDetailWorkflowQueries = useRef(new Set<string>());
+  const retryableDetailWorkflowIds = useRef(new Map<string, RetryableDetailWorkflowNode>());
+  const retryableDetailWorkflowQueries = useRef(new Map<string, number>());
+  const nextRetryToken = useRef(0);
   const previousDetailWorkflowIds = useRef(new Map<string, string>());
   const previousDetailStatuses = useRef(new Map<string, 'loading' | 'ready' | 'error'>());
   const parseChildWorkflow = useMemo(() => createSavedWorkflowDocumentParser(), []);
+  const authorizeNodeRetry = (nodeId: string, workflowId: string) => {
+    retryableDetailWorkflowIds.current.set(nodeId, { token: ++nextRetryToken.current, workflowId });
+  };
+  const authorizeWorkflowRetry = (workflowId: string) => {
+    retryableDetailWorkflowQueries.current.set(workflowId, ++nextRetryToken.current);
+  };
   const reconcile = () => {
     const templatesSnapshot = getInvocationTemplatesSnapshot();
 
@@ -226,12 +235,14 @@ export const CallSavedWorkflowSyncRuntime = () => {
           previousStatus === 'error' &&
           query?.state.status === 'error')
       ) {
-        retryableDetailWorkflowIds.current.set(node.id, workflowId);
+        authorizeNodeRetry(node.id, workflowId);
       }
 
-      const retryWasAuthorized =
-        retryableDetailWorkflowIds.current.get(node.id) === workflowId ||
-        retryableDetailWorkflowQueries.current.has(workflowId);
+      const nodeRetryAuthorization = retryableDetailWorkflowIds.current.get(node.id);
+      const nodeRetryToken =
+        nodeRetryAuthorization?.workflowId === workflowId ? nodeRetryAuthorization.token : undefined;
+      const workflowRetryToken = retryableDetailWorkflowQueries.current.get(workflowId);
+      const retryWasAuthorized = nodeRetryToken !== undefined || workflowRetryToken !== undefined;
 
       if (
         shouldFetchSavedWorkflowDetail(query, {
@@ -247,16 +258,34 @@ export const CallSavedWorkflowSyncRuntime = () => {
         void queryClient
           .fetchQuery(detailOptions)
           .then(() => {
-            if (retryableDetailWorkflowIds.current.get(node.id) === workflowId) {
+            const currentNodeRetry = retryableDetailWorkflowIds.current.get(node.id);
+            const currentWorkflowRetryToken = retryableDetailWorkflowQueries.current.get(workflowId);
+            const hasNewerWorkflowRetry = currentWorkflowRetryToken !== workflowRetryToken;
+
+            if (nodeRetryToken !== undefined && currentNodeRetry?.token === nodeRetryToken) {
               retryableDetailWorkflowIds.current.delete(node.id);
             }
-            retryableDetailWorkflowQueries.current.delete(workflowId);
+            if (workflowRetryToken !== undefined && currentWorkflowRetryToken === workflowRetryToken) {
+              retryableDetailWorkflowQueries.current.delete(workflowId);
+            }
+
+            if (hasNewerWorkflowRetry) {
+              void queryClient.invalidateQueries({
+                exact: true,
+                queryKey: detailOptions.queryKey,
+                refetchType: 'none',
+              });
+            }
           })
           .catch(() => {
-            if (retryableDetailWorkflowIds.current.get(node.id) === workflowId) {
+            const currentNodeRetry = retryableDetailWorkflowIds.current.get(node.id);
+            const currentWorkflowRetryToken = retryableDetailWorkflowQueries.current.get(workflowId);
+            if (nodeRetryToken !== undefined && currentNodeRetry?.token === nodeRetryToken) {
               retryableDetailWorkflowIds.current.delete(node.id);
             }
-            retryableDetailWorkflowQueries.current.delete(workflowId);
+            if (workflowRetryToken !== undefined && currentWorkflowRetryToken === workflowRetryToken) {
+              retryableDetailWorkflowQueries.current.delete(workflowId);
+            }
             const failedQuery = queryClient.getQueryCache().find({ queryKey: detailOptions.queryKey });
             const currentNode = projectPort
               .getSnapshot()
@@ -275,7 +304,7 @@ export const CallSavedWorkflowSyncRuntime = () => {
               // Keep the node blocked while stale data is being retried. This
               // permits transient revalidation failures to recover without
               // allowing a deleted child workflow to enqueue stale inputs.
-              retryableDetailWorkflowIds.current.set(node.id, workflowId);
+              authorizeNodeRetry(node.id, workflowId);
             }
             setStatus(node.id, workflowId, 'error');
           });
@@ -345,10 +374,6 @@ export const CallSavedWorkflowSyncRuntime = () => {
       }
     });
     const unsubscribeLibrary = onWorkflowLibraryCacheInvalidated((workflowId) => {
-      const authorizeWorkflowRetry = (workflowId: string) => {
-        retryableDetailWorkflowQueries.current.add(workflowId);
-      };
-
       if (workflowId) {
         authorizeWorkflowRetry(workflowId);
         void queryClient.invalidateQueries({
