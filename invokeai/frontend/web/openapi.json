@@ -25898,6 +25898,9 @@
                   "ltx2_i2v",
                   "ltx2_a2v",
                   "ltx2_v2a",
+                  "ltx2_lf2v",
+                  "ltx2_flf2v",
+                  "ltx2_extend_video",
                   "minimax_h3_lf2v",
                   "minimax_h3_flf2v",
                   "minimax_h3_extend_video",
@@ -39945,6 +39948,9 @@
                   "$ref": "#/components/schemas/LTX2DenoiseInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/LTX2ExtendConditioningInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
                 },
                 {
@@ -40696,6 +40702,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/LTX2DenoiseOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2ExtendConditioningOutput"
                 },
                 {
                   "$ref": "#/components/schemas/LTX2IdealDimensionsOutput"
@@ -49255,6 +49264,9 @@
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2ExtendConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
               },
               {
@@ -49963,6 +49975,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2DenoiseOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ExtendConditioningOutput"
               },
               {
                 "$ref": "#/components/schemas/LTX2IdealDimensionsOutput"
@@ -50769,6 +50784,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ExtendConditioningInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
@@ -51871,6 +51889,9 @@
           "ltx2_denoise": {
             "$ref": "#/components/schemas/LTX2DenoiseOutput"
           },
+          "ltx2_extend_conditioning": {
+            "$ref": "#/components/schemas/LTX2ExtendConditioningOutput"
+          },
           "ltx2_ideal_dimensions": {
             "$ref": "#/components/schemas/LTX2IdealDimensionsOutput"
           },
@@ -52520,6 +52541,7 @@
           "lscale",
           "ltx2_audio_conditioning",
           "ltx2_denoise",
+          "ltx2_extend_conditioning",
           "ltx2_ideal_dimensions",
           "ltx2_image_conditioning",
           "ltx2_latent_upsample",
@@ -53254,6 +53276,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ExtendConditioningInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
@@ -54421,6 +54446,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ExtendConditioningInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
@@ -58386,6 +58414,23 @@
             "orig_required": false,
             "title": "Image Conditioning"
           },
+          "keyframe_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2VideoConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A frame held somewhere other than the start -- a last frame, or any interior keyframe. Its own `frame_index` says where; -1 is the last frame.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Keyframe Conditioning"
+          },
           "audio_conditioning": {
             "anyOf": [
               {
@@ -58402,6 +58447,23 @@
             "orig_default": null,
             "orig_required": false,
             "title": "Audio Conditioning"
+          },
+          "audio_prefix_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2AudioConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The opening of the soundtrack, held while the rest is generated. A continuation uses it so the join blends the source's real sound against a reproduction of itself rather than against newly invented sound.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Audio Prefix Conditioning"
           },
           "full_video_conditioning": {
             "anyOf": [
@@ -58620,7 +58682,7 @@
         "tags": ["ltx", "ltx2", "video", "audio", "denoise"],
         "title": "Denoise - LTX-2",
         "type": "object",
-        "version": "1.2.0",
+        "version": "1.4.0",
         "output": {
           "$ref": "#/components/schemas/LTX2DenoiseOutput"
         }
@@ -58674,6 +58736,234 @@
         "title": "LTX2DenoiseOutput",
         "type": "object"
       },
+      "LTX2ExtendConditioningInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Encodes the end of a clip so LTX-2 can continue it.\n\nA continuation is image-to-video with a longer anchor: instead of one held frame the generation\nopens with several latent frames of the source, held clean the same way. That is what carries\nthe source's *motion* across the join -- a single still frame fixes the picture but not its\ndirection, and clips extended from one tend to stall or lurch where they meet.\n\nThe held frames are regenerated as part of the output, so they appear in both clips. The join is\nwhat removes the duplication: a crossfade of ``context_frames`` consumes exactly those frames\nfrom each side, blending two renderings of the same moment into one.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "video": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VideoField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The clip to continue.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "VAE",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Video VAE"
+          },
+          "audio_vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Audio VAE (mel spectrogram) for LTX-2",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Audio VAE"
+          },
+          "vocoder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2VocoderField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The vocoder, whose checkpoint carries the log-mel filters the audio VAE encodes from.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Vocoder"
+          },
+          "fps": {
+            "default": 24.0,
+            "description": "The clip's frame rate, used to turn the held frame count into a span of its soundtrack.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 120,
+            "minimum": 1,
+            "orig_default": 24.0,
+            "orig_required": false,
+            "title": "Fps",
+            "type": "number"
+          },
+          "width": {
+            "default": 1248,
+            "description": "Canvas width (must match Denoise).",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 1248,
+            "orig_required": false,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 704,
+            "description": "Canvas height (must match Denoise).",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 704,
+            "orig_required": false,
+            "title": "Height",
+            "type": "integer"
+          },
+          "context_frames": {
+            "default": 17,
+            "description": "Frames of the source to carry into the continuation. The VAE encodes 8k + 1 frames, so this is snapped DOWN to the nearest 9, 17, 25, 33, 41, 49... -- asking for 24 holds 17. A short source is capped at what it has. The `context_frames` output reports what was actually held, which is why the join reads it from there rather than from here. More context means smoother motion and more rhythmic context across the join, and less of the generation left for new material.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 481,
+            "minimum": 1,
+            "orig_default": 17,
+            "orig_required": false,
+            "title": "Context Frames",
+            "type": "integer"
+          },
+          "tile_size": {
+            "default": 512,
+            "description": "Spatial encode tile, in source pixels. Smaller tiles need less VRAM and take longer.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 64,
+            "orig_default": 512,
+            "orig_required": false,
+            "title": "Tile Size",
+            "type": "integer"
+          },
+          "temporal_tile": {
+            "default": 16,
+            "description": "Temporal encode tile, in source frames. Smaller tiles need less VRAM and take longer.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 8,
+            "orig_default": 16,
+            "orig_required": false,
+            "title": "Temporal Tile",
+            "type": "integer"
+          },
+          "type": {
+            "const": "ltx2_extend_conditioning",
+            "default": "ltx2_extend_conditioning",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["ltx", "ltx2", "video", "extend", "conditioning"],
+        "title": "Extend Conditioning - LTX-2",
+        "type": "object",
+        "version": "1.1.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2ExtendConditioningOutput"
+        }
+      },
+      "LTX2ExtendConditioningOutput": {
+        "class": "output",
+        "description": "The source's tail, held as the opening of the continuation.",
+        "properties": {
+          "video_conditioning": {
+            "$ref": "#/components/schemas/LTX2VideoConditioningField",
+            "description": "First-frame (VAE-latent) conditioning for LTX-2",
+            "field_kind": "output",
+            "title": "Image Conditioning",
+            "ui_hidden": false
+          },
+          "context_frames": {
+            "description": "Pixel frames of the source that are held. The generated clip reproduces these, so a join has to consume exactly this many to avoid repeating them.",
+            "field_kind": "output",
+            "title": "Context Frames",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "audio_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2AudioConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The held opening of the source's soundtrack, or nothing when the clip is silent.",
+            "field_kind": "output",
+            "title": "Audio Conditioning",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_extend_conditioning_output",
+            "default": "ltx2_extend_conditioning_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "video_conditioning", "context_frames", "audio_conditioning", "type", "type"],
+        "title": "LTX2ExtendConditioningOutput",
+        "type": "object"
+      },
       "LTX2FullVideoConditioningField": {
         "description": "A whole clip held frozen while its soundtrack is generated (video-to-audio).\n\nDistinct from :class:`LTX2VideoConditioningField`, which anchors a single frame: this one holds\n*every* video token, so the transformer's video stream is a given and only the audio is\nsampled. The canvas and length ride along for the same reason the first-frame field carries a\ncanvas -- a mismatch should be named, not discovered inside the transformer.",
         "properties": {
@@ -58701,9 +58991,14 @@
             "description": "The clip's own frame rate, which the generation adopts.",
             "title": "Fps",
             "type": "number"
+          },
+          "source_video_name": {
+            "description": "The clip these latents were encoded from. The decode muxes its own frames back in rather than rendering the held latents, which would hand the user a VAE round trip of footage they already have.",
+            "title": "Source Video Name",
+            "type": "string"
           }
         },
-        "required": ["latents_name", "width", "height", "num_frames", "fps"],
+        "required": ["latents_name", "width", "height", "num_frames", "fps", "source_video_name"],
         "title": "LTX2FullVideoConditioningField",
         "type": "object"
       },
@@ -58850,7 +59145,7 @@
         "category": "conditioning",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Encodes an image as the first frame of an LTX-2 generation.\n\nThe image is re-compressed as a single H.264 frame before it is encoded. That is not an\noptimization: LTX-2 was trained on frames that had been through a video codec, and a pristine\nsource is far enough out of that distribution that the clip visibly drifts away from it over\nthe first second. 18 is the CRF LTX-2.5 was trained against.",
+        "description": "Encodes an image as a held frame of an LTX-2 generation.\n\nThe image is re-compressed as a single H.264 frame before it is encoded. That is not an\noptimization: LTX-2 was trained on frames that had been through a video codec, and a pristine\nsource is far enough out of that distribution that the clip visibly drifts away from it over\nthe first second. 18 is the CRF LTX-2.5 was trained against.",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -58944,6 +59239,16 @@
             "title": "Strength",
             "type": "number"
           },
+          "frame_index": {
+            "default": 0,
+            "description": "Latent frame to hold this image at. 0 is the first frame; negative counts from the end, so -1 makes it the last. A frame held anywhere but 0 is appended to the model's sequence rather than overwriting the grid, which is what lets it coexist with a first frame.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 0,
+            "orig_required": false,
+            "title": "Frame Index",
+            "type": "integer"
+          },
           "crf": {
             "default": 18,
             "description": "H.264 quality factor the image is re-compressed at before encoding. Higher is more compressed; 0 skips re-compression, which is off-distribution for this model.",
@@ -58968,7 +59273,7 @@
         "tags": ["conditioning", "image", "ltx", "ltx2", "video"],
         "title": "Image Conditioning - LTX-2",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
         }
@@ -59240,6 +59545,23 @@
             "orig_required": false,
             "title": "Source Audio"
           },
+          "source_video": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2FullVideoConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The clip whose soundtrack was generated. When set, its own frames are written out instead of the held video latents being decoded.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Source Video"
+          },
           "audio_latents": {
             "anyOf": [
               {
@@ -59352,7 +59674,7 @@
         "tags": ["latents", "video", "audio", "vae", "l2v", "ltx", "ltx2"],
         "title": "Latents to Video - LTX-2",
         "type": "object",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "output": {
           "$ref": "#/components/schemas/VideoOutput"
         }
@@ -59747,7 +60069,7 @@
         "description": "LTX-2 transformer variants. Dev and Distilled are key-for-key identical checkpoints of the same\narchitecture; the variant decides the sampling recipe (guided ~40-step schedule vs the fixed\n8-sigma distilled schedule with CFG off), so it must travel with the model record.\n\nValues carry the family prefix because variant values are globally unique across enums\n(`FluxVariantType.Dev` already owns \"dev\")."
       },
       "LTX2VideoConditioningField": {
-        "description": "First-frame (VAE-latent) conditioning for LTX-2 image-to-video.\n\nThe canvas the frame was encoded at rides along so the denoise node can reject a mismatch\nwith a named error rather than a shape failure inside the transformer.",
+        "description": "A frame (VAE-latent) held at one point in an LTX-2 generation.\n\nThe canvas the frame was encoded at rides along so the denoise node can reject a mismatch\nwith a named error rather than a shape failure inside the transformer.",
         "properties": {
           "latents_name": {
             "description": "Name of the saved [1, 128, 1, H/32, W/32] latent tensor.",
@@ -59769,6 +60091,12 @@
             "description": "How strongly the frame is held, 0 (ignored) to 1 (kept exactly).",
             "title": "Strength",
             "type": "number"
+          },
+          "frame_index": {
+            "default": 0,
+            "description": "Latent frame the image is held at. 0 is the first frame; negative counts from the end, so -1 is the last. Resolved against the clip's own length by the denoise node, which is why an encode stays valid when the frame count changes.",
+            "title": "Frame Index",
+            "type": "integer"
           }
         },
         "required": ["latents_name", "width", "height"],
@@ -59907,7 +60235,7 @@
         "tags": ["ltx", "ltx2", "video", "audio", "conditioning"],
         "title": "Video Conditioning - LTX-2",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/LTX2VideoConditioningOutput"
         }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getVideoAspectRatioParts,
+  ltx2ExtendJoinFitsInMemory,
   getVideoDurationSeconds,
   invertVideoAspectRatioId,
   isValidMiniMaxH3NumFrames,
@@ -301,5 +302,28 @@ describe('LTX-2 two-stage canvases', () => {
   it('returns null for a degenerate source, in both stages', () => {
     expect(getLtx2StageCanvases(0, 1080, '1024p')).toBeNull();
     expect(getLtx2StageCanvases(Number.NaN, 1080, '1024p')).toBeNull();
+  });
+});
+
+describe('ltx2ExtendJoinFitsInMemory', () => {
+  // `video_concat` buffers a crossfade at the FIRST input's native resolution and refuses over
+  // 512 MiB: `width * height * 3 * (transition_frames * 2 + 13)`. Pinned at the boundary rather
+  // than at comfortable sizes, because every way of getting the formula wrong -- dropping the
+  // blend's working frames, counting the crossfade's two sides once, misreading the budget --
+  // moves the threshold without changing the answer for a 1080p or a 4K source.
+  it('matches the backend budget exactly at the last size that fits', () => {
+    expect(ltx2ExtendJoinFitsInMemory(3_807_595, 1, 17)).toBe(true);
+    expect(ltx2ExtendJoinFitsInMemory(3_807_596, 1, 17)).toBe(false);
+  });
+
+  it('scales with the overlap the join has to blend', () => {
+    expect(ltx2ExtendJoinFitsInMemory(10_526_880, 1, 2)).toBe(true);
+    expect(ltx2ExtendJoinFitsInMemory(10_526_881, 1, 2)).toBe(false);
+  });
+
+  it('accepts the resolutions a user is likely to extend from', () => {
+    expect(ltx2ExtendJoinFitsInMemory(1920, 1080, 17)).toBe(true);
+    expect(ltx2ExtendJoinFitsInMemory(2560, 1440, 17)).toBe(true);
+    expect(ltx2ExtendJoinFitsInMemory(3840, 2160, 17)).toBe(false);
   });
 });

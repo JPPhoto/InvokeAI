@@ -1,8 +1,6 @@
 """A whole clip as LTX-2 conditioning: generate a soundtrack for existing picture."""
 
-import numpy as np
 import torch
-from PIL import Image
 
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
@@ -21,7 +19,7 @@ from invokeai.app.invocations.fields import (
 )
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.app.util.video_thumbnails import iter_video_frames
+from invokeai.backend.ltx2.clip_frames import encode_canvas_clip, read_canvas_frames
 from invokeai.backend.ltx2.constants import (
     LTX2_CANVAS_MULTIPLE,
     LTX2_DEFAULT_TEMPORAL_TILE,
@@ -30,17 +28,9 @@ from invokeai.backend.ltx2.constants import (
     LTX2_LATENT_CHANNELS,
     LTX2_NUM_FRAMES_MAX,
 )
-from invokeai.backend.ltx2.image_conditioning import fit_to_canvas
-from invokeai.backend.ltx2.packing import normalize_video_latents, snap_num_frames_down, video_latent_shape
-from invokeai.backend.ltx2.video_decoding import scoped_ltx2_tiling
-from invokeai.backend.model_manager.load.model_cache.utils import get_effective_device
+from invokeai.backend.ltx2.packing import snap_num_frames_down, video_latent_shape
 from invokeai.backend.model_manager.taxonomy import BaseModelType
-from invokeai.backend.util.cancel_hooks import cancel_before_forward
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_ltx2
-
-# How often the frame-reading loop reports. Decoding and cover-cropping a long clip is tens of
-# seconds; without this the bar sits still for all of it.
-_PROGRESS_FRAME_INTERVAL = 48
 
 
 @invocation_output("ltx2_video_conditioning_output")
@@ -60,7 +50,7 @@ class LTX2VideoConditioningOutput(BaseInvocationOutput):
     title="Video Conditioning - LTX-2",
     tags=["ltx", "ltx2", "video", "audio", "conditioning"],
     category="conditioning",
-    version="1.0.0",
+    version="1.1.0",
     classification=Classification.Prototype,
 )
 class LTX2VideoConditioningInvocation(BaseInvocation):
@@ -118,16 +108,17 @@ class LTX2VideoConditioningInvocation(BaseInvocation):
         # bounds a clip's length -- `validate_num_frames` only checks the 8n + 1 grid -- so a
         # workflow handing this node a ten-minute recording would otherwise materialize every frame
         # before anything refused it. The cap is the grid value at or below the model's own maximum.
-        cap = snap_num_frames_down(LTX2_NUM_FRAMES_MAX)
         context.util.signal_progress("Reading the clip for LTX-2 conditioning")
-        # `fit_to_canvas` takes (height, width) and a PIL image, and already returns RGB.
-        frames: list[np.ndarray] = []
-        for frame in iter_video_frames(path, is_canceled=context.util.is_canceled):
-            frames.append(np.asarray(fit_to_canvas(Image.fromarray(frame), self.height, self.width), dtype=np.uint8))
-            if len(frames) >= cap:
-                break
-            if len(frames) % _PROGRESS_FRAME_INTERVAL == 0:
-                context.util.signal_progress(f"Reading the clip for LTX-2 conditioning ({len(frames)} frames)")
+        frames, _ = read_canvas_frames(
+            path,
+            width=self.width,
+            height=self.height,
+            cap=snap_num_frames_down(LTX2_NUM_FRAMES_MAX),
+            is_canceled=context.util.is_canceled,
+            on_progress=lambda read: context.util.signal_progress(
+                f"Reading the clip for LTX-2 conditioning ({read} frames)"
+            ),
+        )
 
         num_frames = snap_num_frames_down(len(frames))
         if num_frames < 1 + LTX2_FRAME_MODULUS:
@@ -137,15 +128,6 @@ class LTX2VideoConditioningInvocation(BaseInvocation):
             )
         del frames[num_frames:]
 
-        # Stacked as uint8 and converted on the device: the fp32 copy is four times the size, and
-        # making it here would put ~2.4 GiB of host memory (for a 241-frame 1248x704 clip) outside
-        # every budget the model cache knows about, on top of the list it is built from.
-        pixels = torch.from_numpy(np.stack(frames))
-        del frames
-
-        # Tiled, like the decode: an untiled encode's activation grows with the whole clip rather
-        # than with one tile, and a 1248x704 clip of 121 frames needs about 65 GiB of it. Tiled at
-        # the defaults the same encode runs in 3.2 GiB, and the cost is flat in the clip's length.
         working_memory = estimate_vae_working_memory_ltx2(
             "encode",
             vae_info.model,
@@ -159,29 +141,14 @@ class LTX2VideoConditioningInvocation(BaseInvocation):
         context.util.signal_progress("Encoding the clip for LTX-2 conditioning")
 
         with vae_info.model_on_device(working_mem_bytes=working_memory) as (_, vae):
-            vae_dtype = next(iter(vae.parameters())).dtype
-            # Resolved again inside the lock: the cache decides where the model actually lands, and
-            # a partially-loaded or CPU-resident VAE would reject input placed on the accelerator.
-            device = get_effective_device(vae)
-            source = pixels.to(device=device).permute(3, 0, 1, 2).unsqueeze(0)  # [1, 3, T, H, W]
-            # Subtract before dividing: the arithmetic runs in the VAE's own (low-precision) dtype
-            # to keep one copy of the clip rather than two, and `x / 127.5 - 1` cancels there --
-            # mid-grey lands within a bf16 ulp of 1.0, so the subtraction throws the value away.
-            # This order is the same maths with no cancellation, and matches an fp32 round-trip.
-            source = source.to(dtype=vae_dtype).sub_(127.5).div_(127.5)
-            del pixels
-
-            with (
-                scoped_ltx2_tiling(vae, tile_size=self.tile_size, temporal_tile=self.temporal_tile),
-                # One poll per encoder forward: a tiled encode of a long clip is hundreds of them,
-                # and polling only around the whole call would leave a cancel waiting for all of it.
-                cancel_before_forward([vae.encoder], context.util.is_canceled, device),
-            ):
-                latents = vae.encode(source).latent_dist.mode().to(torch.float32)
-            del source
-            latents = normalize_video_latents(
-                latents, vae.latents_mean, vae.latents_std, float(vae.config.scaling_factor)
+            latents = encode_canvas_clip(
+                vae,
+                frames,
+                tile_size=self.tile_size,
+                temporal_tile=self.temporal_tile,
+                is_canceled=context.util.is_canceled,
             )
+        del frames
 
         expected = (1, LTX2_LATENT_CHANNELS, *video_latent_shape(num_frames, self.height, self.width))
         if tuple(latents.shape) != expected:
@@ -197,6 +164,7 @@ class LTX2VideoConditioningInvocation(BaseInvocation):
                 height=self.height,
                 num_frames=num_frames,
                 fps=self.fps,
+                source_video_name=self.video.video_name,
             ),
             width=self.width,
             height=self.height,
