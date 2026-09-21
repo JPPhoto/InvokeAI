@@ -246,7 +246,6 @@ const zLoopLinkageInvocationNodeEdgeValidationSchema = z.looseObject({
 const zLoopLinkageInvocationNodeEdge = z.custom<Edge<Record<string, never>, 'loop_linkage'>>(
   (val) => zLoopLinkageInvocationNodeEdgeValidationSchema.safeParse(val).success
 );
-export type LoopLinkageInvocationNodeEdge = z.infer<typeof zLoopLinkageInvocationNodeEdge>;
 
 const zInvocationNodeEdgeCollapsedData = z.object({
   count: z.number().int().min(1),
