@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.types import Message, Receive, Scope, Send
 
 from invokeai.app.services.auth.token_service import verify_token
+from invokeai.app.services.board_records.board_records_common import BoardVisibility
 from invokeai.app.services.config.config_default import get_config
 from invokeai.app.services.events.events_common import (
     BatchEnqueuedEvent,
@@ -29,6 +30,7 @@ from invokeai.app.services.events.events_common import (
     ImageIndexStatusEvent,
     ImageIndexUpdatedEvent,
     ImageMapProjectionReadyEvent,
+    ImageUploadedEvent,
     InvocationCompleteEvent,
     InvocationErrorEvent,
     InvocationProgressEvent,
@@ -37,6 +39,7 @@ from invokeai.app.services.events.events_common import (
     LLMTaskErrorEvent,
     LLMTaskEventBase,
     LLMTaskProgressEvent,
+    MediaUploadedEventBase,
     ModelEventBase,
     ModelInstallCancelledEvent,
     ModelInstallCompleteEvent,
@@ -54,6 +57,7 @@ from invokeai.app.services.events.events_common import (
     QueueItemStatusChangedEvent,
     RecallParametersUpdatedEvent,
     UserAccessChangedEvent,
+    VideoUploadedEvent,
     WorkflowAccessRevokedEvent,
     WorkflowCreatedEvent,
     WorkflowDeletedEvent,
@@ -132,6 +136,7 @@ WORKFLOW_EVENTS = {WorkflowCreatedEvent, WorkflowUpdatedEvent, WorkflowDeletedEv
 USER_EVENTS = {UserAccessChangedEvent}
 
 IMAGE_INDEX_EVENTS = {ImageIndexStatusEvent, ImageIndexUpdatedEvent, ImageMapProjectionReadyEvent}
+MEDIA_EVENTS = {ImageUploadedEvent, VideoUploadedEvent}
 
 MODEL_INSTALL_EVENTS = (
     ModelInstallDownloadStartedEvent,
@@ -240,6 +245,7 @@ class SocketIO:
         register_events(LLM_TASK_EVENTS, self._handle_llm_task_event)
         register_events(WORKFLOW_EVENTS, self._handle_workflow_event)
         register_events(IMAGE_INDEX_EVENTS, self._handle_image_index_event)
+        register_events(MEDIA_EVENTS, self._handle_media_event)
         register_events(USER_EVENTS, self._handle_user_access_changed)
 
     async def _handle_connect(self, sid: str, environ: dict, auth: dict | None) -> bool:
@@ -1221,6 +1227,33 @@ class SocketIO:
         # a side channel on other users' generation activity, so they go to
         # admins only (single-user mode's sole user is an admin).
         await self._sio.emit(event=event_name, data=event_data.model_dump(mode="json"), room="admin")
+
+    async def _handle_media_event(self, event: FastAPIEvent[MediaUploadedEventBase]) -> None:
+        """Route an upload to the clients whose gallery can show it.
+
+        Shared and Public boards are visible to every user, so those uploads go to everyone.
+        Anything else — a private board or no board at all — goes to the uploader, the board's
+        owner (an admin may upload into someone else's private board), the users that board is
+        explicitly shared with, and admins, who see every board. The route resolves the share
+        list, so routing an event stays free of storage access.
+        """
+        event_name, event_data = event
+        payload = event_data.model_dump(mode="json")
+
+        if not self._is_multiuser_enabled():
+            await self._sio.emit(event=event_name, data=payload, room="admin")
+            return
+
+        if event_data.board_visibility in (BoardVisibility.Shared, BoardVisibility.Public):
+            await self._sio.emit(event=event_name, data=payload)
+            return
+
+        rooms = [f"user:{event_data.user_id}", "admin"]
+        if event_data.board_owner_id is not None and event_data.board_owner_id != event_data.user_id:
+            rooms.append(f"user:{event_data.board_owner_id}")
+        # A room the socket is already in costs nothing: python-socketio unions a room list by sid.
+        rooms.extend(f"user:{user_id}" for user_id in event_data.shared_user_ids)
+        await self._sio.emit(event=event_name, data=payload, room=rooms)
 
     async def _handle_bulk_image_download_event(self, event: FastAPIEvent[BulkDownloadEventBase]) -> None:
         event_name, event_data = event

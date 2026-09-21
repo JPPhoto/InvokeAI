@@ -24,6 +24,20 @@ diffusers = pytest.importorskip("diffusers")
 from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d  # noqa: E402
 
 
+def _restore_stock_forward() -> None:
+    """Put the class back to its unpatched state.
+
+    The patch is process-wide and idempotent, and on a ROCm build it is real: any earlier test on the
+    same xdist worker that loads a Wan-family VAE for real (the loader matrix does) leaves the class
+    patched. A test that then records the patched forward as "stock" cannot tell whether patching
+    did anything, and fails only on ROCm rigs, only for some worker assignments.
+    """
+    if getattr(WanCausalConv3d, mod._SENTINEL, False):
+        assert mod._STOCK_FORWARD is not None
+        WanCausalConv3d.forward = mod._STOCK_FORWARD
+        delattr(WanCausalConv3d, mod._SENTINEL)
+
+
 @pytest.fixture(autouse=True)
 def _decomposed_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """A developer's INVOKEAI_ROCM_CONV3D=verify shell must not reroute the parity tests."""
@@ -80,6 +94,7 @@ def test_decomposed_forward_falls_back_to_conv3d_for_strided_convs() -> None:
 
 def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
     torch.manual_seed(4)
+    _restore_stock_forward()
     stock_forward = WanCausalConv3d.forward
     try:
         conv = WanCausalConv3d(4, 8, kernel_size=3, padding=1)
@@ -94,9 +109,7 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
 
         assert torch.allclose(conv(x), ref, atol=1e-5)
     finally:
-        WanCausalConv3d.forward = stock_forward
-        if hasattr(WanCausalConv3d, "_invokeai_rocm_conv2d_decomposition"):
-            delattr(WanCausalConv3d, "_invokeai_rocm_conv2d_decomposition")
+        _restore_stock_forward()
 
 
 def test_patch_applies_on_every_hip_version(monkeypatch: pytest.MonkeyPatch) -> None:

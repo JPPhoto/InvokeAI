@@ -182,6 +182,31 @@ describe('issue #9151: graphToWorkflow + zod validation roundtrip', () => {
     expect(findInput(migrated, 'core_metadata:sbmUlPbCpY', 'z_image_seed_variance_strength')?.value).toBe(0.1);
     expect(findInput(migrated, 'core_metadata:sbmUlPbCpY', 'z_image_seed_variance_randomize_percent')?.value).toBe(50);
   });
+
+  it('loads webv2 workflows containing loop_linkage edges', () => {
+    const workflow = graphToWorkflow(
+      {
+        ...userFirstGraph,
+        edges: [
+          {
+            destination: { field: 'loop_linkage', node_id: 'lora_selector:lXZkTpWiQQ' },
+            source: { field: 'loop_linkage', node_id: 'core_metadata:sbmUlPbCpY' },
+          },
+        ],
+      } as NonNullableGraph,
+      false
+    );
+    const legacyWorkflow = JSON.parse(JSON.stringify(workflow)) as Record<string, unknown>;
+    legacyWorkflow.meta = { ...(legacyWorkflow.meta as Record<string, unknown>), version: '3.0.0' };
+    legacyWorkflow.edges = (legacyWorkflow.edges as Array<Record<string, unknown>>).map((edge) => ({
+      ...edge,
+      type: 'loop_linkage',
+    }));
+
+    const migrated = parseAndMigrateWorkflow(legacyWorkflow);
+
+    expect(migrated.edges[0]?.type).toBe('loop_linkage');
+  });
 });
 
 const imageCollectionTemplate = {
