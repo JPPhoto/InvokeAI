@@ -6,10 +6,11 @@ app startup or break the app if the dependency stack is unhealthy.
 
 Parameters follow PhotoMapAI's tuning: UMAP(n_neighbors=min(15, N-1),
 n_components=2, min_dist=0.05, metric="cosine") and DBSCAN(min_samples=10)
-over the 2D coordinates. Unlike PhotoMapAI (fixed eps=0.2 plus a user-facing
-slider), eps defaults to an adaptive value: UMAP's output scale grows as the
-point count shrinks, so any fixed eps that works for a dense thousand-image
-map labels a small gallery as all noise.
+over the 2D coordinates. eps defaults to an adaptive value derived from the
+coordinates themselves — UMAP's output scale grows as the point count
+shrinks, so any fixed eps that works for a dense thousand-image map labels a
+small gallery as all noise — and the clustering-strength control lets a user
+override it per map.
 """
 
 import hashlib
@@ -93,33 +94,131 @@ def compute_umap(embeddings: np.ndarray, seed: int = DEFAULT_UMAP_SEED) -> np.nd
 # the image_map router — so it is set from measurement, not headroom.
 MAX_CLUSTERED_POINTS = 300_000
 
-# eps is clamped to this fraction of the projection's coordinate span. UMAP's
-# output scale is data-dependent, so an absolute eps close to the span makes
-# every point a neighbor of every other (O(N^2) memory in sklearn's DBSCAN).
-MAX_EPS_SPAN_FRACTION = 0.05
+# A DERIVED eps is clamped to this fraction of the projection's coordinate
+# span (a requested one is not — see resolve_cluster_eps). UMAP's output scale
+# is data-dependent, so an eps close to the span makes every point a neighbor
+# of every other.
+#
+# 0.05 here was correct for a median k-distance, which sits low in the
+# distribution. The quantile scan deliberately climbs past the median, and at
+# 0.05 the clamp overrode the scan's answer outright on a map of a few
+# well-separated blobs. PhotoMapAI records making exactly this mistake by
+# copying the 0.05 from here. The pair budget below, not this, is what bounds
+# memory; this is only a sanity bound on an automatically chosen number, so it
+# is set where it catches absurdity and nothing else.
+MAX_EPS_SPAN_FRACTION = 0.25
 
 
-def adaptive_cluster_eps(coords: np.ndarray, min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES) -> float:
-    """Median k-distance of the coordinates: each point's distance to its
-    min_samples-th nearest neighbor, aggregated with the median.
+# Quantiles of the k-distance distribution, ascending, that the scan walks.
+# Coarse on purpose: each step costs a DBSCAN fit, and near the knee the
+# resulting eps values are within a few percent of each other anyway.
+CANDIDATE_QUANTILES: tuple[int, ...] = (40, 50, 60, 70, 80, 90)
 
-    This is the standard DBSCAN eps heuristic: a point whose min_samples-th
-    neighbor is within eps is a core point, so the median k-distance makes
-    roughly half the points core points — clusters form wherever density is
-    above the map's typical density, at any gallery size or UMAP scale.
+# A cluster holding more than this share of the gallery is a blob, not a
+# cluster: it is what the map looks like just before every point merges into
+# one component. Ported from PhotoMapAI, where this was measured against real
+# albums and the last candidate below it consistently landed on the value a
+# human had tuned by hand.
+MAX_TOP_CLUSTER_SHARE = 0.25
+
+
+def _k_distances(coords: np.ndarray, min_samples: int) -> Optional[np.ndarray]:
+    """Each point's distance to its min_samples-th nearest neighbor.
+
+    None when the map is too small to have one. Imported lazily because
+    sklearn's neighbors module is not free to import.
     """
     n_points = coords.shape[0]
     k = min(min_samples, n_points - 1)
     if k < 1:
-        return DEFAULT_CLUSTER_EPS
+        return None
 
     from sklearn.neighbors import NearestNeighbors
 
     # k + 1 neighbors because each point's nearest neighbor is itself.
     distances, _ = NearestNeighbors(n_neighbors=k + 1).fit(coords).kneighbors(coords)
-    eps = float(np.median(distances[:, -1]))
-    # Coincident points give a zero k-distance; zero eps clusters nothing.
-    return eps if eps > 0 else DEFAULT_CLUSTER_EPS
+    return distances[:, -1]
+
+
+def _top_cluster_share(coords: np.ndarray, eps: float, min_samples: int) -> float:
+    """Share of the gallery held by the largest cluster at eps.
+
+    Noise is excluded, so an eps that clusters nothing scores 0 and the scan
+    keeps climbing. Returns 1.0 for a candidate whose neighborhoods would
+    exceed the pair budget: that eps is unaffordable, which for the scan's
+    purposes is the same answer as "it has collapsed the map".
+    """
+    from sklearn.cluster import DBSCAN
+    from sklearn.neighbors import KDTree
+
+    if coords.shape[0] > 1:
+        pairs = int(KDTree(coords).query_radius(coords, r=eps, count_only=True).sum())
+        if pairs > MAX_NEIGHBOR_PAIRS:
+            return 1.0
+
+    labels = DBSCAN(eps=eps, min_samples=min_samples).fit(coords).labels_
+    clustered = labels[labels >= 0]
+    if clustered.size == 0:
+        return 0.0
+    return float(np.bincount(clustered).max()) / float(labels.size)
+
+
+def adaptive_cluster_eps(coords: np.ndarray, min_samples: int = DEFAULT_CLUSTER_MIN_SAMPLES) -> float:
+    """The loosest eps that has not yet collapsed the map into one cluster.
+
+    Candidates are quantiles of the k-distance distribution, so they are
+    expressed in the units of THESE coordinates — which is what makes the
+    result independent of gallery size and of UMAP's arbitrary output scale.
+    The scan walks them upward and keeps the last one whose largest cluster
+    stays under MAX_TOP_CLUSTER_SHARE.
+
+    This replaces taking the median outright. The median makes about half the
+    points core points by construction, which measures at 29-35% noise on a
+    large gallery — far more unclustered than a hand-tuned eps gives, and the
+    reason a 170k-image map read as mostly noise even once it was clustering
+    at all. Walking up the quantiles instead stops right before one cluster
+    swallows the map. Ported from PhotoMapAI, which reports the rule
+    reproducing hand-tuned values on real albums (0.119 against a hand-set
+    0.12 on 38k images; 0.051 against 0.05 on 86k).
+
+    If even the smallest candidate is over the share there is no structure to
+    separate, and the smallest is returned: going lower only turns the blob
+    into noise without revealing anything.
+    """
+    distances = _k_distances(coords, min_samples)
+    if distances is None:
+        return DEFAULT_CLUSTER_EPS
+
+    # Coincident points give a zero k-distance, and eps=0 clusters nothing.
+    candidates = [eps for eps in (float(np.percentile(distances, q)) for q in CANDIDATE_QUANTILES) if eps > 0]
+    if not candidates:
+        return DEFAULT_CLUSTER_EPS
+
+    # Raising eps only adds neighbors and core points, so every cluster at one
+    # eps is contained in a cluster at any larger eps: the top share is
+    # monotone non-decreasing, and the acceptable candidates are a prefix.
+    # That makes the boundary searchable rather than walkable, which matters
+    # because each probe is a full DBSCAN fit — 1.1s per probe on a
+    # 170k-point map, so a six-candidate walk is most of ten seconds.
+    top = len(candidates) - 1
+
+    # The loosest candidate first: on a map with real structure nothing
+    # blobs, and that answers the whole scan in a single fit.
+    if _top_cluster_share(coords, candidates[top], min_samples) <= MAX_TOP_CLUSTER_SHARE:
+        return candidates[top]
+
+    lo, hi, best = 0, top - 1, -1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if _top_cluster_share(coords, candidates[mid], min_samples) <= MAX_TOP_CLUSTER_SHARE:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    # Nothing passed: there is no structure to separate, and going tighter
+    # only turns the blob into noise without revealing anything.
+    return candidates[best] if best >= 0 else candidates[0]
 
 
 # sklearn's DBSCAN materializes every point's radius neighborhood as int64

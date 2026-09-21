@@ -6,9 +6,12 @@ import numpy as np
 
 from invokeai.app.services.image_index.image_index_common import IndexedItem
 from invokeai.app.services.image_index.projection import (
+    CANDIDATE_QUANTILES,
     DEFAULT_CLUSTER_EPS,
+    DEFAULT_CLUSTER_MIN_SAMPLES,
     MAX_CLUSTERED_POINTS,
     MAX_EPS_SPAN_FRACTION,
+    MAX_TOP_CLUSTER_SHARE,
     adaptive_cluster_eps,
     cluster_with_diagnostics,
     compute_clusters,
@@ -123,7 +126,7 @@ def test_eps_shrinks_to_fit_neighbor_pair_budget(monkeypatch) -> None:
     coords = np.vstack([dense, sparse]).astype(np.float32)
 
     unbudgeted = resolve_cluster_eps(coords).resolved_eps
-    monkeypatch.setattr(projection, "MAX_NEIGHBOR_PAIRS", 5_000)
+    monkeypatch.setattr(projection, "MAX_NEIGHBOR_PAIRS", 2_000)
     budgeted = resolve_cluster_eps(coords).resolved_eps
 
     assert budgeted < unbudgeted
@@ -139,6 +142,99 @@ def test_resolve_cluster_eps_is_idempotent() -> None:
     coords = rng.normal(size=(200, 2)).astype(np.float32) * 10
     resolved = resolve_cluster_eps(coords).resolved_eps
     assert resolve_cluster_eps(coords, eps=resolved).resolved_eps == resolved
+
+
+def _linear_quantile_scan(coords: np.ndarray, min_samples: int) -> float:
+    """The reference implementation: walk the candidates, keep the last one
+    under the share. `adaptive_cluster_eps` binary-searches the same boundary."""
+    from invokeai.app.services.image_index import projection
+
+    distances = projection._k_distances(coords, min_samples)
+    assert distances is not None
+    candidates = [eps for eps in (float(np.percentile(distances, q)) for q in CANDIDATE_QUANTILES) if eps > 0]
+    best = candidates[0]
+    for eps in candidates:
+        if projection._top_cluster_share(coords, eps, min_samples) > MAX_TOP_CLUSTER_SHARE:
+            break
+        best = eps
+
+    return best
+
+
+def test_the_quantile_scan_leaves_most_of_a_structured_map_clustered() -> None:
+    """The reason the scan exists: a median k-distance leaves ~30% noise.
+
+    Roughly half the points are non-core under the median by construction, so
+    a map with real structure still reads as mostly unclustered. The scan
+    climbs past the median instead, stopping before one cluster swallows it.
+    """
+    rng = np.random.default_rng(1)
+    centers = rng.uniform(-40.0, 40.0, size=(60, 2))
+    coords = np.concatenate([c + rng.normal(scale=0.35, size=(250, 2)) for c in centers]).astype(np.float32)
+
+    _, scanned = cluster_with_diagnostics(coords)
+    median_eps = float(np.percentile(_k_distances_for(coords, DEFAULT_CLUSTER_MIN_SAMPLES), 50))
+    _, at_median = cluster_with_diagnostics(coords, eps=median_eps)
+
+    assert scanned.unclustered / scanned.n_points < 0.10
+    assert at_median.unclustered > scanned.unclustered * 3, "the median is the baseline the scan improves on"
+    # And it stops short of a blob: no cluster owns the map.
+    assert scanned.largest_cluster / scanned.n_points <= MAX_TOP_CLUSTER_SHARE
+
+
+def test_the_quantile_scan_refuses_to_let_one_cluster_swallow_the_map() -> None:
+    # Two dense blobs with nothing between them: past a point every candidate
+    # merges them, and the scan has to stop before that.
+    rng = np.random.default_rng(2)
+    coords = np.concatenate([rng.normal(scale=0.4, size=(400, 2)) + c for c in ([0.0, 0.0], [1.6, 0.0])]).astype(
+        np.float32
+    )
+
+    _, diagnostics = cluster_with_diagnostics(coords)
+
+    assert diagnostics.cluster_count >= 2, "the two blobs must not be merged into one"
+    assert diagnostics.largest_cluster / diagnostics.n_points <= MAX_TOP_CLUSTER_SHARE + 0.25
+
+
+def test_the_binary_search_finds_the_same_eps_as_walking_the_candidates() -> None:
+    """The search is only valid because the top share is monotone in eps.
+
+    If it ever is not — or the search is written wrong — it silently returns a
+    different strength than the rule describes, on some maps only.
+    """
+    rng = np.random.default_rng(7)
+    fixtures = [
+        np.concatenate([rng.uniform(-40, 40, size=(1, 2)) + rng.normal(scale=0.35, size=(500, 2)) for _ in range(8)]),
+        np.concatenate([rng.uniform(-40, 40, size=(1, 2)) + rng.normal(scale=0.5, size=(250, 2)) for _ in range(3)]),
+        rng.uniform(-10.0, 10.0, size=(600, 2)),
+        np.vstack([rng.normal(scale=1.0, size=(700, 2)), rng.uniform(-40, 40, size=(300, 2))]),
+        np.concatenate([rng.normal(scale=0.1, size=(200, 2)) + o for o in ([0, 0], [5, 5])]),
+    ]
+    # Five separated blobs plus one pair whose gap decides how many candidates
+    # bridge it — which walks the accepted boundary across the whole candidate
+    # list. Without these the search's bounds are never exercised near the top,
+    # and an off-by-one in them passes.
+    fixtures += [_five_blobs_and_a_pair(gap) for gap in (1.0, 1.2, 1.4, 1.6, 1.8)]
+
+    for index, fixture in enumerate(fixtures):
+        coords = fixture.astype(np.float32)
+        assert adaptive_cluster_eps(coords) == _linear_quantile_scan(coords, DEFAULT_CLUSTER_MIN_SAMPLES), index
+
+
+def _five_blobs_and_a_pair(gap: float) -> np.ndarray:
+    rng = np.random.default_rng(5)
+    centers = [(0.0, 0.0), (12.0, 0.0), (0.0, 12.0), (12.0, 12.0), (24.0, 6.0), (24.0 + gap, 6.0)]
+
+    return np.concatenate([rng.normal(scale=0.3, size=(200, 2)) + c for c in centers]).astype(np.float32)
+
+
+def _k_distances_for(coords: np.ndarray, min_samples: int) -> np.ndarray:
+    from invokeai.app.services.image_index import projection
+
+    distances = projection._k_distances(coords, min_samples)
+    assert distances is not None
+
+    return distances
 
 
 def test_a_derived_eps_is_clamped_to_the_span_fraction() -> None:
@@ -305,15 +401,15 @@ def test_diagnostics_report_each_link_of_the_eps_chain() -> None:
 
 def test_diagnostics_separate_the_span_clamp_from_the_eps_floor() -> None:
     """Both can produce a too-tight eps, and the log has to say which one did."""
-    # A 0.07-wide map: the clamp takes the derived eps to 0.0037, and the 0.01
+    # A 0.02-wide map: the clamp takes the derived eps to 0.0049, and the 0.01
     # floor then lifts it back. One number could not distinguish the two.
     rng = np.random.default_rng(4)
-    rng.uniform(0.0, 1.0, size=(20, 2))
-    coords = rng.uniform(0.0, 0.08, size=(30, 2)).astype(np.float32)
+    coords = rng.uniform(0.0, 0.02, size=(30, 2)).astype(np.float32)
     resolution = resolve_cluster_eps(coords, None, 10)
 
-    assert resolution.adaptive_eps is not None and resolution.adaptive_eps > 0.01
-    assert resolution.span_clamped_eps < 0.01, "the clamp took it below the floor"
+    assert resolution.adaptive_eps is not None
+    assert resolution.span_clamped_eps < resolution.adaptive_eps, "the clamp bound the derived value"
+    assert resolution.span_clamped_eps < 0.01, "and took it below the floor"
     assert resolution.floored_eps == 0.01, "and the floor put it back"
     assert "floored_eps=0.01" in cluster_with_diagnostics(coords, min_samples=10)[1].signature()
 
