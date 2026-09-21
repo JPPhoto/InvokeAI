@@ -439,7 +439,10 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     await waitForAutosave();
 
     await act(() => {
-      project.setSnapshot({ ...project.port.getSnapshot(), projectGraph: { ...boundGraph, name: 'Invalid after revert' } });
+      project.setSnapshot({
+        ...project.port.getSnapshot(),
+        projectGraph: { ...boundGraph, name: 'Invalid after revert' },
+      });
     });
     await waitForAutosave();
 
