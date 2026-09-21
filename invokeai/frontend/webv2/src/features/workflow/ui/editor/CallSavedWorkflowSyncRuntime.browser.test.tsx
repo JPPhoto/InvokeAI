@@ -220,11 +220,7 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
   });
 
   it('refetches an invalidated workflow once for multiple call nodes', async () => {
-    const { readGraph } = await mountWith([
-      buildCallNode('call-1'),
-      buildCallNode('call-2'),
-      buildCallNode('call-3'),
-    ]);
+    const { readGraph } = await mountWith([buildCallNode('call-1'), buildCallNode('call-2'), buildCallNode('call-3')]);
 
     await expectSettled(readGraph, ['error', 'error', 'error'], 1);
 
@@ -237,10 +233,7 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
 
   it('keeps an invalidation retry available when the first matching node changes', async () => {
     const attempts = mockWorkflowThatRecoversAfterOneFailure(MISSING_WORKFLOW_ID);
-    const { readGraph, updateGraph } = await mountWith([
-      buildCallNode('call-1'),
-      buildCallNode('call-2'),
-    ]);
+    const { readGraph, updateGraph } = await mountWith([buildCallNode('call-1'), buildCallNode('call-2')]);
 
     await settle(60);
     invalidateWorkflowLibraryCache(MISSING_WORKFLOW_ID);
@@ -292,6 +285,39 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
     await settle(25);
 
     expect(getLibraryWorkflowRecordMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retain removed-node state when its id is reused', async () => {
+    const { readGraph, updateGraph } = await mountWith([buildCallNode('call-1', 'workflow-a')]);
+    await settle(60);
+    expect(readStatuses(readGraph())).toEqual(['error']);
+
+    updateGraph(
+      projectGraphReducer(readGraph(), {
+        fieldName: 'workflow_id',
+        nodeId: 'call-1',
+        type: 'setFieldValue',
+        value: 'workflow-b',
+      })
+    );
+    await settle(60);
+    expect(readStatuses(readGraph())).toEqual(['error']);
+    expect(getLibraryWorkflowRecordMock.mock.calls.map(([workflowId]) => workflowId)).toEqual([
+      'workflow-a',
+      'workflow-b',
+    ]);
+
+    updateGraph({ ...readGraph(), nodes: [] });
+    await settle(20);
+
+    updateGraph({ ...createProjectGraph('parent'), nodes: [buildCallNode('call-1', 'workflow-a')] });
+    await settle(60);
+
+    expect(readStatuses(readGraph())).toEqual(['error']);
+    expect(getLibraryWorkflowRecordMock.mock.calls.map(([workflowId]) => workflowId)).toEqual([
+      'workflow-a',
+      'workflow-b',
+    ]);
   });
 
   /**

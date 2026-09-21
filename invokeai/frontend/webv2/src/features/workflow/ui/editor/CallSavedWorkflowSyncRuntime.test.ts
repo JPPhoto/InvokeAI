@@ -5,7 +5,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createDeferredCallSavedWorkflowReconciler,
   createSavedWorkflowDocumentParser,
+  pruneStaleCallSavedWorkflowNodeState,
 } from './CallSavedWorkflowSyncRuntime';
+
+describe('pruneStaleCallSavedWorkflowNodeState', () => {
+  it('removes state for nodes no longer in the project graph', () => {
+    const state = new Map([
+      ['present', 'keep'],
+      ['removed', 'drop'],
+    ]);
+
+    pruneStaleCallSavedWorkflowNodeState(state, new Set(['present']));
+
+    expect(state).toEqual(new Map([['present', 'keep']]));
+  });
+});
 
 describe('createDeferredCallSavedWorkflowReconciler', () => {
   beforeEach(() => {

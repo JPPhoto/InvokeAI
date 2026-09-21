@@ -72,6 +72,17 @@ export const createDeferredCallSavedWorkflowReconciler = (reconcile: () => void)
   };
 };
 
+export const pruneStaleCallSavedWorkflowNodeState = <T,>(
+  state: Map<string, T>,
+  currentNodeIds: ReadonlySet<string>
+): void => {
+  for (const nodeId of state.keys()) {
+    if (!currentNodeIds.has(nodeId)) {
+      state.delete(nodeId);
+    }
+  }
+};
+
 const hasSameFieldType = (left: unknown, right: unknown): boolean => {
   if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
     return false;
@@ -152,17 +163,9 @@ export const CallSavedWorkflowSyncRuntime = () => {
     const document = projectPort.getSnapshot().projectGraph;
     const currentNodeIds = new Set(document.nodes.map((node) => node.id));
 
-    for (const nodeId of retryableDetailWorkflowIds.current.keys()) {
-      if (!currentNodeIds.has(nodeId)) {
-        retryableDetailWorkflowIds.current.delete(nodeId);
-      }
-    }
-
-    for (const nodeId of previousDetailStatuses.current.keys()) {
-      if (!currentNodeIds.has(nodeId)) {
-        previousDetailStatuses.current.delete(nodeId);
-      }
-    }
+    pruneStaleCallSavedWorkflowNodeState(retryableDetailWorkflowIds.current, currentNodeIds);
+    pruneStaleCallSavedWorkflowNodeState(previousDetailStatuses.current, currentNodeIds);
+    pruneStaleCallSavedWorkflowNodeState(previousDetailWorkflowIds.current, currentNodeIds);
 
     const setStatus = (nodeId: string, workflowId: string, status: 'loading' | 'ready' | 'error') => {
       const currentDocument = projectPort.getSnapshot().projectGraph;
