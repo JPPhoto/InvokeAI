@@ -145,8 +145,10 @@ import {
   cloneProjectGraph,
   createProjectGraph,
   getProjectGraphUndoEntry,
+  hasMultipleWorkflowReturnNodes,
   normalizeProjectGraph,
   projectGraphReducer,
+  serializeWorkflowJsonForSubmission,
   type ProjectGraphAction,
 } from '@features/workflow/utility';
 
@@ -520,14 +522,18 @@ const createNotification = ({
   category,
   kind,
   message,
+  messageKey,
   projectId,
   title,
+  titleKey,
 }: {
   category?: WorkbenchNotificationCategory;
   kind: WorkbenchNotificationKind;
   message?: string;
+  messageKey?: string;
   projectId?: string;
   title: string;
+  titleKey?: string;
 }): WorkbenchNotification => ({
   category,
   createdAt: now(),
@@ -535,8 +541,10 @@ const createNotification = ({
   isRead: false,
   kind,
   message,
+  messageKey,
   projectId,
   title,
+  titleKey,
 });
 
 const addNotification = (state: WorkbenchState, notification: WorkbenchNotification): WorkbenchState => {
@@ -586,6 +594,24 @@ const withEnqueueNotification = (
   }
 
   const queueItem = after.queue.items[0];
+
+  if (
+    queueItem?.snapshot.sourceId === 'workflow' &&
+    queueItem.snapshot.backendSubmission.kind === 'workflow' &&
+    !queueItem.snapshot.backendSubmission.workflow
+  ) {
+    return addNotification(
+      nextState,
+      createNotification({
+        kind: 'info',
+        message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
+        messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
+        projectId: after.id,
+        title: 'Workflow metadata omitted',
+        titleKey: 'workflowLibrary.workflowMetadataOmitted',
+      })
+    );
+  }
 
   return addNotification(
     nextState,
@@ -2497,6 +2523,7 @@ const compileInvocationSnapshot = (
 ): {
   graph: GraphContract;
   widgetStates: WidgetStateMap;
+  workflowJson?: Record<string, unknown>;
   workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
 } | null => {
   const widgetStates = getWidgetStatesSnapshot(project.widgetInstances);
@@ -2514,8 +2541,14 @@ const compileInvocationSnapshot = (
     const { graph, ...workflow } = planWorkflowSubmission(project.projectGraph, templatesSnapshot.templates, {
       batchCount: sanitizeBatchCount(widgetStates.workflow?.values.batchCount),
     });
+    const { id: _id, ...workflowJson } = serializeWorkflowJsonForSubmission(project.projectGraph);
 
-    return { graph, widgetStates, workflow };
+    return {
+      graph,
+      widgetStates,
+      workflow,
+      ...(hasMultipleWorkflowReturnNodes(project.projectGraph) ? {} : { workflowJson }),
+    };
   }
 
   if (route.sourceId === 'upscale') {
@@ -3151,6 +3184,8 @@ const enqueueCompiledSnapshot = (
     graph: GraphContract;
     positivePrompts?: string[];
     widgetStates: WidgetStateMap;
+    /** The serialized parent workflow, without its library record id. */
+    workflowJson?: Record<string, unknown>;
     /** The workflow route's seed plan: batch data, run count, and the fields to advance. */
     workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
   },
@@ -3233,6 +3268,7 @@ const enqueueCompiledSnapshot = (
             ...(compiled.workflow.seeds.length ? { seeds: compiled.workflow.seeds } : {}),
             graph: backendGraph,
             kind: 'workflow',
+            ...(compiled.workflowJson ? { workflow: compiled.workflowJson } : {}),
             // Provenance for the completed-run capture: a run submitted from a
             // library-bound graph knows which record to stamp, even after the
             // editor has moved on to another workflow. An unbound graph stamps

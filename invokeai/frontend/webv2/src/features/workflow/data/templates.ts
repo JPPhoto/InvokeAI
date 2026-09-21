@@ -175,7 +175,29 @@ const getNumberOrNull = (value: unknown): number | null => (typeof value === 'nu
 const getStringArrayOrNull = (value: unknown): string[] | null =>
   Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null;
 
-const getDefaultValueForType = (type: FieldType, options: string[] | null): unknown => {
+const getEnumValues = (property: JsonObject): unknown[] | null => {
+  if (property.enum !== undefined) {
+    return Array.isArray(property.enum) ? property.enum : [];
+  }
+
+  if (property.const !== undefined) {
+    return [property.const];
+  }
+
+  if (Array.isArray(property.anyOf)) {
+    const variants = property.anyOf.filter(
+      (variant): variant is JsonObject => isJsonObject(variant) && variant.type !== 'null'
+    );
+
+    if (variants.length === 1) {
+      return getEnumValues(variants[0]);
+    }
+  }
+
+  return null;
+};
+
+const getDefaultValueForType = (type: FieldType, options: unknown[] | null): unknown => {
   if (type.cardinality === 'COLLECTION') {
     return undefined;
   }
@@ -201,12 +223,17 @@ const buildInputTemplate = (
   type: FieldType,
   fieldKind: FieldInputTemplate['fieldKind']
 ): FieldInputTemplate => {
-  const enumValues = Array.isArray(property.enum)
-    ? property.enum
-    : property.const !== undefined
-      ? [property.const]
-      : null;
-  const options = enumValues ? enumValues.filter((value): value is string => typeof value === 'string') : null;
+  const enumValues = getEnumValues(property);
+  const options = enumValues
+    ? enumValues.every(
+        (value) =>
+          typeof value === 'string' ||
+          (typeof value === 'number' && Number.isFinite(value)) ||
+          typeof value === 'boolean'
+      )
+      ? enumValues
+      : []
+    : null;
   const input = property.input === 'connection' || property.input === 'direct' ? property.input : 'any';
   const uiChoiceLabels = isJsonObject(property.ui_choice_labels)
     ? Object.fromEntries(
@@ -217,7 +244,12 @@ const buildInputTemplate = (
     : null;
 
   return {
-    default: property.default ?? getDefaultValueForType(type, options),
+    default:
+      type.name === 'EnumField' && property.default === null && property.orig_required !== true
+        ? undefined
+        : property.default !== undefined && property.default !== null
+          ? property.default
+          : getDefaultValueForType(type, options),
     description: typeof property.description === 'string' ? property.description : '',
     exclusiveMaximum: getNumberOrNull(property.exclusiveMaximum),
     exclusiveMinimum: getNumberOrNull(property.exclusiveMinimum),
