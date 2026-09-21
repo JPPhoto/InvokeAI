@@ -3410,7 +3410,22 @@ describe('workbenchReducer Phase 5 generation flow', () => {
         batchCount: 3,
         kind: 'workflow',
         seeds: [{ fieldName: 'seed', nodeId: 'noise-1', seed: 42, seedStep: 1 }],
+        workflow: {
+          author: '',
+          contact: '',
+          description: '',
+          edges: [],
+          exposedFields: [],
+          form: { elements: expect.any(Object), rootElementId: expect.any(String) },
+          meta: { category: 'user', version: '3.0.0' },
+          name: 'Untitled Workflow',
+          nodes: [{ id: 'noise-1' }],
+          notes: '',
+          tags: '',
+          version: '1.0.0',
+        },
       });
+      expect(readSubmission(state)).not.toHaveProperty('workflow.id');
       expect(readSubmission(state)).toMatchObject({ graph: { nodes: { 'noise-1': { seed: 42 } } } });
       expect(getActiveProject(state).queue.items[0]?.snapshot.presentation.batchCount).toBe(3);
       expect(readNodeSeed(state)).toBe(45);
@@ -3420,6 +3435,81 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       expect(readSubmission(state)).toMatchObject({ seeds: [{ seed: 45 }] });
       expect(readSubmission(state, 1)).toMatchObject({ seeds: [{ seed: 42 }] });
       expect(readNodeSeed(state)).toBe(48);
+    });
+
+    it('notifies when the queued workflow omits metadata the backend would reject', () => {
+      // `WorkflowWithoutID` rejects more than one `workflow_return` node, and
+      // the batch is validated before the enqueue route body, so attaching
+      // such a workflow turns the whole run into a 422. Legacy validates first
+      // and sends no workflow rather than failing the run.
+      const returnTemplate = {
+        category: 'workflow',
+        classification: 'stable',
+        description: '',
+        inputs: {},
+        nodePack: 'invokeai',
+        outputType: 'workflow_return_output',
+        outputs: {},
+        tags: [],
+        title: 'Workflow Return',
+        type: 'workflow_return',
+        useCache: true,
+        version: '1.0.0',
+      };
+      let state = primeWorkflow(42, 'fixed');
+
+      workflowTemplatesMock.snapshot = {
+        error: null,
+        status: 'loaded',
+        templates: { noise: seedTemplate, workflow_return: returnTemplate },
+      };
+
+      for (const id of ['return-1', 'return-2']) {
+        state = workbenchReducer(state, {
+          action: {
+            node: {
+              data: {
+                inputs: {},
+                isIntermediate: true,
+                isOpen: true,
+                label: '',
+                nodePack: 'invokeai',
+                notes: '',
+                type: 'workflow_return',
+                useCache: true,
+                version: '1.0.0',
+              },
+              id,
+              position: { x: 0, y: 0 },
+              type: 'invocation',
+            },
+            type: 'addNode',
+          },
+          type: 'applyProjectGraphAction',
+        });
+      }
+
+      const nextState = submitWorkflow(state);
+      const submission = readSubmission(nextState);
+
+      // `kind` guards the assertion below: a graph that fails to compile also
+      // yields an object with no `workflow` key, which would pass for the
+      // wrong reason.
+      expect(submission).toMatchObject({ kind: 'workflow' });
+      expect(submission).not.toHaveProperty('workflow');
+      expect(nextState.notifications[0]).toMatchObject({
+        kind: 'info',
+        message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
+        messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
+        title: 'Workflow metadata omitted',
+        titleKey: 'workflowLibrary.workflowMetadataOmitted',
+      });
+
+      const repeatedState = submitWorkflow(nextState);
+
+      expect(
+        repeatedState.notifications.filter((notification) => notification.title === 'Workflow metadata omitted')
+      ).toHaveLength(2);
     });
 
     it('holds a fixed seed as a graph constant and repeats the graph for every run', () => {

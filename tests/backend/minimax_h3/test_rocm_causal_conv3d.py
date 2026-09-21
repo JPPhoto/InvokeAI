@@ -13,12 +13,26 @@ import random
 import pytest
 import torch
 
+import invokeai.backend.minimax_h3.rocm_causal_conv3d as mod
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import MiniMaxH3VideoCausalConv3d
 from invokeai.backend.minimax_h3.rocm_causal_conv3d import (
     _decomposed_conv3d,
     _decomposed_forward,
     _patch_minimax_h3_causal_conv3d,
 )
+
+
+def _restore_stock_forward() -> None:
+    """Put the class back to its unpatched state.
+
+    The patch is process-wide and idempotent, and on a ROCm build it is real: any earlier test on the
+    same xdist worker that loads the MiniMax H3 video VAE for real leaves the class patched. A test that then records the patched forward as "stock" cannot tell whether patching
+    did anything, and fails only on ROCm rigs, only for some worker assignments.
+    """
+    if getattr(MiniMaxH3VideoCausalConv3d, mod._SENTINEL, False):
+        assert mod._STOCK_FORWARD is not None
+        MiniMaxH3VideoCausalConv3d.forward = mod._STOCK_FORWARD
+        delattr(MiniMaxH3VideoCausalConv3d, mod._SENTINEL)
 
 
 def test_decomposed_conv3d_matches_f_conv3d() -> None:
@@ -66,6 +80,7 @@ def test_decomposed_forward_falls_back_to_conv3d_for_strided_convs() -> None:
 
 def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
     torch.manual_seed(4)
+    _restore_stock_forward()
     stock_forward = MiniMaxH3VideoCausalConv3d.forward
     try:
         conv = MiniMaxH3VideoCausalConv3d(4, 8, kernel_size=3, spatial_padding=1, temporal_padding=2)
@@ -80,9 +95,7 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
 
         assert torch.allclose(conv(x), ref, atol=1e-5)
     finally:
-        MiniMaxH3VideoCausalConv3d.forward = stock_forward
-        if hasattr(MiniMaxH3VideoCausalConv3d, "_invokeai_rocm_conv2d_decomposition"):
-            delattr(MiniMaxH3VideoCausalConv3d, "_invokeai_rocm_conv2d_decomposition")
+        _restore_stock_forward()
 
 
 def test_patch_applies_on_every_hip_version(monkeypatch) -> None:
