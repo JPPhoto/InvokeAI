@@ -144,23 +144,6 @@ def test_resolve_cluster_eps_is_idempotent() -> None:
     assert resolve_cluster_eps(coords, eps=resolved).resolved_eps == resolved
 
 
-def _linear_quantile_scan(coords: np.ndarray, min_samples: int) -> float:
-    """The reference implementation: walk the candidates, keep the last one
-    under the share. `adaptive_cluster_eps` binary-searches the same boundary."""
-    from invokeai.app.services.image_index import projection
-
-    distances = projection._k_distances(coords, min_samples)
-    assert distances is not None
-    candidates = [eps for eps in (float(np.percentile(distances, q)) for q in CANDIDATE_QUANTILES) if eps > 0]
-    best = candidates[0]
-    for eps in candidates:
-        if projection._top_cluster_share(coords, eps, min_samples) > MAX_TOP_CLUSTER_SHARE:
-            break
-        best = eps
-
-    return best
-
-
 def test_the_quantile_scan_leaves_most_of_a_structured_map_clustered() -> None:
     """The reason the scan exists: a median k-distance leaves ~30% noise.
 
@@ -196,36 +179,27 @@ def test_the_quantile_scan_refuses_to_let_one_cluster_swallow_the_map() -> None:
     assert diagnostics.largest_cluster / diagnostics.n_points <= MAX_TOP_CLUSTER_SHARE + 0.25
 
 
-def test_the_binary_search_finds_the_same_eps_as_walking_the_candidates() -> None:
-    """The search is only valid because the top share is monotone in eps.
+def test_the_scan_stops_at_the_first_candidate_that_blobs() -> None:
+    """It walks the candidates; it must not search them.
 
-    If it ever is not — or the search is written wrong — it silently returns a
-    different strength than the rule describes, on some maps only.
+    The obvious optimisation — the passing candidates are a prefix, so binary
+    search the boundary — is wrong. Raising eps grows every core-point
+    cluster, but a border point can be claimed by a different cluster that
+    has just come into reach, so the largest cluster can LOSE points and the
+    top share is not monotone. A search reads a pass after a failure and
+    keeps climbing, choosing a looser eps than this rule on some maps only.
     """
-    rng = np.random.default_rng(7)
-    fixtures = [
-        np.concatenate([rng.uniform(-40, 40, size=(1, 2)) + rng.normal(scale=0.35, size=(500, 2)) for _ in range(8)]),
-        np.concatenate([rng.uniform(-40, 40, size=(1, 2)) + rng.normal(scale=0.5, size=(250, 2)) for _ in range(3)]),
-        rng.uniform(-10.0, 10.0, size=(600, 2)),
-        np.vstack([rng.normal(scale=1.0, size=(700, 2)), rng.uniform(-40, 40, size=(300, 2))]),
-        np.concatenate([rng.normal(scale=0.1, size=(200, 2)) + o for o in ([0, 0], [5, 5])]),
-    ]
-    # Five separated blobs plus one pair whose gap decides how many candidates
-    # bridge it — which walks the accepted boundary across the whole candidate
-    # list. Without these the search's bounds are never exercised near the top,
-    # and an off-by-one in them passes.
-    fixtures += [_five_blobs_and_a_pair(gap) for gap in (1.0, 1.2, 1.4, 1.6, 1.8)]
+    coords = _non_monotone_share_map()
+    distances = _k_distances_for(coords, DEFAULT_CLUSTER_MIN_SAMPLES)
+    candidates = [float(np.percentile(distances, q)) for q in CANDIDATE_QUANTILES]
+    shares = [_top_cluster_share_for(coords, eps) for eps in candidates]
 
-    for index, fixture in enumerate(fixtures):
-        coords = fixture.astype(np.float32)
-        assert adaptive_cluster_eps(coords) == _linear_quantile_scan(coords, DEFAULT_CLUSTER_MIN_SAMPLES), index
+    # The fixture earns its keep only while it is genuinely non-monotone.
+    assert any(later < earlier for earlier, later in zip(shares, shares[1:], strict=False)), shares
+    assert shares[0] <= MAX_TOP_CLUSTER_SHARE < shares[1], shares
+    assert shares[2] <= MAX_TOP_CLUSTER_SHARE, "a later candidate passes again, which is the trap"
 
-
-def _five_blobs_and_a_pair(gap: float) -> np.ndarray:
-    rng = np.random.default_rng(5)
-    centers = [(0.0, 0.0), (12.0, 0.0), (0.0, 12.0), (12.0, 12.0), (24.0, 6.0), (24.0 + gap, 6.0)]
-
-    return np.concatenate([rng.normal(scale=0.3, size=(200, 2)) + c for c in centers]).astype(np.float32)
+    assert adaptive_cluster_eps(coords) == candidates[0]
 
 
 def _k_distances_for(coords: np.ndarray, min_samples: int) -> np.ndarray:
@@ -235,6 +209,51 @@ def _k_distances_for(coords: np.ndarray, min_samples: int) -> np.ndarray:
     assert distances is not None
 
     return distances
+
+
+def _top_cluster_share_for(coords: np.ndarray, eps: float) -> float:
+    from invokeai.app.services.image_index import projection
+
+    return projection._top_cluster_share(coords, eps, DEFAULT_CLUSTER_MIN_SAMPLES)
+
+
+def _non_monotone_share_map() -> np.ndarray:
+    """A map whose largest-cluster share dips as eps grows.
+
+    One long backbone with five border points hanging off it, plus five
+    "thief" chains placed so that the next candidate up reaches those border
+    points first and takes them off the backbone. The rings are filler that
+    shapes the k-distance distribution so the candidates land where they must.
+    """
+
+    def ring(centre_x: float, count: int, diameter: float) -> np.ndarray:
+        angles = np.linspace(0, 2 * np.pi, count, endpoint=False)
+        return np.stack([centre_x + (diameter / 2) * np.cos(angles), (diameter / 2) * np.sin(angles)], axis=1)
+
+    height, perp, thief_gap, thief_step = (
+        0.8556190490722656,
+        0.4038790583610535,
+        1.0640721321105957,
+        0.11982051849365234,
+    )
+    backbone = np.stack([np.arange(96) * 0.1, np.zeros(96)], axis=1)
+    anchors, borders, thieves = [], [], []
+    for index in range(5):
+        x = (95 * 0.1) * (index + 1) / 6
+        anchors.append([x, perp])
+        borders.append([x, perp + height])
+        thieves.append(np.stack([np.full(12, x), perp + height + thief_gap + np.arange(12) * thief_step], axis=1))
+
+    filler, centre = [], 500.0
+    for _ in range(4):
+        filler.append(ring(centre, 12, 0.04))
+        centre += 60.0
+    for diameter, repeats in ((1.0, 4), (1.15, 2), (1.6, 4), (2.0, 4), (2.6, 4)):
+        for _ in range(repeats):
+            filler.append(ring(centre, 11, diameter))
+            centre += 60.0
+
+    return np.vstack(thieves + filler + [backbone, np.array(anchors), np.array(borders)]).astype(np.float32)
 
 
 def test_a_derived_eps_is_clamped_to_the_span_fraction() -> None:

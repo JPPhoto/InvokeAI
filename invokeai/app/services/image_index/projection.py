@@ -194,31 +194,24 @@ def adaptive_cluster_eps(coords: np.ndarray, min_samples: int = DEFAULT_CLUSTER_
     if not candidates:
         return DEFAULT_CLUSTER_EPS
 
-    # Raising eps only adds neighbors and core points, so every cluster at one
-    # eps is contained in a cluster at any larger eps: the top share is
-    # monotone non-decreasing, and the acceptable candidates are a prefix.
-    # That makes the boundary searchable rather than walkable, which matters
-    # because each probe is a full DBSCAN fit — 1.1s per probe on a
-    # 170k-point map, so a six-candidate walk is most of ten seconds.
-    top = len(candidates) - 1
+    # Probed in order, stopping at the first candidate that blobs. Not
+    # searched: the top share is NOT monotone in eps, so the passing
+    # candidates are not a prefix. Raising eps does grow every core-point
+    # cluster, but a border point can be claimed by a different cluster that
+    # has just come into reach, and the largest cluster then loses it — which
+    # on a random blob map perturbs the share downward often enough to change
+    # the chosen quantile. A binary search over the candidates read a pass
+    # after a failure and kept climbing, picking an eps 1.3x looser than this
+    # rule on some maps and none on others.
+    best = candidates[0]
+    for eps in candidates:
+        if _top_cluster_share(coords, eps, min_samples) > MAX_TOP_CLUSTER_SHARE:
+            # Later candidates are only looser, and the rule wants the last
+            # one before the map collapses — so nothing after this matters.
+            break
+        best = eps
 
-    # The loosest candidate first: on a map with real structure nothing
-    # blobs, and that answers the whole scan in a single fit.
-    if _top_cluster_share(coords, candidates[top], min_samples) <= MAX_TOP_CLUSTER_SHARE:
-        return candidates[top]
-
-    lo, hi, best = 0, top - 1, -1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if _top_cluster_share(coords, candidates[mid], min_samples) <= MAX_TOP_CLUSTER_SHARE:
-            best = mid
-            lo = mid + 1
-        else:
-            hi = mid - 1
-
-    # Nothing passed: there is no structure to separate, and going tighter
-    # only turns the blob into noise without revealing anything.
-    return candidates[best] if best >= 0 else candidates[0]
+    return best
 
 
 # sklearn's DBSCAN materializes every point's radius neighborhood as int64
