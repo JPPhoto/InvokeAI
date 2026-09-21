@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 890252,
+        "brotliBytes": 890448,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 889073,
+        "gzipBytes": 889244,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2113079,
+        "initialRawBytes": 2113534,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 87580,
+        "ownedRawBytes": 88065,
         "requestCount": 37,
         "scriptRequestCount": 21,
         "sourceOwners": [
@@ -181,6 +181,7 @@
           "source:src/platform/browser/randomUuid.ts",
           "source:src/platform/browser/sha256.ts",
           "source:src/platform/core/concurrency.ts",
+          "source:src/platform/core/outputImages.ts",
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
@@ -318,15 +319,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1223010,
+        "brotliBytes": 1223608,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1216850,
+        "gzipBytes": 1217370,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3131717,
+        "initialRawBytes": 3133110,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 140961,
+        "ownedRawBytes": 141137,
         "requestCount": 86,
         "scriptRequestCount": 70,
         "sourceOwners": [
@@ -681,6 +682,7 @@
           "source:src/platform/browser/webLocks.ts",
           "source:src/platform/core/concurrency.ts",
           "source:src/platform/core/json.ts",
+          "source:src/platform/core/outputImages.ts",
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
@@ -1032,7 +1034,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-20",
+  "capturedAt": "2026-09-21",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
@@ -1077,7 +1079,9 @@
       "src/features/queue/ui/launchpad/QueueStatusBand.tsx",
       "src/workbench/launchpad/home/livePanels.ts"
     ],
-    "editorForbiddenInitialChunkNames": ["ag-psd"],
+    "editorForbiddenInitialChunkNames": [
+      "ag-psd"
+    ],
     "inactiveWidgetGateOwner": "deepen-widget-registry-loading"
   }
 }
