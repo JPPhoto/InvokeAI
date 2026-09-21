@@ -41,6 +41,7 @@ const TERMINAL_EVENT_BUFFER_LIMIT = 256;
 const NODE_EVENT_BUFFER_ITEM_LIMIT = 64;
 const NODE_EVENT_BUFFER_EVENTS_PER_ITEM = 512;
 const BACKEND_READ_CONCURRENCY = 16;
+const FRAME_GATE_LIMIT = 1024;
 
 /**
  * Queue's view of model-load activity derived from socket events. The
@@ -256,6 +257,46 @@ export const createQueueCoordinator = (
    */
   const latestFrameGates = new Map<number, { revision: number | null; sessionId: string }>();
 
+  const rememberFrameGate = (itemId: number, gate: { revision: number | null; sessionId: string }): void => {
+    latestFrameGates.delete(itemId);
+    latestFrameGates.set(itemId, gate);
+
+    while (latestFrameGates.size > FRAME_GATE_LIMIT) {
+      let oldestId: number | undefined;
+
+      for (const candidate of latestFrameGates.keys()) {
+        if (!waits.has(candidate)) {
+          oldestId = candidate;
+          break;
+        }
+      }
+
+      if (oldestId === undefined) {
+        return;
+      }
+
+      latestFrameGates.delete(oldestId);
+    }
+  };
+
+  const getTrackedBackendItemId = (event: { item_id: number; root_item_id?: number | null }): number =>
+    event.root_item_id ?? event.item_id;
+
+  const getNodeSourceId = (event: { invocation_source_id: string; workflow_call_parent_source_id?: string | null }) =>
+    event.workflow_call_parent_source_id ?? event.invocation_source_id;
+
+  const routeNodeEvent = <T extends NodeEvent['event']>(
+    event: T,
+    backendItemId: number,
+    invocationSourceId: string
+  ): T => {
+    if (backendItemId === event.item_id && invocationSourceId === event.invocation_source_id) {
+      return event;
+    }
+
+    return { ...event, invocation_source_id: invocationSourceId, item_id: backendItemId } as T;
+  };
+
   const detachers: Array<() => void> = [];
   let isAttached = false;
   let isDisposed = false;
@@ -354,7 +395,7 @@ export const createQueueCoordinator = (
    */
   const isStaleNodeEvent = (nodeEvent: NodeEvent): boolean =>
     nodeExecutionItemId !== null &&
-    nodeEvent.event.item_id !== nodeExecutionItemId &&
+    getTrackedBackendItemId(nodeEvent.event) !== nodeExecutionItemId &&
     nodeEvent.sequence < nodeExecutionItemSequence;
 
   const trackNodeForItem = (backendItemId: number, nodeId: string, sequence: number): void => {
@@ -378,28 +419,32 @@ export const createQueueCoordinator = (
       return;
     }
 
-    trackNodeForItem(nodeEvent.event.item_id, nodeEvent.event.invocation_source_id, nodeEvent.sequence);
+    const backendItemId = getTrackedBackendItemId(nodeEvent.event);
+    const invocationSourceId = getNodeSourceId(nodeEvent.event);
+
+    trackNodeForItem(backendItemId, invocationSourceId, nodeEvent.sequence);
 
     switch (nodeEvent.kind) {
       case 'started': {
-        const wait = waits.get(nodeEvent.event.item_id);
+        const routedEvent = routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId);
+        const wait = waits.get(backendItemId);
         if (wait) {
-          activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, nodeEvent.event.item_id));
+          activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, backendItemId));
         }
-        nodeExecution.started(nodeEvent.event);
+        nodeExecution.started(routedEvent);
         return;
       }
       case 'completed':
-        nodeExecution.completed(nodeEvent.event);
+        nodeExecution.completed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
       case 'failed':
-        nodeExecution.failed(nodeEvent.event);
+        nodeExecution.failed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
     }
   };
 
   const bufferNodeEvent = (nodeEvent: NodeEvent): void => {
-    const itemId = nodeEvent.event.item_id;
+    const itemId = getTrackedBackendItemId(nodeEvent.event);
     const events = pendingNodeEvents.get(itemId) ?? [];
 
     if (events.length >= NODE_EVENT_BUFFER_EVENTS_PER_ITEM) {
@@ -537,7 +582,8 @@ export const createQueueCoordinator = (
     }
   };
 
-  const isTrackedEvent = (event: { item_id: number }): boolean => waits.has(event.item_id);
+  const isTrackedEvent = (event: { item_id: number; root_item_id?: number | null }): boolean =>
+    waits.has(getTrackedBackendItemId(event));
 
   const trackBackendItem = (localQueueItemId: string, backendItemId: number): Promise<TerminalOutcome> => {
     const bufferedOutcome = recentTerminalOutcomes.get(backendItemId);
@@ -688,6 +734,11 @@ export const createQueueCoordinator = (
       return;
     }
 
+    // Child status events are not tracked waits, but their preview gate is
+    // still per-child. Release it when the child ends so repeated calls do not
+    // retain one entry forever. The size cap below covers missed terminal events.
+    latestFrameGates.delete(event.item_id);
+
     if (!isTrackedEvent(event)) {
       bufferTerminalOutcome(event.item_id, toTerminalOutcome(event.status, event.error_message, event.error_type));
       return;
@@ -731,7 +782,7 @@ export const createQueueCoordinator = (
       return true;
     }
 
-    latestFrameGates.set(event.item_id, { revision, sessionId: event.session_id });
+    rememberFrameGate(event.item_id, { revision, sessionId: event.session_id });
 
     return false;
   };
@@ -741,7 +792,8 @@ export const createQueueCoordinator = (
       return;
     }
 
-    const wait = waits.get(event.item_id);
+    const backendItemId = getTrackedBackendItemId(event);
+    const wait = waits.get(backendItemId);
 
     if (!wait) {
       return;
@@ -751,10 +803,11 @@ export const createQueueCoordinator = (
       return;
     }
 
-    trackNodeForItem(event.item_id, event.invocation_source_id, ++nodeEventSequence);
-    nodeExecution.progress(event.invocation_source_id, event.percentage, event.message);
+    const invocationSourceId = getNodeSourceId(event);
+    trackNodeForItem(backendItemId, invocationSourceId, ++nodeEventSequence);
+    nodeExecution.progress(invocationSourceId, event.percentage, event.message);
 
-    const target = getProgressImageTarget(wait.localQueueItemId, event.item_id);
+    const target = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     activeProgressTarget.set(target);
 
     if (event.image?.dataURL) {
@@ -764,7 +817,7 @@ export const createQueueCoordinator = (
     const state = runProgress.get(wait.localQueueItemId);
 
     if (state) {
-      state.activeBackendItemId = event.item_id;
+      state.activeBackendItemId = backendItemId;
       state.message = event.message;
       state.percentage = event.percentage;
       publishRunProgress(wait.localQueueItemId);

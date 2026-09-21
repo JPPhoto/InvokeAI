@@ -3425,6 +3425,22 @@ describe('workbenchReducer Phase 5 generation flow', () => {
           version: '1.0.0',
         },
       });
+      expect(readSubmission(state)).toMatchObject({
+        workflow: {
+          author: '',
+          contact: '',
+          description: '',
+          edges: [],
+          exposedFields: [],
+          form: { elements: expect.any(Object), rootElementId: expect.any(String) },
+          meta: { category: 'user', version: '3.0.0' },
+          name: 'Untitled Workflow',
+          nodes: [{ id: 'noise-1' }],
+          notes: '',
+          tags: '',
+          version: '1.0.0',
+        },
+      });
       expect(readSubmission(state)).not.toHaveProperty('workflow.id');
       expect(readSubmission(state)).toMatchObject({ graph: { nodes: { 'noise-1': { seed: 42 } } } });
       expect(getActiveProject(state).queue.items[0]?.snapshot.presentation.batchCount).toBe(3);

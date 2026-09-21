@@ -1496,7 +1496,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     parent_queue_item.batch_id,
                     field_values_json,
                     parent_queue_item.priority,
-                    None,
+                    parent_queue_item.workflow.model_dump_json() if parent_queue_item.workflow else None,
                     parent_queue_item.origin,
                     parent_queue_item.destination,
                     None,

@@ -4,6 +4,7 @@ import type {
   NodeInvocationStartedEvent,
 } from '@features/nodes/core/executionContracts';
 
+import { getOutputImageNames } from '@platform/core/outputImages';
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createKeyedTransientStore } from '@platform/state/externalStore';
 
@@ -36,13 +37,6 @@ export interface NodeExecutionState {
 
 const stateByNodeId = createKeyedTransientStore<string, NodeExecutionState>();
 
-/** Pull the produced image out of an invocation output, whatever the node type. */
-const getResultImageName = (result: unknown): string | null => {
-  const image = (result as { image?: { image_name?: unknown } }).image;
-
-  return typeof image?.image_name === 'string' ? image.image_name : null;
-};
-
 export const nodeExecutionStore = {
   clearAll(): void {
     stateByNodeId.clear();
@@ -54,7 +48,7 @@ export const nodeExecutionStore = {
     return stateByNodeId.subscribeKey(nodeId, listener);
   },
   completed(event: NodeInvocationCompleteEvent): void {
-    const imageName = getResultImageName(event.result);
+    const imageName = getOutputImageNames(event.result)[0];
     const previous = stateByNodeId.get(event.invocation_source_id);
 
     stateByNodeId.set(event.invocation_source_id, {
