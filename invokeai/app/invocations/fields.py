@@ -198,6 +198,8 @@ class FieldDescriptions:
     ltx2_audio_vae = "Audio VAE (mel spectrogram) for LTX-2"
     ltx2_vocoder = "Vocoder (48 kHz stereo) for LTX-2"
     ltx2_latent_upsampler = "x2 spatial latent upscaler for LTX-2's refine pass"
+    ltx2_audio_conditioning = "A soundtrack to generate a picture for (audio-to-video)"
+    ltx2_full_video_conditioning = "A clip to generate a soundtrack for (video-to-audio)"
     ltx2_video_conditioning = "First-frame (VAE-latent) conditioning for LTX-2"
     sdxl_main_model = "SDXL Main model (UNet, VAE, CLIP1, CLIP2) to load"
     sdxl_refiner_model = "SDXL Refiner Main Modde (UNet, VAE, CLIP2) to load"
@@ -489,6 +491,38 @@ class LTX2VideoConditioningField(BaseModel):
     width: int = Field(description="Pixel width the frame was encoded at (matches denoise width).")
     height: int = Field(description="Pixel height the frame was encoded at (matches denoise height).")
     strength: float = Field(default=1.0, description="How strongly the frame is held, 0 (ignored) to 1 (kept exactly).")
+
+
+class LTX2AudioConditioningField(BaseModel):
+    """A soundtrack held frozen while the picture is generated (audio-to-video).
+
+    LTX-2 conditions both streams through one mask, so this is the audio-side mirror of
+    :class:`LTX2VideoConditioningField`: the rows it names are held clean and the video is free.
+    The clip's own length decides the generation's, so the frame count it implies rides along and
+    the denoise node refuses a mismatch by name.
+    """
+
+    latents_name: str = Field(description="Name of the saved packed [1, L, 128] audio latent tensor.")
+    num_audio_latents: int = Field(description="Rows in the saved tensor; 25 per second of source audio.")
+    num_frames: int = Field(description="Pixel frames the soundtrack covers, snapped down to 8n + 1.")
+    fps: float = Field(description="Frame rate the frame count was derived at.")
+    source_video_name: str = Field(description="The clip the soundtrack was taken from, for muxing it back.")
+
+
+class LTX2FullVideoConditioningField(BaseModel):
+    """A whole clip held frozen while its soundtrack is generated (video-to-audio).
+
+    Distinct from :class:`LTX2VideoConditioningField`, which anchors a single frame: this one holds
+    *every* video token, so the transformer's video stream is a given and only the audio is
+    sampled. The canvas and length ride along for the same reason the first-frame field carries a
+    canvas -- a mismatch should be named, not discovered inside the transformer.
+    """
+
+    latents_name: str = Field(description="Name of the saved [1, 128, T, H/32, W/32] latent tensor.")
+    width: int = Field(description="Pixel width the clip was encoded at.")
+    height: int = Field(description="Pixel height the clip was encoded at.")
+    num_frames: int = Field(description="Pixel frames the clip covers.")
+    fps: float = Field(description="The clip's own frame rate, which the generation adopts.")
 
 
 class MiniMaxH3FrameConditioningField(BaseModel):

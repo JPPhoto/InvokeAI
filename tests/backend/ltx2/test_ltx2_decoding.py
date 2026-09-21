@@ -158,6 +158,34 @@ def test_the_video_reservation_follows_the_tile_and_the_clip() -> None:
     )
 
 
+def test_the_tiled_encode_reservation_holds_at_the_shapes_it_was_measured_at() -> None:
+    """A whole conditioning clip is encoded tiled, which is a different cost shape from the
+    first-frame encode the untiled branch is fitted to -- reading that one here would over-reserve
+    it roughly twofold, and cache the rest of the graph loses is not free."""
+    vae = VaeStub()
+
+    def tiled(frames: int, h: int = 704, w: int = 1248) -> float:
+        return (
+            estimate_vae_working_memory_ltx2("encode", vae, h, w, frames, tile_size=512, temporal_tile=16, tiled=True)
+            / 2**30
+        )
+
+    # Measured on a W7900 at 512/16: 2.82, 2.87, 3.20, 3.78 and 4.02 GiB.
+    assert tiled(33, 512, 768) > 2.82
+    assert tiled(121, 512, 768) > 2.87
+    assert tiled(121) > 3.20
+    assert tiled(241) > 3.78
+    assert tiled(121, 1088, 1920) > 4.02
+
+    # The tile term is flat in the clip's length -- that is the whole reason tiling is used here --
+    # so only the clip term grows, and a long clip must not be estimated as a short one.
+    assert tiled(241) > tiled(121) > tiled(33)
+    # And the untiled branch stays where it was: it is fitted to one frame, where the per-tile
+    # fixed cost dominates, so it is far larger per element and must not be picked for a clip.
+    untiled = estimate_vae_working_memory_ltx2("encode", vae, 704, 1248, 121)
+    assert untiled > tiled(121) * 2**30 * 2
+
+
 def test_the_video_reservation_covers_a_clip_far_longer_than_the_measured_ones() -> None:
     """The tile term is flat in clip length and holds all the fitted margin; the clip term is the
     one that grows, so the longest clip the field accepts is where an under-count would surface."""

@@ -3,18 +3,22 @@
   "byBase": {
     "ltx-2": {
       "modes": [
+        "audio-to-video",
         "first-frame",
-        "txt2vid"
+        "txt2vid",
+        "video-to-audio"
       ],
       "nodeTypes": [
         "core_metadata",
         "integer",
+        "ltx2_audio_conditioning",
         "ltx2_denoise",
         "ltx2_image_conditioning",
         "ltx2_latent_upsample",
         "ltx2_latents_to_video",
         "ltx2_model_loader",
         "ltx2_text_encoder",
+        "ltx2_video_conditioning",
         "string"
       ]
     },
@@ -105,8 +109,10 @@
           24
         ],
         "generation_mode": [
+          "ltx2_a2v",
           "ltx2_i2v",
           "ltx2_t2v",
+          "ltx2_v2a",
           "minimax_h3_extend_video",
           "minimax_h3_flf2v",
           "minimax_h3_i2v",
@@ -141,6 +147,11 @@
           896
         ],
         "ltx2_component_source": [],
+        "ltx2_conditioning_role": [
+          "audio",
+          "video"
+        ],
+        "ltx2_conditioning_video": [],
         "ltx2_modality_scale": [
           3
         ],
@@ -158,6 +169,7 @@
         "num_frames": [
           121,
           124,
+          41,
           81
         ],
         "source_video": [],
@@ -254,11 +266,36 @@
         "value"
       ]
     },
+    "ltx2_audio_conditioning": {
+      "inputs": [
+        "audio_vae",
+        "vocoder"
+      ],
+      "literalInputs": {
+        "fps": [
+          24
+        ],
+        "is_intermediate": [
+          true
+        ],
+        "use_cache": [
+          true
+        ],
+        "video": []
+      },
+      "outputs": [
+        "audio_conditioning",
+        "num_frames"
+      ]
+    },
     "ltx2_denoise": {
       "inputs": [
+        "audio_conditioning",
         "audio_latents",
+        "full_video_conditioning",
         "latents",
         "negative_conditioning",
+        "num_frames",
         "positive_conditioning",
         "seed",
         "transformer",
@@ -291,7 +328,8 @@
           3
         ],
         "num_frames": [
-          121
+          121,
+          41
         ],
         "schedule": [
           "auto"
@@ -374,6 +412,7 @@
         "audio_latents",
         "audio_vae",
         "metadata",
+        "source_audio",
         "vae",
         "video_latents",
         "vocoder"
@@ -434,6 +473,33 @@
       "outputs": [
         "conditioning",
         "negative_conditioning"
+      ]
+    },
+    "ltx2_video_conditioning": {
+      "inputs": [
+        "vae"
+      ],
+      "literalInputs": {
+        "fps": [
+          24
+        ],
+        "height": [
+          704
+        ],
+        "is_intermediate": [
+          true
+        ],
+        "use_cache": [
+          true
+        ],
+        "video": [],
+        "width": [
+          1248
+        ]
+      },
+      "outputs": [
+        "num_frames",
+        "video_conditioning"
       ]
     },
     "minimax_h3_denoise": {

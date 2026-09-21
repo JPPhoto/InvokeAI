@@ -14,6 +14,7 @@ import {
   getAcceleratorSteps,
   getAcceleratorToggleResult,
   getDefaultVideoSettings,
+  getEffectiveVideoTiming,
   getVideoComponentSectionPolicy,
   getVideoDimensions,
   getVideoModelAvailabilityReasons,
@@ -1536,9 +1537,139 @@ const LTX2_ENCODER = {
 };
 
 describe('LTX-2 policy', () => {
-  it('offers text-to-video and first-frame conditioning on both checkpoints', () => {
-    expect(getVideoModes(ltx2('ltx2_dev'))).toEqual(['txt2vid', 'first-frame']);
-    expect(getVideoModes(ltx2('ltx2_distilled'))).toEqual(['txt2vid', 'first-frame']);
+  it('offers text-to-video, first-frame and whole-modality conditioning on both checkpoints', () => {
+    expect(getVideoModes(ltx2('ltx2_dev'))).toEqual(['txt2vid', 'first-frame', 'audio-to-video', 'video-to-audio']);
+    expect(getVideoModes(ltx2('ltx2_distilled'))).toEqual([
+      'txt2vid',
+      'first-frame',
+      'audio-to-video',
+      'video-to-audio',
+    ]);
+  });
+
+  describe('whole-modality conditioning clips', () => {
+    // 96 frames at 24 fps: four seconds, which snaps DOWN to 89 on the 8n + 1 grid.
+    const CLIP = { fps: 24, height: 704, numFrames: 96, video_name: 'clip.mp4', width: 1248 };
+    const model = ltx2('ltx2_dev');
+    const conditioned = (role: 'audio' | 'video', overrides: Partial<VideoSettings> = {}) =>
+      settingsFor(model, {
+        componentSourceModel: LTX2_COMPONENTS,
+        conditioningClip: { clip: CLIP, fpsKnown: true, role },
+        ltx2TextEncoderModel: LTX2_ENCODER,
+        ...overrides,
+      });
+
+    it('takes the length from the clip in either role, and the frame rate only from its picture', () => {
+      const audio = getEffectiveVideoTiming(model, conditioned('audio', { fps: 30, numFrames: 121 }));
+      const video = getEffectiveVideoTiming(model, conditioned('video', { fps: 30, numFrames: 121 }));
+
+      // A generated picture runs at whatever rate was asked for, so the soundtrack's four seconds
+      // cover 120 frames there -- 113 after the snap -- and 89 at the clip's own 24.
+      expect(audio).toEqual({ fps: 30, fpsFromClip: false, numFrames: 113, numFramesFromClip: true });
+      expect(video).toEqual({ fps: 24, fpsFromClip: true, numFrames: 89, numFramesFromClip: true });
+    });
+
+    it("leaves the frame rate to the user when the gallery never knew the clip's own", () => {
+      // A video record's fps is nullable, and `createVideoConditioningClip` falls back to 16 for
+      // the length estimate. Playing and timing a held picture at that guess is the silent kind of
+      // wrong: the clip comes out at the wrong speed with its soundtrack stretched to match.
+      const guessed = getEffectiveVideoTiming(
+        model,
+        conditioned('video', { conditioningClip: { clip: CLIP, fpsKnown: false, role: 'video' }, fps: 30 })
+      );
+
+      expect(guessed).toMatchObject({ fps: 30, fpsFromClip: false });
+      // The length still follows the clip: that comes from the frame count, which is known.
+      expect(guessed.numFramesFromClip).toBe(true);
+    });
+
+    it("leaves the panel's own numbers alone when the model cannot run the mode", () => {
+      // Stale state after a model switch: the panel offers to clear it rather than silently
+      // deriving a length from a clip this family will never encode.
+      const wan = wanModel('t2v_a14b');
+
+      expect(
+        getEffectiveVideoTiming(wan, {
+          ...settingsFor(wan),
+          conditioningClip: { clip: CLIP, fpsKnown: true, role: 'audio' },
+        })
+      ).toMatchObject({ numFramesFromClip: false });
+    });
+
+    it('is cleared by a model switch, like every other media slot', () => {
+      // Left behind it still drives the canvas -- and it disables the aspect-ratio control while
+      // doing so, so the panel could not be corrected from the panel.
+      const wan = wanModel('t2v_a14b');
+      const result = getVideoModelSelectionResult({ currentSettings: conditioned('video'), model: wan, models: [wan] });
+
+      expect(result.settings.conditioningClip).toBeNull();
+      expect(result.clearedLabels).toContain('Conditioning clip');
+      expect(getVideoDimensions(wan, result.settings)?.source).toBe('aspect-ratio');
+    });
+
+    it('stops driving the canvas the moment the model cannot use it', () => {
+      // The clip survives a reload on a family that cannot run it (a stored project, a recall).
+      // Timing already falls back to the panel's own numbers in that case; the canvas must too.
+      const wan = wanModel('t2v_a14b');
+      const stale = { ...settingsFor(wan), conditioningClip: { clip: CLIP, fpsKnown: true, role: 'video' as const } };
+
+      expect(getVideoDimensions(wan, stale)?.source).toBe('aspect-ratio');
+    });
+
+    it('derives the canvas from the clip only when its picture is the given one', () => {
+      expect(getVideoDimensions(model, conditioned('video'))?.source).toBe('conditioning-clip');
+      // In the audio role the picture is what gets generated, so the preset still owns the frame.
+      expect(getVideoDimensions(model, conditioned('audio'))?.source).toBe('aspect-ratio');
+    });
+
+    it('refuses a clip beside any other conditioning slot', () => {
+      expect(
+        getVideoValidationReasons(
+          model,
+          conditioned('audio', { firstFrameImage: { height: 704, image_name: 'first.png', width: 1248 } })
+        )
+      ).toContain(
+        'A conditioning clip cannot be combined with first/last frames, an initial video or references. Clear one side.'
+      );
+    });
+
+    it('refuses a two-stage preset, which the denoise node cannot combine with a held modality', () => {
+      expect(getVideoValidationReasons(model, conditioned('audio', { targetResolution: '1024p' })).join(' ')).toContain(
+        'does not run a two-stage target resolution'
+      );
+      expect(getVideoValidationReasons(model, conditioned('audio'))).toEqual([]);
+    });
+
+    it('refuses a clip whose derived length falls outside the frame grid', () => {
+      // Half a second of audio: under one frame group once snapped down.
+      const short = { ...CLIP, numFrames: 8 };
+      const long = { ...CLIP, numFrames: 24 * 60 };
+
+      expect(
+        getVideoValidationReasons(
+          model,
+          conditioned('audio', { conditioningClip: { clip: short, fpsKnown: true, role: 'audio' } })
+        ).join(' ')
+      ).toContain('Use a longer clip');
+      expect(
+        getVideoValidationReasons(
+          model,
+          conditioned('audio', { conditioningClip: { clip: long, fpsKnown: true, role: 'audio' } })
+        ).join(' ')
+      ).toContain('Use a shorter clip');
+    });
+
+    it("accepts a clip's fractional frame rate, which the panel's own field would reject", () => {
+      // 29.97 is a real clip, and LTX-2's fps fields are floats.
+      const ntsc = { ...CLIP, fps: 29.97 };
+
+      expect(
+        getVideoValidationReasons(
+          model,
+          conditioned('video', { conditioningClip: { clip: ntsc, fpsKnown: true, role: 'video' } })
+        )
+      ).toEqual([]);
+    });
   });
 
   it('exposes the per-modality guidance controls on dev and none on distilled', () => {

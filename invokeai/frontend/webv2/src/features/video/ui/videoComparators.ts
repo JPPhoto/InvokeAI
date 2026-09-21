@@ -57,6 +57,7 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     stableStringify(left.lastFrameImage) === stableStringify(right.lastFrameImage) &&
     stableStringify(left.references) === stableStringify(right.references) &&
     stableStringify(left.sourceVideo) === stableStringify(right.sourceVideo) &&
+    stableStringify(left.conditioningClip) === stableStringify(right.conditioningClip) &&
     stableStringify(left.vae) === stableStringify(right.vae) &&
     stableStringify(left.wanT5EncoderModel) === stableStringify(right.wanT5EncoderModel) &&
     stableStringify(left.wanLowNoiseModel) === stableStringify(right.wanLowNoiseModel) &&

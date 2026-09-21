@@ -74,6 +74,17 @@ def snap_num_frames(num_frames: int) -> int:
     return groups * LTX2_FRAME_MODULUS + 1
 
 
+def snap_num_frames_down(num_frames: int) -> int:
+    """The largest valid frame count at or below ``num_frames`` (at least 1).
+
+    Rounding *down* rather than to the nearest is what a clip's own length asks for: a soundtrack
+    conditions the picture it is paired with, so the generation may cover less of the clip than was
+    supplied but never more than there is audio for.
+    """
+    groups = max(0, (num_frames - 1) // LTX2_FRAME_MODULUS)
+    return groups * LTX2_FRAME_MODULUS + 1
+
+
 def latent_frame_count(num_frames: int) -> int:
     return (num_frames - 1) // LTX2_TEMPORAL_COMPRESSION + 1
 
@@ -138,6 +149,17 @@ def denormalize_video_latents(
     mean = latents_mean.view(1, -1, 1, 1, 1).to(latents.device, latents.dtype)
     std = latents_std.view(1, -1, 1, 1, 1).to(latents.device, latents.dtype)
     return latents * std / scaling_factor + mean
+
+
+def normalize_audio_latents(
+    latents: torch.Tensor, latents_mean: torch.Tensor, latents_std: torch.Tensor
+) -> torch.Tensor:
+    """The audio VAE's own scale -> normalized *packed* audio latents ``[B, L, 128]``.
+
+    The inverse of :func:`denormalize_audio_latents`, and it takes latents already packed for the
+    same reason: the statistics are per packed row element, not per channel.
+    """
+    return (latents - latents_mean.to(latents.device, latents.dtype)) / latents_std.to(latents.device, latents.dtype)
 
 
 def denormalize_audio_latents(

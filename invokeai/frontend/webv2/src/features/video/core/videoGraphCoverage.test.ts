@@ -33,6 +33,7 @@ import {
   getDefaultVideoSettings,
   getVideoComponentSectionPolicy,
   getVideoValidationReasons,
+  isTwoStageSupportedForMode,
   isVideoModelSelectable,
   SUPPORTED_VIDEO_BASES,
   VIDEO_GENERATION,
@@ -49,14 +50,18 @@ const CLIP: VideoSourceClip = {
   width: 1248,
 };
 
+const { endFrame: _end, startFrame: _start, ...CLIP_REF } = CLIP;
+
 /** The conditioning each mode needs; `resolveVideoMode` infers the mode back from it. */
 const MODE_INPUTS: Record<VideoGenerationMode, Partial<VideoSettings>> = {
+  'audio-to-video': { conditioningClip: { clip: CLIP_REF, fpsKnown: true, role: 'audio' } },
   extend: { sourceVideo: CLIP },
   'first-frame': { firstFrameImage: IMAGE },
   'first-last': { firstFrameImage: IMAGE, lastFrameImage: IMAGE },
   'last-frame': { lastFrameImage: IMAGE },
   reference: { references: [{ detail: 'max', image: IMAGE, kind: 'image' }] },
   txt2vid: {},
+  'video-to-audio': { conditioningClip: { clip: CLIP_REF, fpsKnown: true, role: 'video' } },
 };
 
 /**
@@ -184,18 +189,26 @@ const cases: Case[] = SUPPORTED_VIDEO_BASES.flatMap((base) =>
     ];
 
     return config.modes.flatMap((mode) =>
-      presets.flatMap((targetResolution) =>
-        (['diffusers', 'checkpoint'] as const)
-          .map((format) => ({
-            base,
-            format,
-            label: `${base} / ${variant} / ${mode} / ${format}${targetResolution ? ` / ${targetResolution}` : ''}`,
-            mode,
-            ...(targetResolution ? { targetResolution } : {}),
-            variant,
-          }))
-          .filter((testCase) => isVideoModelSelectable(createModel(testCase)))
-      )
+      presets
+        .filter((targetResolution) => {
+          // A mode the policy refuses to run two-stage is not an uncovered case, it is a
+          // combination that does not exist -- asked of the policy so the two cannot drift.
+          const option = config.targetResolutions.find((entry) => entry.id === targetResolution);
+
+          return option?.stages !== 2 || isTwoStageSupportedForMode(mode);
+        })
+        .flatMap((targetResolution) =>
+          (['diffusers', 'checkpoint'] as const)
+            .map((format) => ({
+              base,
+              format,
+              label: `${base} / ${variant} / ${mode} / ${format}${targetResolution ? ` / ${targetResolution}` : ''}`,
+              mode,
+              ...(targetResolution ? { targetResolution } : {}),
+              variant,
+            }))
+            .filter((testCase) => isVideoModelSelectable(createModel(testCase)))
+        )
     );
   })
 );

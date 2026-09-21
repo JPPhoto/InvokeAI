@@ -40,8 +40,19 @@ LTX2_TWO_STAGE_CANVAS_MULTIPLE: Final = LTX2_CANVAS_MULTIPLE * 2
 # 8k + 1 pixel frames.
 LTX2_FRAME_MODULUS: Final = LTX2_TEMPORAL_COMPRESSION
 
+# The longest clip the conditioning nodes will read. Nothing else bounds a clip's length --
+# `validate_num_frames` only checks the grid -- so this is what stops a workflow handing one of them
+# a ten-minute recording to decode. Mirrored by LTX2_NUM_FRAMES_MAX in the panel's dimensions.ts,
+# which is where a generation's own frame count is bounded.
+LTX2_NUM_FRAMES_MAX: Final = 481
+
 LTX2_DEFAULT_FPS: Final = 24.0
 LTX2_DEFAULT_NUM_FRAMES: Final = 121
+
+# The decode's tile defaults, which the conditioning encode reuses: both run the same VAE over the
+# same kind of clip, and a user who has to raise one usually has to raise the other.
+LTX2_DEFAULT_TILE_SIZE: Final = 512
+LTX2_DEFAULT_TEMPORAL_TILE: Final = 16
 
 # --- Audio geometry ------------------------------------------------------------------------------
 

@@ -29,6 +29,7 @@ _LTX2_AUDIO_BYTES_PER_LATENT = 6.5 * 2**20
 _LTX2_VAE_DECODE_BYTES_PER_TILE_ELEMENT = 466
 _LTX2_DECODE_CLIP_COPIES = 3
 _LTX2_VAE_ENCODE_BYTES_PER_TILE_ELEMENT = 700
+_LTX2_VAE_TILED_ENCODE_BYTES_PER_TILE_ELEMENT = 360
 
 _WAN_VAE_SINGLE_FRAME_DECODE_SCALING_CONSTANT = 2900
 _WAN_VAE_VIDEO_DECODE_SCALING_CONSTANT_A14B = 6500
@@ -449,6 +450,7 @@ def estimate_vae_working_memory_ltx2(
     pixel_frames: int,
     tile_size: int | None = None,
     temporal_tile: int | None = None,
+    tiled: bool = False,
 ) -> int:
     """Estimate the working memory to encode or decode with the LTX-2 video VAE.
 
@@ -473,8 +475,25 @@ def estimate_vae_working_memory_ltx2(
     one clip's worth: at the default 16-frame tile the latent stride is one, so a row is kept for
     every latent frame and the accumulation runs to about two clips. Three is what that sums to,
     and it is the term that grows with the clip -- the tile term does not, so a long clip would
-    otherwise eat the margin the measured rows show. Encode runs untiled (this architecture encodes
-    one frame) and is the same shape with one copy; 1248x704x1 measured 1.26 GiB against 1.65 GiB.
+    otherwise eat the margin the measured rows show.
+
+    Encode has the same two shapes with one clip copy. ``tiled=False`` is the first-frame encode,
+    where the whole "tile" is the one frame and the fixed per-tile cost dominates: 1248x704x1
+    measured 1.26 GiB against 1.65 GiB predicted. ``tiled=True`` is a whole conditioning clip,
+    which cannot run any other way -- untiled, the activation grows with the clip and a
+    1248x704x121 encode needs about 65 GiB. Tiled at 512/16, measured the same way:
+
+    | canvas     | frames | activation | of which the tile term |
+    |------------|--------|------------|------------------------|
+    | 768x512    | 33     | 2.82 GiB   | 2.75 GiB               |
+    | 768x512    | 121    | 2.87 GiB   | 2.60 GiB               |
+    | 1248x704   | 121    | 3.20 GiB   | 2.61 GiB               |
+    | 1248x704   | 241    | 3.78 GiB   | 2.60 GiB               |
+    | 1920x1088  | 121    | 4.02 GiB   | 2.61 GiB               |
+
+    The tile term is flat across a 16x range of clip volume, as it should be, and works out at
+    333-352 bytes per tile element; the constant rounds up from there. Reading the encode constant
+    for a tiled run would over-reserve it twofold, which is cache the rest of the graph loses.
     """
     element_size = next(vae.parameters()).element_size()
     spatial_ratio = int(getattr(vae, "spatial_compression_ratio", 32))
@@ -490,6 +509,14 @@ def estimate_vae_working_memory_ltx2(
         tile_frames = max(temporal_ratio, temporal_tile or int(getattr(vae, "tile_sample_min_num_frames", 16)))
         bytes_per_element = _LTX2_VAE_DECODE_BYTES_PER_TILE_ELEMENT
         clip_copies = _LTX2_DECODE_CLIP_COPIES
+    elif tiled:
+        tile_height = max(
+            spatial_ratio, min(tile_size or int(getattr(vae, "tile_sample_min_height", 512)), pixel_height)
+        )
+        tile_width = max(spatial_ratio, min(tile_size or int(getattr(vae, "tile_sample_min_width", 512)), pixel_width))
+        tile_frames = max(temporal_ratio, temporal_tile or int(getattr(vae, "tile_sample_min_num_frames", 16)))
+        bytes_per_element = _LTX2_VAE_TILED_ENCODE_BYTES_PER_TILE_ELEMENT
+        clip_copies = 1
     else:
         tile_height, tile_width, tile_frames = pixel_height, pixel_width, pixel_frames
         bytes_per_element = _LTX2_VAE_ENCODE_BYTES_PER_TILE_ELEMENT

@@ -13,6 +13,7 @@ from invokeai.app.invocations.fields import (
     Input,
     InputField,
     LatentsField,
+    LTX2AudioConditioningField,
     WithBoard,
     WithMetadata,
 )
@@ -21,17 +22,19 @@ from invokeai.app.invocations.primitives import VideoOutput
 from invokeai.app.invocations.vae.wan_latents_to_video import _write_video_frames
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.app.services.shared.invocation_context import InvocationContext
+from invokeai.app.util.video_audio import extract_audio_pcm
 from invokeai.app.util.video_encoding import make_mp4_writer, write_stereo_wav
-from invokeai.backend.ltx2.constants import LTX2_DEFAULT_FPS
+from invokeai.backend.ltx2.constants import (
+    LTX2_DEFAULT_FPS,
+    LTX2_DEFAULT_TEMPORAL_TILE,
+    LTX2_DEFAULT_TILE_SIZE,
+)
 from invokeai.backend.ltx2.video_decoding import decode_audio_latents, decode_video_latents
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.vae_working_memory import (
     estimate_audio_working_memory_ltx2,
     estimate_vae_working_memory_ltx2,
 )
-
-LTX2_DEFAULT_TILE_SIZE = 512
-LTX2_DEFAULT_TEMPORAL_TILE = 16
 
 
 def _iter_decoded_frames(decoded: torch.Tensor) -> Iterator[np.ndarray]:
@@ -46,13 +49,20 @@ def _iter_decoded_frames(decoded: torch.Tensor) -> Iterator[np.ndarray]:
     title="Latents to Video - LTX-2",
     tags=["latents", "video", "audio", "vae", "l2v", "ltx", "ltx2"],
     category="latents",
-    version="1.0.0",
+    version="1.1.0",
     classification=Classification.Prototype,
 )
 class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
     """Decodes LTX-2 video and audio latents into an MP4 with an AAC stereo track."""
 
     video_latents: LatentsField = InputField(description=FieldDescriptions.latents, input=Input.Connection)
+    source_audio: LTX2AudioConditioningField | None = InputField(
+        default=None,
+        description="The soundtrack this clip was generated for. When set, it is muxed in as it was "
+        "supplied rather than the generated audio being decoded.",
+        input=Input.Connection,
+        title="Source Audio",
+    )
     audio_latents: LatentsField | None = InputField(
         default=None,
         description="Packed audio latents from the denoise node. Omit for a silent video.",
@@ -91,7 +101,16 @@ class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
 
         # The soundtrack is decoded and trimmed before the writer opens: the WAV has to exist, and
         # match the video's duration, when the muxing writer is constructed.
-        wav_path = self._decode_audio_to_wav(context, duration) if self.audio_latents is not None else None
+        # Audio-to-video conditions on a soundtrack the user already has, so the output carries that
+        # recording rather than a vocoder's reconstruction of the latents it was encoded to. The
+        # generated audio latents are still produced -- the model denoises both streams -- but
+        # decoding them here would replace the original with a lossy copy of itself.
+        if self.source_audio is not None:
+            wav_path = self._extract_source_audio_to_wav(context, duration)
+        elif self.audio_latents is not None:
+            wav_path = self._decode_audio_to_wav(context, duration)
+        else:
+            wav_path = None
 
         tmp = tempfile.NamedTemporaryFile(prefix="invokeai_ltx2_video_", suffix=".mp4", delete=False)
         tmp.close()
@@ -161,6 +180,36 @@ class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
             )
         TorchDevice.empty_cache()
         return decoded
+
+    def _extract_source_audio_to_wav(self, context: InvocationContext, video_duration_s: float) -> Path:
+        """The conditioning clip's own soundtrack, trimmed or padded to the generated duration.
+
+        The generation's length is the soundtrack's, snapped down to the frame grid, so the clip is
+        normally a little longer than the video; the tail beyond the last frame is dropped.
+        """
+        assert self.source_audio is not None
+        source = context.videos.get_path(self.source_audio.source_video_name)
+        decoded = extract_audio_pcm(source, float_pcm=True)
+
+        if decoded is None:
+            raise ValueError(f"'{self.source_audio.source_video_name}' no longer has an audio track to mux back in.")
+
+        samples, sample_rate = decoded
+        wanted = int(round(video_duration_s * sample_rate))
+        if samples.shape[1] > wanted:
+            samples = samples[:, :wanted]
+        elif samples.shape[1] < wanted:
+            samples = np.pad(samples, ((0, 0), (0, wanted - samples.shape[1])))
+
+        wav = tempfile.NamedTemporaryFile(prefix="invokeai_ltx2_source_audio_", suffix=".wav", delete=False)
+        wav.close()
+        wav_path = Path(wav.name)
+        try:
+            write_stereo_wav(wav_path, samples, sample_rate)
+        except Exception:
+            wav_path.unlink(missing_ok=True)
+            raise
+        return wav_path
 
     def _decode_audio_to_wav(self, context: InvocationContext, video_duration_s: float) -> Path:
         assert self.audio_latents is not None

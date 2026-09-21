@@ -2,6 +2,7 @@ import type {
   Ltx2TargetResolution,
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
+  VideoConditioningClip,
   VideoReferenceImageDetail,
   WanTargetResolution,
 } from './types';
@@ -300,6 +301,35 @@ export const LTX2_NUM_FRAMES_MAX = 481;
 export const LTX2_NUM_FRAMES_SLIDER_MAX = 241;
 export const LTX2_NUM_FRAMES_STEP = 8;
 export const LTX2_NUM_FRAMES_DEFAULT = 121;
+
+/**
+ * A frame count snapped *down* onto LTX-2's 8n + 1 grid. Mirrors `snap_num_frames_down` in
+ * `invokeai/backend/ltx2/packing.py`: a clip supplies whatever it supplies, and the trailing
+ * frames past the last whole group are dropped rather than padded -- padding would invent
+ * picture, or silence, for the model to hold clean.
+ */
+export const snapLtx2FramesDown = (numFrames: number): number =>
+  Math.max(0, Math.floor((Math.floor(numFrames) - 1) / LTX2_NUM_FRAMES_STEP)) * LTX2_NUM_FRAMES_STEP + 1;
+
+/**
+ * The frame count a conditioning clip will produce, as the panel can predict it. The graph wires
+ * the conditioning node's own count into the denoise rather than trusting this, because the two
+ * can differ: an audio track need not be exactly as long as the picture it came with, and the
+ * gallery's frame count is itself duration x fps rounded.
+ *
+ * With the clip in the `audio` role the picture is generated at the panel's own frame rate, so
+ * `fps` decides how many frames the soundtrack covers. In the `video` role the clip's own frames
+ * are the generation, and `fps` is ignored.
+ */
+export const ltx2FramesForClip = (conditioning: VideoConditioningClip, fps: number): number => {
+  if (conditioning.role === 'video') {
+    return snapLtx2FramesDown(conditioning.clip.numFrames);
+  }
+
+  const seconds = conditioning.clip.fps > 0 ? conditioning.clip.numFrames / conditioning.clip.fps : 0;
+
+  return snapLtx2FramesDown(Math.trunc(seconds * fps));
+};
 
 export const LTX2_FPS_MIN = 1;
 export const LTX2_FPS_MAX = 60;

@@ -25896,6 +25896,8 @@
                   "minimax_h3_i2v",
                   "ltx2_t2v",
                   "ltx2_i2v",
+                  "ltx2_a2v",
+                  "ltx2_v2a",
                   "minimax_h3_lf2v",
                   "minimax_h3_flf2v",
                   "minimax_h3_extend_video",
@@ -39937,6 +39939,9 @@
                   "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/LTX2AudioConditioningInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/LTX2DenoiseInvocation"
                 },
                 {
@@ -39956,6 +39961,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2VideoConditioningInvocation"
                 },
                 {
                   "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -40684,6 +40692,9 @@
                   "$ref": "#/components/schemas/Krea2ModelLoaderOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/LTX2AudioConditioningOutput"
+                },
+                {
                   "$ref": "#/components/schemas/LTX2DenoiseOutput"
                 },
                 {
@@ -40700,6 +40711,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/LTX2TextEncoderOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2VideoConditioningOutput"
                 },
                 {
                   "$ref": "#/components/schemas/LatentsCollectionOutput"
@@ -49235,6 +49249,9 @@
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2AudioConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
               },
               {
@@ -49254,6 +49271,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2VideoConditioningInvocation"
               },
               {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -49939,6 +49959,9 @@
                 "$ref": "#/components/schemas/Krea2ModelLoaderOutput"
               },
               {
+                "$ref": "#/components/schemas/LTX2AudioConditioningOutput"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2DenoiseOutput"
               },
               {
@@ -49955,6 +49978,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2TextEncoderOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2VideoConditioningOutput"
               },
               {
                 "$ref": "#/components/schemas/LatentsCollectionOutput"
@@ -50739,6 +50765,9 @@
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2AudioConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
               },
               {
@@ -50758,6 +50787,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2VideoConditioningInvocation"
               },
               {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -51833,6 +51865,9 @@
           "lscale": {
             "$ref": "#/components/schemas/LatentsOutput"
           },
+          "ltx2_audio_conditioning": {
+            "$ref": "#/components/schemas/LTX2AudioConditioningOutput"
+          },
           "ltx2_denoise": {
             "$ref": "#/components/schemas/LTX2DenoiseOutput"
           },
@@ -51853,6 +51888,9 @@
           },
           "ltx2_text_encoder": {
             "$ref": "#/components/schemas/LTX2TextEncoderOutput"
+          },
+          "ltx2_video_conditioning": {
+            "$ref": "#/components/schemas/LTX2VideoConditioningOutput"
           },
           "main_model_loader": {
             "$ref": "#/components/schemas/ModelLoaderOutput"
@@ -52480,6 +52518,7 @@
           "lora_selector",
           "lresize",
           "lscale",
+          "ltx2_audio_conditioning",
           "ltx2_denoise",
           "ltx2_ideal_dimensions",
           "ltx2_image_conditioning",
@@ -52487,6 +52526,7 @@
           "ltx2_latents_to_video",
           "ltx2_model_loader",
           "ltx2_text_encoder",
+          "ltx2_video_conditioning",
           "main_model_loader",
           "mask_combine",
           "mask_edge",
@@ -53210,6 +53250,9 @@
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2AudioConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
               },
               {
@@ -53229,6 +53272,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2VideoConditioningInvocation"
               },
               {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -54371,6 +54417,9 @@
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2AudioConditioningInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2DenoiseInvocation"
               },
               {
@@ -54390,6 +54439,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2VideoConditioningInvocation"
               },
               {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -58049,6 +58101,183 @@
         "title": "LLMTaskProgressEvent",
         "type": "object"
       },
+      "LTX2AudioConditioningField": {
+        "description": "A soundtrack held frozen while the picture is generated (audio-to-video).\n\nLTX-2 conditions both streams through one mask, so this is the audio-side mirror of\n:class:`LTX2VideoConditioningField`: the rows it names are held clean and the video is free.\nThe clip's own length decides the generation's, so the frame count it implies rides along and\nthe denoise node refuses a mismatch by name.",
+        "properties": {
+          "latents_name": {
+            "description": "Name of the saved packed [1, L, 128] audio latent tensor.",
+            "title": "Latents Name",
+            "type": "string"
+          },
+          "num_audio_latents": {
+            "description": "Rows in the saved tensor; 25 per second of source audio.",
+            "title": "Num Audio Latents",
+            "type": "integer"
+          },
+          "num_frames": {
+            "description": "Pixel frames the soundtrack covers, snapped down to 8n + 1.",
+            "title": "Num Frames",
+            "type": "integer"
+          },
+          "fps": {
+            "description": "Frame rate the frame count was derived at.",
+            "title": "Fps",
+            "type": "number"
+          },
+          "source_video_name": {
+            "description": "The clip the soundtrack was taken from, for muxing it back.",
+            "title": "Source Video Name",
+            "type": "string"
+          }
+        },
+        "required": ["latents_name", "num_audio_latents", "num_frames", "fps", "source_video_name"],
+        "title": "LTX2AudioConditioningField",
+        "type": "object"
+      },
+      "LTX2AudioConditioningInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Encodes a clip's soundtrack so LTX-2 can generate a picture for it.\n\nLTX-2 conditions picture and sound through one mask, so this is the mirror of first-frame image\nconditioning: the audio rows are held clean at every step and the video is sampled freely.\n\nThe soundtrack's own length decides the generation's. Audio is encoded at 25 latents per second\nand the resulting frame count is snapped *down* to the VAE's 8n + 1 grid, so a clip is never\nasked to cover more picture than it has sound for; the remainder is dropped.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "video": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VideoField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The clip whose soundtrack conditions the generation.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "audio_vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Audio VAE (mel spectrogram) for LTX-2",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Audio VAE"
+          },
+          "vocoder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2VocoderField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The vocoder, whose checkpoint carries the log-mel filters the VAE encodes from.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Vocoder"
+          },
+          "fps": {
+            "default": 24.0,
+            "description": "Frame rate to convert the soundtrack's duration into a frame count.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 120,
+            "minimum": 1,
+            "orig_default": 24.0,
+            "orig_required": false,
+            "title": "Fps",
+            "type": "number"
+          },
+          "type": {
+            "const": "ltx2_audio_conditioning",
+            "default": "ltx2_audio_conditioning",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["ltx", "ltx2", "video", "audio", "conditioning"],
+        "title": "Audio Conditioning - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2AudioConditioningOutput"
+        }
+      },
+      "LTX2AudioConditioningOutput": {
+        "class": "output",
+        "description": "A soundtrack to generate a picture for, and the clip length it implies.",
+        "properties": {
+          "audio_conditioning": {
+            "$ref": "#/components/schemas/LTX2AudioConditioningField",
+            "description": "A soundtrack to generate a picture for (audio-to-video)",
+            "field_kind": "output",
+            "title": "Audio Conditioning",
+            "ui_hidden": false
+          },
+          "num_frames": {
+            "description": "Frames the soundtrack covers, snapped down to 8n + 1.",
+            "field_kind": "output",
+            "title": "Num Frames",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "fps": {
+            "description": "The frame rate that count was derived at.",
+            "field_kind": "output",
+            "title": "Fps",
+            "type": "number",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_audio_conditioning_output",
+            "default": "ltx2_audio_conditioning_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "audio_conditioning", "num_frames", "fps", "type", "type"],
+        "title": "LTX2AudioConditioningOutput",
+        "type": "object"
+      },
       "LTX2ConditioningField": {
         "description": "An LTX-2 conditioning primitive value.\n\nLTX-2 conditioning is a pair of prompt streams, one per modality, already projected by the\ntext connectors, plus the token mask the connectors emit alongside them.",
         "properties": {
@@ -58156,6 +58385,40 @@
             "orig_default": null,
             "orig_required": false,
             "title": "Image Conditioning"
+          },
+          "audio_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2AudioConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A soundtrack to generate a picture for (audio-to-video)",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Audio Conditioning"
+          },
+          "full_video_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2FullVideoConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A clip to generate a soundtrack for (video-to-audio)",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Video Conditioning"
           },
           "width": {
             "default": 1248,
@@ -58357,7 +58620,7 @@
         "tags": ["ltx", "ltx2", "video", "audio", "denoise"],
         "title": "Denoise - LTX-2",
         "type": "object",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "output": {
           "$ref": "#/components/schemas/LTX2DenoiseOutput"
         }
@@ -58409,6 +58672,39 @@
         },
         "required": ["output_meta", "video_latents", "audio_latents", "width", "height", "num_frames", "type", "type"],
         "title": "LTX2DenoiseOutput",
+        "type": "object"
+      },
+      "LTX2FullVideoConditioningField": {
+        "description": "A whole clip held frozen while its soundtrack is generated (video-to-audio).\n\nDistinct from :class:`LTX2VideoConditioningField`, which anchors a single frame: this one holds\n*every* video token, so the transformer's video stream is a given and only the audio is\nsampled. The canvas and length ride along for the same reason the first-frame field carries a\ncanvas -- a mismatch should be named, not discovered inside the transformer.",
+        "properties": {
+          "latents_name": {
+            "description": "Name of the saved [1, 128, T, H/32, W/32] latent tensor.",
+            "title": "Latents Name",
+            "type": "string"
+          },
+          "width": {
+            "description": "Pixel width the clip was encoded at.",
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "description": "Pixel height the clip was encoded at.",
+            "title": "Height",
+            "type": "integer"
+          },
+          "num_frames": {
+            "description": "Pixel frames the clip covers.",
+            "title": "Num Frames",
+            "type": "integer"
+          },
+          "fps": {
+            "description": "The clip's own frame rate, which the generation adopts.",
+            "title": "Fps",
+            "type": "number"
+          }
+        },
+        "required": ["latents_name", "width", "height", "num_frames", "fps"],
+        "title": "LTX2FullVideoConditioningField",
         "type": "object"
       },
       "LTX2IdealDimensionsInvocation": {
@@ -58927,6 +59223,23 @@
             "input": "connection",
             "orig_required": true
           },
+          "source_audio": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2AudioConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The soundtrack this clip was generated for. When set, it is muxed in as it was supplied rather than the generated audio being decoded.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Source Audio"
+          },
           "audio_latents": {
             "anyOf": [
               {
@@ -59039,7 +59352,7 @@
         "tags": ["latents", "video", "audio", "vae", "l2v", "ltx", "ltx2"],
         "title": "Latents to Video - LTX-2",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/VideoOutput"
         }
@@ -59460,6 +59773,187 @@
         },
         "required": ["latents_name", "width", "height"],
         "title": "LTX2VideoConditioningField",
+        "type": "object"
+      },
+      "LTX2VideoConditioningInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Encodes a whole clip so LTX-2 can generate a soundtrack for it.\n\nThe mirror of audio conditioning: every video token is held clean at each step and only the\naudio is sampled. The clip decides the generation's geometry -- its canvas, its length and its\nframe rate -- because the picture is a given rather than something being made.\n\nFrames are fitted to the canvas by cover-crop, as first-frame conditioning does, and the count\nis snapped *down* to the VAE's 8n + 1 grid; trailing frames beyond the last group are dropped\nrather than padded, since padding would invent picture for the model to score sound against.\n\nWhat comes back is the model's reconstruction of the clip, not the clip: the picture is\ncover-cropped to the canvas, VAE round-tripped and re-encoded, because the decode node renders\nthe held latents like any others. That is the opposite of the choice audio conditioning makes\nfor the soundtrack, which is muxed back in as supplied -- the symmetric treatment here would be\nto remux the source video stream, and it is not done yet.\n\nThe encode is tiled, and not by preference: an untiled encode's activation grows with the whole\nclip rather than with one tile, so a 1248x704 clip of 121 frames would need about 65 GiB where\ntiled it needs 3.2, flat in the clip's length. Tiling costs blend seams -- measured at 16%\nrelative rms against an untiled encode of the same smooth footage -- which is why the tile\nsizes are inputs rather than constants: a clip that fits a larger tile can be given one.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "video": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VideoField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The clip to generate a soundtrack for.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "VAE",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Video VAE"
+          },
+          "width": {
+            "default": 768,
+            "description": "Canvas width to encode at.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 768,
+            "orig_required": false,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 512,
+            "description": "Canvas height to encode at.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 512,
+            "orig_required": false,
+            "title": "Height",
+            "type": "integer"
+          },
+          "fps": {
+            "default": 24.0,
+            "description": "The clip's frame rate, which the audio adopts.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 120,
+            "minimum": 1,
+            "orig_default": 24.0,
+            "orig_required": false,
+            "title": "Fps",
+            "type": "number"
+          },
+          "tile_size": {
+            "default": 512,
+            "description": "Spatial encode tile, in source pixels. Smaller tiles need less VRAM and take longer.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 64,
+            "orig_default": 512,
+            "orig_required": false,
+            "title": "Tile Size",
+            "type": "integer"
+          },
+          "temporal_tile": {
+            "default": 16,
+            "description": "Temporal encode tile, in source frames. Smaller tiles need less VRAM and take longer.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 8,
+            "orig_default": 16,
+            "orig_required": false,
+            "title": "Temporal Tile",
+            "type": "integer"
+          },
+          "type": {
+            "const": "ltx2_video_conditioning",
+            "default": "ltx2_video_conditioning",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["ltx", "ltx2", "video", "audio", "conditioning"],
+        "title": "Video Conditioning - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2VideoConditioningOutput"
+        }
+      },
+      "LTX2VideoConditioningOutput": {
+        "class": "output",
+        "description": "A clip to generate a soundtrack for, and the geometry it pins.",
+        "properties": {
+          "video_conditioning": {
+            "$ref": "#/components/schemas/LTX2FullVideoConditioningField",
+            "description": "A clip to generate a soundtrack for (video-to-audio)",
+            "field_kind": "output",
+            "title": "Video Conditioning",
+            "ui_hidden": false
+          },
+          "width": {
+            "description": "Pixel width the clip was encoded at.",
+            "field_kind": "output",
+            "title": "Width",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "height": {
+            "description": "Pixel height the clip was encoded at.",
+            "field_kind": "output",
+            "title": "Height",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "num_frames": {
+            "description": "Frames encoded, snapped down to 8n + 1.",
+            "field_kind": "output",
+            "title": "Num Frames",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_video_conditioning_output",
+            "default": "ltx2_video_conditioning_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "video_conditioning", "width", "height", "num_frames", "type", "type"],
+        "title": "LTX2VideoConditioningOutput",
         "type": "object"
       },
       "LTX2VocoderField": {

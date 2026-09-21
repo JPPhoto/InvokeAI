@@ -193,6 +193,8 @@ GENERATION_MODES = Literal[
     "minimax_h3_i2v",
     "ltx2_t2v",
     "ltx2_i2v",
+    "ltx2_a2v",
+    "ltx2_v2a",
     "minimax_h3_lf2v",
     "minimax_h3_flf2v",
     "minimax_h3_extend_video",

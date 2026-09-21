@@ -28,6 +28,7 @@ import type { SupportedVideoBase } from './videoPolicies';
 import { getLtx2StageCanvases, isLtx2TwoStage, MINIMAX_H3_FPS } from './dimensions';
 import { MINIMAX_H3_HYBRID_BLOCK_RANGE, resolveVideoMode } from './settings';
 import {
+  getEffectiveVideoTiming,
   getVideoDimensions,
   getVideoModelPolicy,
   getVideoTargetResolution,
@@ -58,11 +59,13 @@ const WAN_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
 };
 
 const LTX2_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
+  'audio-to-video': 'ltx2_a2v',
   'first-frame': 'ltx2_i2v',
   txt2vid: 'ltx2_t2v',
+  'video-to-audio': 'ltx2_v2a',
 };
 
-const MINIMAX_H3_GENERATION_MODES: Record<VideoGenerationMode, string> = {
+const MINIMAX_H3_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
   extend: 'minimax_h3_extend_video',
   'first-frame': 'minimax_h3_i2v',
   'first-last': 'minimax_h3_flf2v',
@@ -705,7 +708,7 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
           }
         : {}),
     },
-    generationMode: MINIMAX_H3_GENERATION_MODES[mode],
+    generationMode: MINIMAX_H3_GENERATION_MODES[mode] ?? 'minimax_h3_t2v',
     graph,
     height: dimensions.height,
     model,
@@ -741,6 +744,10 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
   const mode = resolveVideoMode(settings);
   const policy = getVideoModelPolicy(model, settings);
   const dimensions = getVideoDimensions(model, settings);
+  // A conditioning clip owns the length, and in the video role the frame rate too; everywhere else
+  // these are the panel's own numbers. Used for every literal below, and for the metadata, so all
+  // three describe the same run.
+  const timing = getEffectiveVideoTiming(model, settings);
 
   if (!dimensions) {
     throw new Error('Video dimensions could not be derived from the current settings.');
@@ -815,10 +822,10 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     : { audio_cfg_scale: 1, cfg_scale: 1, modality_scale: 1, stg_scale: 0 };
 
   const denoise = addNode(graph, {
-    fps: settings.fps,
+    fps: timing.fps,
     height: stages.base.height,
     id: 'denoise_latents',
-    num_frames: settings.numFrames,
+    num_frames: timing.numFrames,
     // 'auto' rather than the panel's own reading of the variant: the loader
     // stamps the schedule off the checkpoint itself, which is the authority
     // when a release the panel does not recognise falls back to the dev policy.
@@ -855,6 +862,50 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     addEdge(graph, imageConditioning, 'video_conditioning', denoise, 'video_conditioning');
   }
 
+  // The conditioning clip, in whichever role it was given. Both nodes report the frame count they
+  // actually encoded, and that count is wired into the denoise rather than the panel's prediction
+  // of it: an audio track need not be exactly as long as the picture it shipped with, and the
+  // gallery's own frame count is duration x fps rounded.
+  const conditioningClip = settings.conditioningClip;
+  let audioConditioning: BackendInvocationContract | null = null;
+
+  if (mode === 'audio-to-video' || mode === 'video-to-audio') {
+    if (!conditioningClip) {
+      throw new Error('A conditioning clip is required for audio-to-video and video-to-audio generation.');
+    }
+
+    const video = { video_name: conditioningClip.clip.video_name };
+
+    if (conditioningClip.role === 'audio') {
+      audioConditioning = addNode(graph, {
+        fps: timing.fps,
+        id: 'audio_conditioning',
+        type: 'ltx2_audio_conditioning',
+        video,
+      });
+
+      addEdge(graph, modelLoader, 'audio_vae', audioConditioning, 'audio_vae');
+      addEdge(graph, modelLoader, 'vocoder', audioConditioning, 'vocoder');
+      addEdge(graph, audioConditioning, 'audio_conditioning', denoise, 'audio_conditioning');
+      addEdge(graph, audioConditioning, 'num_frames', denoise, 'num_frames');
+    } else {
+      // The base canvas, which is the only canvas: a conditioned run has no refine pass, so the
+      // two stages are the same and this matches the denoise's own width and height.
+      const videoConditioning = addNode(graph, {
+        fps: timing.fps,
+        height: stages.base.height,
+        id: 'video_conditioning',
+        type: 'ltx2_video_conditioning',
+        video,
+        width: stages.base.width,
+      });
+
+      addEdge(graph, modelLoader, 'vae', videoConditioning, 'vae');
+      addEdge(graph, videoConditioning, 'video_conditioning', denoise, 'full_video_conditioning');
+      addEdge(graph, videoConditioning, 'num_frames', denoise, 'num_frames');
+    }
+  }
+
   // The pass whose latents are decoded: the refine pass when there is one. Audio bypasses the
   // upscaler -- it has no spatial extent -- but still goes through the refine denoise, which
   // re-noises both modalities to one level so the transformer reads a single pair of timesteps.
@@ -868,10 +919,10 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     addEdge(graph, modelLoader, 'vae', upsample, 'vae');
 
     const refine = addNode(graph, {
-      fps: settings.fps,
+      fps: timing.fps,
       height: stages.final.height,
       id: 'refine_latents',
-      num_frames: settings.numFrames,
+      num_frames: timing.numFrames,
       schedule: 'auto',
       // The refine pass enters the schedule partway down and samples its tail, so a variant that
       // pays four forwards a step gets a budget of its own rather than the base pass's. Never more
@@ -913,7 +964,7 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
   }
 
   const output = addNode(graph, {
-    fps: settings.fps,
+    fps: timing.fps,
     id: 'video_output',
     is_intermediate: false,
     type: 'ltx2_latents_to_video',
@@ -922,6 +973,12 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
 
   addEdge(graph, finalDenoise, 'video_latents', output, 'video_latents');
   addEdge(graph, finalDenoise, 'audio_latents', output, 'audio_latents');
+  if (audioConditioning) {
+    // The soundtrack the clip was generated for is muxed in as supplied. The model still denoises
+    // its own audio latents -- they are the stream it holds clean -- but decoding those would
+    // replace the user's recording with a vocoder's copy of itself.
+    addEdge(graph, audioConditioning, 'audio_conditioning', output, 'source_audio');
+  }
   addEdge(graph, modelLoader, 'vae', output, 'vae');
   addEdge(graph, modelLoader, 'audio_vae', output, 'audio_vae');
   addEdge(graph, modelLoader, 'vocoder', output, 'vocoder');
@@ -929,7 +986,7 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
   addVideoMetadata({
     extras: {
       cfg_scale: guidance.cfg_scale,
-      fps: settings.fps,
+      fps: timing.fps,
       ltx2_text_encoder_model: settings.ltx2TextEncoderModel,
       ...(componentSource ? { ltx2_component_source: componentSource } : {}),
       ...(policy.ui.audioCfgVisible ? { ltx2_audio_cfg_scale: guidance.audio_cfg_scale } : {}),
@@ -941,6 +998,15 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       // it was reached by refining an 896x512 pass rather than generated at size.
       ...(twoStage
         ? { ltx2_base_height: stages.base.height, ltx2_base_width: stages.base.width, ltx2_two_stage: true }
+        : {}),
+      // The clip is the run's length and, in the video role, its frame rate -- so record the count
+      // that ran rather than the panel's stored one, which these modes do not use.
+      ...(conditioningClip
+        ? {
+            ltx2_conditioning_role: conditioningClip.role,
+            ltx2_conditioning_video: { video_name: conditioningClip.clip.video_name },
+            num_frames: timing.numFrames,
+          }
         : {}),
     },
     generationMode: LTX2_GENERATION_MODES[mode] ?? 'ltx2_t2v',
