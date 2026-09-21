@@ -48,6 +48,14 @@ export interface ImageMapSnapshot {
    */
   clusterLabelsHash: string | null;
   /**
+   * The eps `clusterLabels` were clustered at. The visible-set hash alone
+   * stopped being enough once the strength became adjustable: changing it
+   * renumbers every cluster while the projection and the visible set — and
+   * so `visibleHash` — stay exactly the same, which would let the previous
+   * strength's tags be shown against the new clustering for a round trip.
+   */
+  clusterLabelsEps: number | null;
+  /**
    * The plot canvas itself failed (WebGL unavailable). Distinct from `error`,
    * which means a fetch failed: with `error` the cached points are still worth
    * showing, whereas here there is nothing that can draw them, so the view must
@@ -58,6 +66,7 @@ export interface ImageMapSnapshot {
 
 const EMPTY_IMAGE_MAP_SNAPSHOT: ImageMapSnapshot = {
   clusterLabels: null,
+  clusterLabelsEps: null,
   clusterLabelsHash: null,
   data: null,
   error: null,
@@ -82,6 +91,10 @@ registerAccountOwnedResource({
   clear: () => {
     inflight = null;
     rerunRequested = false;
+    // Per-project widget state, so it must not survive into the next
+    // account: the widget pushes the new one down when it mounts, but a
+    // socket-driven refresh could beat it there.
+    clusterEps = null;
     // Orphan any in-flight labels request so its completion (or failure)
     // cannot touch the next account's labels.
     labelsSequence += 1;
@@ -106,6 +119,11 @@ export const setClusterEps = (eps: number | null): void => {
   }
 
   clusterEps = eps;
+
+  // The labels in the store describe the previous strength's cluster ids, and
+  // the refresh below will not move `visibleHash`, so nothing else retires
+  // them.
+  imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
 
   // Nothing has been fetched yet, so the first fetch will carry the new value
   // on its own; refreshing here would race it for no gain.
@@ -222,7 +240,7 @@ export const setClusterLabelsEnabled = (enabled: boolean): void => {
   if (!enabled) {
     // Bump the sequence so a request already in flight cannot land after this.
     labelsSequence += 1;
-    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
 
     return;
   }
@@ -284,7 +302,11 @@ const attemptClusterLabels = (sequence: number, data: ImageMapPoints, attempt: n
       }
 
       if (!areLabelMapsEqual(current.clusterLabels, response.labels)) {
-        imageMapStore.patchSnapshot({ clusterLabels: response.labels, clusterLabelsHash: response.visibleHash });
+        imageMapStore.patchSnapshot({
+          clusterLabels: response.labels,
+          clusterLabelsEps: data.clusterEps,
+          clusterLabelsHash: response.visibleHash,
+        });
       }
     })
     .catch((error: unknown) => {
@@ -295,7 +317,7 @@ const attemptClusterLabels = (sequence: number, data: ImageMapPoints, attempt: n
         return;
       }
 
-      imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+      imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
 
       if (attempt >= LABELS_RETRY_DELAYS_MS.length || !isRetryableLabelsFailure(error)) {
         return;
@@ -325,7 +347,7 @@ const refreshClusterLabels = (data: ImageMapPoints): void => {
     // sequence so an in-flight labels response cannot repopulate the labels
     // this clears.
     labelsSequence += 1;
-    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsEps: null, clusterLabelsHash: null });
 
     return;
   }

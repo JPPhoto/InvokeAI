@@ -20,8 +20,13 @@ const COMMIT_DEBOUNCE_MS = 500;
 const DIALOG_DIRECTION = { base: 'column', md: 'row' } as const;
 const DIALOG_ALIGNMENT = { base: 'stretch', md: 'center' } as const;
 
-/** Trims the heuristic's float to something a 0.01 spinner can step from. */
-const forDisplay = (eps: number): string => String(Number(eps.toFixed(3)));
+/**
+ * Trims the heuristic's float to something a spinner can step from. Three
+ * significant digits rather than three decimals: the endpoint reports values
+ * as small as 1e-6 (the pair budget's floor on a near-coincident map) and
+ * asks for them back, and `toFixed(3)` renders every one of those as "0".
+ */
+const forDisplay = (eps: number): string => String(Number(eps.toPrecision(3)));
 
 /**
  * "Clustering strength" — the DBSCAN eps, as a number the user can nudge.
@@ -37,11 +42,16 @@ export const ClusterStrengthField = ({ field, surface, target }: SettingFieldPro
   const { disabled, patch, value: chosen } = useWidgetSettingsTarget('image-map', target, getImageMapClusterEps);
   // What the server actually clustered with, which is the heuristic's answer
   // whenever nothing has been chosen.
-  const resolved = imageMapStore.useSnapshot().data?.clusterEps ?? null;
+  // Only this one field of the snapshot: the footer's index counts tick about
+  // once a second during a backfill, and none of that concerns this control.
+  const resolved = imageMapStore.useSelector((snapshot) => snapshot.data?.clusterEps ?? null);
   const shown = chosen ?? resolved;
   const [invalid, setInvalid] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef(false);
+  // Read by the unmount cleanup, which cannot see the render's closure.
+  const flush = useRef<(() => void) | null>(null);
+  const resolvedRef = useRef<number | null>(null);
   // Uncontrolled on purpose. A controlled `value` driven from the element
   // would erase exactly the input this field has to tolerate: `type="number"`
   // reports "" for a half-typed "0.", so React would write that "" straight
@@ -50,30 +60,70 @@ export const ClusterStrengthField = ({ field, surface, target }: SettingFieldPro
   // number from a deliberately cleared box.
   const input = useRef<HTMLInputElement | null>(null);
 
+  /**
+   * Writes the box, selecting it when the caret is inside — otherwise the
+   * next keystroke appends to a number the user did not type.
+   */
+  const show = useCallback((eps: number | null) => {
+    const field = input.current;
+
+    if (!field) {
+      return;
+    }
+
+    field.value = eps === null ? '' : forDisplay(eps);
+
+    if (document.activeElement === field) {
+      field.select();
+    }
+  }, []);
+
   const commit = useCallback(
     (eps: number | null) => {
       pending.current = false;
       patch({ clusterEps: eps });
+
+      if (eps === null) {
+        // Refilled from here rather than left to the sync effect below:
+        // clearing a field that was already on the heuristic changes no
+        // state at all, so that effect would never run and the box would sit
+        // empty. A committed number needs no write — the box already holds
+        // exactly what was typed, to more digits than forDisplay keeps.
+        show(resolvedRef.current);
+      }
     },
-    [patch]
+    [patch, show]
   );
+
+  useEffect(() => {
+    resolvedRef.current = resolved;
+  }, [resolved]);
 
   // Anything arriving from outside — a recluster's resolved value, another
   // surface changing the setting — must not move the number under the
-  // cursor, so it waits until the edit has settled.
+  // cursor, so it is skipped while an edit is in flight. Skipped, not
+  // queued: an update landing mid-edit is dropped, and the box catches up on
+  // the next keystroke or on blur, both of which rewrite it from `shown`.
+  // Skipped too when the box already holds this number, since rewriting it
+  // through forDisplay would truncate a value typed to more digits than it
+  // keeps.
   useEffect(() => {
-    if (pending.current || !input.current) {
+    if (pending.current || !input.current || Number(input.current.value) === shown) {
       return;
     }
 
     setInvalid(null);
-    input.current.value = shown === null ? '' : forDisplay(shown);
-  }, [shown]);
+    show(shown);
+  }, [show, shown]);
 
+  // Flushed rather than dropped: the settings dialog can close without the
+  // field ever blurring, and an edit made and then dismissed should still
+  // take effect.
   useEffect(
     () => () => {
       if (timer.current !== null) {
         clearTimeout(timer.current);
+        flush.current?.();
       }
     },
     []
@@ -133,6 +183,7 @@ export const ClusterStrengthField = ({ field, surface, target }: SettingFieldPro
         clearTimeout(timer.current);
       }
 
+      flush.current = () => resolve(value, validity.badInput);
       timer.current = setTimeout(() => resolve(value, validity.badInput), COMMIT_DEBOUNCE_MS);
     },
     [resolve]
@@ -152,11 +203,8 @@ export const ClusterStrengthField = ({ field, surface, target }: SettingFieldPro
 
     pending.current = false;
     setInvalid(null);
-
-    if (input.current) {
-      input.current.value = shown === null ? '' : forDisplay(shown);
-    }
-  }, [resolve, shown]);
+    show(shown);
+  }, [resolve, show, shown]);
 
   const label = resolveSettingsText(field.label, t);
   const description = field.description ? resolveSettingsText(field.description, t) : undefined;

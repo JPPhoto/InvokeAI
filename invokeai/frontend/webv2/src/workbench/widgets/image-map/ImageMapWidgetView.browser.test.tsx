@@ -124,6 +124,7 @@ const dataFor = (
 const renderState = async (state: Extract<ImageMapState, 'disabled' | 'model_missing'>, modelName?: string) => {
   imageMapStore.setSnapshot({
     clusterLabels: null,
+    clusterLabelsEps: null,
     clusterLabelsHash: null,
     data: dataFor(state, modelName),
     error: null,
@@ -311,6 +312,7 @@ describe('Image Map indexing activity', () => {
   ) => {
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: {
         clusterEps: null,

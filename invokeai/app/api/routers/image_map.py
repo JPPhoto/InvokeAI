@@ -124,7 +124,9 @@ ClusterEpsQuery = Query(
     ge=MIN_BUDGETED_EPS,
     le=2.0,
     description="DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's "
-    "k-distance distribution. Clamped server-side relative to the projection's coordinate span.",
+    "k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is "
+    "not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and "
+    "the value actually used is returned as `cluster_eps`.",
 )
 ClusterMinSamplesQuery = Query(
     default=DEFAULT_CLUSTER_MIN_SAMPLES, ge=2, le=100, description="DBSCAN min_samples for clustering"

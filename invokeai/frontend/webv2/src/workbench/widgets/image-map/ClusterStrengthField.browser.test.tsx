@@ -75,6 +75,7 @@ const field = imageMapSettingsContribution.fields.find((entry) => entry.id === '
 const render = async (resolved: number | null) => {
   imageMapStore.setSnapshot({
     clusterLabels: null,
+    clusterLabelsEps: null,
     clusterLabelsHash: null,
     data: {
       clusterEps: resolved,
@@ -138,7 +139,7 @@ describe('ClusterStrengthField', () => {
   it('shows the strength the server derived, marked as not the user’s', async () => {
     await render(0.0945);
 
-    expect(spinner().value).toBe('0.095');
+    expect(spinner().value).toBe('0.0945');
     expect(autoBadgeShown()).toBe(true);
     expect(host?.textContent).toContain('Higher values create larger clusters');
   });
@@ -167,7 +168,7 @@ describe('ClusterStrengthField', () => {
 
     expect(settings.patch).toHaveBeenCalledWith({ clusterEps: null });
     // And the box refills with the derived value rather than staying empty.
-    expect(spinner().value).toBe('0.095');
+    expect(spinner().value).toBe('0.0945');
     expect(autoBadgeShown()).toBe(true);
   });
 
@@ -202,6 +203,75 @@ describe('ClusterStrengthField', () => {
     await settle();
 
     expect(settings.patch).toHaveBeenCalledWith({ clusterEps: 0.15 });
+  });
+
+  it('refills the box when cleared from the heuristic it was already on', async () => {
+    // Nothing was chosen, so committing null changes no state and the sync
+    // effect never fires. Without an explicit refill the box sits empty while
+    // the map clusters at a strength the control is no longer showing.
+    await render(0.0945);
+
+    await userEvent.clear(spinner());
+    await settle();
+
+    expect(settings.patch).toHaveBeenCalledWith({ clusterEps: null });
+    expect(spinner().value).toBe('0.0945');
+    expect(autoBadgeShown()).toBe(true);
+  });
+
+  it('does not leave the refilled heuristic for the next keystroke to append to', async () => {
+    // Clearing refills the box with the derived value — while the caret is
+    // still in it. Without selecting the refilled text, typing "0.5" next
+    // lands "0.09450.5" and the map reclusters at a number nobody chose.
+    await render(0.0945);
+    await userEvent.fill(spinner(), '0.25');
+    await settle();
+    settings.patch.mockClear();
+
+    spinner().focus();
+    await userEvent.clear(spinner());
+    await settle();
+    expect(spinner().value).toBe('0.0945');
+
+    await userEvent.type(spinner(), '0.5');
+    await settle();
+
+    expect(settings.patch).toHaveBeenLastCalledWith({ clusterEps: 0.5 });
+    expect(spinner().value).toBe('0.5');
+  });
+
+  it('keeps every digit of a value with more precision than the box shows', async () => {
+    // forDisplay trims to three significant digits. Rewriting the box with
+    // the trimmed value would delete the keystroke that produced it.
+    await render(0.0945);
+
+    await userEvent.fill(spinner(), '0.1234');
+    await settle();
+
+    expect(settings.patch).toHaveBeenCalledWith({ clusterEps: 0.1234 });
+    expect(spinner().value).toBe('0.1234');
+  });
+
+  it('commits an edit the dialog closes on top of', async () => {
+    await render(0.0945);
+    await userEvent.fill(spinner(), '0.25');
+
+    // Unmounted inside the debounce window, which is what closing the
+    // settings dialog does if the field never blurs.
+    await act(() => root?.unmount());
+    root = null;
+
+    expect(settings.patch).toHaveBeenCalledWith({ clusterEps: 0.25 });
+  });
+
+  it('commits an edit the user clicks away from', async () => {
+    await render(0.0945);
+    await userEvent.fill(spinner(), '0.25');
+    await act(() => {
+      spinner().blur();
+    });
+
+    expect(settings.patch).toHaveBeenCalledWith({ clusterEps: 0.25 });
   });
 
   it('refuses a strength the endpoint would reject', async () => {

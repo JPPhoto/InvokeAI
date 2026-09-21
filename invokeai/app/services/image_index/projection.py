@@ -152,8 +152,8 @@ def _top_cluster_share(coords: np.ndarray, eps: float, min_samples: int) -> floa
     from sklearn.neighbors import KDTree
 
     if coords.shape[0] > 1:
-        pairs = int(KDTree(coords).query_radius(coords, r=eps, count_only=True).sum())
-        if pairs > MAX_NEIGHBOR_PAIRS:
+        tree = KDTree(coords)
+        if _count_neighbor_pairs(tree, coords, eps, MAX_NEIGHBOR_PAIRS) > MAX_NEIGHBOR_PAIRS:
             return 1.0
 
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit(coords).labels_
@@ -234,6 +234,32 @@ MAX_NEIGHBOR_PAIRS = 50_000_000
 MIN_BUDGETED_EPS = 1e-6
 
 
+# Query points per chunk when counting neighbor pairs. The count only has to
+# answer "is this over the budget?", and an eps far above it blows past the
+# budget within the first chunk — so chunking turns the expensive probes into
+# a fixed small cost while an under-budget eps still gets an exact full count.
+# Without it, resolving a requested eps of 2.0 on a dense 150k-point map took
+# 50s of CPU: thirteen full passes counting billions of pairs, only to reject
+# every one of them.
+_PAIR_COUNT_CHUNK = 4096
+
+
+def _count_neighbor_pairs(tree, coords: np.ndarray, eps: float, cap: int) -> int:
+    """Neighbor pairs at eps, abandoned once the count passes `cap`.
+
+    Exact whenever the result is within the cap, which is the only case a
+    caller acts on the number itself; above it the return is a lower bound.
+    """
+    total = 0
+    for start in range(0, coords.shape[0], _PAIR_COUNT_CHUNK):
+        chunk = coords[start : start + _PAIR_COUNT_CHUNK]
+        total += int(tree.query_radius(chunk, r=eps, count_only=True).sum())
+        if total > cap:
+            break
+
+    return total
+
+
 def _shrink_eps_to_pair_budget(coords: np.ndarray, eps: float) -> tuple[float, Optional[int]]:
     """Shrink eps until DBSCAN's neighbor-pair count fits MAX_NEIGHBOR_PAIRS.
 
@@ -250,13 +276,13 @@ def _shrink_eps_to_pair_budget(coords: np.ndarray, eps: float) -> tuple[float, O
     from sklearn.neighbors import KDTree
 
     tree = KDTree(coords)
-    pairs = int(tree.query_radius(coords, r=eps, count_only=True).sum())
+    pairs = _count_neighbor_pairs(tree, coords, eps, MAX_NEIGHBOR_PAIRS)
     # Iterate until the budget is met rather than a fixed count: 12 rounds of
     # 0.7 only covers a 71x reduction, and a tight blob can need far more.
     # Bounded below by MIN_BUDGETED_EPS so a fully coincident map terminates.
     while pairs > MAX_NEIGHBOR_PAIRS and eps > MIN_BUDGETED_EPS:
         eps *= 0.7
-        pairs = int(tree.query_radius(coords, r=eps, count_only=True).sum())
+        pairs = _count_neighbor_pairs(tree, coords, eps, MAX_NEIGHBOR_PAIRS)
     return eps, pairs
 
 

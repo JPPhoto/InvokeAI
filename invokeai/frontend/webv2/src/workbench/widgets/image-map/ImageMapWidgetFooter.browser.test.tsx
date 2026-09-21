@@ -32,6 +32,7 @@ const CROWDED = { embedded: 123456, failed: 12, pending: 60544, total: 184012 };
 const renderFooter = async (clusters: number[], width?: string, crowded = false) => {
   imageMapStore.setSnapshot({
     clusterLabels: null,
+    clusterLabelsEps: null,
     clusterLabelsHash: null,
     data: {
       clusterEps: 0.2,

@@ -129,7 +129,10 @@ const ImageMapPlot = ({
   // id, and a refresh can renumber every id — so it shows no tags rather than
   // another cluster's.
   const clusterLabelsMatchPoints = imageMapStore.useSelector(
-    (snapshot) => snapshot.clusterLabelsHash !== null && snapshot.clusterLabelsHash === snapshot.data?.visibleHash
+    (snapshot) =>
+      snapshot.clusterLabelsHash !== null &&
+      snapshot.clusterLabelsHash === snapshot.data?.visibleHash &&
+      snapshot.clusterLabelsEps === snapshot.data?.clusterEps
   );
   // The primary selection as an item key: a selected video is marked on the
   // map like any other item, and the key is a string so the refs and the

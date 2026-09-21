@@ -23,5 +23,9 @@ export const MAX_CLUSTER_EPS = 2;
 export const getImageMapClusterEps = (values: Record<string, unknown>): number | null => {
   const raw = values.clusterEps;
 
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= MIN_CLUSTER_EPS ? raw : null;
+  // Bounded at BOTH ends against the endpoint's own range. A persisted value
+  // outside it — an imported project, a hand-edited file, a future change to
+  // the bounds — is sent on every refresh and 422s each one, leaving the map
+  // stuck on an error with no way back through the UI.
+  return typeof raw === 'number' && raw >= MIN_CLUSTER_EPS && raw <= MAX_CLUSTER_EPS ? raw : null;
 };
