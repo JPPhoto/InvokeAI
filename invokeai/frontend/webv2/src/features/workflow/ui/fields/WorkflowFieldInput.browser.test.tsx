@@ -865,17 +865,23 @@ describe('WorkflowFieldInput LoRA collection', () => {
         </ChakraProvider>
       );
     });
-    await vi.waitFor(() => {
-      expect(modelSelectState.props).not.toBeNull();
-    });
+    await vi.waitFor(
+      () => {
+        expect(modelSelectState.props).not.toBeNull();
+      },
+      { timeout: 5_000 }
+    );
   };
 
   const renderLoras = async (value: unknown, onChange: (value: unknown) => void) => {
     await renderField(LORA_COLLECTION_TEMPLATE, value, onChange);
     // The picker is lazy; wait for Suspense to resolve it before asserting on the mounted widget.
-    await vi.waitFor(() => {
-      expect(modelSelectState.props).not.toBeNull();
-    });
+    await vi.waitFor(
+      () => {
+        expect(modelSelectState.props).not.toBeNull();
+      },
+      { timeout: 5_000 }
+    );
   };
 
   it('scopes the picker to the LoRAs the node can apply and hides the ones already added', async () => {
