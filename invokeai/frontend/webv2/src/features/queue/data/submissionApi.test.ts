@@ -113,6 +113,7 @@ const getSubmittedBody = () => {
       idempotency_key: string;
       origin: string;
       runs: number;
+      workflow?: Record<string, unknown>;
     };
   };
 };
@@ -335,6 +336,28 @@ describe('enqueueWorkflow', () => {
     expect(getSubmittedBody().batch.runs).toBe(2);
     expect(getSubmittedBody().batch.idempotency_key).toBe('webv2:project-1:local-1');
     expect(getSubmittedBody().batch.batch_id).toBeUndefined();
+  });
+
+  it('includes the serialized parent workflow in the batch', async () => {
+    const { enqueueWorkflow } = await import('./submissionApi');
+    const workflow = {
+      author: '',
+      contact: '',
+      description: '',
+      edges: [],
+      exposedFields: [],
+      form: null,
+      meta: { category: 'user', version: '3.0.0' },
+      name: 'Parent workflow',
+      nodes: [],
+      notes: '',
+      tags: '',
+      version: '1.0.0',
+    };
+
+    await enqueueWorkflow({ ...createWorkflowRequest(), workflow });
+
+    expect(getSubmittedBody().batch.workflow).toEqual(workflow);
   });
 
   it('expands recorded seeds into one zipped group and never redraws them', async () => {

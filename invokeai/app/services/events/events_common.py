@@ -4,6 +4,8 @@ from fastapi_events.handlers.local import local_handler
 from fastapi_events.registry.payload_schema import registry as payload_schema
 from pydantic import BaseModel, ConfigDict, Field
 
+from invokeai.app.services.board_records.board_records_common import BoardVisibility
+from invokeai.app.services.image_records.image_records_common import ImageCategory
 from invokeai.app.services.model_install.model_install_common import ModelInstallJob, ModelSource
 from invokeai.app.services.session_processor.session_processor_common import ProgressImage
 from invokeai.app.services.session_queue.session_queue_common import (
@@ -951,6 +953,90 @@ class ImageMapProjectionReadyEvent(ImageIndexEventBase):
     @classmethod
     def build(cls, user_id: str, point_count: int) -> "ImageMapProjectionReadyEvent":
         return cls(user_id=user_id, point_count=point_count)
+
+
+class MediaUploadedEventBase(EventBase):
+    """Base class for media upload events.
+
+    Tells clients that gallery content appeared through the upload API, which no queue event
+    announces. Emitted for gallery-visible uploads only: intermediates and canvas-owned OTHER
+    category images never show in the gallery, and canvas editing uploads both constantly.
+    """
+
+    user_id: str = Field(description="The user who uploaded the media")
+    board_id: Optional[str] = Field(default=None, description="The board the media was added to, if any")
+    board_owner_id: Optional[str] = Field(
+        default=None, description="The owner of that board, who may differ from the uploader; None for no board"
+    )
+    board_visibility: Optional[BoardVisibility] = Field(
+        default=None, description="The visibility of that board; None when the media landed on no board"
+    )
+    shared_user_ids: list[str] = Field(
+        default_factory=list,
+        description="Users a private board is explicitly shared with, who can see this media too",
+    )
+
+
+@payload_schema.register
+class ImageUploadedEvent(MediaUploadedEventBase):
+    """Event model for image_uploaded"""
+
+    __event_name__ = "image_uploaded"
+
+    image_name: str = Field(description="The name of the uploaded image")
+    image_category: ImageCategory = Field(description="The category of the uploaded image")
+
+    @classmethod
+    def build(
+        cls,
+        image_name: str,
+        image_category: ImageCategory,
+        user_id: str,
+        board_id: Optional[str],
+        board_owner_id: Optional[str],
+        board_visibility: Optional[BoardVisibility],
+        shared_user_ids: list[str],
+    ) -> "ImageUploadedEvent":
+        return cls(
+            image_name=image_name,
+            image_category=image_category,
+            user_id=user_id,
+            board_id=board_id,
+            board_owner_id=board_owner_id,
+            board_visibility=board_visibility,
+            shared_user_ids=shared_user_ids,
+        )
+
+
+@payload_schema.register
+class VideoUploadedEvent(MediaUploadedEventBase):
+    """Event model for video_uploaded"""
+
+    __event_name__ = "video_uploaded"
+
+    video_name: str = Field(description="The name of the uploaded video")
+    video_category: ImageCategory = Field(description="The category of the uploaded video")
+
+    @classmethod
+    def build(
+        cls,
+        video_name: str,
+        video_category: ImageCategory,
+        user_id: str,
+        board_id: Optional[str],
+        board_owner_id: Optional[str],
+        board_visibility: Optional[BoardVisibility],
+        shared_user_ids: list[str],
+    ) -> "VideoUploadedEvent":
+        return cls(
+            video_name=video_name,
+            video_category=video_category,
+            user_id=user_id,
+            board_id=board_id,
+            board_owner_id=board_owner_id,
+            board_visibility=board_visibility,
+            shared_user_ids=shared_user_ids,
+        )
 
 
 class UserAccessChangedEvent(EventBase):

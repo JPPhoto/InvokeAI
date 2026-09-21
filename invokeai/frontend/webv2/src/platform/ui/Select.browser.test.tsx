@@ -6,6 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { Select } from './Select';
 
+const RATIO_ITEMS = [
+  { label: '16:9', value: '16:9' },
+  { label: '1:1', value: '1:1' },
+];
+const RATIO_VALUE = ['16:9'];
+
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('Select', () => {
@@ -30,6 +36,40 @@ describe('Select', () => {
   afterEach(async () => {
     await act(() => root.unmount());
     host.remove();
+  });
+
+  it('shows the selected label by default and lets a caller name the value instead', async () => {
+    // Callers that override the trigger text rely on omitting the prop falling back to the
+    // selection rather than rendering an empty trigger -- a Select whose value is still meaningful
+    // but whose display is not (a disabled control whose size comes from elsewhere, a preset list
+    // with no exact match) states something the selection alone cannot.
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Select
+            aria-label="Aspect ratio"
+            collection={createListCollection({ items: RATIO_ITEMS })}
+            value={RATIO_VALUE}
+          />
+        </ChakraProvider>
+      );
+    });
+    expect(trigger().textContent).toContain('16:9');
+
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <Select
+            aria-label="Aspect ratio"
+            collection={createListCollection({ items: RATIO_ITEMS })}
+            value={RATIO_VALUE}
+            valueText="From the first frame"
+          />
+        </ChakraProvider>
+      );
+    });
+    expect(trigger().textContent).toContain('From the first frame');
+    expect(trigger().textContent).not.toContain('16:9');
   });
 
   it('disables the trigger while the collection is empty, and opens once it has items', async () => {

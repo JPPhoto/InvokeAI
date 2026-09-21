@@ -75,6 +75,11 @@ at it — without ever surfacing in the gallery or in a board's counts.
 """
 
 
+def is_gallery_category(category: ImageCategory) -> bool:
+    """Whether media of this category shows in a gallery view (Images or Assets)."""
+    return category in IMAGE_CATEGORIES or category in ASSETS_CATEGORIES
+
+
 class InvalidImageCategoryException(ValueError):
     """Raised when a provided value is not a valid ImageCategory.
 

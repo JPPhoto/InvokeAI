@@ -43,6 +43,8 @@ interface QueueEnqueueRequestBase {
 }
 
 export interface QueueEnqueueWorkflowRequest extends QueueEnqueueRequestBase {
+  /** Serialized parent workflow, compatible with the backend's `WorkflowWithoutID` schema. */
+  workflow?: Record<string, unknown>;
   /** The seed inputs that vary between the `batchCount` runs; the graph carries each one's first seed. */
   seeds?: QueueWorkflowSeed[];
 }
@@ -81,6 +83,8 @@ export type QueueCompiledSubmission =
       batchCount: number;
       graph: QueueBackendGraph;
       kind: 'workflow';
+      /** Serialized parent workflow, compatible with the backend's `WorkflowWithoutID` schema. */
+      workflow?: Record<string, unknown>;
       /** The seed inputs that vary between runs, expanded into one zipped batch group at send time. */
       seeds?: QueueWorkflowSeed[];
       /**

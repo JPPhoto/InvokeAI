@@ -34,6 +34,23 @@ import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
 import { DEFAULT_LORA_WEIGHT_CONFIG, sanitizeBatchCount, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
+import {
+  buildSavedWorkflowOptions,
+  getSavedWorkflowDisplayState,
+  getSavedWorkflowListItemFromRecord,
+  getSavedWorkflowPickerOwnedQuery,
+  getSavedWorkflowPickerSharedQuery,
+  getSavedWorkflowSelectionOption,
+  getSavedWorkflowSelectionState,
+  mergeSavedWorkflowPickerItems,
+  MISSING_WORKFLOW_OPTION_VALUE,
+  shouldFetchNextSavedWorkflowPickerPage,
+} from '@features/workflow/data/savedWorkflowFieldUtils';
+import {
+  getWorkflowPagesItems,
+  savedWorkflowDetailQueryOptions,
+  savedWorkflowPickerQueryOptions,
+} from '@features/workflow/data/savedWorkflowQueries';
 import { isSeedInputField } from '@features/workflow/graph';
 import {
   getWorkflowMediaFieldDropId,
@@ -72,12 +89,13 @@ import {
 } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SeedInput } from '@platform/ui/SeedInput';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FilmIcon, ImageIcon, ImagePlusIcon, RotateCcwIcon, Trash2Icon, XIcon } from 'lucide-react';
 import {
   lazy,
   Suspense,
   useCallback,
+  useDeferredValue,
   useEffect,
   useId,
   useMemo,
@@ -131,6 +149,15 @@ const toFiniteNumber = (raw: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const finiteNumberOrUndefined = (value: number | null | undefined): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+const positiveFiniteNumberOrUndefined = (value: number | null | undefined): number | undefined => {
+  const normalized = finiteNumberOrUndefined(value);
+
+  return normalized !== undefined && normalized > 0 ? normalized : undefined;
+};
+
 const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const text = typeof value === 'string' ? value : '';
   const onTextareaChange = useCallback(
@@ -181,8 +208,9 @@ const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTa
 const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
-  const min = template.minimum ?? template.exclusiveMinimum ?? undefined;
-  const max = template.maximum ?? template.exclusiveMaximum ?? undefined;
+  const min = finiteNumberOrUndefined(template.minimum) ?? finiteNumberOrUndefined(template.exclusiveMinimum);
+  const max = finiteNumberOrUndefined(template.maximum) ?? finiteNumberOrUndefined(template.exclusiveMaximum);
+  const multipleOf = positiveFiniteNumberOrUndefined(template.multipleOf);
   const onInputChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
       const parsed = toFiniteNumber(event.currentTarget.value);
@@ -202,7 +230,7 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
       max={max !== undefined ? String(max) : undefined}
       min={min !== undefined ? String(min) : undefined}
       size="xs"
-      step={template.multipleOf !== null ? String(template.multipleOf) : isInteger ? '1' : 'any'}
+      step={multipleOf !== undefined ? String(multipleOf) : isInteger ? '1' : 'any'}
       type="number"
       value={numericValue}
       w="full"
@@ -315,10 +343,11 @@ const SelectInput = ({
   value: unknown;
 }) => {
   const collection = useMemo(() => createListCollection({ items: options }), [options]);
-  const selectedValue = useMemo(
-    () => (typeof value === 'string' && options.some((option) => option.value === value) ? [value] : []),
-    [options, value]
-  );
+  const selectedValue = useMemo(() => {
+    const key =
+      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : null;
+    return key !== null && options.some((option) => option.value === key) ? [key] : [];
+  }, [options, value]);
   const selectIds = useMemo(() => (id ? { trigger: `${id}-select` } : undefined), [id]);
   const onSelectValueChange = useCallback(
     ({ value: next }: { value: string[] }) => {
@@ -351,10 +380,17 @@ const EnumInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInpu
   const options = useMemo(
     () =>
       (template.options ?? []).map((option) => ({
-        label: template.uiChoiceLabels?.[option] ?? option,
-        value: option,
+        label: template.uiChoiceLabels?.[String(option)] ?? String(option),
+        value: String(option),
       })),
     [template.options, template.uiChoiceLabels]
+  );
+  const onOptionChange = useCallback(
+    (nextValue: string) => {
+      const option = template.options?.find((candidate) => String(candidate) === nextValue);
+      onChange(option ?? nextValue);
+    },
+    [onChange, template.options]
   );
 
   if (template.name === 'scheduler') {
@@ -367,13 +403,20 @@ const EnumInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInpu
         options={options}
         size="xs"
         value={typeof value === 'string' ? value : null}
-        onValueChange={onChange}
+        onValueChange={onOptionChange}
       />
     );
   }
 
   return (
-    <SelectInput id={id} invalid={invalid} options={options} title={template.title} value={value} onChange={onChange} />
+    <SelectInput
+      id={id}
+      invalid={invalid}
+      options={options}
+      title={template.title}
+      value={value}
+      onChange={onOptionChange}
+    />
   );
 };
 
@@ -714,6 +757,50 @@ const ImageCollectionTile = ({
   );
 };
 
+const ImageCollectionDropMonitor = ({ dropId, onDrop }: { dropId: string; onDrop: (names: string[]) => void }) => {
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over?.id === dropId) {
+        onDrop(getWorkflowMediaFieldDropItems(event.active.data.current, 'image').map((item) => item.name));
+      }
+    },
+    [dropId, onDrop]
+  );
+
+  useDndMonitor({ onDragEnd });
+
+  return null;
+};
+
+const MediaDropMonitor = ({
+  dropId,
+  kind,
+  onDrop,
+}: {
+  dropId: string;
+  kind: WorkflowMediaKind;
+  onDrop: (item: { name: string }) => void;
+}) => {
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over?.id !== dropId) {
+        return;
+      }
+
+      const item = getWorkflowMediaFieldDropItem(event.active.data.current, kind);
+
+      if (item) {
+        onDrop(item);
+      }
+    },
+    [dropId, kind, onDrop]
+  );
+
+  useDndMonitor({ onDragEnd });
+
+  return null;
+};
+
 /**
  * Direct input for `ImageField` collections (Image Collection primitive, Image
  * Batch): a thumbnail grid with per-item removal, a multi-select gallery
@@ -751,17 +838,6 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
   const { active } = useDndContext();
   const acceptsActiveDrag = getWorkflowMediaFieldDropItems(active?.data.current, 'image').length > 0;
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: dropId });
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (event.over?.id === dropId) {
-        appendNames(getWorkflowMediaFieldDropItems(event.active.data.current, 'image').map((item) => item.name));
-      }
-    },
-    [appendNames, dropId]
-  );
-
-  useDndMonitor({ onDragEnd });
-
   const { fileInputRef, isUploading, onFileChange, onUploadClick } = useMediaUpload({
     kind: 'image',
     multiple: true,
@@ -780,6 +856,7 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
+      <ImageCollectionDropMonitor dropId={dropId} onDrop={appendNames} />
       <Box
         ref={setNodeRef}
         boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
@@ -896,23 +973,6 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
   const { active } = useDndContext();
   const acceptsActiveDrag = getWorkflowMediaFieldDropItem(active?.data.current, kind) !== null;
   const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: dropId });
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (event.over?.id !== dropId) {
-        return;
-      }
-
-      const item = getWorkflowMediaFieldDropItem(event.active.data.current, kind);
-
-      if (item) {
-        onChange({ [config.nameKey]: item.name });
-      }
-    },
-    [config.nameKey, dropId, kind, onChange]
-  );
-
-  useDndMonitor({ onDragEnd });
-
   const onUploaded = useCallback(
     (names: string[]) => onChange({ [config.nameKey]: names[0] }),
     [config.nameKey, onChange]
@@ -951,9 +1011,14 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
   const FallbackIcon = kind === 'video' ? FilmIcon : ImageIcon;
   const pickerAccept = kind === 'video' ? VIDEO_ONLY : IMAGE_ONLY;
   const pickerLabel = t(kind === 'video' ? 'widgets.gallery.picker.chooseVideo' : 'widgets.gallery.picker.chooseImage');
+  const onMediaDrop = useCallback(
+    (item: { name: string }) => onChange({ [config.nameKey]: item.name }),
+    [config.nameKey, onChange]
+  );
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
+      <MediaDropMonitor dropId={dropId} kind={kind} onDrop={onMediaDrop} />
       {/* The whole preview area is the drop target, like the legacy editor's widget. */}
       <Box
         ref={setNodeRef}
@@ -1483,6 +1548,153 @@ const CONNECTION_ONLY_FALLBACK = (
   </Text>
 );
 
+const SavedWorkflowInput = ({ nodeId, onChange, template, value }: WorkflowFieldInputProps) => {
+  const { t } = useTranslation();
+  const { commands } = useWorkflowUi();
+  const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search);
+  const ownedParams = useMemo(() => getSavedWorkflowPickerOwnedQuery(deferredSearch), [deferredSearch]);
+  const sharedParams = useMemo(() => getSavedWorkflowPickerSharedQuery(deferredSearch), [deferredSearch]);
+  const ownedQuery = useInfiniteQuery(savedWorkflowPickerQueryOptions(ownedParams));
+  const sharedQuery = useInfiniteQuery(savedWorkflowPickerQueryOptions(sharedParams));
+  const ownedItems = getWorkflowPagesItems(ownedQuery.data);
+  const sharedItems = getWorkflowPagesItems(sharedQuery.data);
+  const items = useMemo(() => mergeSavedWorkflowPickerItems(ownedItems, sharedItems), [ownedItems, sharedItems]);
+  const workflowId = typeof value === 'string' ? value : '';
+  const selectedInList = items.some((item) => item.workflow_id === workflowId);
+  const detailQuery = useQuery({
+    ...savedWorkflowDetailQueryOptions(workflowId),
+    enabled: workflowId !== '' && !selectedInList,
+  });
+  const selectedWorkflow = detailQuery.data ? getSavedWorkflowListItemFromRecord(detailQuery.data) : undefined;
+  const selectionState = useMemo(
+    () => getSavedWorkflowSelectionState(items, workflowId, selectedWorkflow),
+    [items, selectedWorkflow, workflowId]
+  );
+  const selectedOption = useMemo(() => {
+    const option = getSavedWorkflowSelectionOption(selectionState);
+
+    return option?.value === MISSING_WORKFLOW_OPTION_VALUE
+      ? { ...option, label: t('nodes.savedWorkflowMissing') }
+      : option;
+  }, [selectionState, t]);
+  const options = useMemo(() => {
+    const base = buildSavedWorkflowOptions(items);
+
+    if (selectedOption && !base.some((option) => option.value === selectedOption.value)) {
+      return [selectedOption, ...base];
+    }
+
+    return base;
+  }, [items, selectedOption]);
+  const displayState = getSavedWorkflowDisplayState(selectionState);
+  const clearSelection = useCallback(() => onChange(''), [onChange]);
+  const onWorkflowChange = useCallback(
+    (nextValue: string | null) => {
+      if (nodeId && nextValue === workflowId && workflowId) {
+        commands.editGraph({ nodeId, type: 'retryCallSavedWorkflow' });
+        return;
+      }
+
+      onChange(nextValue);
+    },
+    [commands, nodeId, onChange, workflowId]
+  );
+  const retrySelection = useCallback(() => {
+    if (nodeId && workflowId) {
+      commands.editGraph({ nodeId, type: 'retryCallSavedWorkflow' });
+    }
+  }, [commands, nodeId, workflowId]);
+  const fetchNextPage = useCallback(() => {
+    if (shouldFetchNextSavedWorkflowPickerPage(ownedQuery)) {
+      void ownedQuery.fetchNextPage();
+    }
+
+    if (shouldFetchNextSavedWorkflowPickerPage(sharedQuery)) {
+      void sharedQuery.fetchNextPage();
+    }
+  }, [ownedQuery, sharedQuery]);
+  const isLoading = ownedQuery.isLoading || sharedQuery.isLoading;
+  const isFetching = ownedQuery.isFetching || sharedQuery.isFetching;
+  const statusText =
+    displayState.statusLabel === 'choose'
+      ? t('nodes.savedWorkflowChoose')
+      : displayState.statusLabel === 'missing'
+        ? t('nodes.savedWorkflowMissing')
+        : null;
+
+  return (
+    <Stack gap="1" minW="0" w="full">
+      <HStack gap="1" minW="0" w="full">
+        <Combobox
+          aria-label={template.title}
+          flex="1"
+          noResultsText={t('nodes.noMatchingWorkflows')}
+          options={options}
+          searchPlaceholder={isLoading ? t('nodes.savedWorkflowListLoading') : t('nodes.savedWorkflowSearch')}
+          value={selectedOption?.value ?? null}
+          onInputValueChange={setSearch}
+          onItemReselect={retrySelection}
+          onListScrollToBottom={fetchNextPage}
+          onValueChange={onWorkflowChange}
+        />
+        {nodeId && workflowId && detailQuery.isError ? (
+          <IconButton
+            aria-label={t('common.retry')}
+            className="nodrag"
+            size="xs"
+            variant="ghost"
+            onClick={retrySelection}
+          >
+            <RotateCcwIcon />
+          </IconButton>
+        ) : null}
+        {workflowId ? (
+          <IconButton
+            aria-label={t('nodes.savedWorkflowClear')}
+            className="nodrag"
+            size="xs"
+            variant="ghost"
+            onClick={clearSelection}
+          >
+            <XIcon />
+          </IconButton>
+        ) : null}
+      </HStack>
+      {selectionState.status === 'selected' ? (
+        <HStack flexWrap="wrap" gap="1" minW="0">
+          <Text color="fg.muted" fontSize="2xs" minW="0" truncate>
+            {selectionState.workflow.name}
+          </Text>
+          {displayState.badges.includes('unsupported') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowUnsupported')}</Badge>
+          ) : null}
+          {displayState.badges.includes('default') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowDefaultBadge')}</Badge>
+          ) : null}
+          {displayState.badges.includes('shared') ? (
+            <Badge fontSize="2xs">{t('nodes.savedWorkflowShared')}</Badge>
+          ) : null}
+        </HStack>
+      ) : (
+        <Badge alignSelf="flex-start" fontSize="2xs">
+          {statusText}
+        </Badge>
+      )}
+      {displayState.compatibility?.message ? (
+        <Text color="fg.subtle" fontSize="2xs">
+          {displayState.compatibility.message}
+        </Text>
+      ) : null}
+      {isFetching ? (
+        <Text color="fg.subtle" fontSize="2xs">
+          {t('nodes.savedWorkflowUpdating')}
+        </Text>
+      ) : null}
+    </Stack>
+  );
+};
+
 export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
   // COLLECTION fields hold arrays; only image lists have a list widget. Other
   // collections stay connection-only even when a migrated linear-form element
@@ -1492,6 +1704,8 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
   }
 
   switch (props.template.type.name) {
+    case 'SavedWorkflowField':
+      return <SavedWorkflowInput {...props} />;
     case 'StringField':
       return <StringInput {...props} />;
     case 'IntegerField':

@@ -135,8 +135,11 @@ describe('workflow library cache invalidation listeners', () => {
     cache.invalidateWorkflowLibraryCache();
     expect(listener).toHaveBeenCalledTimes(1);
 
+    cache.invalidateWorkflowLibraryCache('workflow-1');
+    expect(listener).toHaveBeenLastCalledWith('workflow-1');
+
     unsubscribe();
     cache.invalidateWorkflowLibraryCache();
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });
