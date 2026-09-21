@@ -40,6 +40,9 @@ import torch
 import torch.nn.functional as F
 
 _SENTINEL = "_invokeai_rocm_conv2d_decomposition"
+
+_STOCK_FORWARD = None
+"""The forward the patch replaced, kept so a test can restore the class to its unpatched state."""
 _MODE = os.environ.get("INVOKEAI_ROCM_CONV3D", "decomposed").strip().lower()
 
 
@@ -85,8 +88,11 @@ def _patch_minimax_h3_causal_conv3d() -> None:
     """Rebind MiniMaxH3VideoCausalConv3d.forward to the conv2d decomposition (idempotent)."""
     from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import MiniMaxH3VideoCausalConv3d
 
+    global _STOCK_FORWARD
+
     if getattr(MiniMaxH3VideoCausalConv3d, _SENTINEL, False):
         return
+    _STOCK_FORWARD = MiniMaxH3VideoCausalConv3d.forward
     MiniMaxH3VideoCausalConv3d.forward = _decomposed_forward
     setattr(MiniMaxH3VideoCausalConv3d, _SENTINEL, True)
 

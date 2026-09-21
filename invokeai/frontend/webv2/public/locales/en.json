@@ -3878,6 +3878,11 @@
         "last-frame": "from the last frame",
         "source-video": "from the initial video"
       },
+      "dimensionSourceValue": {
+        "first-frame": "From the first frame",
+        "last-frame": "From the last frame",
+        "source-video": "From the initial video"
+      },
       "firstFrame": "First Frame",
       "firstFrameBlocked": "Clear the initial video to start from a frame instead.",
       "firstFrameHelp": "The video starts on this image.",
