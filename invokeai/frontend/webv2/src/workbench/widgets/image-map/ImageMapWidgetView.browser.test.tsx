@@ -8,7 +8,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@workbench/WorkbenchContext', () => ({
-  useWidgetValuesSelector: () => false,
+  // Applied to an empty value bag rather than answering `false` to every
+  // selector: each accessor owns its own default, and handing a boolean to a
+  // setting that is a number or null makes the widget act on a value it could
+  // never be given in production.
+  useWidgetValuesSelector: (_widgetId: string, select: (values: Record<string, unknown>) => unknown) => select({}),
 }));
 
 // The real one pulls the ~1.5MB plotly chunk; the badge under test is its

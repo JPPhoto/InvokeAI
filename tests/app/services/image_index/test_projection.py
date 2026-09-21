@@ -141,13 +141,36 @@ def test_resolve_cluster_eps_is_idempotent() -> None:
     assert resolve_cluster_eps(coords, eps=resolved).resolved_eps == resolved
 
 
-def test_compute_clusters_clamps_eps_to_span_fraction() -> None:
-    # Span ~1: an eps near the span would make every point a neighbor of
-    # every other (the sklearn DBSCAN memory blowup); the clamp keeps distant
-    # pairs from ever merging.
-    coords = np.array([[0, 0], [0.01, 0], [1, 1], [1.01, 1]], dtype=np.float32)
-    labels = compute_clusters(coords, eps=2.0, min_samples=2)
-    assert labels[0] == labels[1] != labels[2] == labels[3]
+def test_a_derived_eps_is_clamped_to_the_span_fraction() -> None:
+    # 20 scattered points: the median k-distance is half the map wide, which
+    # says there is no density structure to find. Clustering at that radius
+    # would merge everything, so the heuristic's own answer is bounded.
+    rng = np.random.default_rng(4)
+    coords = rng.uniform(0.0, 1.0, size=(20, 2)).astype(np.float32)
+    resolution = resolve_cluster_eps(coords, None, 10)
+
+    assert resolution.adaptive_eps is not None
+    assert resolution.adaptive_eps > resolution.coord_span * MAX_EPS_SPAN_FRACTION
+    assert resolution.span_clamped_eps == resolution.coord_span * MAX_EPS_SPAN_FRACTION
+
+
+def test_a_requested_eps_is_not_clamped_to_the_span_fraction() -> None:
+    """The clustering-strength control has to mean what it says.
+
+    Clamping a number the user typed would silently retune it — on a small
+    map (span 2, clamp 0.1) that overrides most of the range the control
+    offers, and the value reported back would not be the one they chose. The
+    pair budget still applies to both, because that one is a memory bound.
+    """
+    rng = np.random.default_rng(4)
+    coords = rng.uniform(0.0, 1.0, size=(20, 2)).astype(np.float32)
+    resolution = resolve_cluster_eps(coords, 0.5, 10)
+
+    assert 0.5 > resolution.coord_span * MAX_EPS_SPAN_FRACTION, "the clamp would bind if it were applied"
+    assert resolution.span_clamped_eps == 0.5
+    assert resolution.resolved_eps == 0.5
+    # And it reaches DBSCAN: at 0.5 on a span-0.88 map everything is one cluster.
+    assert set(compute_clusters(coords, eps=0.5, min_samples=2)) == {0}
 
 
 def test_compute_clusters_skips_huge_point_sets() -> None:
@@ -275,23 +298,24 @@ def test_diagnostics_report_each_link_of_the_eps_chain() -> None:
     assert resolution.requested_eps == 5.0
     assert resolution.adaptive_eps is None, "an explicit eps must not be reported as an adaptive one"
     assert resolution.coord_span == 30.0
-    assert resolution.span_clamped_eps == 30.0 * MAX_EPS_SPAN_FRACTION
-    assert resolution.floored_eps == resolution.span_clamped_eps, "1.5 is above the floor; the floor must not move it"
-    assert resolution.resolved_eps == resolution.floored_eps, "6 pairs is under any budget"
+    assert resolution.span_clamped_eps == 5.0, "a requested eps passes the clamp untouched"
+    assert resolution.floored_eps == 5.0, "5.0 is above the floor; the floor must not move it"
+    assert resolution.resolved_eps == 5.0, "4 pairs is under any budget"
 
 
 def test_diagnostics_separate_the_span_clamp_from_the_eps_floor() -> None:
     """Both can produce a too-tight eps, and the log has to say which one did."""
-    # Span 0.08, so the clamp gives 0.004 and the 0.01 floor then lifts it.
-    coords = np.array([[0.0, 0.0], [0.08, 0.0], [0.04, 0.0]], dtype=np.float32)
-    resolution = resolve_cluster_eps(coords, eps=2.0, min_samples=2)
+    # A 0.07-wide map: the clamp takes the derived eps to 0.0037, and the 0.01
+    # floor then lifts it back. One number could not distinguish the two.
+    rng = np.random.default_rng(4)
+    rng.uniform(0.0, 1.0, size=(20, 2))
+    coords = rng.uniform(0.0, 0.08, size=(30, 2)).astype(np.float32)
+    resolution = resolve_cluster_eps(coords, None, 10)
 
-    assert resolution.span_clamped_eps < 0.01
-    assert resolution.floored_eps == 0.01
-    assert (
-        "span_clamped_eps=0.004 floored_eps=0.01"
-        in cluster_with_diagnostics(coords, eps=2.0, min_samples=2)[1].signature()
-    )
+    assert resolution.adaptive_eps is not None and resolution.adaptive_eps > 0.01
+    assert resolution.span_clamped_eps < 0.01, "the clamp took it below the floor"
+    assert resolution.floored_eps == 0.01, "and the floor put it back"
+    assert "floored_eps=0.01" in cluster_with_diagnostics(coords, min_samples=10)[1].signature()
 
 
 def test_the_pair_budget_shrink_can_succeed_short_of_its_floor(monkeypatch) -> None:

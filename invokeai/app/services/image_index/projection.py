@@ -176,7 +176,9 @@ class EpsResolution:
     coord_span: float
     """Widest coordinate extent of the projection; 0.0 for a single point."""
     span_clamped_eps: float
-    """After the MAX_EPS_SPAN_FRACTION clamp, before the floor."""
+    """After the MAX_EPS_SPAN_FRACTION clamp, before the floor. Equal to the
+    requested eps when the caller supplied one: the clamp guards the
+    heuristic, not the user."""
     floored_eps: float
     """After the 0.01 floor. Reported apart from the clamp because the two are
     separate causes of an over-tight eps, and a single number cannot say which
@@ -203,6 +205,7 @@ def resolve_cluster_eps(
     """
     requested_eps = eps
     adaptive_eps: Optional[float] = None
+    span = float(np.ptp(coords, axis=0).max()) if coords.shape[0] > 1 else 0.0
     if eps is None:
         # Cap at the API's own upper bound (le=2.0) so a reported adaptive
         # eps can always be passed back explicitly. Values that large only
@@ -210,9 +213,16 @@ def resolve_cluster_eps(
         # more (correct) noise.
         adaptive_eps = adaptive_cluster_eps(coords, min_samples)
         eps = min(adaptive_eps, 2.0)
-    span = float(np.ptp(coords, axis=0).max()) if coords.shape[0] > 1 else 0.0
-    if span > 0:
-        eps = min(eps, span * MAX_EPS_SPAN_FRACTION)
+        # The span clamp applies ONLY to a derived value. A number the user
+        # typed into the clustering-strength control is theirs to keep:
+        # silently retuning it makes the control lie about what it does, and
+        # on a small map (span 2, clamp 0.1) it would override most of the
+        # range the control offers. A derived eps a large fraction of the
+        # whole map's width, by contrast, means there is no density structure
+        # to find, so bounding that one is a sanity check on the heuristic.
+        # The pair budget below is the memory bound and applies to both.
+        if span > 0:
+            eps = min(eps, span * MAX_EPS_SPAN_FRACTION)
     # Floor at the API's lower bound (ge=0.01) for pass-back validity, but do
     # it BEFORE the budget shrink, never after: applied afterwards it silently
     # re-inflated eps past the neighbor-pair budget the shrink had just

@@ -92,6 +92,30 @@ registerAccountOwnedResource({
   name: 'image-map',
 });
 
+/**
+ * The eps the clustering-strength control has been set to, or null for the
+ * server's adaptive value. Pushed down from the widget rather than passed by
+ * callers: every refresh — socket-driven, manual, or the first load — has to
+ * cluster at the strength the user chose, and only this module sees them all.
+ */
+let clusterEps: number | null = null;
+
+export const setClusterEps = (eps: number | null): void => {
+  if (eps === clusterEps) {
+    return;
+  }
+
+  clusterEps = eps;
+
+  // Nothing has been fetched yet, so the first fetch will carry the new value
+  // on its own; refreshing here would race it for no gain.
+  if (imageMapStore.getSnapshot().loadState === 'idle') {
+    return;
+  }
+
+  void refreshImageMapPoints();
+};
+
 export const refreshImageMapPoints = (): Promise<void> => {
   if (inflight) {
     // A refresh requested mid-flight (e.g. projection_ready arriving while
@@ -105,7 +129,7 @@ export const refreshImageMapPoints = (): Promise<void> => {
   const owner = captureAccountScope();
   imageMapStore.patchSnapshot({ loadState: 'loading' });
 
-  const refresh = fetchImageMapPoints()
+  const refresh = fetchImageMapPoints(clusterEps !== null ? { eps: clusterEps } : undefined)
     .then((data) => {
       if (!isAccountScopeCurrent(owner)) {
         return;
