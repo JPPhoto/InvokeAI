@@ -121,6 +121,7 @@ export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Pro
         project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),
         runs: plan.runs,
+        ...(request.workflow ? { workflow: request.workflow } : {}),
       },
       prepend: false,
     }),

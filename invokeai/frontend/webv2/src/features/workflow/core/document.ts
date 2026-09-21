@@ -20,6 +20,12 @@ import type {
   XYPosition,
 } from './types';
 
+import {
+  clearSavedWorkflowDynamicFields,
+  setCallSavedWorkflowStatus,
+  syncCallSavedWorkflowFields,
+  type SavedWorkflowDynamicField,
+} from './callSavedWorkflow';
 import { getConnectorDeletionSpliceConnections } from './connectors';
 import { isInvocationNode, isNotesNode } from './types';
 
@@ -97,6 +103,7 @@ export const buildInvocationNode = (template: InvocationTemplate, position: XYPo
       type: template.type,
       useCache: template.useCache,
       version: template.version,
+      ...(template.type === 'call_saved_workflow' ? { callSavedWorkflowStatus: 'ready' as const } : {}),
     },
     id: createWorkflowId(template.type),
     position,
@@ -299,6 +306,15 @@ export type ProjectGraphAction =
   | { type: 'setNodeIsIntermediate'; nodeId: string; isIntermediate: boolean }
   | { type: 'setNodeUseCache'; nodeId: string; useCache: boolean }
   | { type: 'setFieldValue'; nodeId: string; fieldName: string; value: unknown }
+  | {
+      type: 'syncCallSavedWorkflowFields';
+      nodeId: string;
+      fields: SavedWorkflowDynamicField[];
+      edgeIdsToRemove: string[];
+      status?: 'loading' | 'ready' | 'error';
+    }
+  | { type: 'setCallSavedWorkflowStatus'; nodeId: string; status: 'loading' | 'ready' | 'error' }
+  | { type: 'retryCallSavedWorkflow'; nodeId: string }
   | { type: 'setFieldLabel'; nodeId: string; fieldName: string; label: string }
   | { type: 'setFieldDescription'; nodeId: string; fieldName: string; description: string }
   | { type: 'setFieldSeedMode'; nodeId: string; fieldName: string; seedMode: SeedMode }
@@ -367,9 +383,11 @@ const getUndoMergeKey = (action: ProjectGraphAction): string | undefined => {
       return `${action.type}:${action.nodeId}:${action.fieldName}`;
     case 'setFieldValue':
       // Typed text and dragged numbers stream; a pick (model, board, switch) is one step of its own.
-      return typeof action.value === 'string' || typeof action.value === 'number'
-        ? `${action.type}:${action.nodeId}:${action.fieldName}`
-        : undefined;
+      return action.fieldName === 'workflow_id'
+        ? undefined
+        : typeof action.value === 'string' || typeof action.value === 'number'
+          ? `${action.type}:${action.nodeId}:${action.fieldName}`
+          : undefined;
     case 'setNodeLabel':
     case 'setNodeNotes':
       return `${action.type}:${action.nodeId}`;
@@ -586,22 +604,51 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       }));
     }
     case 'setFieldValue': {
-      return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({
+      const node = document.nodes.find((candidate) => candidate.id === action.nodeId);
+      const shouldClearDynamicFields =
+        action.fieldName === 'workflow_id' &&
+        node &&
+        isInvocationNode(node) &&
+        node.data.type === 'call_saved_workflow' &&
+        node.data.inputs.workflow_id?.value !== action.value;
+      const clearedDocument = shouldClearDynamicFields
+        ? clearSavedWorkflowDynamicFields(document, action.nodeId)
+        : document;
+      const nextDocument =
+        shouldClearDynamicFields && node && isInvocationNode(node) && node.data.type === 'call_saved_workflow'
+          ? setCallSavedWorkflowStatus(
+              clearedDocument,
+              action.nodeId,
+              typeof action.value === 'string' && action.value.trim() ? 'loading' : 'ready'
+            )
+          : clearedDocument;
+
+      return setFieldInstance(nextDocument, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
         value: action.value,
       }));
+    }
+    case 'syncCallSavedWorkflowFields': {
+      return syncCallSavedWorkflowFields(document, action.nodeId, action.fields, action.edgeIdsToRemove, action.status);
+    }
+    case 'setCallSavedWorkflowStatus': {
+      return setCallSavedWorkflowStatus(document, action.nodeId, action.status);
+    }
+    case 'retryCallSavedWorkflow': {
+      return setCallSavedWorkflowStatus(document, action.nodeId, 'loading');
     }
     case 'setFieldLabel': {
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
         label: action.label,
+        labelOverride: action.label !== '',
       }));
     }
     case 'setFieldDescription': {
-      // An emptied override falls back to the template description.
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => ({
         ...instance,
         description: action.description || undefined,
+        descriptionOverride: action.description !== '',
       }));
     }
     case 'setFieldSeedMode': {

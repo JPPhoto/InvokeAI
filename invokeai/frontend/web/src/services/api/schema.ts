@@ -19811,6 +19811,51 @@ export type components = {
             presigned_url: string;
         };
         /**
+         * ImageUploadedEvent
+         * @description Event model for image_uploaded
+         */
+        ImageUploadedEvent: {
+            /**
+             * Timestamp
+             * @description The timestamp of the event
+             */
+            timestamp: number;
+            /**
+             * User Id
+             * @description The user who uploaded the media
+             */
+            user_id: string;
+            /**
+             * Board Id
+             * @description The board the media was added to, if any
+             * @default null
+             */
+            board_id: string | null;
+            /**
+             * Board Owner Id
+             * @description The owner of that board, who may differ from the uploader; None for no board
+             * @default null
+             */
+            board_owner_id: string | null;
+            /**
+             * @description The visibility of that board; None when the media landed on no board
+             * @default null
+             */
+            board_visibility: components["schemas"]["BoardVisibility"] | null;
+            /**
+             * Shared User Ids
+             * @description Users a private board is explicitly shared with, who can see this media too
+             */
+            shared_user_ids: string[];
+            /**
+             * Image Name
+             * @description The name of the uploaded image
+             */
+            image_name: string;
+            /** @description The category of the uploaded image */
+            image_category: components["schemas"]["ImageCategory"];
+        };
+        /**
          * ImageUrlsDTO
          * @description The URLs for an image and its thumbnail.
          */
@@ -45719,6 +45764,51 @@ export type components = {
             starred?: boolean | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * VideoUploadedEvent
+         * @description Event model for video_uploaded
+         */
+        VideoUploadedEvent: {
+            /**
+             * Timestamp
+             * @description The timestamp of the event
+             */
+            timestamp: number;
+            /**
+             * User Id
+             * @description The user who uploaded the media
+             */
+            user_id: string;
+            /**
+             * Board Id
+             * @description The board the media was added to, if any
+             * @default null
+             */
+            board_id: string | null;
+            /**
+             * Board Owner Id
+             * @description The owner of that board, who may differ from the uploader; None for no board
+             * @default null
+             */
+            board_owner_id: string | null;
+            /**
+             * @description The visibility of that board; None when the media landed on no board
+             * @default null
+             */
+            board_visibility: components["schemas"]["BoardVisibility"] | null;
+            /**
+             * Shared User Ids
+             * @description Users a private board is explicitly shared with, who can see this media too
+             */
+            shared_user_ids: string[];
+            /**
+             * Video Name
+             * @description The name of the uploaded video
+             */
+            video_name: string;
+            /** @description The category of the uploaded video */
+            video_category: components["schemas"]["ImageCategory"];
         };
         /**
          * VideoUrlsDTO
