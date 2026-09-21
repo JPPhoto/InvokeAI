@@ -5,7 +5,6 @@ import type {
   InvocationTemplates,
   InvocationTemplatesSnapshot,
   ProjectGraphState,
-  WorkflowFieldInstance,
   WorkflowInvocationNode,
 } from './types';
 
@@ -186,18 +185,6 @@ const getAvailableBinding = (
   selected: WorkflowImageBinding
 ): WorkflowImageBinding | undefined => bindings.find((candidate) => isSameBinding(candidate, selected));
 
-export const getLayerWorkflowInjectedInput = (
-  instance: WorkflowFieldInstance | undefined,
-  fieldName: string,
-  imageName: string
-): WorkflowFieldInstance => ({
-  label: instance?.label ?? '',
-  name: fieldName,
-  ...(instance?.description === undefined ? {} : { description: instance.description }),
-  ...(instance?.descriptionOverride === undefined ? {} : { descriptionOverride: instance.descriptionOverride }),
-  value: { image_name: imageName },
-});
-
 const allocateNodeId = (graph: WorkflowBackendGraph, base: string): string => {
   if (!graph.nodes[base]) {
     return base;
@@ -268,7 +255,12 @@ export const buildLayerWorkflowGraph = (options: BuildLayerWorkflowGraphOptions)
   if (!isConnectionOnly) {
     const instance = inputNode.data.inputs[input.fieldName];
 
-    inputNode.data.inputs[input.fieldName] = getLayerWorkflowInjectedInput(instance, input.fieldName, imageName);
+    inputNode.data.inputs[input.fieldName] = {
+      label: instance?.label ?? '',
+      name: input.fieldName,
+      ...(instance?.description === undefined ? {} : { description: instance.description }),
+      value: { image_name: imageName },
+    };
   }
 
   const readiness = getProjectGraphReadiness(cloned, templatesSnapshot, { externallySatisfiedInputs });
