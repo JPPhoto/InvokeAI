@@ -63,20 +63,22 @@ export const getLibraryWorkflowCached = async (
   return result;
 };
 
-const invalidationListeners = new Set<() => void>();
+type WorkflowLibraryCacheInvalidationListener = (workflowId?: string) => void;
+
+const invalidationListeners = new Set<WorkflowLibraryCacheInvalidationListener>();
 
 /** Registers a listener fired at the end of every `invalidateWorkflowLibraryCache()` call. */
-export const onWorkflowLibraryCacheInvalidated = (listener: () => void): (() => void) => {
+export const onWorkflowLibraryCacheInvalidated = (listener: WorkflowLibraryCacheInvalidationListener): (() => void) => {
   invalidationListeners.add(listener);
   return () => invalidationListeners.delete(listener);
 };
 
-export const invalidateWorkflowLibraryCache = (): void => {
+export const invalidateWorkflowLibraryCache = (workflowId?: string): void => {
   pageCache.clear();
   workflowCache.clear();
 
   for (const listener of invalidationListeners) {
-    listener();
+    listener(workflowId);
   }
 };
 
