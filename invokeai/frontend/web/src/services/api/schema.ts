@@ -50341,7 +50341,7 @@ export interface operations {
     get_image_map_points: {
         parameters: {
             query?: {
-                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span. */
+                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`. */
                 eps?: number | null;
                 /** @description DBSCAN min_samples for clustering */
                 min_samples?: number;
@@ -50457,7 +50457,7 @@ export interface operations {
     get_image_map_cluster_labels: {
         parameters: {
             query?: {
-                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span. */
+                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`. */
                 eps?: number | null;
                 /** @description DBSCAN min_samples for clustering */
                 min_samples?: number;
