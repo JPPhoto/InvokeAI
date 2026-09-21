@@ -440,10 +440,9 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
   /**
    * One invalidation refreshes one shared cache entry, so it costs one request
    * however many nodes name that workflow. Selecting the workflow through the
-   * picker arms a per-node retry, and a node that then skips its fetch (the
-   * entry is already warm) keeps that authorization. An invalidation whose
-   * refetch then fails lets every such node spend its stale authorization, one
-   * doomed request each.
+   * picker arms a per-node retry. A cache invalidation supersedes those stale
+   * node authorizations with one shared retry, so one invalidation costs one
+   * request even when several nodes name the workflow.
    */
   it('refetches an invalidated workflow once for nodes that selected it through the picker', async () => {
     const SHARED_WORKFLOW_ID = 'shared-workflow';

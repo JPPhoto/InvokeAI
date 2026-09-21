@@ -399,6 +399,7 @@ describe('buildNodesGraph', () => {
 
     expect(graph.edges).toContainEqual(
       expect.objectContaining({
+        type: 'loop_linkage',
         destination: { field: 'loop_linkage', node_id: target.id },
         source: { field: 'loop_linkage', node_id: source.id },
       })
