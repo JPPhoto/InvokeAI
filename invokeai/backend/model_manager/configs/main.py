@@ -6,6 +6,7 @@ from typing import Any, Literal, Self
 import torch
 from pydantic import BaseModel, Field
 
+from invokeai.backend.model_manager.checkpoint_prefix import COMFYUI_KEY_PREFIXES
 from invokeai.backend.model_manager.configs.base import (
     Checkpoint_Config_Base,
     Config_Base,
@@ -1910,15 +1911,16 @@ class Main_Diffusers_QwenImage_Config(Diffusers_Config_Base, Main_Config_Base, C
         return QwenImageVariantType.Generate
 
 
-# ComfyUI single-file checkpoints prefix every transformer key with one of these.
-# The loaders strip them before instantiating the model (see `_strip_comfyui_prefix`
-# in the qwen_image loader); detection must strip them too so the two paths agree.
-_COMFYUI_KEY_PREFIXES = ("model.diffusion_model.", "diffusion_model.")
+# ComfyUI single-file checkpoints prefix every transformer key with one of these. The loaders strip
+# them before instantiating the model (`CheckpointPrefix`), and detection has to strip them too or
+# the two disagree: a file identification accepts, the loader then refuses with every key unexpected.
+# Shared rather than restated, which is what made them drift; the *operation* still differs, because
+# detection looks for evidence in individual names instead of normalising a whole file.
 
 
 def _strip_comfyui_key_prefix(key: str) -> str:
     """Strip a leading ComfyUI `model.diffusion_model.` / `diffusion_model.` prefix from a key."""
-    for prefix in _COMFYUI_KEY_PREFIXES:
+    for prefix in COMFYUI_KEY_PREFIXES:
         if key.startswith(prefix):
             return key[len(prefix) :]
     return key

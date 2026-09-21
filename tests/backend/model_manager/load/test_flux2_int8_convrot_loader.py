@@ -440,3 +440,23 @@ def test_a_scaled_fp8_checkpoint_still_folds_its_scales(monkeypatch, tmp_path) -
         assert not hasattr(layer, "weight_scale"), path
         # fp8 keeps ~2 decimal digits, so this is a "the scale was applied" check, not a bit compare.
         assert torch.allclose(layer.weight.float(), source, rtol=0.1, atol=0.1 * source.abs().max())
+
+
+def test_a_comfyui_prefixed_checkpoint_loads_the_same_as_a_bare_one(monkeypatch, tmp_path) -> None:
+    """Not about int8 -- about the prefix strip this loader performs before it reads any side
+    channel, which was eight lines inline here and which no test noticed. A redistribution wrapping
+    every key in `model.diffusion_model.` passes the config probes and reaches this method; with the
+    strip gone, the markers and scales are read from keys the model does not have. Asserted against
+    the bare load, so the two cannot drift apart.
+    """
+    state_dict, _ = _checkpoint()
+    prefixed = {f"model.diffusion_model.{key}": value for key, value in state_dict.items()}
+
+    run, config = _driver(monkeypatch, tmp_path, prefixed)
+    from_prefixed = run.loader._load_model(config, SubModelType.Transformer).state_dict()
+    run, config = _driver(monkeypatch, tmp_path, state_dict)
+    from_bare = run.loader._load_model(config, SubModelType.Transformer).state_dict()
+
+    assert set(from_prefixed) == set(from_bare)
+    for key, value in from_bare.items():
+        assert torch.equal(from_prefixed[key].to(torch.float32), value.to(torch.float32)), key

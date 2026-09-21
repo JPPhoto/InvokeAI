@@ -8,6 +8,7 @@ import accelerate
 import torch
 from transformers import AutoTokenizer, Qwen3ForCausalLM
 
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.controlnet import ControlNet_Checkpoint_ZImage_Config
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
@@ -483,20 +484,7 @@ class ZImageCheckpointModel(ModelLoader):
 
         # Some Z-Image checkpoint files have keys prefixed with "diffusion_model." or
         # "model.diffusion_model." (ComfyUI-style format). Check if we need to strip this prefix.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            stripped_sd = {}
-            for key, value in sd.items():
-                if isinstance(key, str) and key.startswith(prefix_to_strip):
-                    stripped_sd[key[len(prefix_to_strip) :]] = value
-                else:
-                    stripped_sd[key] = value
-            sd = stripped_sd
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Determine safe dtype based on target device capabilities
         target_device = TorchDevice.choose_torch_device()
@@ -774,20 +762,7 @@ class ZImageGGUFCheckpointModel(ModelLoader):
 
         # Some Z-Image GGUF models have keys prefixed with "diffusion_model." or
         # "model.diffusion_model." (ComfyUI-style format). Check if we need to strip this prefix.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            stripped_sd = {}
-            for key, value in sd.items():
-                if isinstance(key, str) and key.startswith(prefix_to_strip):
-                    stripped_sd[key[len(prefix_to_strip) :]] = value
-                else:
-                    stripped_sd[key] = value
-            sd = stripped_sd
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Convert GGUF format keys to diffusers format
         sd = _convert_z_image_gguf_to_diffusers(sd)
@@ -908,20 +883,7 @@ class ZImageSDNQCheckpointModel(ModelLoader):
 
         # Some Z-Image SDNQ models may have keys prefixed with "diffusion_model." or
         # "model.diffusion_model." (ComfyUI-style format). Check if we need to strip this prefix.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            stripped_sd = {}
-            for key, value in sd.items():
-                if isinstance(key, str) and key.startswith(prefix_to_strip):
-                    stripped_sd[key[len(prefix_to_strip) :]] = value
-                else:
-                    stripped_sd[key] = value
-            sd = stripped_sd
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Check if conversion is needed (original format vs diffusers format)
         needs_conversion = any(k.startswith("x_embedder.") for k in sd.keys() if isinstance(k, str))

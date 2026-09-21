@@ -35,6 +35,7 @@ from invokeai.backend.flux.model import Flux
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder
 from invokeai.backend.flux.redux.flux_redux_model import FluxReduxModel
 from invokeai.backend.flux.util import get_flux_ae_params, get_flux_transformers_params
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.clip_embed import CLIPEmbed_Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.controlnet import (
@@ -1172,17 +1173,7 @@ class Flux2CheckpointModel(ModelLoader):
 
         # Check if keys have ComfyUI-style prefix and strip if needed. This runs before anything
         # reads the quantization side-channel: the scales carry the same prefix as their weights.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            sd = {
-                (k[len(prefix_to_strip) :] if isinstance(k, str) and k.startswith(prefix_to_strip) else k): v
-                for k, v in sd.items()
-            }
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Which of the two ComfyUI side channels this file carries is decided once, and int8 first:
         # an int8 layer ships a `.weight_scale` too, so probing for scales without ruling int8 out
@@ -1694,17 +1685,7 @@ class Flux2GGUFCheckpointModel(ModelLoader):
         sd = gguf_sd_loader(model_path, compute_dtype=torch.bfloat16)
 
         # Check if keys have ComfyUI-style prefix and strip if needed
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            sd = {
-                (k[len(prefix_to_strip) :] if isinstance(k, str) and k.startswith(prefix_to_strip) else k): v
-                for k, v in sd.items()
-            }
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Convert BFL format state dict to diffusers format
         converted_sd = convert_flux2_bfl_to_diffusers(sd)
