@@ -278,12 +278,14 @@ def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
     assert child_queue_item.root_item_id == parent_item_id
     assert child_queue_item.workflow_call_depth == 1
     assert child_queue_item.session_id == child_session.id
-    assert child_queue_item.workflow == _workflow_without_id()
+    assert child_queue_item.workflow is None
 
     services = MagicMock()
     services.configuration.multiuser = False
     services.configuration.pil_compress_level = 6
     services.images.create.return_value = MagicMock()
+    workflow_json = _workflow_without_id().model_dump_json()
+    services.session_queue.get_queue_item_workflow_json.return_value = workflow_json
     images = ImagesInterface(
         services,
         InvocationContextData(
@@ -294,7 +296,8 @@ def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
         MagicMock(),
     )
     images.save(Image.new("RGB", (4, 4)))
-    workflow_json = services.images.create.call_args.kwargs["workflow"]
+    assert services.session_queue.get_queue_item_workflow_json.call_args.args == (parent_item_id,)
+    assert services.images.create.call_args.kwargs["workflow"] == workflow_json
 
     storage = DiskImageFileStorage(tmp_path)
     storage._DiskImageFileStorage__invoker = services  # type: ignore
@@ -371,8 +374,9 @@ def test_enqueue_workflow_call_child_preserves_workflow_through_nested_calls(
     assert grandchild_event.parent_item_id == child_queue_item.item_id
     assert grandchild_event.workflow_call_parent_source_id == "root-call"
 
-    assert child_queue_item.workflow == workflow
-    assert grandchild_queue_item.workflow == workflow
+    assert child_queue_item.workflow is None
+    assert grandchild_queue_item.workflow is None
+    assert session_queue.get_queue_item_workflow_json(root_item_id) == workflow.model_dump_json()
 
 
 def test_enqueue_workflow_call_child_persists_batch_field_values(session_queue: SqliteSessionQueue) -> None:

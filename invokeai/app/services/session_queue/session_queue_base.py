@@ -256,6 +256,11 @@ class SessionQueueBase(ABC):
         pass
 
     @abstractmethod
+    def get_queue_item_workflow_json(self, item_id: int) -> str | None:
+        """Gets only the workflow metadata JSON for a queue item, if present."""
+        pass
+
+    @abstractmethod
     def set_queue_item_session(self, item_id: int, session: GraphExecutionState) -> SessionQueueItem:
         """Sets the session for a session queue item. Use this to update the session state."""
         pass

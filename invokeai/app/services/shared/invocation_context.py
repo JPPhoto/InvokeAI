@@ -73,6 +73,14 @@ class InvocationContextInterface:
         self._services = services
         self._data = data
 
+    def _get_workflow_json(self) -> str | None:
+        queue_item = self._data.queue_item
+        if queue_item.workflow is not None:
+            return queue_item.workflow.model_dump_json()
+        if queue_item.root_item_id is not None:
+            return self._services.session_queue.get_queue_item_workflow_json(queue_item.root_item_id)
+        return None
+
 
 class BoardsInterface(InvocationContextInterface):
     def create(self, board_name: str) -> BoardDTO:
@@ -249,9 +257,7 @@ class ImagesInterface(InvocationContextInterface):
                 ):
                     raise PermissionError("Queue user is not authorized to save images to this board")
 
-        workflow_ = None
-        if self._data.queue_item.workflow:
-            workflow_ = self._data.queue_item.workflow.model_dump_json()
+        workflow_ = self._get_workflow_json()
 
         graph_ = None
         if self._data.queue_item.session.graph:
@@ -414,9 +420,7 @@ class VideosInterface(InvocationContextInterface):
                 ):
                     raise PermissionError("Queue user is not authorized to save videos to this board")
 
-        workflow_ = None
-        if self._data.queue_item.workflow:
-            workflow_ = self._data.queue_item.workflow.model_dump_json()
+        workflow_ = self._get_workflow_json()
 
         graph_ = None
         if self._data.queue_item.session.graph:

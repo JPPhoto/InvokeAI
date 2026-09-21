@@ -1011,6 +1011,36 @@ describe('queueCoordinator', () => {
     await expect(harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z')).resolves.toHaveLength(1);
   });
 
+  it('replays a child preview received before the enqueue response', async () => {
+    const acceptance = deferred<QueueEnqueueResult>();
+
+    harness.api.enqueueWorkflow.mockReturnValue(acceptance.promise);
+    harness.coordinator.connect();
+    const submission = harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_progress', {
+      ...createStatusEvent({ item_id: 2 }),
+      image: { dataURL: 'data:image/png;base64:child', height: 32, width: 64 },
+      invocation_source_id: 'child-node',
+      message: 'Child sampling',
+      percentage: 0.5,
+      revision: 1,
+      root_item_id: 1,
+      session_id: 'child-session',
+      workflow_call_parent_source_id: 'call-node',
+    });
+
+    expect(harness.progressImage.set).not.toHaveBeenCalled();
+
+    acceptance.resolve({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    await submission;
+
+    expect(harness.progressImage.set).toHaveBeenCalledWith(
+      { dataUrl: 'data:image/png;base64:child', height: 32, width: 64 },
+      { itemIndex: 1, queueItemId: 'local-1' }
+    );
+  });
+
   it('routes child invocation events to the parent call node', async () => {
     harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
     harness.coordinator.connect();

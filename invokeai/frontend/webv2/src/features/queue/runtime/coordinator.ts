@@ -40,6 +40,7 @@ const SAFETY_SWEEP_INTERVAL_MS = 30_000;
 const TERMINAL_EVENT_BUFFER_LIMIT = 256;
 const NODE_EVENT_BUFFER_ITEM_LIMIT = 64;
 const NODE_EVENT_BUFFER_EVENTS_PER_ITEM = 512;
+const PROGRESS_EVENT_BUFFER_ITEM_LIMIT = 64;
 const BACKEND_READ_CONCURRENCY = 16;
 const FRAME_GATE_LIMIT = 1024;
 
@@ -241,13 +242,15 @@ export const createQueueCoordinator = (
    * is still resolving.
    */
   const pendingNodeEvents = new Map<number, NodeEvent[]>();
+  /** Latest preview for items whose enqueue response has not registered them yet. */
+  const pendingProgressEvents = new Map<number, InvocationProgressEvent>();
   /** Nodes each backend item has driven; settled with the item's terminal outcome. */
   const nodeIdsByBackendItem = new Map<number, Set<string>>();
   /** The backend item whose node events the execution store currently reflects, and the receipt sequence it took over at. */
   let nodeExecutionItemId: number | null = null;
   let nodeExecutionItemSequence = 0;
   let nodeEventSequence = 0;
-  /** Enqueue requests awaiting a response; node events are only buffered while one is in flight. */
+  /** Enqueue requests awaiting a response; early node events and previews are buffered while one is in flight. */
   let inFlightSubmissions = 0;
   const latestStatusSequences = new Map<number, number>();
   /**
@@ -465,6 +468,23 @@ export const createQueueCoordinator = (
     }
   };
 
+  const bufferProgressEvent = (event: InvocationProgressEvent): void => {
+    const backendItemId = getTrackedBackendItemId(event);
+
+    pendingProgressEvents.delete(backendItemId);
+    pendingProgressEvents.set(backendItemId, event);
+
+    while (pendingProgressEvents.size > PROGRESS_EVENT_BUFFER_ITEM_LIMIT) {
+      const oldestId = pendingProgressEvents.keys().next().value;
+
+      if (oldestId === undefined) {
+        break;
+      }
+
+      pendingProgressEvents.delete(oldestId);
+    }
+  };
+
   const replayNodeEvents = (backendItemId: number): void => {
     const events = pendingNodeEvents.get(backendItemId);
 
@@ -487,7 +507,7 @@ export const createQueueCoordinator = (
     }
   };
 
-  /** Runs an enqueue call while buffering node events that may land before its response registers the items. */
+  /** Runs an enqueue call while buffering events that may land before its response registers the items. */
   const withSubmissionInFlight = async <T>(submit: () => Promise<T>): Promise<T> => {
     inFlightSubmissions += 1;
 
@@ -498,6 +518,7 @@ export const createQueueCoordinator = (
 
       if (inFlightSubmissions === 0) {
         pendingNodeEvents.clear();
+        pendingProgressEvents.clear();
       }
     }
   };
@@ -591,6 +612,7 @@ export const createQueueCoordinator = (
     if (bufferedOutcome) {
       replayNodeEvents(backendItemId);
       recentTerminalOutcomes.delete(backendItemId);
+      pendingProgressEvents.delete(backendItemId);
       settleNodes(backendItemId, bufferedOutcome.status);
 
       return Promise.resolve(bufferedOutcome);
@@ -599,6 +621,7 @@ export const createQueueCoordinator = (
     return new Promise<TerminalOutcome>((settle) => {
       waits.set(backendItemId, { localQueueItemId, settle });
       replayNodeEvents(backendItemId);
+      replayProgressEvent(backendItemId);
     });
   };
 
@@ -796,6 +819,9 @@ export const createQueueCoordinator = (
     const wait = waits.get(backendItemId);
 
     if (!wait) {
+      if (inFlightSubmissions > 0) {
+        bufferProgressEvent(event);
+      }
       return;
     }
 
@@ -826,6 +852,16 @@ export const createQueueCoordinator = (
     }
   };
 
+  const replayProgressEvent = (backendItemId: number): void => {
+    const event = pendingProgressEvents.get(backendItemId);
+
+    pendingProgressEvents.delete(backendItemId);
+
+    if (event) {
+      handleProgress(event);
+    }
+  };
+
   /**
    * React to the shared socket's connection lifecycle. The Platform hub owns
    * transport mechanics only; this Queue coordinator clears its transient
@@ -847,6 +883,7 @@ export const createQueueCoordinator = (
     nodeExecutionItemId = null;
     nodeExecutionItemSequence = 0;
     pendingNodeEvents.clear();
+    // Keep previews received before enqueue adoption; the HTTP response may still be in flight.
     nodeIdsByBackendItem.clear();
     modelLoads.reset();
 
@@ -952,6 +989,7 @@ export const createQueueCoordinator = (
     runs.clear();
     runProgress.clear();
     recentTerminalOutcomes.clear();
+    pendingProgressEvents.clear();
     latestStatusSequences.clear();
     latestFrameGates.clear();
   };

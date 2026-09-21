@@ -1417,6 +1417,19 @@ class SqliteSessionQueue(SessionQueueBase):
             raise SessionQueueItemNotFoundError(f"No queue item with id {item_id}")
         return SessionQueueItem.queue_item_from_dict(dict(result))
 
+    def get_queue_item_workflow_json(self, item_id: int) -> str | None:
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                """--sql
+                SELECT workflow
+                FROM session_queue
+                WHERE item_id = ?
+                """,
+                (item_id,),
+            )
+            result = cast(Union[sqlite3.Row, None], cursor.fetchone())
+        return cast(str | None, result["workflow"]) if result is not None else None
+
     def save_queue_item_session(self, item_id: int, session: GraphExecutionState) -> None:
         with self._db.transaction() as cursor:
             # Use exclude_none so we don't end up with a bunch of nulls in the graph - this can cause validation errors
@@ -1496,7 +1509,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     parent_queue_item.batch_id,
                     field_values_json,
                     parent_queue_item.priority,
-                    parent_queue_item.workflow.model_dump_json() if parent_queue_item.workflow else None,
+                    None,
                     parent_queue_item.origin,
                     parent_queue_item.destination,
                     None,
