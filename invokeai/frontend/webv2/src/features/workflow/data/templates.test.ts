@@ -270,6 +270,89 @@ describe('parseOpenApiToTemplates', () => {
     expect(parsed.for?.outputs.output_collection?.outputScope).toBe('final');
     expect(parsed.for?.outputs.output?.uiHidden).toBe(true);
   });
+
+  it('extracts options from nullable Literal schemas and normalizes numeric options', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          LiteralInvocation: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              type: { default: 'literal_invocation' },
+              text: {
+                anyOf: [{ enum: ['fast', 'slow'], type: 'string' }, { type: 'null' }],
+                default: 'slow',
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Text',
+              },
+              number: {
+                anyOf: [{ const: 2, type: 'integer' }, { type: 'null' }],
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Number',
+              },
+            },
+            title: 'Literal',
+            type: 'object',
+          },
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.literal_invocation?.inputs.text?.options).toEqual(['fast', 'slow']);
+    expect(parsed.literal_invocation?.inputs.text?.default).toBe('slow');
+    expect(parsed.literal_invocation?.inputs.number?.options).toEqual([2]);
+    expect(parsed.literal_invocation?.inputs.number?.default).toBe(2);
+  });
+
+  it('leaves optional null enum defaults unset and rejects malformed enum shapes', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          OptionalEnums: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              type: { default: 'optional_enums' },
+              provider: {
+                default: null,
+                enum: ['openai', 'gemini'],
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Provider',
+                type: 'string',
+              },
+              malformed: {
+                enum: 'not-an-array',
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Malformed',
+                type: 'string',
+                ui_type: 'EnumField',
+              },
+            },
+            title: 'Optional enums',
+            type: 'object',
+          },
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.optional_enums?.inputs.provider?.default).toBeUndefined();
+    expect(parsed.optional_enums?.inputs.malformed?.options).toEqual([]);
+  });
 });
 
 describe('parseFieldType', () => {
@@ -289,5 +372,80 @@ describe('parseFieldType', () => {
   it('returns null for unparseable shapes instead of throwing', () => {
     expect(parseFieldType({ anyOf: [{ type: 'string' }, { type: 'integer' }, { type: 'boolean' }] })).toBeNull();
     expect(parseFieldType('nonsense')).toBeNull();
+  });
+});
+
+describe('integer Literal enum templates', () => {
+  // The backend types these fields as `Literal[256, 512]`, so the template
+  // default has to stay numeric: pydantic rejects the string "512" with
+  // `literal_error`. Both shapes below are taken from shipped schemas, and
+  // they reach the default through different branches.
+  it('keeps a numeric Literal default numeric', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+          MaxSeqLenInvocation: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              max_seq_len: {
+                default: 512,
+                enum: [256, 512],
+                field_kind: 'input',
+                orig_required: false,
+                title: 'Max Seq Length',
+                type: 'integer',
+              },
+              type: { default: 'max_seq_len_invocation' },
+            },
+            title: 'MaxSeqLen',
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.max_seq_len_invocation?.inputs.max_seq_len?.default).toBe(512);
+  });
+
+  // `flux_text_encoder.t5_max_seq_len` is `Optional[Literal[256, 512]]` and
+  // required, so its schema default is null and the template falls back to the
+  // first option instead of the `String(property.default)` branch above. Legacy
+  // resolves the same fallback to a number.
+  it('keeps a nullable Literal fallback default numeric', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          IntegerOutput: {
+            class: 'output',
+            properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+            type: 'object',
+          },
+          NullableMaxSeqLenInvocation: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/IntegerOutput' },
+            properties: {
+              t5_max_seq_len: {
+                anyOf: [{ enum: [256, 512], type: 'integer' }, { type: 'null' }],
+                default: null,
+                field_kind: 'input',
+                orig_required: true,
+                title: 'T5 Max Seq Length',
+              },
+              type: { default: 'nullable_max_seq_len_invocation' },
+            },
+            title: 'NullableMaxSeqLen',
+            type: 'object',
+          },
+        },
+      },
+    });
+
+    expect(parsed.nullable_max_seq_len_invocation?.inputs.t5_max_seq_len?.default).toBe(256);
   });
 });

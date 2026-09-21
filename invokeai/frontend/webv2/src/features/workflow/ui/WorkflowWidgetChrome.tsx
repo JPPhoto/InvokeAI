@@ -14,6 +14,7 @@ import {
   createWorkflowId,
   getCompatibleInputTemplate,
   getCompatibleOutputTemplate,
+  hasMultipleWorkflowReturnNodes,
   LOOP_LINKAGE_FIELD,
   resolveConnectorSource,
   shouldAddForReturnLoopLinkage,
@@ -34,6 +35,7 @@ import { useTranslation } from 'react-i18next';
 import type { WorkflowWidgetLabelProps, WorkflowWidgetViewProps } from './contracts';
 
 import { AddNodeDialog } from './editor/AddNodeDialog';
+import { CallSavedWorkflowSyncRuntime } from './editor/CallSavedWorkflowSyncRuntime';
 import { getWorkflowFlowInstance } from './editor/flowInstanceStore';
 import { createLibraryAutosaver, type LibrarySyncStatus } from './library/libraryAutosave';
 import { registerLibraryGraphSyncedHandler, releaseLibraryGraphSyncedHandler } from './library/librarySyncBridge';
@@ -126,9 +128,25 @@ export const WorkflowMenuItems = (_props: WorkflowWidgetViewProps) => {
     widgets.open({ region: 'left', widgetId: 'workflow' });
     widgets.patchValues('workflow', { editTab: 'details', panelMode: 'edit' });
   }, [widgets]);
-  const exportWorkflow = useCallback(() => downloadWorkflowJson(getProjectGraph()), [getProjectGraph]);
+  const exportWorkflow = useCallback(() => {
+    const projectGraph = getProjectGraph();
+
+    if (hasMultipleWorkflowReturnNodes(projectGraph)) {
+      notify.error(t('projects.exportFailed'), t('workflowLibrary.multipleWorkflowReturnNodesForTransfer'));
+      return;
+    }
+
+    downloadWorkflowJson(projectGraph);
+  }, [getProjectGraph, notify, t]);
   const copyWorkflow = useCallback(() => {
-    copyWorkflowJson(getProjectGraph())
+    const projectGraph = getProjectGraph();
+
+    if (hasMultipleWorkflowReturnNodes(projectGraph)) {
+      notify.error(t('widgets.workflow.copyJsonFailed'), t('workflowLibrary.multipleWorkflowReturnNodesForTransfer'));
+      return;
+    }
+
+    copyWorkflowJson(projectGraph)
       .then(() => notify.success(t('widgets.workflow.copyJsonSuccess')))
       .catch(() => notify.error(t('widgets.workflow.copyJsonFailed')));
   }, [getProjectGraph, notify, t]);
@@ -246,6 +264,9 @@ export const WorkflowDialogHost = () => {
   const { editGraph, replace } = useProjectGraphCommands();
   const { project: projectStore } = useWorkflowUi();
   const notify = useWorkflowNotifications();
+  const { t } = useTranslation();
+  const notifyRef = useRef(notify);
+  const translationRef = useRef(t);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const addNodeConnection = workflowUiStore.useSelector((snapshot) => snapshot.addNodeConnection);
   const addNodePosition = workflowUiStore.useSelector((snapshot) => snapshot.addNodePosition);
@@ -254,6 +275,11 @@ export const WorkflowDialogHost = () => {
   const isLibraryOpen = workflowUiStore.useSelector((snapshot) => snapshot.isLibraryOpen);
   const isNewWorkflowConfirmOpen = workflowUiStore.useSelector((snapshot) => snapshot.isNewWorkflowConfirmOpen);
   const lastImportRequestRef = useRef(importRequestCount);
+
+  useEffect(() => {
+    notifyRef.current = notify;
+    translationRef.current = t;
+  }, [notify, t]);
 
   // Library autosave: bound graphs save themselves back after edits settle.
   //
@@ -282,6 +308,8 @@ export const WorkflowDialogHost = () => {
   // never outlives the account it was captured for.
   useEffect(() => {
     const hostScope = captureAccountScope();
+    let autosaverActive = true;
+    let duplicateReturnNotificationShown = false;
     const autosaver = createLibraryAutosaver({
       onStatus: (status) => {
         if (isAccountScopeCurrent(hostScope)) {
@@ -295,11 +323,25 @@ export const WorkflowDialogHost = () => {
       save: async (workflowId, serialized) => {
         // Same scope discipline as the manual save paths: never let a
         // debounced write land in the next account's library.
-        const owner = captureAccountScope();
-        await updateLibraryWorkflow(workflowId, serialized, owner.signal);
-        assertAccountScopeCurrent(owner);
+        assertAccountScopeCurrent(hostScope);
+        const hasDuplicateWorkflowReturns = hasMultipleWorkflowReturnNodes(projectStore.getSnapshot().projectGraph);
+
+        if (hasDuplicateWorkflowReturns) {
+          if (autosaverActive && !duplicateReturnNotificationShown) {
+            duplicateReturnNotificationShown = true;
+            notifyRef.current.error(
+              translationRef.current('workflowLibrary.saveFailed'),
+              translationRef.current('workflowLibrary.multipleWorkflowReturnNodes')
+            );
+          }
+          throw new Error('Workflow contains multiple workflow_return nodes.');
+        }
+
+        duplicateReturnNotificationShown = false;
+        await updateLibraryWorkflow(workflowId, serialized, hostScope.signal);
+        assertAccountScopeCurrent(hostScope);
         // The library dialog serves cached payloads and pages; a save changes both.
-        invalidateWorkflowLibraryCache();
+        invalidateWorkflowLibraryCache(workflowId);
       },
     });
 
@@ -308,6 +350,9 @@ export const WorkflowDialogHost = () => {
       const graph = projectStore.getSnapshot().projectGraph;
       if (graph !== lastGraph) {
         lastGraph = graph;
+        if (!hasMultipleWorkflowReturnNodes(graph)) {
+          duplicateReturnNotificationShown = false;
+        }
         autosaver.notifyGraphChanged();
       }
     });
@@ -317,6 +362,7 @@ export const WorkflowDialogHost = () => {
     registerLibraryGraphSyncedHandler(handler);
 
     return () => {
+      autosaverActive = false;
       unsubscribe();
       releaseLibraryGraphSyncedHandler(handler);
       autosaver.dispose();
@@ -521,6 +567,7 @@ export const WorkflowDialogHost = () => {
 
   return (
     <>
+      <CallSavedWorkflowSyncRuntime />
       <input ref={fileInputRef} accept=".json,application/json" hidden type="file" onChange={handleImportFile} />
       <AddNodeDialog
         connectionFilter={addNodeConnection}

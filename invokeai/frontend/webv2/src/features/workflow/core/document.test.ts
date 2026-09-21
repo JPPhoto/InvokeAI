@@ -213,10 +213,12 @@ describe('projectGraphReducer', () => {
     };
 
     expect(getInstance(next)?.description).toBe('Custom help text');
+    expect(getInstance(next)?.descriptionOverride).toBe(true);
 
     next = projectGraphReducer(next, { description: '', fieldName: 'a', nodeId: nodeAId, type: 'setFieldDescription' });
 
     expect(getInstance(next)?.description).toBeUndefined();
+    expect(getInstance(next)?.descriptionOverride).toBe(false);
   });
 
   it('exposing a field twice is a no-op, and form elements reorder', () => {
@@ -421,6 +423,11 @@ describe('getProjectGraphUndoEntry', () => {
       'setFieldValue:n:b'
     );
     expect(getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: true })).toEqual({
+      label: 'Edit workflow field value',
+    });
+    expect(
+      getProjectGraphUndoEntry({ fieldName: 'workflow_id', nodeId: 'n', type: 'setFieldValue', value: 'workflow-a' })
+    ).toEqual({
       label: 'Edit workflow field value',
     });
     expect(getProjectGraphUndoEntry({ nodeId: 'n', type: 'setNodeUseCache', useCache: false })).toEqual({
