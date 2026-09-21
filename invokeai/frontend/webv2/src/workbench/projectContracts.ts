@@ -100,7 +100,9 @@ export interface WorkbenchNotification {
   id: string;
   kind: WorkbenchNotificationKind;
   title: string;
+  titleKey?: string;
   message?: string;
+  messageKey?: string;
   createdAt: string;
   projectId?: string;
   isRead: boolean;

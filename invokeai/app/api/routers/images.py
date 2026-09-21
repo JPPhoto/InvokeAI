@@ -26,6 +26,9 @@ from invokeai.app.api.routers._access import (
 from invokeai.app.api.routers._access import (
     assert_image_read_access as _assert_image_read_access,
 )
+from invokeai.app.api.routers._access import (
+    board_share_recipients as _board_share_recipients,
+)
 from invokeai.app.api.routers._limits import MAX_COPY_BATCH_SIZE
 from invokeai.app.api.routers.image_move_maintenance import assert_image_move_maintenance_inactive
 from invokeai.app.invocations.fields import MetadataField
@@ -35,6 +38,7 @@ from invokeai.app.services.image_records.image_records_common import (
     ImageRecordChanges,
     ImageRecordNotFoundException,
     ResourceOrigin,
+    is_gallery_category,
 )
 from invokeai.app.services.images.images_common import (
     DeleteImagesResult,
@@ -123,7 +127,7 @@ async def upload_image(
     """Uploads an image for the current user"""
     # If uploading into a board, verify the user has write access.
     # Public boards allow uploads from any authenticated user.
-    await asyncio.to_thread(_assert_board_write_access, board_id, current_user)
+    board = await asyncio.to_thread(_assert_board_write_access, board_id, current_user)
 
     await asyncio.to_thread(assert_image_move_maintenance_inactive)
 
@@ -189,14 +193,20 @@ async def upload_image(
             is_intermediate=is_intermediate,
             user_id=current_user.user_id,
         )
-
-        response.status_code = 201
-        response.headers["Location"] = image_dto.image_url
-
-        return image_dto
     except Exception:
         ApiDependencies.invoker.services.logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail="Failed to create image")
+
+    if not is_intermediate and is_gallery_category(image_category):
+        shared_user_ids = await asyncio.to_thread(_board_share_recipients, board)
+        ApiDependencies.invoker.services.events.emit_image_uploaded(
+            image_dto, user_id=current_user.user_id, board=board, shared_user_ids=shared_user_ids
+        )
+
+    response.status_code = 201
+    response.headers["Location"] = image_dto.image_url
+
+    return image_dto
 
 
 class ImageUploadEntry(BaseModel):
