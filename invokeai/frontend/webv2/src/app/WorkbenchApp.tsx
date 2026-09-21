@@ -16,6 +16,7 @@ import { WorkbenchWidgetRegistryProvider } from '@workbench/WorkbenchWidgetRegis
 import { useMemo } from 'react';
 
 import { BootWidgetHintController } from './BootWidgetHintController';
+import { GalleryRealtimeRuntime } from './GalleryRealtimeRuntime';
 import { GenerateWidgetSyncRuntime } from './GenerateWidgetSyncRuntime';
 import { QueueRuntimeAdapter } from './QueueRuntimeAdapter';
 import { RecallParametersRuntime } from './RecallParametersRuntime';
@@ -54,6 +55,7 @@ export const WorkbenchApp = () => {
           <WorkbenchHotkeyRuntime />
           <WorkbenchCommandPalette />
           <QueueRuntimeAdapter />
+          <GalleryRealtimeRuntime />
           <WorkbenchRuntime />
           <WorkbenchSessionController search={search} />
           <WidgetHosts />
