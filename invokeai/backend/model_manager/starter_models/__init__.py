@@ -149,6 +149,7 @@ from invokeai.backend.model_manager.starter_models.ltx_2 import (
     ltx2_5_components,
     ltx2_5_dev_transformer_bf16,
     ltx2_5_dev_transformer_int8,
+    ltx2_5_distilled_lora,
     ltx2_5_distilled_transformer_int8,
     ltx2_5_text_encoder_bf16,
     ltx2_5_text_encoder_int8,
@@ -468,6 +469,7 @@ STARTER_MODELS: list[StarterModel] = [
     minimax_h3_lightx2v_ref2v_turbo_lora,
     ltx2_5_dev_transformer_int8,
     ltx2_5_distilled_transformer_int8,
+    ltx2_5_distilled_lora,
     ltx2_5_dev_transformer_bf16,
     ltx2_5_text_encoder_int8,
     ltx2_5_text_encoder_bf16,
@@ -666,6 +668,7 @@ ltx2_bundle: list[StarterModel] = [
     ltx2_5_text_encoder_int8,
     ltx2_5_dev_transformer_int8,
     ltx2_5_distilled_transformer_int8,
+    ltx2_5_distilled_lora,
 ]
 
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {

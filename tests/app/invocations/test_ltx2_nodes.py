@@ -1235,6 +1235,34 @@ def test_an_extension_without_the_audio_models_holds_only_the_picture(monkeypatc
     assert output.context_frames == 17
 
 
+def test_the_lora_loader_wires_into_the_graph_the_panel_compiles() -> None:
+    """The panel splices the LoRA collection loader between the model loader and both denoise
+    passes. Every one of those edges has to be one the queue accepts, and `Graph.validate_self()`
+    runs at enqueue -- after the models have loaded -- so a type mismatch here surfaces as a failed
+    run rather than a failed compile. Numeric coercion is asymmetric and has bitten this stack
+    twice, which is why the check is against the backend's own compatibility function.
+    """
+    from invokeai.app.invocations.baseinvocation import InvocationRegistry
+    from invokeai.app.services.shared.graph import are_connection_types_compatible
+
+    invocations = InvocationRegistry.get_invocations_map()
+    loader = invocations["ltx2_lora_collection_loader"]
+    model_loader_out = invocations["ltx2_model_loader"].get_output_annotation()
+    denoise = invocations["ltx2_denoise"]
+
+    edges = [
+        (model_loader_out, "transformer", loader, "transformer"),
+        (loader.get_output_annotation(), "transformer", denoise, "transformer"),
+        (model_loader_out, "transformer", denoise, "transformer"),
+    ]
+    for source_cls, source_field, target_cls, target_field in edges:
+        source = source_cls.model_fields[source_field].annotation
+        target = target_cls.model_fields[target_field].annotation
+        assert are_connection_types_compatible(source, target), (
+            f"the queue refuses {source_cls.__name__}.{source_field} -> {target_cls.__name__}.{target_field}"
+        )
+
+
 def test_a_context_longer_than_the_model_can_generate_is_refused_before_any_decoding() -> None:
     """A tail read cannot stop early, so `context_frames` sizes a buffer of SOURCE-resolution frames
     held before any of them are fitted to the canvas. Unbounded, asking for 1001 frames of a 1080p
@@ -1350,6 +1378,23 @@ def test_a_last_frame_encode_wired_into_the_first_frame_slot_is_refused() -> Non
         node._load_image_latents(_context())
 
 
+def test_the_reservation_grows_with_the_loras_that_will_be_patched_in() -> None:
+    """A LoRA is not free headroom. The distilled accelerator is rank 450 over 1660 layers -- about
+    8.3 GiB of patch tensors in bf16 -- plus the transient a sidecar-patched layer holds while it
+    computes the low-rank residual. Reserving the same bytes with and without it packs VRAM with
+    weights and dies in the first forward."""
+    node_type = LTX2DenoiseInvocation
+    rows, audio = 13728, 300
+
+    bare = node_type._estimate_working_memory(rows, audio)
+    with_one = node_type._estimate_working_memory(rows, audio, 1)
+    with_two = node_type._estimate_working_memory(rows, audio, 2)
+
+    assert with_one > bare
+    # The per-LoRA term dominates, so a second LoRA has to add roughly as much as the first.
+    assert with_two - with_one >= 8 * 1024**3
+
+
 def test_the_reservation_covers_the_keyframe_rows_the_transformer_attends_over(monkeypatch) -> None:
     """A held keyframe adds rows to every forward -- 858 on top of 13728 at 1248x704 x121 -- and the
     working-memory fit is tightest exactly where running out costs the most."""
@@ -1360,7 +1405,7 @@ def test_the_reservation_covers_the_keyframe_rows_the_transformer_attends_over(m
     monkeypatch.setattr(
         type(node),
         "_estimate_working_memory",
-        lambda _self, sequence, _audio: captured.append(sequence) or (_ for _ in ()).throw(_StopAfterState()),
+        lambda _self, sequence, _audio, _loras=0: captured.append(sequence) or (_ for _ in ()).throw(_StopAfterState()),
     )
     monkeypatch.setattr(denoise_module, "build_denoise_state", _denoise_state_stub(keyframe_rows=858))
     context = _context()

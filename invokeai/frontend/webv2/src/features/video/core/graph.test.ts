@@ -1067,6 +1067,58 @@ describe('compileVideoGraph — LTX-2', () => {
     ).toBe(true);
   });
 
+  it('patches the distilled LoRA onto the transformer both passes read', () => {
+    const model = ltx2Model('ltx2_dev');
+    const distilled = { base: 'ltx-2', key: 'ltx2-distilled', name: 'LTX-2.5 Distilled LoRA', type: 'lora' as const };
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        acceleratorEnabled: true,
+        acceleratorLoraKeys: [distilled.key],
+        aspectRatioId: '16:9',
+        loras: [{ isEnabled: true, model: distilled, weight: 1 }],
+        targetResolution: '1024p',
+      }),
+      model
+    );
+    const loraLoader = nodeOfType(backendGraph, 'ltx2_lora_collection_loader');
+
+    expect(hasEdge(backendGraph, 'model_loader', 'transformer', loraLoader.id, 'transformer')).toBe(true);
+    // Both passes share one transformer, so both must read the patched one -- a refine pass wired
+    // straight to the loader would sample the second half of the run unpatched.
+    expect(hasEdge(backendGraph, loraLoader.id, 'transformer', 'denoise_latents', 'transformer')).toBe(true);
+    expect(hasEdge(backendGraph, loraLoader.id, 'transformer', 'refine_latents', 'transformer')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'transformer', 'denoise_latents', 'transformer')).toBe(false);
+    expect(hasEdge(backendGraph, 'model_loader', 'transformer', 'refine_latents', 'transformer')).toBe(false);
+  });
+
+  it('names the distilled schedule, which the checkpoint variant cannot', () => {
+    // `auto` resolves the schedule off the transformer's VARIANT, which names the checkpoint and
+    // not the patch. On a Dev checkpoint that is the guided ~30-step schedule, so an accelerated
+    // run would take 8 steps of the wrong schedule and look like a broken model.
+    const model = ltx2Model('ltx2_dev');
+    const distilled = { base: 'ltx-2', key: 'ltx2-distilled', name: 'LTX-2.5 Distilled LoRA', type: 'lora' as const };
+    const accelerated = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        acceleratorEnabled: true,
+        acceleratorLoraKeys: [distilled.key],
+        aspectRatioId: '16:9',
+        loras: [{ isEnabled: true, model: distilled, weight: 1 }],
+        targetResolution: '1024p',
+      }),
+      model
+    ).backendGraph;
+
+    expect(accelerated.nodes.denoise_latents).toMatchObject({ schedule: 'distilled' });
+    expect(accelerated.nodes.refine_latents).toMatchObject({ schedule: 'distilled' });
+
+    // Off, the checkpoint stays the authority.
+    const plain = compileVideoGraph(ltx2SettingsFor(model), model).backendGraph;
+
+    expect(plain.nodes.denoise_latents).toMatchObject({ schedule: 'auto' });
+    expect(nodeOfType(plain, 'ltx2_model_loader')).toBeDefined();
+    expect(Object.values(plain.nodes).some((node) => node.type === 'ltx2_lora_collection_loader')).toBe(false);
+  });
+
   it('continues a clip from its own tail and consumes the overlap in the join', () => {
     const model = ltx2Model('ltx2_dev');
     const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { sourceVideo: LTX2_SOURCE_CLIP }), model);

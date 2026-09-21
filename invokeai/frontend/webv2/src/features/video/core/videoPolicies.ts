@@ -125,7 +125,7 @@ export interface VideoFpsPolicy {
  * different schedule are resolved per-LoRA by `getAcceleratorSteps`.
  */
 export interface VideoAcceleratorConfig {
-  label: 'Lightning' | 'Turbo';
+  label: 'Lightning' | 'Turbo' | 'Distilled';
   steps: number;
   /**
    * Step counts for releases whose names carry no "N-step" token. First match
@@ -134,6 +134,14 @@ export interface VideoAcceleratorConfig {
   stepOverrides?: readonly { pattern: RegExp; steps: number }[];
   cfgScale: number;
   cfgScaleLowNoise: number | null;
+  /**
+   * Guidance values the accelerator requires, for families that expose more than the primary CFG
+   * scale. A step-distilled model is trained to predict without guidance at all, so leaving the
+   * extra scales at their guided defaults does not merely waste compute — it pushes the sample off
+   * the distribution the distillation was fitted to. Absent for accelerators whose family has no
+   * extra guidance, in which case the toggle leaves those settings alone.
+   */
+  guidance?: { audioCfgScale: number; modalityScale: number; stgScale: number };
 }
 
 interface VideoVariantConfig {
@@ -197,6 +205,23 @@ export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   label: 'Turbo',
   steps: 6,
   stepOverrides: [{ pattern: LIGHTX2V_PATTERN, steps: 8 }],
+};
+
+/**
+ * The LTX-2.5 step-distillation LoRA: 8 steps with no guidance, against the Dev transformer's ~30
+ * guided ones. Rank 450 over all 1660 projections, so it is a heavy patch (~8.9 GB) rather than a
+ * light touch, and it retrains the model to predict the clean sample directly — which is why every
+ * guidance scale goes to its identity here rather than merely lower.
+ *
+ * `steps: 8` is stated rather than read from the file name: the release is called
+ * `ltx-2.5-22b-distilled-lora-450`, where the only number is the rank.
+ */
+export const LTX2_DISTILLED_ACCELERATOR: VideoAcceleratorConfig = {
+  cfgScale: 1,
+  cfgScaleLowNoise: null,
+  guidance: { audioCfgScale: 1, modalityScale: 1, stgScale: 0 },
+  label: 'Distilled',
+  steps: 8,
 };
 
 /**
@@ -368,6 +393,9 @@ const LTX2_COMMON = {
  */
 const LTX2_DEV: VideoVariantConfig = {
   ...LTX2_COMMON,
+  // Only Dev offers it. The distilled *checkpoint* already is the fast path, and stacking the LoRA
+  // on top of it would patch a model the distillation was not fitted to.
+  accelerator: LTX2_DISTILLED_ACCELERATOR,
   // The release guides against this list, not against an empty string: it is as much a part of the
   // recipe as the scales are. Mirrors LTX2_DEFAULT_NEGATIVE_PROMPT in
   // invokeai/backend/ltx2/constants.py, which is the node's own default.
@@ -924,23 +952,82 @@ export const findMiniMaxH3TurboLora = (
  * actually running. `model` must be the EFFECTIVE model: for MiniMax H3 the
  * task variant (fl2va vs ref2va) decides which Turbo distillation qualifies.
  */
+/**
+ * The LTX-2.5 step-distillation LoRA in a catalog, or null.
+ *
+ * Unlike the H3 and Wan families there is one release, and its name states its rank rather than its
+ * schedule (`ltx-2.5-22b-distilled-lora-450`), so matching keys on the word that names what it does.
+ * `requireFamilyName` exists for the same reason it does elsewhere: on a model switch the panel
+ * re-verifies a recorded accelerator, and a bare "distilled" in some other family's LoRA should not
+ * satisfy that check.
+ */
+const LTX2_DISTILLED_PATTERN = /(?:^|[^a-z0-9])distill(?:ed|ation)?(?:[^a-z0-9]|$)/i;
+const LTX2_NAME_PATTERN = /(?:^|[^a-z0-9])ltx[ _-]?2(?:\.\d)?(?:[^a-z0-9]|$)/i;
+
+export const findLtx2DistilledLora = (
+  models: readonly ModelConfig[],
+  { requireFamilyName = false }: FindAcceleratorLoraOptions = {}
+): LoraModelConfig | null => {
+  const matches = models.filter(
+    (model): model is LoraModelConfig =>
+      isLoraModelConfig(model) &&
+      model.base === 'ltx-2' &&
+      LTX2_DISTILLED_PATTERN.test(model.name) &&
+      (!requireFamilyName || LTX2_NAME_PATTERN.test(model.name))
+  );
+
+  return (
+    matches
+      .slice()
+      // Family-named first, then a deterministic tie-break — there is no step count to rank on.
+      .sort(
+        (a, b) =>
+          Number(LTX2_NAME_PATTERN.test(b.name)) - Number(LTX2_NAME_PATTERN.test(a.name)) ||
+          a.name.localeCompare(b.name)
+      )[0] ?? null
+  );
+};
+
 export const findAcceleratorLorasIn = (
   model: MainModelConfig,
   candidates: readonly ModelConfig[],
   options: FindAcceleratorLoraOptions = {}
 ): LoraModelConfig[] | null => {
-  if (model.base === 'minimax-h3') {
+  const find = ACCELERATOR_FINDERS[model.base as SupportedVideoBase];
+
+  return find ? find(candidates, model, options) : null;
+};
+
+/**
+ * How each family locates its own accelerator LoRAs, keyed by base so a new family plugs in without
+ * touching the others. Wan's is a *pair* (one per expert); the rest are a single LoRA.
+ */
+const ACCELERATOR_FINDERS: Record<
+  SupportedVideoBase,
+  (
+    candidates: readonly ModelConfig[],
+    model: MainModelConfig,
+    options: FindAcceleratorLoraOptions
+  ) => LoraModelConfig[] | null
+> = {
+  'ltx-2': (candidates, _model, options) => {
+    const distilled = findLtx2DistilledLora(candidates, options);
+
+    return distilled ? [distilled] : null;
+  },
+  'minimax-h3': (candidates, model, options) => {
     const turbo = findMiniMaxH3TurboLora(candidates, {
       ...options,
       variant: typeof model.variant === 'string' ? model.variant : 'fl2va',
     });
 
     return turbo ? [turbo] : null;
-  }
+  },
+  wan: (candidates, model, options) => {
+    const pair = findWanLightningLoraPair(candidates, model.variant, options);
 
-  const pair = findWanLightningLoraPair(candidates, model.variant, options);
-
-  return pair ? [pair.high, pair.low] : null;
+    return pair ? [pair.high, pair.low] : null;
+  },
 };
 
 // "4-step", "8 steps", "6step" — how a distillation release states the schedule
@@ -1091,6 +1178,16 @@ export const getAcceleratorToggleResult = (
         acceleratorLoraKeys: [],
         cfgScale: config.defaults.cfgScale,
         cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
+        // Only for a family whose accelerator drove these down in the first place. Restoring them
+        // unconditionally would reset a user's own guidance tweak on families whose accelerator
+        // never touched it.
+        ...(config.accelerator?.guidance
+          ? {
+              audioCfgScale: config.defaults.audioCfgScale,
+              modalityScale: config.defaults.modalityScale,
+              stgScale: config.defaults.stgScale,
+            }
+          : {}),
         loras: withoutAccelerators,
         steps: config.defaults.steps,
       },
@@ -1117,6 +1214,10 @@ export const getAcceleratorToggleResult = (
       acceleratorLoraKeys: entries.map((entry) => entry.model.key),
       cfgScale: config.accelerator.cfgScale,
       cfgScaleLowNoise: config.accelerator.cfgScaleLowNoise,
+      // A step-distilled model predicts the clean sample directly; leaving the extra guidance
+      // scales at their guided defaults samples off the distribution it was fitted to, not merely
+      // slower. Families without extra guidance declare none and keep whatever is set.
+      ...config.accelerator.guidance,
       loras: [
         ...withoutAccelerators.filter((lora) => !entries.some((e) => e.model.key === lora.model.key)),
         ...entries,

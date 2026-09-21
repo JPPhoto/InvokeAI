@@ -13,6 +13,7 @@ import {
   getAcceleratorLoraChangeResult,
   getAcceleratorSteps,
   getAcceleratorToggleResult,
+  findLtx2DistilledLora,
   getDefaultVideoSettings,
   getEffectiveVideoTiming,
   getVideoComponentSectionPolicy,
@@ -370,6 +371,62 @@ describe('Lightning', () => {
     expect(withoutPair).toMatchObject({ cfgScale: 5, acceleratorEnabled: false, steps: 40 });
     // The catalog holds no H3 Turbo LoRA, so H3 falls back to its slow defaults.
     expect(h3Defaults).toMatchObject({ fps: 24, acceleratorEnabled: false, numFrames: 124, steps: 50 });
+  });
+});
+
+describe('LTX-2 distilled accelerator', () => {
+  const DISTILLED = { base: 'ltx-2', key: 'ltx2-distilled', name: 'LTX-2.5 Distilled LoRA', type: 'lora' as const };
+  const STYLE = { base: 'ltx-2', key: 'ltx2-style', name: 'LTX-2 Painterly', type: 'lora' as const };
+
+  it('finds the distilled LoRA and ignores other families and other LTX-2 LoRAs', () => {
+    expect(findLtx2DistilledLora([STYLE, DISTILLED])).toMatchObject({ key: 'ltx2-distilled' });
+    expect(findLtx2DistilledLora([STYLE])).toBeNull();
+    // A distillation LoRA for a different architecture must not satisfy the LTX-2 slot.
+    expect(findLtx2DistilledLora([{ base: 'wan', key: 'w', name: 'Wan Distilled', type: 'lora' as const }])).toBeNull();
+  });
+
+  it('turns the whole guided recipe off, not just the step count', () => {
+    // The distillation retrains the model to predict the clean sample directly. Cutting steps to 8
+    // while still paying for CFG, STG and modality guidance samples off the distribution it was
+    // fitted to -- the failure looks like a broken model, not like a slow one.
+    const model = ltx2('ltx2_dev');
+    const settings = getDefaultVideoSettings(model, []);
+    const result = getAcceleratorToggleResult(settings, model, [DISTILLED], true);
+
+    expect(result.missingLoras).toBe(false);
+    expect(result.settings).toMatchObject({
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: ['ltx2-distilled'],
+      audioCfgScale: 1,
+      cfgScale: 1,
+      modalityScale: 1,
+      steps: 8,
+      stgScale: 0,
+    });
+  });
+
+  it('puts the guided recipe back when switched off', () => {
+    const model = ltx2('ltx2_dev');
+    const on = getAcceleratorToggleResult(getDefaultVideoSettings(model, []), model, [DISTILLED], true).settings;
+    const off = getAcceleratorToggleResult(on, model, [DISTILLED], false).settings;
+
+    expect(off).toMatchObject({
+      acceleratorEnabled: false,
+      acceleratorLoraKeys: [],
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      steps: 30,
+      stgScale: 1,
+    });
+    expect(off.loras).toEqual([]);
+  });
+
+  it('is not offered on the distilled checkpoint, which already is the fast path', () => {
+    // Patching a distillation LoRA onto a model the distillation was not fitted to.
+    const policy = getVideoModelPolicy(ltx2('ltx2_distilled'), getDefaultVideoSettings(ltx2('ltx2_distilled')));
+
+    expect(policy.ui.accelerator).toBeNull();
   });
 });
 

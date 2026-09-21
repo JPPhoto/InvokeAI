@@ -1579,6 +1579,9 @@
                       "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
                     },
                     {
@@ -2028,6 +2031,9 @@
                       "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
                     },
                     {
@@ -2475,6 +2481,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
@@ -2969,6 +2978,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
@@ -3490,6 +3502,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
@@ -4865,6 +4880,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
@@ -17460,6 +17478,9 @@
           },
           {
             "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
+          },
+          {
+            "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
           },
           {
             "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
@@ -39963,6 +39984,12 @@
                   "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/LTX2LoRACollectionLoader"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2LoRALoaderInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
                 },
                 {
@@ -40714,6 +40741,12 @@
                 },
                 {
                   "$ref": "#/components/schemas/LTX2LatentUpsampleOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2LoRACollectionLoaderOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2LoRALoaderOutput"
                 },
                 {
                   "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
@@ -49279,6 +49312,12 @@
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2LoRACollectionLoader"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRALoaderInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
               },
               {
@@ -49987,6 +50026,12 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2LatentUpsampleOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRACollectionLoaderOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRALoaderOutput"
               },
               {
                 "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
@@ -50799,6 +50844,12 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRACollectionLoader"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRALoaderInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
@@ -51904,6 +51955,12 @@
           "ltx2_latents_to_video": {
             "$ref": "#/components/schemas/VideoOutput"
           },
+          "ltx2_lora_collection_loader": {
+            "$ref": "#/components/schemas/LTX2LoRACollectionLoaderOutput"
+          },
+          "ltx2_lora_loader": {
+            "$ref": "#/components/schemas/LTX2LoRALoaderOutput"
+          },
           "ltx2_model_loader": {
             "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
           },
@@ -52546,6 +52603,8 @@
           "ltx2_image_conditioning",
           "ltx2_latent_upsample",
           "ltx2_latents_to_video",
+          "ltx2_lora_collection_loader",
+          "ltx2_lora_loader",
           "ltx2_model_loader",
           "ltx2_text_encoder",
           "ltx2_video_conditioning",
@@ -53291,6 +53350,12 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRACollectionLoader"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRALoaderInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
@@ -54461,6 +54526,12 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRACollectionLoader"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LoRALoaderInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
@@ -58682,7 +58753,7 @@
         "tags": ["ltx", "ltx2", "video", "audio", "denoise"],
         "title": "Denoise - LTX-2",
         "type": "object",
-        "version": "1.4.0",
+        "version": "1.5.0",
         "output": {
           "$ref": "#/components/schemas/LTX2DenoiseOutput"
         }
@@ -59679,6 +59750,268 @@
           "$ref": "#/components/schemas/VideoOutput"
         }
       },
+      "LTX2LoRACollectionLoader": {
+        "category": "model",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Apply a collection of LoRAs to an LTX-2 transformer.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "loras": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoRAField"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LoRAField"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "LoRAs to apply. May be a single LoRA or a collection.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "LoRAs",
+            "ui_model_base": ["ltx-2"],
+            "ui_model_type": ["lora"]
+          },
+          "transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Transformer",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Transformer"
+          },
+          "type": {
+            "const": "ltx2_lora_collection_loader",
+            "default": "ltx2_lora_collection_loader",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["lora", "model", "ltx", "ltx2"],
+        "title": "Apply LoRA Collection - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2LoRACollectionLoaderOutput"
+        }
+      },
+      "LTX2LoRACollectionLoaderOutput": {
+        "class": "output",
+        "description": "LTX-2 LoRA collection loader output.\n\nSeparate from the single loader's output because a collection applies zero or more LoRAs, so\nits metadata echo is a list \u2014 which is also what `core_metadata.loras` takes directly, with no\nintervening collect node.",
+        "properties": {
+          "transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Transformer",
+            "field_kind": "output",
+            "title": "LTX-2 Transformer",
+            "ui_hidden": false
+          },
+          "lora_metadata": {
+            "default": [],
+            "description": "The applied LoRAs, in the shape Core Metadata's `loras` field takes.",
+            "field_kind": "output",
+            "items": {
+              "$ref": "#/components/schemas/LoRAMetadataField"
+            },
+            "title": "LoRA Metadata",
+            "type": "array",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_lora_collection_loader_output",
+            "default": "ltx2_lora_collection_loader_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "transformer", "lora_metadata", "type", "type"],
+        "title": "LTX2LoRACollectionLoaderOutput",
+        "type": "object"
+      },
+      "LTX2LoRALoaderInvocation": {
+        "category": "model",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Apply a LoRA model to an LTX-2 transformer (e.g. the distilled step accelerator).\n\nA step-distillation LoRA changes what schedule the run should use, not just how many steps it\ntakes. The denoise node reads its schedule from the transformer's *variant*, which names the\ncheckpoint rather than the patch, so a distilled LoRA on a dev checkpoint still has to be told\nto take the distilled schedule \u2014 set `schedule` on the denoise node rather than leaving it on\n`auto`.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "lora": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "LoRA model to load",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true,
+            "title": "LoRA",
+            "ui_model_base": ["ltx-2"],
+            "ui_model_type": ["lora"]
+          },
+          "weight": {
+            "default": 1.0,
+            "description": "Strength of the LoRA. The distilled accelerator is trained for 1.0; it carries no alpha tensors, so this is the only scaling applied.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 1.0,
+            "orig_required": false,
+            "title": "Weight",
+            "type": "number"
+          },
+          "transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Transformer",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Transformer"
+          },
+          "type": {
+            "const": "ltx2_lora_loader",
+            "default": "ltx2_lora_loader",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["lora", "model", "ltx", "ltx2"],
+        "title": "Apply LoRA - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2LoRALoaderOutput"
+        }
+      },
+      "LTX2LoRALoaderOutput": {
+        "class": "output",
+        "description": "LTX-2 LoRA loader output.",
+        "properties": {
+          "transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Transformer",
+            "field_kind": "output",
+            "title": "LTX-2 Transformer",
+            "ui_hidden": false
+          },
+          "lora_metadata": {
+            "$ref": "#/components/schemas/LoRAMetadataField",
+            "description": "The applied LoRA, in the shape Core Metadata's `loras` field takes.",
+            "field_kind": "output",
+            "title": "LoRA Metadata",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_lora_loader_output",
+            "default": "ltx2_lora_loader_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "transformer", "lora_metadata", "type", "type"],
+        "title": "LTX2LoRALoaderOutput",
+        "type": "object"
+      },
       "LTX2ModelLoaderInvocation": {
         "category": "model",
         "class": "invocation",
@@ -59762,7 +60095,7 @@
         "tags": ["model", "ltx", "ltx2", "video"],
         "title": "Main Model - LTX-2",
         "type": "object",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "output": {
           "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
         }
@@ -60043,6 +60376,14 @@
           "transformer": {
             "$ref": "#/components/schemas/ModelIdentifierField",
             "description": "Info to load Transformer submodel"
+          },
+          "loras": {
+            "description": "LoRAs to apply on model loading",
+            "items": {
+              "$ref": "#/components/schemas/LoRAField"
+            },
+            "title": "Loras",
+            "type": "array"
           },
           "variant": {
             "anyOf": [
@@ -63205,6 +63546,158 @@
         ],
         "title": "LoRA_LyCORIS_Krea2_Config",
         "description": "Model config for Krea-2 LoRA models in LyCORIS (single-file diffusers PEFT) format."
+      },
+      "LoRA_LyCORIS_LTX2_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "type": {
+            "type": "string",
+            "const": "lora",
+            "title": "Type",
+            "default": "lora"
+          },
+          "trigger_phrases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Phrases",
+            "description": "Set of trigger phrases for this model"
+          },
+          "default_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoraModelDefaultSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default settings for this model"
+          },
+          "format": {
+            "type": "string",
+            "const": "lycoris",
+            "title": "Format",
+            "default": "lycoris"
+          },
+          "base": {
+            "type": "string",
+            "const": "ltx-2",
+            "title": "Base",
+            "default": "ltx-2"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "type",
+          "trigger_phrases",
+          "default_settings",
+          "format",
+          "base"
+        ],
+        "title": "LoRA_LyCORIS_LTX2_Config",
+        "description": "Model config for LTX-2 LoRA models in LyCORIS (single-file PEFT) format.\n\nLTX-2 LoRAs (e.g. the 2.5 distilled step-accelerator) target the\n``LTX2VideoTransformer3DModel`` in the official Lightricks single-file layout. Detection keys\non submodules that exist only because LTX-2 is a *dual-stream* video+audio transformer -- the\nper-block audio tower and the cross-modal attentions, or the top-level cross-modal modulation\nheads -- and rejects any state dict carrying another architecture's signature. See\n``ltx2_lora_constants`` for the exact patterns, and for why the block path alone is not\nsufficient: LTX-2 shares ``transformer_blocks.N.attn1`` with Wan's diffusers layout and with\nQwenImage."
       },
       "LoRA_LyCORIS_MiniMaxH3_Config": {
         "properties": {
@@ -79548,6 +80041,9 @@
                 "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
               },
               {
+                "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
+              },
+              {
                 "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
               },
               {
@@ -80243,6 +80739,9 @@
                     "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
                   },
                   {
+                    "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
+                  },
+                  {
                     "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
                   },
                   {
@@ -80823,6 +81322,9 @@
                 "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
               },
               {
+                "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
+              },
+              {
                 "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
               },
               {
@@ -81257,6 +81759,9 @@
               },
               {
                 "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
+              },
+              {
+                "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
               },
               {
                 "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"
@@ -82173,6 +82678,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/LoRA_LyCORIS_QwenImage_Config"
+                },
+                {
+                  "$ref": "#/components/schemas/LoRA_LyCORIS_LTX2_Config"
                 },
                 {
                   "$ref": "#/components/schemas/LoRA_LyCORIS_MiniMaxH3_Config"

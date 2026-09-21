@@ -824,22 +824,40 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       }
     : { audio_cfg_scale: 1, cfg_scale: 1, modality_scale: 1, stg_scale: 0 };
 
+  const activeLoras = getActiveCompatibleLoras(settings, model);
+  let transformerSource: BackendInvocationContract = modelLoader;
+
+  if (activeLoras.length) {
+    transformerSource = addTransformerLoraCollectionLoader(
+      graph,
+      activeLoras,
+      'ltx2_lora_collection_loader',
+      transformerSource,
+      ['transformer']
+    );
+  }
+
   const denoise = addNode(graph, {
     fps: timing.fps,
     height: stages.base.height,
     id: 'denoise_latents',
     num_frames: timing.numFrames,
-    // 'auto' rather than the panel's own reading of the variant: the loader
-    // stamps the schedule off the checkpoint itself, which is the authority
-    // when a release the panel does not recognise falls back to the dev policy.
-    schedule: 'auto',
+    // Normally 'auto': the loader stamps the schedule off the checkpoint itself, which is the
+    // authority when a release the panel does not recognise falls back to the dev policy.
+    //
+    // The step-distillation LoRA is the exception, and it has to be named here. 'auto' resolves off
+    // the transformer's *variant*, which names the checkpoint and not the patch, so a distilled
+    // LoRA on a Dev checkpoint would still take the guided ~30-step schedule -- the accelerator
+    // would set 8 steps and then sample them on the wrong schedule, which looks like a broken
+    // model rather than a wiring mistake.
+    schedule: settings.acceleratorEnabled ? 'distilled' : 'auto',
     steps: settings.steps,
     type: 'ltx2_denoise',
     width: stages.base.width,
     ...guidance,
   });
 
-  addEdge(graph, modelLoader, 'transformer', denoise, 'transformer');
+  addEdge(graph, transformerSource, 'transformer', denoise, 'transformer');
   addEdge(graph, textEncoder, 'conditioning', denoise, 'positive_conditioning');
   if (negativeWired) {
     addEdge(graph, textEncoder, 'negative_conditioning', denoise, 'negative_conditioning');
@@ -1007,7 +1025,8 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       height: stages.final.height,
       id: 'refine_latents',
       num_frames: timing.numFrames,
-      schedule: 'auto',
+      // Same schedule as the base pass: the patch is on the transformer both passes share.
+      schedule: settings.acceleratorEnabled ? 'distilled' : 'auto',
       // The refine pass enters the schedule partway down and samples its tail, so a variant that
       // pays four forwards a step gets a budget of its own rather than the base pass's. Never more
       // than the base pass, though: shortening Steps for a quick probe must not leave the expensive
@@ -1018,7 +1037,7 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       ...guidance,
     });
 
-    addEdge(graph, modelLoader, 'transformer', refine, 'transformer');
+    addEdge(graph, transformerSource, 'transformer', refine, 'transformer');
     addEdge(graph, textEncoder, 'conditioning', refine, 'positive_conditioning');
     if (negativeWired) {
       addEdge(graph, textEncoder, 'negative_conditioning', refine, 'negative_conditioning');
