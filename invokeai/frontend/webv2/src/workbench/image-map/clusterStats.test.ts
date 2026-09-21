@@ -18,7 +18,6 @@ describe('summarizeClusters', () => {
     expect(summarizeClusters(points(0, 0, 0, 1, 1, 2, -1, -1))).toEqual({
       clusterCount: 3,
       largestCluster: 3,
-      smallestCluster: 1,
       unclustered: 2,
     });
   });
@@ -28,7 +27,6 @@ describe('summarizeClusters', () => {
     expect(summarizeClusters(points(-1, -1, -1))).toEqual({
       clusterCount: 0,
       largestCluster: 0,
-      smallestCluster: 0,
       unclustered: 3,
     });
   });
@@ -39,25 +37,19 @@ describe('summarizeClusters', () => {
     expect(summarizeClusters(points(7, 7, 42))).toEqual({
       clusterCount: 2,
       largestCluster: 2,
-      smallestCluster: 1,
       unclustered: 0,
     });
   });
 
   it('handles an empty map', () => {
-    expect(summarizeClusters([])).toEqual({
-      clusterCount: 0,
-      largestCluster: 0,
-      smallestCluster: 0,
-      unclustered: 0,
-    });
+    expect(summarizeClusters([])).toEqual({ clusterCount: 0, largestCluster: 0, unclustered: 0 });
   });
 });
 
 describe('describeClusters', () => {
   it('agrees with the noun it is counting', () => {
     expect(describeClusters(summarizeClusters(points(0, 0, 1, -1)))).toBe(
-      'Cluster count: 2, Largest cluster: 2 media points, Smallest cluster: 1 media point, Unclustered: 1 media point'
+      'Cluster count: 2, Largest cluster: 2 media points, Unclustered: 1 media point'
     );
   });
 

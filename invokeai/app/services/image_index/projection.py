@@ -84,7 +84,14 @@ def compute_umap(embeddings: np.ndarray, seed: int = DEFAULT_UMAP_SEED) -> np.nd
 # Above this many points, per-request DBSCAN is skipped (everything is served
 # as unclustered) — sklearn DBSCAN materializes all radius neighborhoods, and
 # the memory cost grows with the pair count.
-MAX_CLUSTERED_POINTS = 50_000
+#
+# Raised from 50k to cover a reported 170k-item gallery, which the old value
+# left entirely unclustered with nothing in the response saying so. The
+# neighbor-pair budget below, not this number, is what actually bounds
+# DBSCAN's memory; this bounds the per-request CPU and the size of the label
+# arrays the endpoint caches. Both grow with it — see the cluster cache in
+# the image_map router — so it is set from measurement, not headroom.
+MAX_CLUSTERED_POINTS = 300_000
 
 # eps is clamped to this fraction of the projection's coordinate span. UMAP's
 # output scale is data-dependent, so an absolute eps close to the span makes

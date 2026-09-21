@@ -169,12 +169,16 @@ def _release_refresh_slot(user_id: str) -> None:
         _refresh_claims.pop(user_id, None)
 
 
-# /points is polled, and between polls its inputs almost never change, so the
-# clustering it repeats is usually identical work. Caching the labels turns the
-# steady state into a dict lookup; entries are int64 label arrays, bounded at
-# ~400KB each by the 50k-point clustering cap (only a clustering that actually
-# ran is stored, so the all-noise array a skipped clustering returns — free to
-# recompute and unbounded in size — never lands here).
+# /points is refreshed on every gallery change, and between refreshes its
+# inputs almost never change, so the clustering it repeats is usually
+# identical work. Caching the labels turns the steady state into a dict
+# lookup; entries are int64 label arrays, bounded at 8 bytes per point by the
+# clustering cap (only a clustering that actually ran is stored, so the
+# all-noise array a skipped clustering returns — free to recompute and
+# unbounded in size — never lands here). At the current 300k cap that is
+# 2.4MB per entry and ~77MB across a full pool, up from ~400KB and ~13MB when
+# the cap was 50k; if the cap stays this high, the pool size below wants
+# revisiting.
 #
 # ONE entry per user, rather than a shared pool of N. A shared pool made the
 # cache worse than none: with more concurrent map users than slots, strict LRU

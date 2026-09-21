@@ -94,7 +94,7 @@ describe('ImageMapWidgetFooter', () => {
 
     expect(host?.textContent).toContain('6 points');
     expect(host?.textContent).toContain(
-      'Cluster count: 2, Largest cluster: 3 media points, Smallest cluster: 2 media points, Unclustered: 1 media point'
+      'Cluster count: 2, Largest cluster: 3 media points, Unclustered: 1 media point'
     );
   });
 
@@ -127,9 +127,7 @@ describe('ImageMapWidgetFooter', () => {
 
     const tooltip = document.querySelector('[role="tooltip"]');
 
-    expect(tooltip?.textContent).toBe(
-      'Cluster count: 2, Largest cluster: 3 media points, Smallest cluster: 2 media points, Unclustered: 1 media point'
-    );
+    expect(tooltip?.textContent).toBe('Cluster count: 2, Largest cluster: 3 media points, Unclustered: 1 media point');
   });
 
   it('says so when nothing clustered', async () => {
@@ -137,7 +135,7 @@ describe('ImageMapWidgetFooter', () => {
     await renderFooter([-1, -1, -1]);
 
     expect(host?.textContent).toContain(
-      'Cluster count: 0, Largest cluster: 0 media points, Smallest cluster: 0 media points, Unclustered: 3 media points'
+      'Cluster count: 0, Largest cluster: 0 media points, Unclustered: 3 media points'
     );
   });
 });

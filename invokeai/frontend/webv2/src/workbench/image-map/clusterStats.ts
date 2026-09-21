@@ -4,8 +4,6 @@ export interface ClusterStats {
   clusterCount: number;
   /** Size of the biggest cluster, or 0 when nothing clustered. */
   largestCluster: number;
-  /** Size of the smallest cluster, or 0 when nothing clustered. */
-  smallestCluster: number;
   /** Points DBSCAN labelled noise (cluster -1). */
   unclustered: number;
 }
@@ -22,7 +20,6 @@ export const describeClusters = (stats: ClusterStats): string =>
   [
     `Cluster count: ${stats.clusterCount.toLocaleString()}`,
     `Largest cluster: ${count(stats.largestCluster, 'media point')}`,
-    `Smallest cluster: ${count(stats.smallestCluster, 'media point')}`,
     `Unclustered: ${count(stats.unclustered, 'media point')}`,
   ].join(', ');
 
@@ -52,17 +49,10 @@ export const summarizeClusters = (points: readonly ImageMapPoint[]): ClusterStat
   }
 
   let largestCluster = 0;
-  let smallestCluster = Infinity;
 
   for (const size of sizes.values()) {
     largestCluster = Math.max(largestCluster, size);
-    smallestCluster = Math.min(smallestCluster, size);
   }
 
-  return {
-    clusterCount: sizes.size,
-    largestCluster,
-    smallestCluster: sizes.size > 0 ? smallestCluster : 0,
-    unclustered,
-  };
+  return { clusterCount: sizes.size, largestCluster, unclustered };
 };
