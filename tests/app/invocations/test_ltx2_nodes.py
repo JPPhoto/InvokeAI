@@ -1459,6 +1459,10 @@ def test_the_reservation_covers_the_keyframe_rows_the_transformer_attends_over(m
     import invokeai.app.invocations.ltx2.ltx2_denoise as denoise_module
 
     captured: list[int] = []
+    # The reservation is arithmetic over the sequence, not a hardware question, but `invoke` asks the
+    # chosen device for its dtype before it gets there. Left unpinned that reaches the real
+    # accelerator: on a macOS runner MPS reports available and then fails every allocation.
+    monkeypatch.setattr(TorchDevice, "choose_torch_device", staticmethod(lambda: torch.device("cpu")))
     node = _denoise(num_frames=121, keyframe_conditioning=_keyframe_field(-1), cfg_scale=1.0, audio_cfg_scale=1.0)
     monkeypatch.setattr(
         type(node),
