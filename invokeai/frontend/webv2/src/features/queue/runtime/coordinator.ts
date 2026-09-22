@@ -438,9 +438,18 @@ export const createQueueCoordinator = (
         return;
       }
       case 'completed':
+        // A called workflow's child lifecycle is represented by the visible
+        // Call Saved Workflow node. Only the root invocation may settle that
+        // node or replace its latest output.
+        if (backendItemId !== nodeEvent.event.item_id) {
+          return;
+        }
         nodeExecution.completed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
       case 'failed':
+        if (backendItemId !== nodeEvent.event.item_id) {
+          return;
+        }
         nodeExecution.failed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
     }

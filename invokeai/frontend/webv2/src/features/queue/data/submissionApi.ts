@@ -145,7 +145,6 @@ export const enqueueUtility = async (request: {
 };
 
 const getResultImageNames = (queueItem: QueueServerItemDTO, options?: QueueResultImageOptions): string[] => {
-  const imageNames = new Set<string>();
   const results = queueItem.session?.results ?? {};
   const preparedSourceMapping = queueItem.session?.prepared_source_mapping ?? {};
   const resultValues = options?.resultNodeIds
@@ -154,11 +153,7 @@ const getResultImageNames = (queueItem: QueueServerItemDTO, options?: QueueResul
         .map(([, result]) => result)
     : Object.values(results);
 
-  for (const result of resultValues) {
-    getOutputImageNames(result).forEach((imageName) => imageNames.add(imageName));
-  }
-
-  return [...imageNames];
+  return [...new Set(resultValues.flatMap(getOutputImageNames))];
 };
 
 const getResultImage = async (

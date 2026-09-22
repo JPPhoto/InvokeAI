@@ -1061,6 +1061,25 @@ describe('queueCoordinator', () => {
     );
   });
 
+  it('does not let child terminal events settle the visible call node', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    const child = {
+      ...createStatusEvent({ item_id: 2 }),
+      invocation_source_id: 'child-node',
+      root_item_id: 1,
+      workflow_call_parent_source_id: 'call-node',
+    };
+    harness.socket.fire('invocation_complete', { ...child, result: { type: 'integer_output', value: 1 } });
+    harness.socket.fire('invocation_error', { ...child, error_message: 'child failed', error_type: 'ValueError' });
+
+    expect(harness.nodeExecution.completed).not.toHaveBeenCalled();
+    expect(harness.nodeExecution.failed).not.toHaveBeenCalled();
+    expect(harness.nodeExecution.settleRunning).not.toHaveBeenCalled();
+  });
+
   it('routes child preview frames to the parent call node and root progress slot', async () => {
     harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
     harness.coordinator.connect();

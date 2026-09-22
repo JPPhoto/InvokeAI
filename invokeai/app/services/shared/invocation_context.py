@@ -66,6 +66,9 @@ class InvocationContextData:
     """The invocation that is being executed."""
     source_invocation_id: str
     """The ID of the invocation from which the currently executing invocation was prepared."""
+    workflow_json: str | None = None
+    """Cached workflow JSON used by repeated image/video saves in this invocation context."""
+    workflow_json_loaded: bool = False
 
 
 class InvocationContextInterface:
@@ -74,12 +77,16 @@ class InvocationContextInterface:
         self._data = data
 
     def _get_workflow_json(self) -> str | None:
-        queue_item = self._data.queue_item
-        if queue_item.workflow is not None:
-            return queue_item.workflow.model_dump_json()
-        if queue_item.root_item_id is not None:
-            return self._services.session_queue.get_queue_item_workflow_json(queue_item.root_item_id)
-        return None
+        if not self._data.workflow_json_loaded:
+            queue_item = self._data.queue_item
+            if queue_item.workflow is not None:
+                self._data.workflow_json = queue_item.workflow.model_dump_json()
+            elif queue_item.root_item_id is not None:
+                self._data.workflow_json = self._services.session_queue.get_queue_item_workflow_json(
+                    queue_item.root_item_id
+                )
+            self._data.workflow_json_loaded = True
+        return self._data.workflow_json
 
 
 class BoardsInterface(InvocationContextInterface):

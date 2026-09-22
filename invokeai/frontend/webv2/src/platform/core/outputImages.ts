@@ -1,56 +1,47 @@
 /**
- * Collect image names from an invocation output, including named values returned by
- * `workflow_return`. A collection is intentionally flattened: callers that render one
- * thumbnail use the first name, while queue result routing uses every name.
+ * Shared adapter from backend invocation-output contracts to image names.
+ *
+ * This deliberately understands only the output shapes owned by the backend
+ * contract. It is not a general object walker: metadata and invocation inputs
+ * may contain images, but they are not outputs.
  */
 export const getOutputImageNames = (output: unknown): string[] => {
   const imageNames = new Set<string>();
 
-  const visitImageValue = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(visitImageValue);
-      return;
-    }
-
+  const visitOutputValue = (value: unknown): void => {
     if (!value || typeof value !== 'object') {
       return;
     }
 
-    const imageName = (value as { image_name?: unknown }).image_name;
+    if (Array.isArray(value)) {
+      value.forEach(visitOutputValue);
+      return;
+    }
+
+    const record = value as Record<string, unknown>;
+    const imageName = record.image_name;
     if (typeof imageName === 'string') {
       imageNames.add(imageName);
       return;
     }
 
-    if ('image' in value) {
-      visitImageValue(value.image);
+    if ('image' in record) {
+      visitOutputValue(record.image);
     }
 
-    if ('collection' in value) {
-      visitImageValue(value.collection);
+    if ('collection' in record) {
+      visitOutputValue(record.collection);
     }
 
-    // `values` is the only output field whose nested values are all returned
-    // values. Do not walk arbitrary output fields such as `value` or metadata.
-    if ('values' in value) {
-      visitImageValue(value.values);
-    }
-
-    // A workflow return value is a mapping from names to output values. Its
-    // entries need one more explicit descent, without opening unrelated fields.
-    if (!('image' in value) && !('collection' in value) && !('values' in value)) {
-      Object.entries(value)
-        .filter(([key]) => key !== 'output_meta')
-        .forEach(([, nestedValue]) => visitImageValue(nestedValue));
+    // `values` is the workflow-return wrapper. Its keys are user-selected and
+    // therefore must never be interpreted as field names.
+    if ('values' in record && record.values && typeof record.values === 'object') {
+      Object.values(record.values as Record<string, unknown>).forEach(visitOutputValue);
     }
   };
 
   if (output && typeof output === 'object' && !Array.isArray(output)) {
-    const result = output as Record<string, unknown>;
-
-    visitImageValue(result.image);
-    visitImageValue(result.collection);
-    visitImageValue(result.values);
+    visitOutputValue(output);
   }
 
   return [...imageNames];

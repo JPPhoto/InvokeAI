@@ -1,6 +1,7 @@
 """Tests for workflow-call relationship metadata on session_queue items."""
 
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +14,7 @@ from invokeai.app.services.events.events_common import (
     QueueItemStatusChangedEvent,
 )
 from invokeai.app.services.image_files.image_files_disk import DiskImageFileStorage
+from invokeai.app.services.names.names_default import SimpleNameService
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.session_queue.session_queue_common import (
     NodeFieldValue,
@@ -22,6 +24,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
 from invokeai.app.services.session_queue.session_queue_sqlite import SqliteSessionQueue
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 from invokeai.app.services.shared.invocation_context import ImagesInterface, InvocationContextData
+from invokeai.app.services.urls.urls_default import LocalUrlService
 from invokeai.app.services.workflow_records.workflow_records_common import WorkflowMeta, WorkflowWithoutID
 from tests.test_nodes import TestEventService
 
@@ -219,7 +222,7 @@ def test_status_transition_reuses_loaded_queue_item(
 
 
 def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
-    session_queue: SqliteSessionQueue, tmp_path
+    session_queue: SqliteSessionQueue, mock_invoker: Invoker, tmp_path: Path
 ) -> None:
     parent_graph = Graph()
     parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
@@ -280,31 +283,29 @@ def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
     assert child_queue_item.session_id == child_session.id
     assert child_queue_item.workflow is None
 
-    services = MagicMock()
-    services.configuration.multiuser = False
-    services.configuration.pil_compress_level = 6
-    services.images.create.return_value = MagicMock()
-    workflow_json = _workflow_without_id().model_dump_json()
-    services.session_queue.get_queue_item_workflow_json.return_value = workflow_json
+    image_files = DiskImageFileStorage(tmp_path / "images")
+    mock_invoker.services.session_queue = session_queue
+    mock_invoker.services.image_files = image_files
+    mock_invoker.services.names = SimpleNameService()
+    mock_invoker.services.urls = LocalUrlService()
+    image_files.start(mock_invoker)
+    mock_invoker.services.images.start(mock_invoker)
+
     images = ImagesInterface(
-        services,
+        mock_invoker.services,
         InvocationContextData(
             queue_item=child_queue_item,
-            invocation=MagicMock(is_intermediate=False),
+            invocation=MagicMock(is_intermediate=False, id="image-node"),
             source_invocation_id="image-node",
         ),
         MagicMock(),
     )
-    images.save(Image.new("RGB", (4, 4)))
-    assert services.session_queue.get_queue_item_workflow_json.call_args.args == (parent_item_id,)
-    assert services.images.create.call_args.kwargs["workflow"] == workflow_json
+    dto = images.save(Image.new("RGB", (4, 4)))
 
-    storage = DiskImageFileStorage(tmp_path)
-    storage._DiskImageFileStorage__invoker = services  # type: ignore
-    storage.save(image=Image.new("RGB", (4, 4)), image_name="child.png", workflow=workflow_json)
-
-    with Image.open(storage.get_path("child.png")) as saved:
+    workflow_json = _workflow_without_id().model_dump_json()
+    with Image.open(image_files.get_path(dto.image_name)) as saved:
         assert saved.info["invokeai_workflow"] == workflow_json
+    assert mock_invoker.services.images.get_workflow(dto.image_name) == workflow_json
 
 
 def test_enqueue_workflow_call_child_rejects_full_pending_queue(session_queue: SqliteSessionQueue) -> None:
