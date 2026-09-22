@@ -671,10 +671,18 @@ const runVideoPreviewJourney = async (browser) => {
     assert.equal(await video.getAttribute('playsinline'), '');
     assert.match((await video.getAttribute('poster')) ?? '', /fixture-video-001\.mp4\/thumbnail$/);
     assert.equal(await video.getAttribute('draggable'), null);
+
+    // Media details live in the floating header chrome's Details popover; audit the surface with it open.
+    const details = page
+      .locator('[data-hotkey-widget-region="center"][data-hotkey-widget-type-id="preview"]')
+      .getByRole('button', { exact: true, name: 'Details' });
+    await details.focus();
+    await expectFocused(details, 'The preview Details toggle must be keyboard focusable.');
+    await details.press('Enter');
     await page.getByText(/Duration 0:01/).waitFor();
     await waitForSettledDocument(page);
 
-    // Disable the caption rule only for generated video, which has no caption track.
+    // Generated media has no caption track, so only this video surface disables axe's caption rule.
     await assertNoAxeViolations(page, id, { rules: { 'video-caption': { enabled: false } } });
 
     if (pageErrors.length > 0) {
