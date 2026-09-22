@@ -1,43 +1,19 @@
-import type { BuiltInLayoutPresetId } from '@workbench/layoutContracts';
-import type { LucideIcon } from 'lucide-react';
+import type { LaunchpadStartEntry } from '@workbench/launchpad/startEntries';
 
 import { Icon, Menu, Portal } from '@chakra-ui/react';
 import { Button, IconButton } from '@platform/ui/Button';
 import { Group } from '@platform/ui/Group';
-import { MenuContent } from '@platform/ui/Menu';
-import { Link } from '@tanstack/react-router';
-import { BUILT_IN_LAYOUT_PRESET_LABELS, LAUNCHPAD_LAYOUT_IDS } from '@workbench/launchpad/intents';
-import { ChevronDownIcon, ClapperboardIcon, LayersIcon, PlusIcon, TypeIcon, WorkflowIcon } from 'lucide-react';
+import { MenuActionItem, MenuContent } from '@platform/ui/Menu';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { LAUNCHPAD_START_ENTRIES } from '@workbench/launchpad/startEntries';
+import { ChevronDownIcon, PlusIcon } from 'lucide-react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Plain clicks use the last preset; the caret chooses a built-in arrangement. Shared labels avoid drift without
- * importing preset snapshots or the custom icon catalog.
- */
+/** Plain clicks use the last arrangement; the caret offers the same starts as the Home tiles. */
 
 const NEW_PROJECT_SEARCH = { new: true } as const;
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
-
-const LAYOUT_ICONS: Record<BuiltInLayoutPresetId, LucideIcon> = {
-  automate: WorkflowIcon,
-  compose: TypeIcon,
-  edit: LayersIcon,
-  video: ClapperboardIcon,
-};
-
-interface NewProjectLayoutItem {
-  icon: LucideIcon;
-  id: BuiltInLayoutPresetId;
-  label: string;
-  search: { new: true; preset: BuiltInLayoutPresetId };
-}
-
-const LAYOUT_ITEMS: NewProjectLayoutItem[] = LAUNCHPAD_LAYOUT_IDS.map((id) => ({
-  icon: LAYOUT_ICONS[id],
-  id,
-  label: BUILT_IN_LAYOUT_PRESET_LABELS[id],
-  search: { new: true, preset: id },
-}));
 
 export const NewProjectButton = ({ variant = 'solid' }: { variant?: 'outline' | 'solid' }) => {
   const { t } = useTranslation();
@@ -52,17 +28,17 @@ export const NewProjectButton = ({ variant = 'solid' }: { variant?: 'outline' | 
       </Button>
       <Menu.Root positioning={MENU_POSITIONING}>
         <Menu.Trigger asChild>
-          <IconButton aria-label={t('projects.newProjectWithLayout')} size="xs" variant={variant}>
+          <IconButton aria-label={t('projects.newProjectStart')} size="xs" variant={variant}>
             <Icon as={ChevronDownIcon} boxSize="3.5" />
           </IconButton>
         </Menu.Trigger>
         <Portal>
           <Menu.Positioner>
-            <MenuContent minW="12rem">
+            <MenuContent minW="16rem">
               <Menu.ItemGroup>
-                <Menu.ItemGroupLabel>{t('projects.newProjectWithLayout')}</Menu.ItemGroupLabel>
-                {LAYOUT_ITEMS.map((item) => (
-                  <NewProjectLayoutMenuItem key={item.id} item={item} />
+                <Menu.ItemGroupLabel>{t('launchpad.home.intents.heading')}</Menu.ItemGroupLabel>
+                {LAUNCHPAD_START_ENTRIES.map((entry) => (
+                  <NewProjectStartMenuItem entry={entry} key={entry.id} />
                 ))}
               </Menu.ItemGroup>
             </MenuContent>
@@ -73,11 +49,18 @@ export const NewProjectButton = ({ variant = 'solid' }: { variant?: 'outline' | 
   );
 };
 
-const NewProjectLayoutMenuItem = ({ item }: { item: NewProjectLayoutItem }) => (
-  <Menu.Item asChild value={item.id}>
-    <Link search={item.search} to="/app">
-      <Icon as={item.icon} boxSize="3.5" color="fg.subtle" />
-      <Menu.ItemText fontSize="xs">{item.label}</Menu.ItemText>
-    </Link>
-  </Menu.Item>
-);
+const NewProjectStartMenuItem = ({ entry }: { entry: LaunchpadStartEntry }) => {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const handleSelect = useCallback(() => void navigate({ search: entry.search, to: '/app' }), [entry.search, navigate]);
+
+  return (
+    <MenuActionItem
+      hint={t(entry.descriptionKey)}
+      icon={entry.icon}
+      label={t(entry.labelKey)}
+      value={entry.id}
+      onSelect={handleSelect}
+    />
+  );
+};

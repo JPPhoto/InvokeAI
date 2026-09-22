@@ -25,7 +25,7 @@ import {
   useRouter,
 } from '@tanstack/react-router';
 import { WorkbenchSplashScreen } from '@workbench/components/WorkbenchSplashScreen';
-import { isLaunchpadIntentId, isLaunchpadLayoutId } from '@workbench/launchpad/intents';
+import { isLaunchpadIntentId } from '@workbench/launchpad/intents';
 import { Launchpad } from '@workbench/launchpad/Launchpad';
 import { ProjectFileOptionsProvider } from '@workbench/projects/components/ProjectFileOptionsProvider';
 import { peekOpenProjectIds, type WorkbenchSearch } from '@workbench/projects/session';
@@ -180,7 +180,6 @@ const workbenchRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): WorkbenchSearch => ({
     intent: isLaunchpadIntentId(search.intent) ? search.intent : undefined,
     new: search.new === true || search.new === 'true' || search.new === 1 ? true : undefined,
-    preset: isLaunchpadLayoutId(search.preset) ? search.preset : undefined,
     project: typeof search.project === 'string' && search.project.length > 0 ? search.project : undefined,
   }),
 });

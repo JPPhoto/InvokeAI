@@ -508,7 +508,7 @@
       "unsupportedVersion": "\"{{name}}\" was saved by a newer version of Invoke and cannot be opened here."
     },
     "newProject": "New project",
-    "newProjectWithLayout": "Start with a layout",
+    "newProjectStart": "Choose how to start",
     "noSavedProjects": "No saved projects yet.",
     "noSavedProjectsDescription": "Create your first project to start generating.",
     "noSearchMatches": "No projects match “{{search}}”.",

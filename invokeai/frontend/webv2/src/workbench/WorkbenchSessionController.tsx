@@ -27,14 +27,8 @@ const HydratedSessionController = ({ search }: { search: WorkbenchSearch }) => {
       // Apply the draft intent before stripping it from search so it runs exactly once.
       const intent = resolveLaunchpadIntent(search.intent);
 
-      // A named preset chooses the arrangement; intent may still choose the invocation source.
-      if (search.preset) {
-        commands.layout.applyPreset(search.preset);
-      } else if (intent) {
-        commands.layout.applyPreset(intent.presetId);
-      }
-
       if (intent) {
+        commands.layout.applyPreset(intent.presetId);
         commands.generation.setSource(intent.sourceId);
       }
 

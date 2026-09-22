@@ -1,5 +1,4 @@
 import type { LaunchpadIntentId } from '@workbench/launchpad/intents';
-import type { BuiltInLayoutPresetId } from '@workbench/layoutContracts';
 import type { AccountState, WorkbenchState } from '@workbench/projectContracts';
 import type { QueueRunJournal } from '@workbench/queue-integration/queueRunJournal';
 import type { WorkbenchPreferences } from '@workbench/settings/contracts';
@@ -12,15 +11,11 @@ import { getClientStateValue, setClientStateValue } from './api';
 
 export const SESSION_STATE_KEY = 'webv2:workbench-account';
 
-/**
- * project opens a library project; new creates a draft. An explicit preset overrides the arrangement implied by
- * intent.
- */
+/** project opens a library project; new creates a draft whose intent picks the arrangement and source. */
 export interface WorkbenchSearch {
   new?: true;
   project?: string;
   intent?: LaunchpadIntentId;
-  preset?: BuiltInLayoutPresetId;
 }
 
 export interface WorkbenchSessionBlob {
