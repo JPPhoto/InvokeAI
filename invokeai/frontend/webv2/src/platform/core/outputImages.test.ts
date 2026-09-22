@@ -7,7 +7,7 @@ describe('getOutputImageNames', () => {
     expect(
       getOutputImageNames({
         collection: [{ image_name: 'a.png' }, { image_name: 'b.png' }],
-      }),
+      })
     ).toEqual(['a.png', 'b.png']);
 
     expect(
@@ -21,7 +21,7 @@ describe('getOutputImageNames', () => {
           image: { image: { image_name: 'd.png' }, type: 'image_output' },
           values: { image_name: 'e.png' },
         },
-      }),
+      })
     ).toEqual(['c.png', 'd.png', 'e.png']);
 
     expect(
