@@ -1,8 +1,11 @@
 import type { GenerationModelCatalogItem, MainModelConfig } from '@features/generation/contracts';
 
 import { architectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
-import { isLtx2TwoStage, LTX2_DEFAULT_NEGATIVE_PROMPT } from '@features/video/core/dimensions';
-import { LTX2_EXTEND_CONTEXT_FRAMES } from '@features/video/core/dimensions';
+import {
+  isLtx2TwoStage,
+  LTX2_DEFAULT_NEGATIVE_PROMPT,
+  LTX2_EXTEND_CONTEXT_FRAMES,
+} from '@features/video/core/dimensions';
 import { isVideoTargetResolution, normalizeVideoSettings } from '@features/video/core/settings';
 import { describe, expect, it } from 'vitest';
 
