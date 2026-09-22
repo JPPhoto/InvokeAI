@@ -37,6 +37,8 @@ export interface ModelsUiSnapshot {
   selectedBundleName: string | null;
   /** Whether the always-visible install queue footer is expanded. */
   queueExpanded: boolean;
+  /** Whether the expanded queue fills the detail pane instead of docking as a footer. */
+  queueMaximized: boolean;
   /** Scroll offsets per library-list instance, restored on remount. */
   libraryScrollOffsets: Record<string, number>;
   /** Compact/full row density per picker id, remembered across opens. */
@@ -57,6 +59,7 @@ const createInitialModelsUiSnapshot = (): ModelsUiSnapshot => ({
   pickerBaseFilters: {},
   pickerCompactViews: {},
   queueExpanded: false,
+  queueMaximized: false,
   scan: null,
   selectedBundleName: null,
   selectedKeys: new Set(),
@@ -96,19 +99,21 @@ export const pruneModelsUiKeys = (deletedKeys: string[]): void => {
   });
 };
 
+// Revealing a tab must also restore the pane a maximized queue is covering.
+
 /** Jump the model manager's detail pane to a specific tab. */
 export const openModelManagerTab = (activeTab: ModelManagerTab): void => {
-  updateModelsUi({ activeTab });
+  updateModelsUi({ activeTab, queueMaximized: false });
 };
 
 /** Focus a model and reveal it in the detail tab (e.g. from a library row). */
 export const openModelDetail = (modelKey: string): void => {
-  updateModelsUi({ activeModelKey: modelKey, activeTab: 'details' });
+  updateModelsUi({ activeModelKey: modelKey, activeTab: 'details', queueMaximized: false });
 };
 
 /** Name the requested provider so its possibly offscreen key card can reveal itself. */
 export const openExternalProviderKeys = (providerId: string): void => {
-  updateModelsUi({ activeTab: 'keys', highlightProviderId: providerId });
+  updateModelsUi({ activeTab: 'keys', highlightProviderId: providerId, queueMaximized: false });
 };
 
 /** Consumes the pending highlight so it fires once per request. */
@@ -118,7 +123,13 @@ export const clearHighlightedProvider = (): void => {
 
 /** Clear scan/repo results when opening a bundle because those panels otherwise hide it. */
 export const openAddModelsWithBundle = (bundleName: string): void => {
-  updateModelsUi({ activeTab: 'add', hfLookup: null, scan: null, selectedBundleName: bundleName });
+  updateModelsUi({
+    activeTab: 'add',
+    hfLookup: null,
+    queueMaximized: false,
+    scan: null,
+    selectedBundleName: bundleName,
+  });
 };
 
 /**
@@ -131,6 +142,7 @@ export const requestAddModelsSearch = (query: string): void => {
     addModelsSeed: query,
     addModelsTypeSeed: null,
     hfLookup: null,
+    queueMaximized: false,
     scan: null,
     selectedBundleName: null,
   });
@@ -143,6 +155,7 @@ export const requestAddModelsTypeFilter = (typeFilter: ModelTaxonomyType): void 
     addModelsSeed: null,
     addModelsTypeSeed: typeFilter,
     hfLookup: null,
+    queueMaximized: false,
     scan: null,
     selectedBundleName: null,
   });
@@ -170,6 +183,10 @@ export const openInstallQueue = (): void => {
 
 export const setQueueExpanded = (queueExpanded: boolean): void => {
   updateModelsUi({ queueExpanded });
+};
+
+export const setQueueMaximized = (queueMaximized: boolean): void => {
+  updateModelsUi({ queueMaximized });
 };
 
 export const saveLibraryScrollOffset = (instanceId: string, offset: number): void => {

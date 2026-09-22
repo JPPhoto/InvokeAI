@@ -24,11 +24,15 @@ export interface InstallsSnapshot {
   jobs: ModelInstallJob[];
   status: 'idle' | 'loading' | 'loaded' | 'error';
   error: string | null;
+  /** Settled jobs hidden locally; the backend only prunes all finished jobs at once. */
+  dismissedJobIds: ReadonlySet<number>;
 }
 
 export interface InstallDownloadProgress {
   bytes: number;
   totalBytes: number;
+  /** Smoothed transfer rate; null until two spaced samples exist. */
+  bytesPerSecond: number | null;
 }
 
 /** A just-settled install, surfaced so the UI can toast success/failure. */
@@ -68,8 +72,16 @@ export const getInstallSourceLabel = (source: unknown): string => {
 const REFRESH_COALESCE_MS = 250;
 // Bound display history with room for completion bursts between toast flushes.
 const OUTCOME_LIMIT = 64;
+const RATE_SAMPLE_MS = 500;
+const RATE_SMOOTHING = 0.3;
 
-const EMPTY_INSTALLS_SNAPSHOT: InstallsSnapshot = { error: null, jobs: [], status: 'idle' };
+const EMPTY_DISMISSED_IDS: ReadonlySet<number> = new Set();
+const EMPTY_INSTALLS_SNAPSHOT: InstallsSnapshot = {
+  dismissedJobIds: EMPTY_DISMISSED_IDS,
+  error: null,
+  jobs: [],
+  status: 'idle',
+};
 const EMPTY_INSTALL_OUTCOMES: { outcomes: InstallOutcome[] } = { outcomes: [] };
 
 const store = createExternalStore<InstallsSnapshot>(EMPTY_INSTALLS_SNAPSHOT);
@@ -77,6 +89,7 @@ const outcomesStore = createExternalStore<{ outcomes: InstallOutcome[] }>(EMPTY_
 let nextOutcomeId = 1;
 
 const progressByJobId = createKeyedTransientStore<number, InstallDownloadProgress>();
+const rateSamplesByJobId = new Map<number, { bytes: number; at: number }>();
 
 const refreshFlight = createTrailingSingleFlight();
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -97,6 +110,7 @@ registerAccountOwnedResource({
     refreshFlight.reset();
     nextOutcomeId = 1;
     progressByJobId.clear();
+    rateSamplesByJobId.clear();
     outcomesStore.setSnapshot(EMPTY_INSTALL_OUTCOMES);
     store.setSnapshot(EMPTY_INSTALLS_SNAPSHOT);
   },
@@ -118,10 +132,20 @@ export const refreshInstalls = (owner: AccountScope = captureAccountScope()): Pr
         for (const [jobId] of progressByJobId.entries()) {
           if (!activeJobIds.has(jobId)) {
             progressByJobId.delete(jobId);
+            rateSamplesByJobId.delete(jobId);
           }
         }
 
-        store.patchSnapshot({ error: null, jobs, status: 'loaded' });
+        const { dismissedJobIds } = store.getSnapshot();
+        const retainedDismissed = [...dismissedJobIds].filter((jobId) => activeJobIds.has(jobId));
+
+        store.patchSnapshot({
+          dismissedJobIds:
+            retainedDismissed.length === dismissedJobIds.size ? dismissedJobIds : new Set(retainedDismissed),
+          error: null,
+          jobs,
+          status: 'loaded',
+        });
       })
       .catch((error: unknown) => {
         if (!isAccountScopeCurrent(owner)) {
@@ -180,6 +204,15 @@ export const replaceInstallJob = (job: ModelInstallJob): void => {
   });
 };
 
+/** Hide a settled job locally until the backend stops listing it. */
+export const dismissInstallJob = (jobId: number): void => {
+  const { dismissedJobIds } = store.getSnapshot();
+
+  if (!dismissedJobIds.has(jobId)) {
+    store.patchSnapshot({ dismissedJobIds: new Set([...dismissedJobIds, jobId]) });
+  }
+};
+
 /** Optimistically add a freshly created job so the queue updates instantly. */
 export const addInstallJob = (job: ModelInstallJob): void => {
   if (store.getSnapshot().jobs.some((existing) => existing.id === job.id)) {
@@ -216,6 +249,30 @@ const recordOutcome = (outcome: Omit<InstallOutcome, 'id'>): void => {
     outcomes: [{ ...outcome, id: nextOutcomeId }, ...outcomesStore.getSnapshot().outcomes].slice(0, OUTCOME_LIMIT),
   });
   nextOutcomeId += 1;
+};
+
+/** Exponential smoothing over spaced samples keeps the rate readable through bursty progress ticks. */
+const sampleTransferRate = (jobId: number, bytes: number): number | null => {
+  const now = Date.now();
+  const previous = rateSamplesByJobId.get(jobId);
+  const current = progressByJobId.get(jobId)?.bytesPerSecond ?? null;
+
+  if (!previous) {
+    rateSamplesByJobId.set(jobId, { at: now, bytes });
+    return current;
+  }
+
+  const elapsedMs = now - previous.at;
+
+  if (elapsedMs < RATE_SAMPLE_MS) {
+    return current;
+  }
+
+  rateSamplesByJobId.set(jobId, { at: now, bytes });
+
+  const instant = Math.max(0, ((bytes - previous.bytes) * 1000) / elapsedMs);
+
+  return current === null ? instant : current * (1 - RATE_SMOOTHING) + instant * RATE_SMOOTHING;
 };
 
 interface ModelInstallSocketPayload {
@@ -257,7 +314,13 @@ export const handleModelInstallSocketEvent = (
   }
 
   if (event === 'model_install_download_progress') {
-    progressByJobId.set(data.id, { bytes: data.bytes ?? 0, totalBytes: data.total_bytes ?? 0 });
+    const bytes = data.bytes ?? 0;
+
+    progressByJobId.set(data.id, {
+      bytes,
+      bytesPerSecond: sampleTransferRate(data.id, bytes),
+      totalBytes: data.total_bytes ?? 0,
+    });
 
     const job = store.getSnapshot().jobs.find((candidate) => candidate.id === data.id);
 
@@ -277,6 +340,7 @@ export const handleModelInstallSocketEvent = (
   if (event === 'model_install_complete' || event === 'model_install_error' || event === 'model_install_cancelled') {
     // Retain settled jobs until cleared, but release their inactive byte-progress state.
     progressByJobId.delete(data.id);
+    rateSamplesByJobId.delete(data.id);
   }
 
   if (event === 'model_install_complete') {
