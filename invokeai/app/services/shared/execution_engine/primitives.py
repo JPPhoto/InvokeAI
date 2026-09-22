@@ -345,10 +345,13 @@ class StreamBuffer(_InternalModel, Generic[T]):
         *,
         value: Any = _MISSING,
         sequence: int | None = None,
+        trusted: bool = False,
     ) -> StreamData[T] | StreamEnd:
         if isinstance(event, StreamData):
             if value is not _MISSING or sequence is not None:
                 raise TypeError("event object cannot be combined with value or sequence")
+            if trusted:
+                return event
             return self._make_data_event(event.sequence, event.value)
         if isinstance(event, StreamEnd):
             if value is not _MISSING or sequence is not None:
@@ -378,11 +381,16 @@ class StreamBuffer(_InternalModel, Generic[T]):
         *,
         value: Any = _MISSING,
         sequence: int | None = None,
+        trusted: bool = False,
     ) -> bool:
-        """Accept one event atomically; return false for exact retries."""
+        """Accept one event atomically; return false for exact retries.
+
+        ``trusted`` is reserved for rehydration of values already decoded from a JSON snapshot. Normal engine
+        inputs must use the default validated path.
+        """
 
         with self._lock:
-            candidate = self._coerce_event(event, value=value, sequence=sequence)
+            candidate = self._coerce_event(event, value=value, sequence=sequence, trusted=trusted)
             existing = self.events[candidate.sequence] if candidate.sequence < len(self.events) else None
             if existing is not None:
                 if existing == candidate:

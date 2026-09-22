@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -93,6 +95,12 @@ def test_stream_buffer_preserves_order_and_none_values() -> None:
     assert isinstance(buffer.events[-1], StreamEnd)
 
 
+@pytest.mark.parametrize("value", [[], {}, {"nested": []}, None])
+def test_stream_data_keeps_json_values_by_reference(value: Any) -> None:
+    event = StreamData(sequence=0, value=value)
+    assert event.value is value
+
+
 def test_stream_buffer_rejects_conflicting_duplicate_and_out_of_order_events() -> None:
     buffer = StreamBuffer[int](stream_id="stream", owner_id="iterate", frame=_frame())
     buffer.accept(StreamData(sequence=0, value=1))
@@ -126,6 +134,18 @@ def test_stream_buffer_validates_event_json_and_round_trips() -> None:
 
     with pytest.raises(ValidationError):
         StreamData(sequence=0, value=object())
+
+
+def test_stream_buffer_trusted_rehydration_skips_only_value_serialization() -> None:
+    value = object()
+    event = StreamData.model_construct(kind="data", sequence=0, value=value)
+    buffer = StreamBuffer[Any](stream_id="stream", owner_id="iterate", frame=_frame())
+
+    assert buffer.accept(event, trusted=True) is True
+    assert buffer.events[0].value is value
+
+    with pytest.raises(ValueError, match="JSON-serializable"):
+        StreamBuffer[Any](stream_id="other", owner_id="iterate", frame=_frame()).accept("data", value=value)
 
 
 def test_continuation_record_has_atomic_idempotent_status_transitions() -> None:

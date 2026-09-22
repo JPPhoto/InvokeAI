@@ -614,6 +614,16 @@ class _EdgeList(list[Edge]):
         super().sort(key=key, reverse=reverse)
 
 
+class _GraphEdgeIndexes:
+    """Process-local adjacency indexes kept out of pydantic's attribute lookup path."""
+
+    __slots__ = ("input_edges_by_node", "output_edges_by_node")
+
+    def __init__(self) -> None:
+        self.input_edges_by_node: Optional[dict[str, list[Edge]]] = None
+        self.output_edges_by_node: Optional[dict[str, list[Edge]]] = None
+
+
 class Graph(BaseModel):
     """A validated invocation graph made of nodes and typed edges."""
 
@@ -624,8 +634,7 @@ class Graph(BaseModel):
         description="The connections between nodes and their fields in this graph",
         default_factory=list,
     )
-    _input_edges_by_node: Optional[dict[str, list[Edge]]] = PrivateAttr(default=None)
-    _output_edges_by_node: Optional[dict[str, list[Edge]]] = PrivateAttr(default=None)
+    _edge_indexes: _GraphEdgeIndexes = PrivateAttr(default_factory=_GraphEdgeIndexes)
 
     def _rebind_edge_list(self) -> None:
         object.__setattr__(self, "edges", _EdgeList(self.edges, self))
@@ -636,16 +645,19 @@ class Graph(BaseModel):
 
     def model_copy(self, *, update: Optional[dict[str, Any]] = None, deep: bool = False) -> "Graph":
         copied = super().model_copy(update=update, deep=deep)
+        copied.__pydantic_private__["_edge_indexes"] = _GraphEdgeIndexes()
         copied._rebind_edge_list()
         return copied
 
     def __copy__(self) -> "Graph":
         copied = super().__copy__()
+        copied.__pydantic_private__["_edge_indexes"] = _GraphEdgeIndexes()
         copied._rebind_edge_list()
         return copied
 
     def __deepcopy__(self, memo: Optional[dict[int, Any]] = None) -> "Graph":
         copied = super().__deepcopy__(memo)
+        copied.__pydantic_private__["_edge_indexes"] = _GraphEdgeIndexes()
         copied._rebind_edge_list()
         return copied
 
@@ -667,11 +679,13 @@ class Graph(BaseModel):
         return self.id == other.id and self.nodes == other.nodes and self.edges == other.edges
 
     def _invalidate_edge_indexes(self) -> None:
-        self._input_edges_by_node = None
-        self._output_edges_by_node = None
+        indexes = self.__pydantic_private__["_edge_indexes"]
+        indexes.input_edges_by_node = None
+        indexes.output_edges_by_node = None
 
     def _ensure_edge_indexes(self) -> None:
-        if self._input_edges_by_node is not None and self._output_edges_by_node is not None:
+        indexes = self.__pydantic_private__["_edge_indexes"]
+        if indexes.input_edges_by_node is not None and indexes.output_edges_by_node is not None:
             return
 
         input_edges_by_node: dict[str, list[Edge]] = {}
@@ -679,22 +693,24 @@ class Graph(BaseModel):
         for edge in self.edges:
             input_edges_by_node.setdefault(edge.destination.node_id, []).append(edge)
             output_edges_by_node.setdefault(edge.source.node_id, []).append(edge)
-        self._input_edges_by_node = input_edges_by_node
-        self._output_edges_by_node = output_edges_by_node
+        indexes.input_edges_by_node = input_edges_by_node
+        indexes.output_edges_by_node = output_edges_by_node
 
     def _add_edge_to_indexes(self, edge: Edge) -> None:
-        if self._input_edges_by_node is not None:
-            self._input_edges_by_node.setdefault(edge.destination.node_id, []).append(edge)
-        if self._output_edges_by_node is not None:
-            self._output_edges_by_node.setdefault(edge.source.node_id, []).append(edge)
+        indexes = self.__pydantic_private__["_edge_indexes"]
+        if indexes.input_edges_by_node is not None:
+            indexes.input_edges_by_node.setdefault(edge.destination.node_id, []).append(edge)
+        if indexes.output_edges_by_node is not None:
+            indexes.output_edges_by_node.setdefault(edge.source.node_id, []).append(edge)
 
     def _remove_edge_from_indexes(self, edge: Edge) -> None:
-        if self._input_edges_by_node is not None:
-            input_edges = self._input_edges_by_node.get(edge.destination.node_id)
+        indexes = self.__pydantic_private__["_edge_indexes"]
+        if indexes.input_edges_by_node is not None:
+            input_edges = indexes.input_edges_by_node.get(edge.destination.node_id)
             if input_edges is not None:
                 input_edges.remove(edge)
-        if self._output_edges_by_node is not None:
-            output_edges = self._output_edges_by_node.get(edge.source.node_id)
+        if indexes.output_edges_by_node is not None:
+            output_edges = indexes.output_edges_by_node.get(edge.source.node_id)
             if output_edges is not None:
                 output_edges.remove(edge)
 
@@ -1100,8 +1116,9 @@ class Graph(BaseModel):
         """Gets all input edges for a node. If field is provided, only edges to that field are returned."""
 
         self._ensure_edge_indexes()
-        assert self._input_edges_by_node is not None
-        edges = self._input_edges_by_node.get(node_id, [])
+        indexes = self.__pydantic_private__["_edge_indexes"]
+        assert indexes.input_edges_by_node is not None
+        edges = indexes.input_edges_by_node.get(node_id, [])
         if not include_loop_linkage:
             edges = [edge for edge in edges if edge.type == "default"]
 
@@ -1117,8 +1134,9 @@ class Graph(BaseModel):
     ) -> list[Edge]:
         """Gets all output edges for a node. If field is provided, only edges from that field are returned."""
         self._ensure_edge_indexes()
-        assert self._output_edges_by_node is not None
-        edges = self._output_edges_by_node.get(node_id, [])
+        indexes = self.__pydantic_private__["_edge_indexes"]
+        assert indexes.output_edges_by_node is not None
+        edges = indexes.output_edges_by_node.get(node_id, [])
         if not include_loop_linkage:
             edges = [edge for edge in edges if edge.type == "default"]
 
@@ -2080,3 +2098,17 @@ class Graph(BaseModel):
         edges = dict.fromkeys((e.source.node_id, e.destination.node_id) for e in self.edges if e.type == "default")
         g.add_edges_from(edges)
         return g
+
+
+def _edge_index_property(name: str) -> property:
+    def getter(graph: Graph) -> Optional[dict[str, list[Edge]]]:
+        return getattr(graph.__pydantic_private__["_edge_indexes"], name)
+
+    def setter(graph: Graph, value: Optional[dict[str, list[Edge]]]) -> None:
+        setattr(graph.__pydantic_private__["_edge_indexes"], name, value)
+
+    return property(getter, setter)
+
+
+Graph._input_edges_by_node = _edge_index_property("input_edges_by_node")
+Graph._output_edges_by_node = _edge_index_property("output_edges_by_node")

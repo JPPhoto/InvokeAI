@@ -1,3 +1,4 @@
+import copy
 from collections import defaultdict, deque
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -270,6 +271,23 @@ def test_graph_state_apply_stores_stable_frame_tokens_and_effects():
     restored = load_execution_state(dump_execution_state(state))
     assert restored.get_execution_ref(node.id).reference_id == ref.reference_id
     assert restored.execution_tokens == {}
+
+
+def test_graph_state_output_tokens_retain_mutable_result_values_by_reference():
+    graph = Graph()
+    graph.add_node(BooleanCollectionInvocation(id="values", collection=[True, False]))
+    state = GraphExecutionState(graph=graph)
+    node = state.next()
+    assert node is not None
+    output = node.invoke(Mock(InvocationContext))
+    ref = state.get_execution_ref(node.id)
+
+    state.apply(ref, output)
+
+    token = state.execution_tokens[f"{ref.reference_id}:collection"]
+    assert token.value is output.collection
+    output.collection.append(True)
+    assert token.value == [True, False, True]
 
 
 def test_graph_state_apply_accepts_protocol_ref_without_token():
@@ -802,6 +820,21 @@ def test_rehydrated_iterate_state_can_be_deep_copied_without_sharing_runtime_loc
     )
     assert closed_stream.closed
     assert closed_stream.values == (0, 1)
+
+
+@pytest.mark.parametrize(
+    "copy_state",
+    [pytest.param(lambda state: state.model_copy(), id="model_copy"), pytest.param(copy.copy, id="copy")],
+)
+def test_graph_state_shallow_copy_reset_does_not_clear_original_runtime_state(copy_state):
+    state = GraphExecutionState(graph=Graph())
+    state._ready_queues["test"] = deque(["node"])
+
+    copied = copy_state(state)
+    copied._reset_runtime_caches()
+
+    assert state._ready_queues == {"test": deque(["node"])}
+    assert not copied._ready_queues
 
 
 @pytest.mark.parametrize("port", ["type", "output_meta", "loop_linkage"])

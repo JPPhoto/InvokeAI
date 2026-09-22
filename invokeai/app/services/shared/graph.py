@@ -199,6 +199,89 @@ def _hide_execution_state_runtime_fields(schema: JsonSchemaValue) -> None:
         schema["required"] = [field_name for field_name in _EXECUTION_STATE_REQUIRED_FIELDS if field_name in properties]
 
 
+class _GraphExecutionStateRuntime:
+    """Process-local execution state kept behind one pydantic private attribute."""
+
+    __slots__ = (
+        "ready_queues",
+        "ready_node_ids",
+        "active_class",
+        "resolved_if_exec_branches",
+        "pending_if_exec_nodes",
+        "if_branch_sources_cache",
+        "if_activation_dependencies_by_source",
+        "if_activation_dependencies_by_exec",
+        "prepared_if_exec_ids_by_source_and_frame",
+        "prepared_if_exec_frames_by_source",
+        "prepared_if_exec_indexed_sources",
+        "prepared_exec_metadata",
+        "prepared_exec_registry",
+        "if_activation_controller_instance",
+        "execution_materializer",
+        "generic_for_planner",
+        "execution_scheduler",
+        "execution_runtime",
+        "for_parent_iteration_paths_cache",
+        "all_for_contexts_finalized_cache",
+        "prepared_for_index",
+        "final_prepared_for_index",
+        "prepared_for_index_by_exec",
+        "source_graph_flat",
+        "execution_graph_flat",
+        "completed_source_ids_cache",
+        "unexecuted_prepared_counts",
+        "for_source_by_return_id",
+        "apply_transaction",
+        "generic_execution_runtime",
+        "generic_graph_scheduler",
+        "generic_child_dependencies",
+        "pending_lifecycle_execution_nodes",
+        "execution_effects_persisted",
+        "legacy_execution_snapshot",
+        "legacy_snapshot_loaded",
+    )
+
+    def __init__(self) -> None:
+        self.ready_queues: dict[str, Deque[str]] = {}
+        self.ready_node_ids: set[str] = set()
+        self.active_class: Optional[str] = None
+        self.resolved_if_exec_branches: dict[str, str] = {}
+        self.pending_if_exec_nodes: set[str] = set()
+        self.if_branch_sources_cache: dict[tuple[str, str], frozenset[str]] = {}
+        self.if_activation_dependencies_by_source: dict[
+            tuple[str, tuple[int, ...]], tuple[ActivationDependency, ...]
+        ] = {}
+        self.if_activation_dependencies_by_exec: dict[str, tuple[ActivationDependency, ...]] = {}
+        self.prepared_if_exec_ids_by_source_and_frame: dict[tuple[str, tuple[int, ...]], tuple[str, ...]] = {}
+        self.prepared_if_exec_frames_by_source: dict[str, tuple[tuple[int, ...], ...]] = {}
+        self.prepared_if_exec_indexed_sources: set[str] = set()
+        self.prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = {}
+        self.prepared_exec_registry: Optional[_PreparedExecRegistry] = None
+        self.if_activation_controller_instance: Optional[_IfActivationController] = None
+        self.execution_materializer: Optional[_ExecutionMaterializer] = None
+        self.generic_for_planner: Optional[_GenericForPlanner] = None
+        self.execution_scheduler: Optional[_ExecutionScheduler | _GenericGraphSchedulerAdapter] = None
+        self.execution_runtime: Optional[_ExecutionRuntime] = None
+        self.for_parent_iteration_paths_cache: dict[str, set[tuple[int, ...]]] = {}
+        self.all_for_contexts_finalized_cache: dict[str, bool] = {}
+        self.prepared_for_index: Optional[dict[tuple[str, tuple[int, ...]], str]] = None
+        self.final_prepared_for_index: Optional[dict[tuple[str, tuple[int, ...]], str]] = None
+        self.prepared_for_index_by_exec: dict[str, tuple[str, tuple[int, ...], tuple[int, ...]]] = {}
+        self.source_graph_flat: Any | None = None
+        self.execution_graph_flat: Any | None = None
+        self.completed_source_ids_cache: Optional[set[str]] = None
+        self.unexecuted_prepared_counts: Optional[dict[str, int]] = None
+        self.for_source_by_return_id: Optional[dict[str, str]] = None
+        self.apply_transaction: Optional[_ApplyTransaction] = None
+        self.generic_execution_runtime: Optional[ExecutionEngineRuntime] = None
+        self.generic_graph_scheduler: Optional[_GenericGraphSchedulerAdapter] = None
+        self.generic_child_dependencies: dict[str, ChildDependencyRecord] = {}
+        self.pending_lifecycle_execution_nodes: set[str] = set()
+        self.execution_effects_persisted = False
+        self.legacy_execution_snapshot = True
+        self.legacy_snapshot_loaded = False
+
+
 class GraphExecutionState(BaseModel):
     """Tracks source-graph expansion, execution progress, and runtime results."""
 
@@ -294,99 +377,75 @@ class GraphExecutionState(BaseModel):
         description="Durable generic child dependency records",
         exclude=True,
     )
-    # Ready queues grouped by node class name (internal only)
-    _ready_queues: dict[str, Deque[str]] = PrivateAttr(default_factory=dict)
-    _ready_node_ids: set[str] = PrivateAttr(default_factory=set)
-    # Current class being drained; stays until its queue empties
-    _active_class: Optional[str] = PrivateAttr(default=None)
+    # All process-local runtime state is kept behind this single private attribute.
+    _runtime_state: _GraphExecutionStateRuntime = PrivateAttr(default_factory=_GraphExecutionStateRuntime)
     # Optional priority; others follow in name order
     ready_order: list[str] = Field(default_factory=list)
     indegree: dict[str, int] = Field(default_factory=dict, description="Remaining unmet input count for exec nodes")
-    _resolved_if_exec_branches: dict[str, str] = PrivateAttr(default_factory=dict)
-    _pending_if_exec_nodes: set[str] = PrivateAttr(default_factory=set)
-    _if_branch_sources_cache: dict[tuple[str, str], frozenset[str]] = PrivateAttr(default_factory=dict)
-    _if_activation_dependencies_by_source: dict[tuple[str, tuple[int, ...]], tuple[ActivationDependency, ...]] = (
-        PrivateAttr(default_factory=dict)
-    )
-    _if_activation_dependencies_by_exec: dict[str, tuple[ActivationDependency, ...]] = PrivateAttr(default_factory=dict)
-    _prepared_if_exec_ids_by_source_and_frame: dict[tuple[str, tuple[int, ...]], tuple[str, ...]] = PrivateAttr(
-        default_factory=dict
-    )
-    _prepared_if_exec_frames_by_source: dict[str, tuple[tuple[int, ...], ...]] = PrivateAttr(default_factory=dict)
-    _prepared_if_exec_indexed_sources: set[str] = PrivateAttr(default_factory=set)
-    _prepared_exec_metadata: dict[str, _PreparedExecNodeMetadata] = PrivateAttr(default_factory=dict)
-    _prepared_exec_registry: Optional[_PreparedExecRegistry] = PrivateAttr(default=None)
-    _if_activation_controller_instance: Optional[_IfActivationController] = PrivateAttr(default=None)
-    _execution_materializer: Optional[_ExecutionMaterializer] = PrivateAttr(default=None)
-    _generic_for_planner: Optional[_GenericForPlanner] = PrivateAttr(default=None)
-    _execution_scheduler: Optional[_ExecutionScheduler | _GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
-    _execution_runtime: Optional[_ExecutionRuntime] = PrivateAttr(default=None)
-    _for_parent_iteration_paths_cache: dict[str, set[tuple[int, ...]]] = PrivateAttr(default_factory=dict)
-    _all_for_contexts_finalized_cache: dict[str, bool] = PrivateAttr(default_factory=dict)
-    _prepared_for_index: Optional[dict[tuple[str, tuple[int, ...]], str]] = PrivateAttr(default=None)
-    _final_prepared_for_index: Optional[dict[tuple[str, tuple[int, ...]], str]] = PrivateAttr(default=None)
-    _prepared_for_index_by_exec: dict[str, tuple[str, tuple[int, ...], tuple[int, ...]]] = PrivateAttr(
-        default_factory=dict
-    )
-    _source_graph_flat: Any | None = PrivateAttr(default=None)
-    _execution_graph_flat: Any | None = PrivateAttr(default=None)
-    _completed_source_ids_cache: Optional[set[str]] = PrivateAttr(default=None)
-    _unexecuted_prepared_counts: Optional[dict[str, int]] = PrivateAttr(default=None)
-    _for_source_by_return_id: Optional[dict[str, str]] = PrivateAttr(default=None)
-    _apply_transaction: Optional[_ApplyTransaction] = PrivateAttr(default=None)
-    _generic_execution_runtime: Optional[ExecutionEngineRuntime] = PrivateAttr(default=None)
-    _generic_graph_scheduler: Optional[_GenericGraphSchedulerAdapter] = PrivateAttr(default=None)
-    _generic_child_dependencies: dict[str, ChildDependencyRecord] = PrivateAttr(default_factory=dict)
-    _pending_lifecycle_execution_nodes: set[str] = PrivateAttr(default_factory=set)
-    _execution_effects_persisted: bool = PrivateAttr(default=False)
-    _legacy_execution_snapshot: bool = PrivateAttr(default=True)
-    _legacy_snapshot_loaded: bool = PrivateAttr(default=False)
+
+    def model_copy(self, *, update: Optional[dict[str, Any]] = None, deep: bool = False) -> "GraphExecutionState":
+        copied = super().model_copy(update=update, deep=deep)
+        if not deep:
+            copied.__pydantic_private__["_runtime_state"] = copy.copy(self.__pydantic_private__["_runtime_state"])
+        return copied
+
+    def __copy__(self) -> "GraphExecutionState":
+        copied = super().__copy__()
+        copied.__pydantic_private__["_runtime_state"] = copy.copy(self.__pydantic_private__["_runtime_state"])
+        return copied
 
     def _tx_record_once(self, key: tuple[Any, ...], undo: Callable[[], None]) -> None:
-        if self._apply_transaction is not None:
-            self._apply_transaction.record_once(key, undo)
+        transaction = self.__pydantic_private__["_runtime_state"].apply_transaction
+        if transaction is not None:
+            transaction.record_once(key, undo)
 
     def _tx_record(self, undo: Callable[[], None]) -> None:
-        if self._apply_transaction is not None:
-            self._apply_transaction.record(undo)
+        transaction = self.__pydantic_private__["_runtime_state"].apply_transaction
+        if transaction is not None:
+            transaction.record(undo)
 
     def _tx_set_mapping(self, mapping: dict[Any, Any], key: Any, value: Any) -> None:
-        if self._apply_transaction is not None:
+        transaction = self.__pydantic_private__["_runtime_state"].apply_transaction
+        if transaction is not None:
             marker = ("mapping", id(mapping), key)
             if key in mapping:
                 old_value = mapping[key]
-                self._tx_record_once(marker, lambda: mapping.__setitem__(key, old_value))
+                transaction.record_once(marker, lambda: mapping.__setitem__(key, old_value))
             else:
-                self._tx_record_once(marker, lambda: mapping.pop(key, None))
+                transaction.record_once(marker, lambda: mapping.pop(key, None))
         mapping[key] = value
 
     def _tx_pop_mapping(self, mapping: dict[Any, Any], key: Any) -> None:
         if key not in mapping:
             return
         old_value = mapping[key]
-        if self._apply_transaction is not None:
-            self._tx_record_once(("mapping", id(mapping), key), lambda: mapping.__setitem__(key, old_value))
+        transaction = self.__pydantic_private__["_runtime_state"].apply_transaction
+        if transaction is not None:
+            transaction.record_once(("mapping", id(mapping), key), lambda: mapping.__setitem__(key, old_value))
         mapping.pop(key, None)
 
     def _tx_set_attr(self, obj: Any, name: str, value: Any) -> None:
-        if self._apply_transaction is not None:
+        transaction = self.__pydantic_private__["_runtime_state"].apply_transaction
+        if transaction is not None:
             old_value = getattr(obj, name)
-            self._tx_record_once(("attr", id(obj), name), lambda: setattr(obj, name, old_value))
+            transaction.record_once(("attr", id(obj), name), lambda: setattr(obj, name, old_value))
         setattr(obj, name, value)
 
     def _tx_add_set(self, values: set[Any], value: Any) -> None:
-        if self._apply_transaction is not None:
+        transaction = self.__pydantic_private__["_runtime_state"].apply_transaction
+        if transaction is not None:
             existed = value in values
-            self._tx_record_once(
+            transaction.record_once(
                 ("set", id(values), value),
                 lambda: None if existed else values.discard(value),
             )
         values.add(value)
 
     def _tx_discard_set(self, values: set[Any], value: Any) -> None:
-        if self._apply_transaction is not None:
+        transaction = self.__pydantic_private__["_runtime_state"].apply_transaction
+        if transaction is not None:
             existed = value in values
-            self._tx_record_once(
+            transaction.record_once(
                 ("set", id(values), value),
                 lambda: values.add(value) if existed else None,
             )
@@ -469,16 +528,17 @@ class GraphExecutionState(BaseModel):
         return node_obj.__class__.__name__
 
     def _prepared_registry(self) -> _PreparedExecRegistry:
-        if self._prepared_exec_registry is None:
-            self._prepared_exec_registry = _PreparedExecRegistry(
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.prepared_exec_registry is None:
+            runtime.prepared_exec_registry = _PreparedExecRegistry(
                 prepared_source_mapping=self.prepared_source_mapping,
                 source_prepared_mapping=self.source_prepared_mapping,
                 prepared_iteration_paths=self.prepared_iteration_paths,
-                metadata=self._prepared_exec_metadata,
+                metadata=runtime.prepared_exec_metadata,
                 on_iteration_path_change=self._invalidate_loop_caches_for_exec_node,
                 state=self,
             )
-        return self._prepared_exec_registry
+        return runtime.prepared_exec_registry
 
     def _prepared_if_exec_ids(self, source_node_id: str, iteration_path: tuple[int, ...]) -> tuple[str, ...]:
         """Return prepared If executions for one source/frame without rescanning them per dependency check."""
@@ -510,9 +570,10 @@ class GraphExecutionState(BaseModel):
         return self._if_activation_controller_instance
 
     def _get_source_graph_flat(self) -> Any:
-        if self._source_graph_flat is None:
-            self._source_graph_flat = self.graph.nx_graph_flat()
-        return self._source_graph_flat
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.source_graph_flat is None:
+            runtime.source_graph_flat = self.graph.nx_graph_flat()
+        return runtime.source_graph_flat
 
     def _get_fresh_if_nodes(self) -> tuple[IfInvocation, ...]:
         return graph_if_dependencies._get_fresh_if_nodes(self)
@@ -541,26 +602,29 @@ class GraphExecutionState(BaseModel):
         return graph_if_runtime._is_source_inactive(self, source_node_id, iteration_path)
 
     def _get_execution_graph_flat(self) -> Any:
-        if self._execution_graph_flat is None:
-            self._execution_graph_flat = self.execution_graph.nx_graph_flat()
-        return self._execution_graph_flat
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.execution_graph_flat is None:
+            runtime.execution_graph_flat = self.execution_graph.nx_graph_flat()
+        return runtime.execution_graph_flat
 
     def _add_execution_graph_node(self, node_id: str) -> None:
-        if self._execution_graph_flat is not None:
-            self._execution_graph_flat.add_node(node_id)
+        execution_graph_flat = self.__pydantic_private__["_runtime_state"].execution_graph_flat
+        if execution_graph_flat is not None:
+            execution_graph_flat.add_node(node_id)
 
     def _add_execution_graph_edges(self, edges: Iterable[Edge]) -> None:
-        if self._execution_graph_flat is not None:
-            self._execution_graph_flat.add_edges_from(
+        execution_graph_flat = self.__pydantic_private__["_runtime_state"].execution_graph_flat
+        if execution_graph_flat is not None:
+            execution_graph_flat.add_edges_from(
                 (edge.source.node_id, edge.destination.node_id) for edge in edges if edge.type == "default"
             )
 
     def _invalidate_execution_graph_flat(self) -> None:
-        self._execution_graph_flat = None
+        self.__pydantic_private__["_runtime_state"].execution_graph_flat = None
 
     def _mark_source_executed(self, source_node_id: str) -> None:
         self._tx_add_set(self.executed, source_node_id)
-        self._completed_source_ids_cache = None
+        self.__pydantic_private__["_runtime_state"].completed_source_ids_cache = None
         self._tx_add_set(self._get_completed_source_ids_cache(), source_node_id)
         if source_node_id not in self.executed_history:
             self._tx_append_list(self.executed_history, source_node_id)
@@ -575,7 +639,7 @@ class GraphExecutionState(BaseModel):
         if exec_node_id in self.executed:
             return
         self._tx_add_set(self.executed, exec_node_id)
-        counts = self._unexecuted_prepared_counts
+        counts = self.__pydantic_private__["_runtime_state"].unexecuted_prepared_counts
         if counts is None:
             return
         source_node_id = self.prepared_source_mapping.get(exec_node_id)
@@ -605,16 +669,18 @@ class GraphExecutionState(BaseModel):
 
     def _count_unexecuted_prepared(self, source_node_id: str) -> int:
         """Return prepared exec nodes not yet executed or skipped for source."""
-        if self._unexecuted_prepared_counts is None:
-            self._unexecuted_prepared_counts = {
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.unexecuted_prepared_counts is None:
+            runtime.unexecuted_prepared_counts = {
                 mapped_source_id: sum(1 for exec_node_id in prepared_ids if exec_node_id not in self.executed)
                 for mapped_source_id, prepared_ids in self.source_prepared_mapping.items()
             }
-        return self._unexecuted_prepared_counts.get(source_node_id, 0)
+        return runtime.unexecuted_prepared_counts.get(source_node_id, 0)
 
     def _get_completed_source_ids_cache(self) -> set[str]:
-        if self._completed_source_ids_cache is None:
-            self._completed_source_ids_cache = {
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.completed_source_ids_cache is None:
+            runtime.completed_source_ids_cache = {
                 source_node_id
                 for source_node_id in self.graph.nodes
                 if source_node_id in self.executed
@@ -624,7 +690,7 @@ class GraphExecutionState(BaseModel):
                 )
                 or self._is_source_inactive(source_node_id)
             }
-        return self._completed_source_ids_cache
+        return runtime.completed_source_ids_cache
 
     def _get_for_source_by_return_id(self) -> dict[str, str]:
         if self._for_source_by_return_id is None:
@@ -639,22 +705,25 @@ class GraphExecutionState(BaseModel):
         return self._for_source_by_return_id
 
     def _invalidate_source_graph_cache(self) -> None:
-        self._source_graph_flat = None
-        self._for_source_by_return_id = None
-        self._if_branch_sources_cache = {}
-        self._if_activation_dependencies_by_source = {}
-        self._if_activation_dependencies_by_exec = {}
-        self._if_activation_controller_instance = None
+        runtime = self.__pydantic_private__["_runtime_state"]
+        runtime.source_graph_flat = None
+        runtime.for_source_by_return_id = None
+        runtime.if_branch_sources_cache = {}
+        runtime.if_activation_dependencies_by_source = {}
+        runtime.if_activation_dependencies_by_exec = {}
+        runtime.if_activation_controller_instance = None
 
     def _materializer(self) -> _ExecutionMaterializer:
-        if self._execution_materializer is None:
-            self._execution_materializer = _ExecutionMaterializer(self)
-        return self._execution_materializer
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.execution_materializer is None:
+            runtime.execution_materializer = _ExecutionMaterializer(self)
+        return runtime.execution_materializer
 
     def _for_planner(self) -> _GenericForPlanner:
-        if self._generic_for_planner is None:
-            self._generic_for_planner = _GenericForPlanner(self)
-        return self._generic_for_planner
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.generic_for_planner is None:
+            runtime.generic_for_planner = _GenericForPlanner(self)
+        return runtime.generic_for_planner
 
     def _create_for_body_iteration(self, source_for_id: str, prepared_for_id: str) -> Optional[str]:
         if self._is_generic_graph_scheduler(self._scheduler()) and self._can_use_generic_for_scheduler():
@@ -756,7 +825,7 @@ class GraphExecutionState(BaseModel):
             if existing is None:
                 self._tx_set_mapping(self.execution_tokens, token_id, token)
             else:
-                self._tx_set_attr(existing, "value", copydeep(token.value))
+                self._tx_set_attr(existing, "value", token.value)
 
     def _apply_for_continuation(
         self,
@@ -1329,13 +1398,14 @@ class GraphExecutionState(BaseModel):
         return not any(isinstance(node, CallSavedWorkflowInvocation) for node in self.graph.nodes.values())
 
     def _scheduler(self) -> _ExecutionScheduler | _GenericGraphSchedulerAdapter:
-        if self._execution_scheduler is None:
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.execution_scheduler is None:
             if self._can_use_generic_scheduler():
-                self._generic_graph_scheduler = _GenericGraphSchedulerAdapter(self)
-                self._execution_scheduler = self._generic_graph_scheduler
+                runtime.generic_graph_scheduler = _GenericGraphSchedulerAdapter(self)
+                runtime.execution_scheduler = runtime.generic_graph_scheduler
             else:
-                self._execution_scheduler = _ExecutionScheduler(self)
-        return self._execution_scheduler
+                runtime.execution_scheduler = _ExecutionScheduler(self)
+        return runtime.execution_scheduler
 
     def _is_generic_graph_scheduler(self, scheduler: Any) -> bool:
         return isinstance(scheduler, _GenericGraphSchedulerAdapter)
@@ -1344,16 +1414,18 @@ class GraphExecutionState(BaseModel):
         return uuid_string()
 
     def _runtime(self) -> _ExecutionRuntime:
-        if self._execution_runtime is None:
-            self._execution_runtime = _ExecutionRuntime(self)
-        return self._execution_runtime
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.execution_runtime is None:
+            runtime.execution_runtime = _ExecutionRuntime(self)
+        return runtime.execution_runtime
 
     def _generic_runtime(self) -> ExecutionEngineRuntime:
         """Return the private typed runtime used by legacy-control adapters."""
 
-        if self._generic_execution_runtime is None:
-            self._generic_execution_runtime = ExecutionEngineRuntime()
-        return self._generic_execution_runtime
+        runtime_state = self.__pydantic_private__["_runtime_state"]
+        if runtime_state.generic_execution_runtime is None:
+            runtime_state.generic_execution_runtime = ExecutionEngineRuntime()
+        return runtime_state.generic_execution_runtime
 
     def _clear_transient_runtime(self) -> None:
         """Clear scheduling projections after execution reaches a terminal error."""
@@ -1398,7 +1470,12 @@ class GraphExecutionState(BaseModel):
         return f"{self.id}:iterate:{source_node_id}:{path}"
 
     def _record_iterate_stream(
-        self, exec_node_id: str, output: BaseInvocationOutput, *, prefer_existing: bool = False
+        self,
+        exec_node_id: str,
+        output: BaseInvocationOutput,
+        *,
+        prefer_existing: bool = False,
+        trusted: bool = False,
     ) -> None:
         if not isinstance(output, IterateInvocationOutput):
             return
@@ -1433,7 +1510,12 @@ class GraphExecutionState(BaseModel):
                 else:
                     raise ValueError(f"Iterate result conflicts with closed stream {stream_id}")
         if not skip_data:
-            stream.accept(StreamData(sequence=output.index, value=copydeep(output.item)))
+            event = (
+                StreamData.model_construct(kind="data", sequence=output.index, value=output.item)
+                if trusted
+                else StreamData(sequence=output.index, value=output.item)
+            )
+            stream.accept(event, trusted=trusted)
         if output.index + 1 >= output.total:
             if stream.closed:
                 if stream.end_sequence != output.total:
@@ -1460,7 +1542,9 @@ class GraphExecutionState(BaseModel):
                 )
         stream.close(sequence=stream.next_sequence)
 
-    def _record_effect_streams(self, execution_ref: ExecutionReference, effects: Iterable[Any]) -> None:
+    def _record_effect_streams(
+        self, execution_ref: ExecutionReference, effects: Iterable[Any], *, trusted: bool = False
+    ) -> None:
         """Mirror generic stream effects into the private stream registry."""
 
         for effect in effects:
@@ -1518,7 +1602,12 @@ class GraphExecutionState(BaseModel):
             value = self._value_from_object(effect, "value")
             if value is None:
                 value = self._value_from_object(token, "value")
-            stream.accept(StreamData(sequence=sequence, value=copydeep(value)))
+            event = (
+                StreamData.model_construct(kind="data", sequence=sequence, value=value)
+                if trusted
+                else StreamData(sequence=sequence, value=value)
+            )
+            stream.accept(event, trusted=trusted)
 
     def _stream_for_iterate_edge(self, edge: Edge) -> tuple[str, tuple[Any, ...]] | None:
         source_node_id = self.prepared_source_mapping.get(edge.source.node_id)
@@ -2264,6 +2353,7 @@ class GraphExecutionState(BaseModel):
         effect_count: Optional[int],
         *,
         require_continuation: bool = False,
+        validate_json: bool = True,
     ) -> list[Any]:
         expected_count = effect_count if effect_count is not None else execution_ref.effect_count
         if expected_count is not None and len(effects) != expected_count:
@@ -2278,10 +2368,11 @@ class GraphExecutionState(BaseModel):
         awaited_child_ids: list[str] = []
         lifecycle_effect_kinds: set[str] = set()
         for effect in effects:
-            try:
-                _JSON_SERIALIZER.dump_python(effect, mode="json", warnings="error")
-            except (PydanticSerializationError, TypeError, ValueError) as exc:
-                raise ValueError("Execution effect must be JSON-serializable") from exc
+            if validate_json:
+                try:
+                    _JSON_SERIALIZER.dump_python(effect, mode="json", warnings="error")
+                except (PydanticSerializationError, TypeError, ValueError) as exc:
+                    raise ValueError("Execution effect must be JSON-serializable") from exc
             effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
             if effect_kind in {"spawn_execution", "await", "fail"}:
                 lifecycle_effect_kinds.add(effect_kind)
@@ -2579,7 +2670,7 @@ class GraphExecutionState(BaseModel):
                 owner_node_id=execution_ref.exec_node_id,
                 port=port,
                 frame=execution_ref.frame,
-                value=copydeep(getattr(output, port)),
+                value=getattr(output, port),
             )
         for effect in effects:
             effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
@@ -2622,7 +2713,7 @@ class GraphExecutionState(BaseModel):
                 owner_node_id=execution_ref.exec_node_id,
                 port=port,
                 frame=execution_ref.frame,
-                value=copydeep(token_value),
+                value=token_value,
                 token_kind="stream_end" if effect_kind == "close_stream" else token_kind,
                 sequence=sequence,
             )
@@ -3239,11 +3330,46 @@ class GraphExecutionState(BaseModel):
     def _rehydrate_generic_runtime_state(self) -> None:
         """Rebuild private stream/continuation adapters from durable results."""
 
+        iterate_stream_needed_cache: dict[str, bool] = {}
+
+        def iterate_stream_needed(source_node_id: str) -> bool:
+            """Keep an Iterate stream only while a prepared item or Collect consumer can still need it."""
+
+            if source_node_id in iterate_stream_needed_cache:
+                return iterate_stream_needed_cache[source_node_id]
+            # Raw model snapshots predate the compact runtime projection and retain the legacy stream behavior.
+            if self._legacy_execution_snapshot and not self._execution_effects_persisted:
+                iterate_stream_needed_cache[source_node_id] = True
+                return True
+            if any(
+                isinstance(self.graph.nodes.get(edge.destination.node_id), CollectInvocation)
+                and edge.destination.node_id not in self.executed
+                for edge in self.graph._get_output_edges(source_node_id, ITEM_FIELD)
+            ):
+                iterate_stream_needed_cache[source_node_id] = True
+                return True
+            prepared_ids = self.source_prepared_mapping.get(source_node_id, ())
+            if any(exec_node_id not in self.executed for exec_node_id in prepared_ids):
+                iterate_stream_needed_cache[source_node_id] = True
+                return True
+            if not prepared_ids:
+                iterate_stream_needed_cache[source_node_id] = False
+                return False
+            needed = any(
+                isinstance(self.execution_graph.nodes.get(edge.destination.node_id), CollectInvocation)
+                and edge.destination.node_id not in self.executed
+                for exec_node_id in prepared_ids
+                for edge in self.execution_graph._get_output_edges(exec_node_id, ITEM_FIELD)
+            )
+            iterate_stream_needed_cache[source_node_id] = needed
+            return needed
+
         for source_node_id, source_node in self.graph.nodes.items():
             if (
                 isinstance(source_node, IterateInvocation)
                 and source_node_id in self.executed
                 and not self.source_prepared_mapping.get(source_node_id)
+                and iterate_stream_needed(source_node_id)
             ):
                 self._record_empty_iterate_stream(source_node_id)
 
@@ -3272,9 +3398,10 @@ class GraphExecutionState(BaseModel):
                     list(effects),
                     len(effects),
                     require_continuation=self._requires_continuation_effect(execution_ref),
+                    validate_json=not self._execution_effects_persisted,
                 )
                 self._record_continuation_effects(execution_ref, effects)
-                self._record_effect_streams(execution_ref, effects)
+                self._record_effect_streams(execution_ref, effects, trusted=self._execution_effects_persisted)
         elif self._legacy_execution_snapshot:
             for reference_id, effects in self.execution_effects.items():
                 execution_ref = next(
@@ -3295,7 +3422,13 @@ class GraphExecutionState(BaseModel):
                 if execution_ref.reference_id not in self.execution_effects:
                     raise ValueError(f"{type(node).__name__} execution must include a continuation effect")
                 effects = self.execution_effects[execution_ref.reference_id]
-                self._validate_effects(execution_ref, list(effects), len(effects), require_continuation=True)
+                self._validate_effects(
+                    execution_ref,
+                    list(effects),
+                    len(effects),
+                    require_continuation=True,
+                    validate_json=not self._execution_effects_persisted,
+                )
             if self._execution_effects_persisted:
                 self._validate_for_continuation_output(execution_ref, output)
 
@@ -3305,7 +3438,10 @@ class GraphExecutionState(BaseModel):
                 iterate_results.append((exec_node_id, output))
         iterate_results.sort(key=lambda item: (self._get_iteration_path(item[0]), item[1].index, item[0]))
         for exec_node_id, output in iterate_results:
-            self._record_iterate_stream(exec_node_id, output, prefer_existing=True)
+            source_node_id = self.prepared_source_mapping.get(exec_node_id)
+            if source_node_id is None or not iterate_stream_needed(source_node_id):
+                continue
+            self._record_iterate_stream(exec_node_id, output, prefer_existing=True, trusted=True)
 
         for exec_node_id, node in self.execution_graph.nodes.items():
             if isinstance(node, ForInvocation) and node.index >= 0 and exec_node_id in self.results:
@@ -3741,3 +3877,59 @@ class GraphExecutionState(BaseModel):
             )
         self.graph.delete_edge(edge)
         self._invalidate_source_graph_cache()
+
+
+_GRAPH_RUNTIME_ATTRIBUTE_NAMES = (
+    "ready_queues",
+    "ready_node_ids",
+    "active_class",
+    "resolved_if_exec_branches",
+    "pending_if_exec_nodes",
+    "if_branch_sources_cache",
+    "if_activation_dependencies_by_source",
+    "if_activation_dependencies_by_exec",
+    "prepared_if_exec_ids_by_source_and_frame",
+    "prepared_if_exec_frames_by_source",
+    "prepared_if_exec_indexed_sources",
+    "prepared_exec_metadata",
+    "prepared_exec_registry",
+    "if_activation_controller_instance",
+    "execution_materializer",
+    "generic_for_planner",
+    "execution_scheduler",
+    "execution_runtime",
+    "for_parent_iteration_paths_cache",
+    "all_for_contexts_finalized_cache",
+    "prepared_for_index",
+    "final_prepared_for_index",
+    "prepared_for_index_by_exec",
+    "source_graph_flat",
+    "execution_graph_flat",
+    "completed_source_ids_cache",
+    "unexecuted_prepared_counts",
+    "for_source_by_return_id",
+    "apply_transaction",
+    "generic_execution_runtime",
+    "generic_graph_scheduler",
+    "generic_child_dependencies",
+    "pending_lifecycle_execution_nodes",
+    "execution_effects_persisted",
+    "legacy_execution_snapshot",
+    "legacy_snapshot_loaded",
+)
+
+
+def _runtime_state_property(name: str) -> property:
+    def getter(state: GraphExecutionState) -> Any:
+        # Access the single PrivateAttr through pydantic's storage directly. Using ``state._runtime_state``
+        # here would put every compatibility-property access back through BaseModel.__getattr__.
+        return getattr(state.__pydantic_private__["_runtime_state"], name)
+
+    def setter(state: GraphExecutionState, value: Any) -> None:
+        setattr(state.__pydantic_private__["_runtime_state"], name, value)
+
+    return property(getter, setter)
+
+
+for _runtime_attribute_name in _GRAPH_RUNTIME_ATTRIBUTE_NAMES:
+    setattr(GraphExecutionState, f"_{_runtime_attribute_name}", _runtime_state_property(_runtime_attribute_name))

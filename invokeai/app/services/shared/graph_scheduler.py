@@ -108,6 +108,7 @@ class _ExecutionScheduler:
 
     def __init__(self, state: "GraphExecutionState") -> None:
         self._state = state
+        self._runtime_state = state.__pydantic_private__["_runtime_state"]
 
     def _validate_exec_node_ready_state(self, exec_node_id: str) -> None:
         if exec_node_id not in self._state.execution_graph.nodes:
@@ -218,19 +219,21 @@ class _ExecutionScheduler:
                 self.enqueue_if_ready(child)
 
     def queue_for(self, cls_name: str) -> Deque[str]:
-        q = self._state._ready_queues.get(cls_name)
+        runtime = self._runtime_state
+        q = runtime.ready_queues.get(cls_name)
         if q is None:
             q = deque()
-            self._state._tx_set_mapping(self._state._ready_queues, cls_name, q)
+            self._state._tx_set_mapping(runtime.ready_queues, cls_name, q)
         return q
 
     def remove_from_ready_queues(self, exec_node_id: str) -> None:
-        for q in self._state._ready_queues.values():
+        runtime = self._runtime_state
+        for q in runtime.ready_queues.values():
             try:
                 self._state._tx_queue_remove(q, exec_node_id)
             except ValueError:
                 continue
-        self._state._tx_discard_set(self._state._ready_node_ids, exec_node_id)
+        self._state._tx_discard_set(runtime.ready_node_ids, exec_node_id)
 
     def mark_skipped(self, exec_node_id: str) -> None:
         """Satisfy downstream indegrees without resolving inputs from a skipped node."""
@@ -249,50 +252,52 @@ class _ExecutionScheduler:
         if self._should_skip_ready_enqueue(exec_node_id):
             return
         queue = self._get_ready_queue(exec_node_id)
-        if exec_node_id in self._state._ready_node_ids:
+        runtime = self._runtime_state
+        if exec_node_id in runtime.ready_node_ids:
             return
         self._state._set_prepared_exec_state(exec_node_id, "ready")
         self._insert_ready_node(queue, exec_node_id)
-        self._state._tx_add_set(self._state._ready_node_ids, exec_node_id)
+        self._state._tx_add_set(runtime.ready_node_ids, exec_node_id)
 
     def get_next_node(self) -> Optional[BaseInvocation]:
         """Gets the next ready node: FIFO within class, drain class before switching."""
+        runtime = self._runtime_state
         while True:
-            if not self._state._active_class and self._state.results:
+            if not runtime.active_class and self._state.results:
                 last_exec_node_id = next(reversed(self._state.results))
                 last_node = self._state.execution_graph.nodes.get(last_exec_node_id)
                 if last_node is not None:
                     last_class = self._state._type_key(last_node)
-                    if self._state._ready_queues.get(last_class):
-                        self._state._active_class = last_class
-            if self._state._active_class:
-                q = self._state._ready_queues.get(self._state._active_class)
+                    if runtime.ready_queues.get(last_class):
+                        runtime.active_class = last_class
+            if runtime.active_class:
+                q = runtime.ready_queues.get(runtime.active_class)
                 while q:
                     exec_node_id = q.popleft()
-                    self._state._ready_node_ids.discard(exec_node_id)
+                    runtime.ready_node_ids.discard(exec_node_id)
                     if exec_node_id not in self._state.executed:
                         return self._state.execution_graph.nodes[exec_node_id]
-                self._state._active_class = None
+                runtime.active_class = None
                 continue
 
             seen = set(self._state.ready_order)
             next_class = next(
-                (cls_name for cls_name in self._state.ready_order if self._state._ready_queues.get(cls_name)),
+                (cls_name for cls_name in self._state.ready_order if runtime.ready_queues.get(cls_name)),
                 None,
             )
             if next_class is None:
                 next_class = next(
                     (
                         cls_name
-                        for cls_name in sorted(k for k in self._state._ready_queues.keys() if k not in seen)
-                        if self._state._ready_queues[cls_name]
+                        for cls_name in sorted(k for k in runtime.ready_queues.keys() if k not in seen)
+                        if runtime.ready_queues[cls_name]
                     ),
                     None,
                 )
             if next_class is None:
                 return None
 
-            self._state._active_class = next_class
+            runtime.active_class = next_class
 
     def complete(
         self, exec_node_id: str, output: BaseInvocationOutput
@@ -346,6 +351,7 @@ class _GenericGraphSchedulerAdapter:
 
     def __init__(self, state: "GraphExecutionState") -> None:
         self._state = state
+        self._runtime_state = state.__pydantic_private__["_runtime_state"]
         self._initializing = True
         self._if_exec_ids: dict[str, None] = {}
         self._scheduler = ExecutionScheduler(
@@ -412,7 +418,8 @@ class _GenericGraphSchedulerAdapter:
     def resolve_if_node(self, exec_node_id: str, *, enqueue: bool = True) -> None:
         """Resolve legacy If inputs without pruning graph edges or using type-specific skips."""
 
-        if exec_node_id in self._state._resolved_if_exec_branches:
+        runtime = self._runtime_state
+        if exec_node_id in runtime.resolved_if_exec_branches:
             return
         node = self._state.execution_graph.get_node(exec_node_id)
         if not isinstance(node, IfInvocation):
@@ -422,7 +429,7 @@ class _GenericGraphSchedulerAdapter:
 
         selected_field = "true_input" if node.condition else "false_input"
         self._state._resolve_activation_gate(exec_node_id, selected_field)
-        self._state._tx_set_mapping(self._state._resolved_if_exec_branches, exec_node_id, selected_field)
+        self._state._tx_set_mapping(runtime.resolved_if_exec_branches, exec_node_id, selected_field)
         self._state._record_compatibility_activation_token(exec_node_id, selected_field)
         self._discard_rejected_nodes()
         self._sync_indegree()
@@ -503,14 +510,15 @@ class _GenericGraphSchedulerAdapter:
             self._state._tx_set_mapping(self._state.indegree, exec_node_id, degree)
 
     def _project_ready_node(self, exec_node_id: str) -> None:
-        if not self._scheduler.is_ready(exec_node_id) or exec_node_id in self._state._ready_node_ids:
+        runtime = self._runtime_state
+        if not self._scheduler.is_ready(exec_node_id) or exec_node_id in runtime.ready_node_ids:
             return
         node = self._state.execution_graph.nodes[exec_node_id]
         cls_name = self._state._type_key(node)
-        queue = self._state._ready_queues.get(cls_name)
+        queue = runtime.ready_queues.get(cls_name)
         if queue is None:
             queue = deque()
-            self._state._tx_set_mapping(self._state._ready_queues, cls_name, queue)
+            self._state._tx_set_mapping(runtime.ready_queues, cls_name, queue)
         iteration_path = self._state._get_iteration_path(exec_node_id)
         if not queue or self._state._get_iteration_path(queue[-1]) <= iteration_path:
             self._state._tx_queue_append(queue, exec_node_id)
@@ -522,7 +530,7 @@ class _GenericGraphSchedulerAdapter:
             )
             self._state._tx_queue_insert(queue, insert_at, exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "ready")
-        self._state._tx_add_set(self._state._ready_node_ids, exec_node_id)
+        self._state._tx_add_set(runtime.ready_node_ids, exec_node_id)
 
     def _project_ready_nodes(self) -> None:
         for exec_node_id in self._scheduler.ready_ids:
@@ -540,18 +548,20 @@ class _GenericGraphSchedulerAdapter:
             self.enqueue_if_ready(exec_node_id)
 
     def _remove_projected(self, exec_node_id: str) -> None:
-        for queue in self._state._ready_queues.values():
+        runtime = self._runtime_state
+        for queue in runtime.ready_queues.values():
             try:
                 self._state._tx_queue_remove(queue, exec_node_id)
             except ValueError:
                 continue
-        self._state._tx_discard_set(self._state._ready_node_ids, exec_node_id)
+        self._state._tx_discard_set(runtime.ready_node_ids, exec_node_id)
 
     def queue_for(self, cls_name: str) -> Deque[str]:
-        queue = self._state._ready_queues.get(cls_name)
+        runtime = self._runtime_state
+        queue = runtime.ready_queues.get(cls_name)
         if queue is None:
             queue = deque()
-            self._state._tx_set_mapping(self._state._ready_queues, cls_name, queue)
+            self._state._tx_set_mapping(runtime.ready_queues, cls_name, queue)
         return queue
 
     def remove_from_ready_queues(self, exec_node_id: str) -> None:
