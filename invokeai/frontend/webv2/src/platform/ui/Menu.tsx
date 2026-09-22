@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
 
-import { Box, HStack, Icon, Kbd, Menu, Text, useMenuContext } from '@chakra-ui/react';
+import { Box, HStack, Icon, Kbd, Menu, Stack, Text, useMenuContext } from '@chakra-ui/react';
 
 import { Tooltip } from './Tooltip';
 import { useRegisterWidgetOverlay } from './widgetOverlays';
@@ -18,6 +18,8 @@ export const MenuContent = (props: MenuContentProps) => {
 export interface MenuActionItemProps {
   value: string;
   label: string;
+  /** Second line under the label, for choices whose consequences are not obvious; top-aligns the icon. */
+  hint?: string;
   icon?: LucideIcon;
   /** CSS color for the icon (e.g. a swatch); the theme tone otherwise. */
   iconColor?: string;
@@ -28,9 +30,12 @@ export interface MenuActionItemProps {
   onSelect: () => void;
 }
 
+const TWO_LINE_ITEM = { py: '1.5' } as const;
+
 /** The shared icon+label menu item; `tone: 'danger'` colors the whole row, icon included. */
 export const MenuActionItem = ({
   disabled,
+  hint,
   hintParts,
   icon,
   iconColor,
@@ -39,8 +44,14 @@ export const MenuActionItem = ({
   tone,
   value,
 }: MenuActionItemProps) => (
-  <Menu.Item data-danger={tone === 'danger' ? '' : undefined} disabled={disabled} value={value} onSelect={onSelect}>
-    <HStack gap="2" minW="0" w="full">
+  <Menu.Item
+    {...(hint ? TWO_LINE_ITEM : undefined)}
+    data-danger={tone === 'danger' ? '' : undefined}
+    disabled={disabled}
+    value={value}
+    onSelect={onSelect}
+  >
+    <HStack alignItems={hint ? 'flex-start' : 'center'} gap={hint ? '2.5' : '2'} minW="0" w="full">
       {icon ? (
         <Icon
           as={icon}
@@ -48,11 +59,21 @@ export const MenuActionItem = ({
           color={tone === 'danger' ? undefined : (iconColor ?? 'fg.subtle')}
           fill={iconColor ?? 'none'}
           flexShrink={0}
+          mt={hint ? '0.5' : undefined}
         />
       ) : null}
-      <Text flex="1" fontSize="xs">
-        {label}
-      </Text>
+      {hint ? (
+        <Stack flex="1" gap="0" minW="0">
+          <Text fontSize="xs">{label}</Text>
+          <Text color="fg.subtle" fontSize="2xs">
+            {hint}
+          </Text>
+        </Stack>
+      ) : (
+        <Text flex="1" fontSize="xs">
+          {label}
+        </Text>
+      )}
       {hintParts && hintParts.length > 0 ? (
         <HStack flexShrink={0} gap="0.5">
           {hintParts.map((part) => (
