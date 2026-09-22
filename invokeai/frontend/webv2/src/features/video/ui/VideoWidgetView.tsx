@@ -710,6 +710,24 @@ export const VideoWidgetView = () => {
               sourceVideo={values.sourceVideo}
               onChange={setSourceVideo}
             />
+            {policy.ui.extendContext ? (
+              <ScrubberField
+                defaultValue={LTX2_EXTEND_CONTEXT_FRAMES}
+                // The trade this control makes, which Frames alone does not show: the join consumes
+                // the context from both halves, so every frame held is a frame of new video given up.
+                helpText={t('widgets.video.extendContextHelp', {
+                  frames: policy.ui.extendContext.newFrames,
+                  seconds: (policy.ui.extendContext.newFrames / Math.max(1, values.fps)).toFixed(1),
+                })}
+                inputMax={policy.ui.extendContext.max}
+                label={t('widgets.video.extendContext')}
+                max={policy.ui.extendContext.max}
+                min={policy.ui.extendContext.min}
+                step={policy.ui.extendContext.step}
+                value={policy.ui.extendContext.value}
+                onChange={set.ltx2ExtendContextFrames}
+              />
+            ) : null}
           </Stack>
         </GenerationSettingsSection>
       ) : null}
@@ -823,24 +841,6 @@ export const VideoWidgetView = () => {
                 </Switch.Control>
               </Switch.Root>
             </Field>
-          ) : null}
-          {policy.ui.extendContext ? (
-            <ScrubberField
-              defaultValue={LTX2_EXTEND_CONTEXT_FRAMES}
-              // The trade this control makes, which Frames alone does not show: the join consumes
-              // the context from both halves, so every frame held is a frame of new video given up.
-              helpText={t('widgets.video.extendContextHelp', {
-                frames: policy.ui.extendContext.newFrames,
-                seconds: (policy.ui.extendContext.newFrames / Math.max(1, values.fps)).toFixed(1),
-              })}
-              inputMax={policy.ui.extendContext.max}
-              label={t('widgets.video.extendContext')}
-              max={policy.ui.extendContext.max}
-              min={policy.ui.extendContext.min}
-              step={policy.ui.extendContext.step}
-              value={policy.ui.extendContext.value}
-              onChange={set.ltx2ExtendContextFrames}
-            />
           ) : null}
           {policy.ui.stepsEditable ? (
             <ScrubberField
