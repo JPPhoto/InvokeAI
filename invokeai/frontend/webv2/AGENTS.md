@@ -19,6 +19,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) for ownership/interface changes and affe
 - Migrate effects when changing their behavior, without unrelated sweeps. Identity changes use store/runtime lifecycles or deliberate keyed remounts without accidental state loss.
 - Reuse Platform controls, Chakra/theme tokens, icons, and interactions; no second styling system or generic Next.js/SWR patterns.
 - Include disabled states; preserve keyboard operation, visible/restored focus, accessible names, and pointer alternatives.
+- Icon-only controls carry the platform `Tooltip`, including menu and popover triggers (share `useTooltipTriggerIds` between the root and the Tooltip); never a native `title`.
 - Keep dense layouts usable across window sizes/zoom. Check overflow, long/localized text, selected/hover/active states, and themes; follow localization conventions.
 - Keep interactions immediate and motion restrained, interruptible, and reduced-motion compatible. Specify transition properties; animation must neither delay editing nor be the sole state cue.
 - Provide visual evidence of browser-inspected flows; browser tests and axe do not replace visual/interaction review.
