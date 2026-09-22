@@ -36,5 +36,4 @@ describe('connectionToEdge', () => {
       })
     ).toMatchObject({ type: 'loop_linkage' });
   });
-
 });
