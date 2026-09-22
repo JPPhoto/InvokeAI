@@ -500,7 +500,6 @@
     "importFailed": "Import failed",
     "importing": "Importing project…",
     "importWithEllipsis": "Import…",
-    "libraryDescription": "Every project saved to your account.",
     "listView": "List view",
     "load": {
       "invalid": "\"{{name}}\" contains canvas data this version of Invoke cannot read, and it was not opened.",
@@ -1623,7 +1622,6 @@
     },
     "projectsGreeting": "Welcome to Invoke",
     "projectsGreetingWithName": "Welcome back, {{name}}",
-    "projectsSubtitle": "Pick up where you left off, or start something new.",
     "sections": {
       "home": "Home",
       "models": "Models",

@@ -88,7 +88,6 @@ export const ProjectsPage = () => {
           />
         </Stack>
       }
-      description={t('projects.libraryDescription')}
       scroll="content"
       title={t('launchpad.sections.projects')}
     >

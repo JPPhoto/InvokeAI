@@ -77,7 +77,6 @@ export const HomePage = () => {
         </>
       }
       banner={BROWSER_ISSUES_BANNER}
-      description={t('launchpad.projectsSubtitle')}
       regionLabel={t('launchpad.sections.home')}
       title={greeting}
     >
