@@ -1418,14 +1418,28 @@ def test_an_auto_schedule_with_a_lora_applied_says_so() -> None:
     context = _context()
 
     assert node._resolve_distilled(context) is False
-    warning = " ".join(str(call) for call in context.logger.warning.call_args_list)
-    assert "Distilled" in warning
+    assert "Distilled" in " ".join(str(call) for call in context.logger.info.call_args_list)
 
-    # Said once, and only when it could be wrong: no LoRAs, or an explicit schedule, stays quiet.
+    # Silent where it would be wrong: on a distilled checkpoint `auto` already resolves correctly,
+    # so telling the user to set Schedule to 'Distilled' would be advice against the truth.
+    on_distilled = _context()
+    distilled_node = _denoise(
+        num_frames=121,
+        transformer=LTX2TransformerField(
+            transformer=_identifier("transformer"),
+            loras=[LoRAField(lora=_identifier("style-lora"), weight=1.0)],
+            variant="ltx2_distilled",
+        ),
+    )
+
+    assert distilled_node._resolve_distilled(on_distilled) is True
+    assert on_distilled.logger.info.call_count == 0
+
+    # And silent when the schedule was named explicitly, or when there is nothing patched.
     quiet = _context()
     _denoise(num_frames=121, schedule="distilled")._resolve_distilled(quiet)
 
-    assert quiet.logger.warning.call_count == 0
+    assert quiet.logger.info.call_count == 0
 
 
 def test_a_directly_patched_lora_reserves_nothing_for_itself() -> None:

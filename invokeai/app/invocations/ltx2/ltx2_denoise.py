@@ -271,13 +271,18 @@ class LTX2DenoiseInvocation(BaseInvocation):
     def _resolve_distilled(self, context: InvocationContext) -> bool:
         if self.schedule != "auto":
             return self.schedule == "distilled"
-        if self.transformer.loras:
+        if self.transformer.loras and self.transformer.variant != LTX2VariantType.Distilled.value:
             # `auto` follows the transformer's *variant*, which names the checkpoint -- and a LoRA
             # does not change it. A step-distillation LoRA on a Dev checkpoint therefore resolves to
             # the guided ~30-step schedule and samples the LoRA's 8 steps on it, which produces a
             # broken clip and looks like a broken model rather than a wiring mistake. The panel sets
             # `schedule` explicitly for this reason; a hand-built graph has to be told.
-            context.logger.warning(
+            #
+            # Info rather than a warning, and silent on a distilled checkpoint: this cannot tell a
+            # step-distillation LoRA from an ordinary style one, so on Dev it is a note for the
+            # minority case rather than a claim about this run. On a distilled checkpoint `auto` has
+            # already resolved correctly and saying anything would be simply wrong.
+            context.logger.info(
                 "LTX-2 schedule is Auto with %d LoRA(s) applied. Auto follows the checkpoint, which a LoRA "
                 "does not change -- if one of these is a step-distillation LoRA, set Schedule to 'Distilled' "
                 "or the run will sample its step count on the guided schedule.",

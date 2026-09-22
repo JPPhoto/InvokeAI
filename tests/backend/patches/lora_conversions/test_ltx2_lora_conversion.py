@@ -166,6 +166,30 @@ def test_an_unknown_layer_keeps_its_own_name_so_the_patcher_can_report_it() -> N
     assert len(patch.layers) == len(PUBLISHED_LAYERS) + 1
 
 
+def test_a_peft_lora_bias_file_converts_rather_than_being_refused() -> None:
+    """PEFT's `lora_bias=True` emits a bias beside each pair. It is a real published shape, and the
+    layer builder consumes it -- refusing it would reject a usable file at the point where the 22B
+    transformer has already loaded."""
+    state_dict = _published_state_dict()
+    for path, _rank, _in, out_features in PUBLISHED_LAYERS[:3]:
+        state_dict[f"diffusion_model.{path}.lora_B.bias"] = _z(out_features)
+
+    patch = lora_model_from_ltx2_state_dict(state_dict)
+
+    assert len(patch.layers) == len(PUBLISHED_LAYERS)
+
+
+def test_half_a_low_rank_pair_is_named_rather_than_a_bare_keyerror() -> None:
+    """A truncated or hand-edited file used to surface as `KeyError: 'lora_B.weight'` from deep in
+    the patch build, with nothing saying which layer or why."""
+    state_dict = _published_state_dict()
+    victim = f"diffusion_model.{PUBLISHED_LAYERS[0][0]}.lora_B.weight"
+    del state_dict[victim]
+
+    with pytest.raises(ValueError, match="missing one half of its low-rank pair"):
+        lora_model_from_ltx2_state_dict(state_dict)
+
+
 def test_lycoris_variants_are_refused_by_name() -> None:
     state_dict = _published_state_dict()
     state_dict["diffusion_model.transformer_blocks.0.attn1.to_q.dora_scale"] = _z(4096)

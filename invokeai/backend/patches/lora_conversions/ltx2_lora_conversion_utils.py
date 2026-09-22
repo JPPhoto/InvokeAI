@@ -141,6 +141,10 @@ def _group_by_layer(state_dict: Dict[str, torch.Tensor]) -> dict[str, dict[str, 
         ".lora_B.weight",
         ".lora_down.weight",
         ".lora_up.weight",
+        # PEFT's `lora_bias=True` emits these alongside the pair. They are a real published shape,
+        # and the layer builder consumes them, so refusing here would reject a usable file.
+        ".lora_B.bias",
+        ".lora_up.bias",
         ".alpha",
     )
 
@@ -153,6 +157,20 @@ def _group_by_layer(state_dict: Dict[str, torch.Tensor]) -> dict[str, dict[str, 
                 grouped.setdefault(key[: -len(suffix)], {})[suffix[1:]] = value
                 break
         else:
-            raise ValueError(f"LTX-2 LoRA key {key!r} does not end in a recognized LoRA suffix.")
+            raise ValueError(
+                f"LTX-2 LoRA key {key!r} does not end in a recognized LoRA suffix "
+                f"({', '.join(known_suffixes)}). This file is not in a layout this conversion reads."
+            )
+
+    # A pair split across the file leaves a half-layer, which `any_lora_layer_from_state_dict` would
+    # meet as a bare KeyError deep in the patch build -- after the transformer has loaded. Name it.
+    for layer_path, values in grouped.items():
+        has_down = {"lora_A.weight", "lora_down.weight"} & values.keys()
+        has_up = {"lora_B.weight", "lora_up.weight"} & values.keys()
+        if not (has_down and has_up):
+            raise ValueError(
+                f"LTX-2 LoRA layer {layer_path!r} is missing one half of its low-rank pair "
+                f"(has {sorted(values)}). The file is truncated or was edited."
+            )
 
     return grouped
