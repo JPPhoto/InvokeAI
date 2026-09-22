@@ -778,6 +778,29 @@ def test_partial_iterate_stream_round_trip_defers_collect_until_close():
     assert restored.is_complete()
 
 
+def test_completed_iterate_stream_without_post_load_consumer_is_not_rehydrated():
+    """A finished Iterate stream is runtime-only once no downstream node can consume it."""
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(AddInvocation(id="add", b=1))
+    graph.add_edge(create_edge("range", "collection", "iterate", "collection"))
+    graph.add_edge(create_edge("iterate", "item", "add", "a"))
+
+    state = GraphExecutionState(graph=graph)
+    execute_all_nodes(state)
+
+    original_streams = [stream for stream in state._generic_runtime().streams.values() if stream.owner_id == "iterate"]
+    assert original_streams
+    assert all(stream.closed for stream in original_streams)
+    assert state.is_complete()
+
+    restored = load_execution_state(dump_execution_state(state))
+
+    assert restored.is_complete()
+    assert not [stream for stream in restored._generic_runtime().streams.values() if stream.owner_id == "iterate"]
+
+
 def test_rehydrated_iterate_state_can_be_deep_copied_without_sharing_runtime_locks():
     graph = Graph()
     graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))

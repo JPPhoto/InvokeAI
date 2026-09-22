@@ -1,10 +1,12 @@
 """Tests for session queue item sanitization in multiuser mode."""
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from invokeai.app.api.routers import session_queue as session_queue_router
 from invokeai.app.api.routers.session_queue import sanitize_queue_item_for_user, strip_missing_image_results
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
 from invokeai.app.invocations.collections import RangeInvocation
@@ -238,6 +240,41 @@ def test_strip_missing_image_results_removes_deleted_single_image_output(sample_
     assert "kept_node" in result.session.results
     # The original queue item is not mutated; only the API response copy is sanitized.
     assert "missing_node" in sample_session_queue_item.session.results
+
+
+def test_queue_detail_and_list_routes_drop_deleted_image_results(
+    monkeypatch: pytest.MonkeyPatch, sample_session_queue_item: SessionQueueItem
+) -> None:
+    sample_session_queue_item.status = "completed"
+    sample_session_queue_item.session.results = {
+        "deleted_node": ImageOutput(image=ImageField(image_name="deleted.png"), width=64, height=64),
+        "kept_node": ImageOutput(image=ImageField(image_name="kept.png"), width=64, height=64),
+    }
+    queue_service = Mock()
+    queue_service.get_queue_item_for_api.return_value = sample_session_queue_item
+    queue_service.list_all_queue_items_for_api.return_value = [sample_session_queue_item]
+    monkeypatch.setattr(
+        session_queue_router.ApiDependencies,
+        "invoker",
+        SimpleNamespace(
+            services=SimpleNamespace(
+                session_queue=queue_service,
+                image_records=SimpleNamespace(exists=lambda name: name == "kept.png"),
+            )
+        ),
+        raising=False,
+    )
+    current_user = SimpleNamespace(user_id="user_123", is_admin=False)
+
+    detail = session_queue_router.get_queue_item(current_user=current_user, queue_id="default", item_id=1)
+    listed = session_queue_router.list_all_queue_items(current_user=current_user, queue_id="default")
+
+    assert detail.status == "completed"
+    assert set(detail.session.results) == {"kept_node"}
+    assert len(listed) == 1
+    assert listed[0].status == "completed"
+    assert set(listed[0].session.results) == {"kept_node"}
+    assert set(sample_session_queue_item.session.results) == {"deleted_node", "kept_node"}
 
 
 def test_strip_missing_image_results_deep_copies_rehydrated_iterate_runtime(sample_session_queue_item):
