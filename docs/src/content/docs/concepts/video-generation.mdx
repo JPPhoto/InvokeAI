@@ -239,7 +239,7 @@ What to know in practice:
 
 * **Frames are 8·n + 1** (the video VAE encodes the first frame alone, then groups of eight): 9 to 481, default 121 — five seconds at the default 24 fps. The slider stops at 241; the field accepts more for a deliberate long render, but cost grows linearly with the frame count.
 * **Frame rate is yours to set** (1–60 fps). It changes the clip's duration, and with it how much audio is generated — the two streams share one clock.
-* **Canvas presets pin the short edge**: 512p, 704p (default) or 768p, with the long edge following your aspect ratio and both axes snapped to a multiple of 32.
+* **Canvas presets pin the short edge**, with the long edge following your aspect ratio: 512p, 704p (default) and 768p render in one pass and snap to a multiple of 32; 1024p and 1536p are [two-stage](#two-stage-presets) and snap to 64, because the first pass runs at half of them.
 * **Image-to-video re-compresses your frame** as a single H.264 frame before encoding it. That is deliberate: the model was trained on frames that had been through a video codec, and a pristine PNG is far enough out of that distribution that the clip visibly drifts away from it over the first second.
 * **The negative prompt** only reaches the model through classifier-free guidance, so it is available on Dev and hidden on Distilled. It is pre-filled with the release's own default, a long list of artifact and audio-defect terms.
 
@@ -251,12 +251,20 @@ Beyond the usual **CFG**, LTX-2 exposes three more terms in a collapsed **Advanc
 * **STG** (default 1) — spatio-temporal guidance. Steers away from a pass with one attention block skipped, which sharpens motion. 0 turns it off.
 * **Modality guidance** (default 3) — steers away from a pass with the audio/video cross-attention disabled, tightening how well the two streams agree. 1 turns it off.
 
+#### Two-stage presets
+
+The **1024p** and **1536p** target resolutions are *two-stage*. LTX-2 generates at half the canvas, doubles the latent with a dedicated x2 upscaler, then runs a second, shorter denoise over it. The upscaler alone produces a soft latent; the refine pass is what resolves it, so the output is larger without going soft. The soundtrack skips the upscaler, having no spatial extent, but is carried through the second pass so the two streams stay on one trajectory.
+
+The refine pass is the expensive half: it runs at four times the base pass's token count. Dev evaluates the model four times per step, so a Dev refine step costs four times a Distilled one — which is why the Dev refine runs a smaller step budget than its base pass rather than the same one. Expect minutes for Distilled at 1024p and hours for Dev at 1536p.
+
+A first frame is anchored on both passes, encoded once at each canvas. The refine pass re-noises every frame including the first, so an anchor that was only applied to the base pass would not survive into the output.
+
 #### Installing LTX-2
 
 The **LTX-2** starter bundle installs the working set:
 
 * **LTX-2.5 Dev Transformer (int8)** and **LTX-2.5 Distilled Transformer (int8)** (~18 GiB each) — single-file transformer builds. **One of these is the model you select in the Video panel**, and which one you pick decides the schedule.
-* **LTX-2.5 Components** — the video VAE, audio VAE, vocoder and text connectors, which go in the panel's **Model components** slot.
+* **LTX-2.5 Components** — the video VAE, audio VAE, vocoder, text connectors and the x2 latent upscaler, which go in the panel's **Model components** slot. The upscaler is what the two-stage presets need; a hand-assembled components folder without it fails when the refine pass begins, after the first pass has already run.
 * **LTX-2.5 Text Encoder (Gemma-4 12B, int8)** — the Lightricks-tuned Gemma-4 text tower, which goes in the **Gemma-4 encoder** slot. No LTX-2 model carries text-encoder weights, so this one is required rather than an override.
 
 LTX-2 does not condition on the last hidden state of its text encoder the way most models do: it stacks the hidden states of *every* Gemma layer and runs them through a separate connector model. That is why the encoder is a large, separate download.

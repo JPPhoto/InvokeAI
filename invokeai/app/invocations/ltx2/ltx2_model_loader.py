@@ -11,6 +11,7 @@ from invokeai.app.invocations.baseinvocation import (
 )
 from invokeai.app.invocations.fields import FieldDescriptions, Input, InputField, OutputField
 from invokeai.app.invocations.model import (
+    LTX2LatentUpsamplerField,
     LTX2TextEncoderField,
     LTX2TransformerField,
     LTX2VocoderField,
@@ -39,6 +40,9 @@ class LTX2ModelLoaderOutput(BaseInvocationOutput):
     vae: VAEField = OutputField(description=FieldDescriptions.vae, title="Video VAE")
     audio_vae: VAEField = OutputField(description=FieldDescriptions.ltx2_audio_vae, title="Audio VAE")
     vocoder: LTX2VocoderField = OutputField(description=FieldDescriptions.ltx2_vocoder, title="Vocoder")
+    latent_upsampler: LTX2LatentUpsamplerField = OutputField(
+        description=FieldDescriptions.ltx2_latent_upsampler, title="Latent Upsampler"
+    )
 
     # Echoed so a graph can record what it ran with. The inputs are all Direct (base-filtered
     # pickers), so nothing upstream could be read instead, and a literal re-typed into a metadata
@@ -57,7 +61,7 @@ class LTX2ModelLoaderOutput(BaseInvocationOutput):
     title="Main Model - LTX-2",
     tags=["model", "ltx", "ltx2", "video"],
     category="model",
-    version="1.0.0",
+    version="1.1.0",
     classification=Classification.Prototype,
 )
 class LTX2ModelLoaderInvocation(BaseInvocation):
@@ -142,6 +146,9 @@ class LTX2ModelLoaderInvocation(BaseInvocation):
             vae=VAEField(vae=components.model_copy(update={"submodel_type": SubModelType.VAE})),
             audio_vae=VAEField(vae=components.model_copy(update={"submodel_type": SubModelType.AudioVAE})),
             vocoder=LTX2VocoderField(vocoder=components.model_copy(update={"submodel_type": SubModelType.Vocoder})),
+            latent_upsampler=LTX2LatentUpsamplerField(
+                latent_upsampler=components.model_copy(update={"submodel_type": SubModelType.LatentUpsampler})
+            ),
             model=self.model,
             component_source=self.component_source,
             text_encoder_model=self.text_encoder_model,

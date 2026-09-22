@@ -6,10 +6,20 @@ import pytest
 import torch
 
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
-from invokeai.backend.ltx2.constants import LTX2_LATENT_CHANNELS
-from invokeai.backend.ltx2.denoise import build_denoise_state, denoise, preview_latent_frame
+from invokeai.backend.ltx2.constants import (
+    LTX2_ANCESTRAL_NOISE_SEED_OFFSET,
+    LTX2_LATENT_CHANNELS,
+    LTX2_REFINE_NOISE_SEED_OFFSET,
+    LTX2_STAGE_2_NOISE_SCALE,
+)
+from invokeai.backend.ltx2.denoise import build_denoise_state, build_refine_state, denoise, preview_latent_frame
 from invokeai.backend.ltx2.guidance import LTX2Guidance
-from invokeai.backend.ltx2.packing import pack_video_latents, unpack_video_latents
+from invokeai.backend.ltx2.packing import (
+    audio_latent_count,
+    pack_video_latents,
+    unpack_video_latents,
+    video_latent_shape,
+)
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import LTX2ConditioningInfo
 
 WIDTH, HEIGHT, FRAMES = 64, 64, 9
@@ -218,3 +228,199 @@ def test_the_run_is_reproducible_from_its_seed_and_differs_without_it() -> None:
         num_frames=FRAMES, height=HEIGHT, width=WIDTH, fps=24.0, seed=8, distilled=False, num_steps=3
     )
     assert not torch.equal(_denoise(TransformerStub(), other, LTX2Guidance(**OFF))[0], same[0])
+
+
+def _refine_inputs(width: int = 1792, height: int = 1024, num_frames: int = 121, fps: float = 24.0):
+    # Deliberately not a standard normal: stage one's output is a denoised clip, and latents that
+    # were already N(0, 1) would make "the noise this was mixed with" indistinguishable from the
+    # latents themselves -- an assertion on its distribution would then hold with no mixing at all.
+    frames, latent_height, latent_width = video_latent_shape(num_frames, height, width)
+    video = torch.randn(1, LTX2_LATENT_CHANNELS, frames, latent_height, latent_width) * 4.0 + 7.0
+    audio = torch.randn(1, audio_latent_count(num_frames, fps), LTX2_LATENT_CHANNELS) * 4.0 + 7.0
+    return video, audio
+
+
+@pytest.mark.parametrize("distilled", [True, False])
+def test_the_refine_pass_starts_as_the_forward_process_at_its_first_level(distilled: bool) -> None:
+    """A partial schedule expects a sample at its first level, not a clean one: both modalities are
+    taken back up the same rectified flow the step walks down."""
+    video, audio = _refine_inputs()
+    state = build_refine_state(
+        video_latents=video,
+        audio_latents=audio,
+        num_frames=121,
+        height=1024,
+        width=1792,
+        fps=24.0,
+        seed=4,
+        distilled=distilled,
+        num_steps=12,
+        noise_scale=LTX2_STAGE_2_NOISE_SCALE,
+    )
+    sigma = float(state.sigmas[0])
+
+    # Independent of the implementation's draw order: the noise is whatever is left once the clean
+    # part is removed, and it has to be a standard normal of the right shape and scale.
+    for name, mixed, clean in (
+        ("video", state.video_latents, pack_video_latents(video)),
+        # Audio is the half of this the docstring argues hardest for: the transformer reads one pair
+        # of timesteps for both streams, so clean audio beside sigma-0.91 video would misstate where
+        # the audio sits on the trajectory. A pass-through here would leave every other assertion in
+        # this file green.
+        ("audio", state.audio_latents, audio),
+    ):
+        noise = (mixed - (1 - sigma) * clean) / sigma
+        assert noise.shape == mixed.shape, name
+        assert abs(float(noise.std()) - 1.0) < 0.05, f"{name} noise is not unit-variance"
+        assert abs(float(noise.mean())) < 0.05, f"{name} noise is not zero-mean"
+    # The schedule is float32 and 0.909375 rounds up in it, so the level that truncation keeps
+    # can exceed the requested one by an ulp; the comparison that matters is made in float32.
+    assert sigma == pytest.approx(LTX2_STAGE_2_NOISE_SCALE, abs=1e-6) or sigma < LTX2_STAGE_2_NOISE_SCALE
+    # Nothing is anchored: a first frame is already resolved into what is being refined.
+    assert state.conditioning_mask is None
+    assert state.clean_video_latents is None
+
+
+def test_a_refine_pass_is_reproducible_from_its_seed() -> None:
+    video, audio = _refine_inputs()
+    kwargs = {
+        "audio_latents": audio,
+        "distilled": True,
+        "fps": 24.0,
+        "height": 1024,
+        "noise_scale": LTX2_STAGE_2_NOISE_SCALE,
+        "num_frames": 121,
+        "num_steps": 8,
+        "video_latents": video,
+        "width": 1792,
+    }
+    first = build_refine_state(seed=11, **kwargs)
+    again = build_refine_state(seed=11, **kwargs)
+    other = build_refine_state(seed=12, **kwargs)
+
+    assert torch.equal(first.video_latents, again.video_latents)
+    assert torch.equal(first.audio_latents, again.audio_latents)
+    assert not torch.equal(first.video_latents, other.video_latents)
+
+
+def test_latents_from_the_wrong_canvas_are_refused_naming_both_shapes() -> None:
+    """The upscaler doubles a latent grid exactly, so a mismatch here means the stages were planned
+    at canvases that do not line up -- silently reshaping would denoise the wrong geometry."""
+    video, audio = _refine_inputs(width=1792, height=1024)
+
+    with pytest.raises(ValueError, match="1248x704"):
+        build_refine_state(
+            video_latents=video,
+            audio_latents=audio,
+            num_frames=121,
+            height=704,
+            width=1248,
+            fps=24.0,
+            seed=1,
+            distilled=True,
+            num_steps=8,
+            noise_scale=LTX2_STAGE_2_NOISE_SCALE,
+        )
+
+
+def test_audio_latents_from_a_different_clip_length_are_refused() -> None:
+    video, _ = _refine_inputs()
+    _, mismatched = _refine_inputs(num_frames=49)
+
+    with pytest.raises(ValueError, match="one fps and frame count"):
+        build_refine_state(
+            video_latents=video,
+            audio_latents=mismatched,
+            num_frames=121,
+            height=1024,
+            width=1792,
+            fps=24.0,
+            seed=1,
+            distilled=True,
+            num_steps=8,
+            noise_scale=LTX2_STAGE_2_NOISE_SCALE,
+        )
+
+
+def test_the_refine_pass_draws_from_a_different_stream_than_the_base_pass() -> None:
+    """The forward process assumes the noise mixed in is independent of what it is mixed into. Both
+    stages seed from the request's seed, so without an offset the refine's draw would begin with
+    exactly the values the base pass's own initial noise came from -- the numbers the clip was grown
+    out of, mixed back into it. The module already carries that argument for the ancestral loop."""
+    video, audio = _refine_inputs(width=896, height=512)
+    base = build_denoise_state(num_frames=121, height=512, width=896, fps=24.0, seed=7, distilled=True, num_steps=8)
+    refine = build_refine_state(
+        video_latents=video,
+        audio_latents=audio,
+        num_frames=121,
+        height=512,
+        width=896,
+        fps=24.0,
+        seed=7,
+        distilled=True,
+        num_steps=8,
+        noise_scale=LTX2_STAGE_2_NOISE_SCALE,
+    )
+    sigma = float(refine.sigmas[0])
+    drawn = (refine.video_latents - (1 - sigma) * pack_video_latents(video)) / sigma
+
+    # Same shape here (no upscale in this fixture), so a shared stream would be an exact match.
+    assert drawn.shape == base.video_latents.shape
+    assert not torch.allclose(drawn, base.video_latents, atol=1e-4)
+    # All four streams in a two-stage run must be distinct, not merely the two initial ones: an
+    # offset equal to the ancestral one would make the refine's re-noise repeat the base pass's
+    # ancestral draws, which is the collision the ancestral offset exists to prevent.
+    assert len({7, 7 + LTX2_ANCESTRAL_NOISE_SEED_OFFSET, 7 + LTX2_REFINE_NOISE_SEED_OFFSET, refine.noise_seed}) == 4
+
+
+def test_the_refine_pass_re_anchors_a_conditioned_first_frame() -> None:
+    """The refine pass re-noises every token, frame 0 included, so at the released entry level about
+    nine tenths of an anchored frame's signal is replaced. Nothing restores it without a mask, and
+    the base pass's encode is half this canvas -- so two-stage image-to-video would regenerate the
+    first frame from the prompt alone."""
+    video, audio = _refine_inputs(width=896, height=512)
+    _, latent_height, latent_width = video_latent_shape(121, 512, 896)
+    anchor = torch.randn(1, LTX2_LATENT_CHANNELS, 1, latent_height, latent_width)
+    common = {
+        "audio_latents": audio,
+        "distilled": True,
+        "fps": 24.0,
+        "height": 512,
+        "noise_scale": LTX2_STAGE_2_NOISE_SCALE,
+        "num_frames": 121,
+        "num_steps": 8,
+        "seed": 3,
+        "video_latents": video,
+        "width": 896,
+    }
+    anchored = build_refine_state(image_latents=anchor, **common)
+    free = build_refine_state(**common)
+
+    assert free.conditioning_mask is None and free.clean_video_latents is None
+    assert anchored.conditioning_mask is not None and anchored.clean_video_latents is not None
+    # Frame 0's tokens are held at the anchor; everything after it is free.
+    per_frame = anchored.conditioning_mask[0].reshape(-1, latent_height * latent_width)
+    assert torch.all(per_frame[0] == 1.0)
+    assert torch.all(per_frame[1:] == 0.0)
+    first_span = anchored.video_latents[0, : latent_height * latent_width]
+    torch.testing.assert_close(first_span, anchored.clean_video_latents[0, : latent_height * latent_width])
+
+
+def test_a_refine_anchor_encoded_at_the_base_canvas_is_refused_by_name() -> None:
+    video, audio = _refine_inputs(width=896, height=512)
+    _, base_h, base_w = video_latent_shape(121, 256, 448)
+
+    with pytest.raises(ValueError, match="refine canvas"):
+        build_refine_state(
+            video_latents=video,
+            audio_latents=audio,
+            num_frames=121,
+            height=512,
+            width=896,
+            fps=24.0,
+            seed=3,
+            distilled=True,
+            num_steps=8,
+            noise_scale=LTX2_STAGE_2_NOISE_SCALE,
+            image_latents=torch.randn(1, LTX2_LATENT_CHANNELS, 1, base_h, base_w),
+        )

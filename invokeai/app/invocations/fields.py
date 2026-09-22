@@ -197,6 +197,7 @@ class FieldDescriptions:
     ltx2_text_encoder = "Gemma-4 tokenizer and text encoder, and the LTX-2 text connectors"
     ltx2_audio_vae = "Audio VAE (mel spectrogram) for LTX-2"
     ltx2_vocoder = "Vocoder (48 kHz stereo) for LTX-2"
+    ltx2_latent_upsampler = "x2 spatial latent upscaler for LTX-2's refine pass"
     ltx2_video_conditioning = "First-frame (VAE-latent) conditioning for LTX-2"
     sdxl_main_model = "SDXL Main model (UNet, VAE, CLIP1, CLIP2) to load"
     sdxl_refiner_model = "SDXL Refiner Main Modde (UNet, VAE, CLIP2) to load"

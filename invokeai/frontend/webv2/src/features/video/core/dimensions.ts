@@ -215,12 +215,27 @@ export const resolveMiniMaxH3ReferenceImage = (
 
 export const LTX2_CANVAS_MULTIPLE = 32;
 
+/**
+ * A two-stage canvas is chosen on the doubled grid so that halving it -- which is what the base
+ * pass runs at, the x2 latent upscaler doubling a latent grid exactly -- still lands on the plain
+ * one. Mirrors `LTX2_TWO_STAGE_CANVAS_MULTIPLE` in `invokeai/backend/ltx2/constants.py`.
+ */
+export const LTX2_TWO_STAGE_CANVAS_MULTIPLE = LTX2_CANVAS_MULTIPLE * 2;
+
 /** Short-side pixel count for each LTX-2 preset ("p" names the short dimension). */
 export const LTX2_TARGET_RESOLUTION_PX: Record<Ltx2TargetResolution, number> = {
   '512p': 512,
   '704p': 704,
   '768p': 768,
+  '1024p': 1024,
+  '1536p': 1536,
 };
+
+/** The presets that run a base pass and then a refine pass over an upscaled latent. */
+export const LTX2_TWO_STAGE_RESOLUTIONS: ReadonlySet<Ltx2TargetResolution> = new Set(['1024p', '1536p']);
+
+export const isLtx2TwoStage = (targetResolution: Ltx2TargetResolution): boolean =>
+  LTX2_TWO_STAGE_RESOLUTIONS.has(targetResolution);
 
 /**
  * The LTX-2 canvas for an aspect ratio: the preset pins the SHORT edge, the long
@@ -238,14 +253,41 @@ export const resolveLtx2Canvas = (
   }
 
   const shortEdge = LTX2_TARGET_RESOLUTION_PX[targetResolution];
+  const multiple = isLtx2TwoStage(targetResolution) ? LTX2_TWO_STAGE_CANVAS_MULTIPLE : LTX2_CANVAS_MULTIPLE;
   const ratio = width / height;
   const raw =
     ratio >= 1 ? { height: shortEdge, width: shortEdge * ratio } : { height: shortEdge / ratio, width: shortEdge };
 
   return {
-    height: snapToMultiple(raw.height, LTX2_CANVAS_MULTIPLE),
-    width: snapToMultiple(raw.width, LTX2_CANVAS_MULTIPLE),
+    height: snapToMultiple(raw.height, multiple),
+    width: snapToMultiple(raw.width, multiple),
   };
+};
+
+/**
+ * The two canvases a two-stage run uses: the base pass's, and the final one the refine pass
+ * produces. `base` is exactly half of `final` on both axes -- not a resize, but the x2 latent
+ * upscaler's doubling read backwards, which is why `resolveLtx2Canvas` puts a two-stage canvas on
+ * the 64 grid. Mirrors `base_canvas` in `invokeai/backend/ltx2/packing.py`.
+ *
+ * A single-stage preset returns the same canvas for both, so a caller can wire one shape.
+ */
+export const getLtx2StageCanvases = (
+  width: number,
+  height: number,
+  targetResolution: Ltx2TargetResolution
+): { base: VideoDimensions; final: VideoDimensions } | null => {
+  const final = resolveLtx2Canvas(width, height, targetResolution);
+
+  if (!final) {
+    return null;
+  }
+
+  if (!isLtx2TwoStage(targetResolution)) {
+    return { base: final, final };
+  }
+
+  return { base: { height: final.height / 2, width: final.width / 2 }, final };
 };
 
 // LTX-2's causal VAE encodes the first frame alone and then groups of 8, so

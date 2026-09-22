@@ -39946,6 +39946,9 @@
                   "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/LTX2LatentUpsampleInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
                 },
                 {
@@ -40684,7 +40687,13 @@
                   "$ref": "#/components/schemas/LTX2DenoiseOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/LTX2IdealDimensionsOutput"
+                },
+                {
                   "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2LatentUpsampleOutput"
                 },
                 {
                   "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
@@ -49317,6 +49326,9 @@
                 "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2LatentUpsampleInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
               },
               {
@@ -50012,7 +50024,13 @@
                 "$ref": "#/components/schemas/LTX2DenoiseOutput"
               },
               {
+                "$ref": "#/components/schemas/LTX2IdealDimensionsOutput"
+              },
+              {
                 "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentUpsampleOutput"
               },
               {
                 "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
@@ -50810,6 +50828,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentUpsampleInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
@@ -51898,10 +51919,13 @@
             "$ref": "#/components/schemas/LTX2DenoiseOutput"
           },
           "ltx2_ideal_dimensions": {
-            "$ref": "#/components/schemas/IdealSizeOutput"
+            "$ref": "#/components/schemas/LTX2IdealDimensionsOutput"
           },
           "ltx2_image_conditioning": {
             "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
+          },
+          "ltx2_latent_upsample": {
+            "$ref": "#/components/schemas/LTX2LatentUpsampleOutput"
           },
           "ltx2_latents_to_video": {
             "$ref": "#/components/schemas/VideoOutput"
@@ -52541,6 +52565,7 @@
           "ltx2_denoise",
           "ltx2_ideal_dimensions",
           "ltx2_image_conditioning",
+          "ltx2_latent_upsample",
           "ltx2_latents_to_video",
           "ltx2_model_loader",
           "ltx2_text_encoder",
@@ -53274,6 +53299,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentUpsampleInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
@@ -54432,6 +54460,9 @@
               },
               {
                 "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentUpsampleInvocation"
               },
               {
                 "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
@@ -58350,6 +58381,52 @@
             "title": "Seed",
             "type": "integer"
           },
+          "latents": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatentsField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Upscaled video latents to refine, from Upscale Latents - LTX-2. Present only on the second pass of a two-stage run; leave unwired to generate from noise.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Video Latents"
+          },
+          "audio_latents": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatentsField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The base pass's audio latents, carried into the refine pass unchanged. Required whenever video latents are wired.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Audio Latents"
+          },
+          "noise_scale": {
+            "default": 0.909375,
+            "description": "Where the refine pass re-enters the schedule: the noise level the upscaled latents are taken back to, and the highest level it samples. Lower keeps more of the base pass. Ignored without wired video latents.",
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 0.909375,
+            "orig_required": false,
+            "title": "Noise Scale",
+            "type": "number"
+          },
           "type": {
             "const": "ltx2_denoise",
             "default": "ltx2_denoise",
@@ -58362,7 +58439,7 @@
         "tags": ["ltx", "ltx2", "video", "audio", "denoise"],
         "title": "Denoise - LTX-2",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/LTX2DenoiseOutput"
         }
@@ -58420,7 +58497,7 @@
         "category": "video",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Ideal LTX-2 dimensions for a source image's aspect ratio.\n\nThe chosen preset pins the canvas's *short* edge and the long edge follows the source's aspect\nratio, each axis rounded to a multiple of 32 (the video VAE's spatial compression). Only the\nratio of the inputs matters. Wire the outputs into the width and height of both the image\nconditioning and the denoise node, which must share one canvas.\n\nCost grows with the token count, which is the canvas area over 1024: 768p is about 2.2x the\nwork of 512p at the same length.",
+        "description": "Ideal LTX-2 dimensions for a source image's aspect ratio.\n\nThe chosen preset pins the canvas's *short* edge and the long edge follows the source's aspect\nratio. Only the ratio of the inputs matters.\n\nOne-stage presets (512p, 704p, 768p) round each axis to a multiple of 32, the video VAE's\nspatial compression: wire `width`/`height` into both the image conditioning and the denoise\nnode, which must share one canvas.\n\nTwo-stage presets (1024p, 1536p) round to 64 instead, because generation happens at half the\ncanvas: wire `base_width`/`base_height` into the image conditioning and the *first* denoise\nnode, and `width`/`height` into the refine denoise that follows the latent upscaler. Wiring the\nfinal size into a single pass renders at a canvas the checkpoints were not trained for, and\nnothing will report it.\n\nCost grows with the token count, which is the canvas area over 1024: 768p is about 2.2x the\nwork of 512p at the same length.",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -58472,7 +58549,7 @@
           "target_resolution": {
             "default": "704p",
             "description": "Which short edge to pin the canvas to.",
-            "enum": ["512p", "704p", "768p"],
+            "enum": ["512p", "704p", "768p", "1024p", "1536p"],
             "field_kind": "input",
             "input": "any",
             "orig_default": "704p",
@@ -58480,6 +58557,8 @@
             "title": "Target Resolution",
             "type": "string",
             "ui_choice_labels": {
+              "1024p": "1024p (short edge 1024, two-stage)",
+              "1536p": "1536p (short edge 1536, two-stage - very slow)",
               "512p": "512p (short edge 512 - fastest)",
               "704p": "704p (short edge 704)",
               "768p": "768p (short edge 768 - sharpest, slowest)"
@@ -58497,10 +58576,61 @@
         "tags": ["ltx", "ltx2", "video", "dimensions", "math"],
         "title": "LTX-2 Ideal Dimensions",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
-          "$ref": "#/components/schemas/IdealSizeOutput"
+          "$ref": "#/components/schemas/LTX2IdealDimensionsOutput"
         }
+      },
+      "LTX2IdealDimensionsOutput": {
+        "class": "output",
+        "description": "The canvas a generation runs at, and for a two-stage preset the pass that precedes it.",
+        "properties": {
+          "width": {
+            "description": "Width of the final canvas.",
+            "field_kind": "output",
+            "title": "Width",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "height": {
+            "description": "Height of the final canvas.",
+            "field_kind": "output",
+            "title": "Height",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "base_width": {
+            "description": "Width of the base pass; equals `width` on one-stage presets.",
+            "field_kind": "output",
+            "title": "Base Width",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "base_height": {
+            "description": "Height of the base pass; equals `height` on one-stage presets.",
+            "field_kind": "output",
+            "title": "Base Height",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "two_stage": {
+            "description": "Whether this preset runs a base pass and then a refine pass.",
+            "field_kind": "output",
+            "title": "Two Stage",
+            "type": "boolean",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_ideal_dimensions_output",
+            "default": "ltx2_ideal_dimensions_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "width", "height", "base_width", "base_height", "two_stage", "type", "type"],
+        "title": "LTX2IdealDimensionsOutput",
+        "type": "object"
       },
       "LTX2ImageConditioningInvocation": {
         "category": "conditioning",
@@ -58649,6 +58779,156 @@
         },
         "required": ["output_meta", "video_conditioning", "type", "type"],
         "title": "LTX2ImageConditioningOutput",
+        "type": "object"
+      },
+      "LTX2LatentUpsampleInvocation": {
+        "category": "latents",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Doubles an LTX-2 clip's latent width and height, between the base and refine passes.\n\nThe upscaler is a small convolutional network over the latent grid, not a denoiser: it produces\na plausible 2x latent for the refine pass to resolve, and its output decoded on its own is\nsofter than either stage. Nothing here touches the audio latents, which have no spatial extent.\n\nThe upscaler was trained on the VAE's own latent scale, while the transformer reads normalized\nlatents, so the clip is denormalized on the way in and normalized again on the way out. That is\nwhat the video VAE is here for -- only its ``latents_mean``/``latents_std`` and scaling factor\nare read, never its encoder or decoder, and it is never moved to the compute device.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "video_latents": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatentsField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Video latents [1, 128, T_lat, H/32, W/32] from the base pass.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true
+          },
+          "latent_upsampler": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2LatentUpsamplerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "x2 spatial latent upscaler for LTX-2's refine pass",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Latent Upsampler"
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The video VAE whose latent statistics the upscaler's scale is defined against.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Video VAE"
+          },
+          "type": {
+            "const": "ltx2_latent_upsample",
+            "default": "ltx2_latent_upsample",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["ltx", "ltx2", "video", "latents", "upscale"],
+        "title": "Upscale Latents - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2LatentUpsampleOutput"
+        }
+      },
+      "LTX2LatentUpsampleOutput": {
+        "class": "output",
+        "description": "The upscaled clip, with the pixel geometry the refine pass runs at.",
+        "properties": {
+          "latents": {
+            "$ref": "#/components/schemas/LatentsField",
+            "description": "Upscaled video latents [1, 128, T_lat, 2h, 2w].",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "width": {
+            "description": "Pixel width of the upscaled latents.",
+            "field_kind": "output",
+            "title": "Width",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "height": {
+            "description": "Pixel height of the upscaled latents.",
+            "field_kind": "output",
+            "title": "Height",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "num_frames": {
+            "description": "Pixel-frame count of the upscaled latents.",
+            "field_kind": "output",
+            "title": "Num Frames",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_latent_upsample_output",
+            "default": "ltx2_latent_upsample_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "latents", "width", "height", "num_frames", "type", "type"],
+        "title": "LTX2LatentUpsampleOutput",
+        "type": "object"
+      },
+      "LTX2LatentUpsamplerField": {
+        "description": "Latent upsampler field for LTX-2: the x2 spatial upscaler the refine pass runs on top of.",
+        "properties": {
+          "latent_upsampler": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Info to load the latent upsampler submodel"
+          }
+        },
+        "required": ["latent_upsampler"],
+        "title": "LTX2LatentUpsamplerField",
         "type": "object"
       },
       "LTX2LatentsToVideoInvocation": {
@@ -58929,7 +59209,7 @@
         "tags": ["model", "ltx", "ltx2", "video"],
         "title": "Main Model - LTX-2",
         "type": "object",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
         }
@@ -58971,6 +59251,13 @@
             "description": "Vocoder (48 kHz stereo) for LTX-2",
             "field_kind": "output",
             "title": "Vocoder",
+            "ui_hidden": false
+          },
+          "latent_upsampler": {
+            "$ref": "#/components/schemas/LTX2LatentUpsamplerField",
+            "description": "x2 spatial latent upscaler for LTX-2's refine pass",
+            "field_kind": "output",
+            "title": "Latent Upsampler",
             "ui_hidden": false
           },
           "model": {
@@ -59017,6 +59304,7 @@
           "vae",
           "audio_vae",
           "vocoder",
+          "latent_upsampler",
           "model",
           "component_source",
           "text_encoder_model",

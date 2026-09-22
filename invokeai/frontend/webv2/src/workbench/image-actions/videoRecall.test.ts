@@ -881,6 +881,26 @@ describe('LTX-2 recall', () => {
     }
   });
 
+  it('recalls a two-stage run as the preset that produces its canvas', () => {
+    // A two-stage run records its final canvas, and no single-stage preset resolves to it -- so the
+    // preset comes back from the size alone, without the metadata having to name the stage count.
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: ltx2Metadata({
+        height: 1024,
+        ltx2_base_height: 512,
+        ltx2_base_width: 896,
+        ltx2_two_stage: true,
+        width: 1792,
+      }),
+      models: catalog,
+    });
+
+    expect(result?.values.targetResolution).toBe('1024p');
+    expect(result?.values.aspectRatioId).toBe('16:9');
+  });
+
   it('reproduces a dev clip that ran without a negative prompt, from a distilled panel', () => {
     // Switching to dev seeds the release's list into a panel that carries none -- which is right
     // when the user picks the model, and wrong here: the clip recorded an empty negative prompt and

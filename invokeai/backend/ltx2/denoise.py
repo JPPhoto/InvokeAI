@@ -23,6 +23,7 @@ from invokeai.backend.ltx2.constants import (
     LTX2_AUDIO_LATENT_CHANNELS,
     LTX2_AUDIO_LATENT_MEL_BINS,
     LTX2_LATENT_CHANNELS,
+    LTX2_REFINE_NOISE_SEED_OFFSET,
 )
 from invokeai.backend.ltx2.guidance import (
     PASS_MODALITY,
@@ -40,7 +41,7 @@ from invokeai.backend.ltx2.packing import (
     video_latent_shape,
     video_sequence_length,
 )
-from invokeai.backend.ltx2.sampling import build_sigmas, flow_step
+from invokeai.backend.ltx2.sampling import build_refine_sigmas, build_sigmas, flow_step
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import LTX2ConditioningInfo
 from invokeai.backend.util.cancel_hooks import cancel_before_forward
 
@@ -165,6 +166,118 @@ def build_denoise_state(
         # deterministically; eta is what selects between the two branches of one step.
         eta=LTX2_ANCESTRAL_ETA if distilled else 0.0,
         noise_seed=seed + LTX2_ANCESTRAL_NOISE_SEED_OFFSET,
+    )
+
+
+def build_refine_state(
+    *,
+    video_latents: torch.Tensor,
+    audio_latents: torch.Tensor,
+    num_frames: int,
+    height: int,
+    width: int,
+    fps: float,
+    seed: int,
+    distilled: bool,
+    num_steps: int,
+    noise_scale: float,
+    image_latents: torch.Tensor | None = None,
+    conditioning_strength: float = 1.0,
+) -> LTX2DenoiseState:
+    """The refine pass's state: stage one's result re-entered partway down the schedule.
+
+    ``video_latents`` is the upsampled ``(1, 128, T, h, w)`` clip at the *second* stage's canvas,
+    normalized; ``audio_latents`` is stage one's packed audio, which no upsampler touches. Both are
+    noised back to the level the schedule is re-entered at -- ``x = (1 - sigma) * x0 + sigma * eps``,
+    the forward process of the same rectified flow the step inverts -- because a partial schedule
+    expects a sample at its first level, not a clean one.
+
+    Audio is re-noised to the same level rather than carried through clean: the two modalities are
+    denoised jointly and the transformer reads one pair of timesteps, so handing it clean audio
+    beside a noised video would place the two streams at different points of the same trajectory.
+
+    ``image_latents`` re-anchors a conditioned first frame, and has to be a *fresh* encode at this
+    pass's canvas -- stage one's is half the size. Re-anchoring is not optional for image-to-video:
+    the refine pass re-noises every token, frame 0 included, so at the released entry level about
+    nine tenths of the anchored frame's signal is replaced by noise and nothing restores it. Without
+    this the first frame would be regenerated from the prompt alone, and a two-stage run would
+    quietly mean something different by "first frame" than a single-stage one.
+    """
+    validate_canvas(height, width)
+    validate_num_frames(num_frames)
+
+    latent_frames, latent_height, latent_width = video_latent_shape(num_frames, height, width)
+    expected = (1, LTX2_LATENT_CHANNELS, latent_frames, latent_height, latent_width)
+    if tuple(video_latents.shape) != expected:
+        raise ValueError(
+            f"The refine pass was handed {tuple(video_latents.shape)} latents but {width}x{height} "
+            f"at {num_frames} frames needs {expected}. Check the upsampler's scale against the "
+            f"canvas the stages were planned at."
+        )
+
+    audio_count = audio_latent_count(num_frames, fps)
+    # The packed audio row is one channel-by-mel-bin block, which happens to be the same width as a
+    # video row; asserting the video channel count here would be the right number for the wrong
+    # reason, and would stop being right the day either shape moved.
+    audio_row = LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS
+    if tuple(audio_latents.shape) != (1, audio_count, audio_row):
+        raise ValueError(
+            f"The refine pass was handed {tuple(audio_latents.shape)} audio latents but this clip "
+            f"needs {(1, audio_count, audio_row)}; both stages must run at one fps and frame count."
+        )
+
+    sigmas = build_refine_sigmas(
+        distilled=distilled,
+        refine_steps=num_steps,
+        video_seq_len=video_sequence_length(num_frames, height, width),
+        noise_scale=noise_scale,
+    )
+    sigma = sigmas[0].to(torch.float32)
+
+    # Drawn on the CPU, so a refine is reproducible across devices, and offset from the base pass's
+    # stream so the noise mixed back in is not the noise the clip was grown out of.
+    generator = torch.Generator(device="cpu").manual_seed(seed + LTX2_REFINE_NOISE_SEED_OFFSET)
+    packed_video = pack_video_latents(video_latents.to(device="cpu", dtype=torch.float32))
+    audio = audio_latents.to(device="cpu", dtype=torch.float32)
+    video_noise = randn_tensor(packed_video.shape, generator=generator, device=torch.device("cpu"), dtype=torch.float32)
+    audio_noise = randn_tensor(audio.shape, generator=generator, device=torch.device("cpu"), dtype=torch.float32)
+
+    video_latents = torch.lerp(packed_video, video_noise, sigma)
+    conditioning_mask: torch.Tensor | None = None
+    clean_video_latents: torch.Tensor | None = None
+
+    if image_latents is not None:
+        expected_anchor = (1, LTX2_LATENT_CHANNELS, 1, latent_height, latent_width)
+        if tuple(image_latents.shape) != expected_anchor:
+            raise ValueError(
+                f"The refine pass's image conditioning was encoded at {tuple(image_latents.shape)} "
+                f"but this pass needs {expected_anchor}. Encode it at the refine canvas "
+                f"({width}x{height}), not the base pass's."
+            )
+        if not 0.0 < conditioning_strength <= 1.0:
+            raise ValueError(f"Image conditioning strength must be in (0, 1]; got {conditioning_strength}.")
+
+        clean = torch.zeros((1, LTX2_LATENT_CHANNELS, latent_frames, latent_height, latent_width))
+        clean[:, :, 0] = image_latents.to(device="cpu", dtype=torch.float32)[:, :, 0]
+        mask = torch.zeros((1, 1, latent_frames, latent_height, latent_width), dtype=torch.float32)
+        mask[:, :, 0] = conditioning_strength
+
+        clean_video_latents = pack_video_latents(clean)
+        conditioning_mask = pack_video_latents(mask).squeeze(-1)
+        video_latents = torch.lerp(video_latents, clean_video_latents, conditioning_mask.unsqueeze(-1))
+
+    return LTX2DenoiseState(
+        video_latents=video_latents,
+        audio_latents=torch.lerp(audio, audio_noise, sigma),
+        sigmas=sigmas,
+        latent_frames=latent_frames,
+        latent_height=latent_height,
+        latent_width=latent_width,
+        audio_latents_count=audio_count,
+        conditioning_mask=conditioning_mask,
+        clean_video_latents=clean_video_latents,
+        eta=LTX2_ANCESTRAL_ETA if distilled else 0.0,
+        noise_seed=seed + LTX2_REFINE_NOISE_SEED_OFFSET + LTX2_ANCESTRAL_NOISE_SEED_OFFSET,
     )
 
 

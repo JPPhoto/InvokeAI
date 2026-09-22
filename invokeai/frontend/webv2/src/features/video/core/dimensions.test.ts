@@ -15,6 +15,8 @@ import {
   LTX2_NUM_FRAMES_MAX,
   LTX2_NUM_FRAMES_MIN,
   LTX2_NUM_FRAMES_STEP,
+  getLtx2StageCanvases,
+  isLtx2TwoStage,
   resolveLtx2Canvas,
   snapNumFramesToChoices,
   snapNumFramesToGrid,
@@ -255,5 +257,49 @@ describe('getVideoDurationSeconds', () => {
     expect(getVideoDurationSeconds(81, 16)).toBeCloseTo(5.0625, 4);
     expect(getVideoDurationSeconds(81, 0)).toBeNull();
     expect(getVideoDurationSeconds(Number.NaN, 16)).toBeNull();
+  });
+});
+
+describe('LTX-2 two-stage canvases', () => {
+  it('puts a two-stage canvas where halving it stays on the VAE grid', () => {
+    // 32 is the VAE's grid; a two-stage preset resolves on 64 because the base pass runs at half.
+    for (const [width, height] of [
+      [1920, 1080],
+      [1080, 1920],
+      [1000, 1000],
+    ]) {
+      const canvas = resolveLtx2Canvas(width, height, '1024p');
+
+      expect(canvas).not.toBeNull();
+      expect(canvas!.width % 64, `${width}x${height} width`).toBe(0);
+      expect(canvas!.height % 64, `${width}x${height} height`).toBe(0);
+    }
+  });
+
+  it('derives the base canvas by halving, not by resolving a smaller preset', () => {
+    const stages = getLtx2StageCanvases(1920, 1080, '1024p');
+
+    expect(stages).toEqual({ base: { height: 512, width: 896 }, final: { height: 1024, width: 1792 } });
+    // The x2 upscaler doubles a latent grid exactly, so this relation has to be exact.
+    expect(stages!.base.width * 2).toBe(stages!.final.width);
+    expect(stages!.base.height * 2).toBe(stages!.final.height);
+  });
+
+  it('gives a single-stage preset the same canvas twice, so one code path builds both', () => {
+    const stages = getLtx2StageCanvases(1920, 1080, '704p');
+
+    expect(stages!.base).toEqual(stages!.final);
+    expect(stages!.final).toEqual(resolveLtx2Canvas(1920, 1080, '704p'));
+  });
+
+  it('reports which presets run two passes', () => {
+    expect(isLtx2TwoStage('1024p')).toBe(true);
+    expect(isLtx2TwoStage('1536p')).toBe(true);
+    expect(isLtx2TwoStage('768p')).toBe(false);
+  });
+
+  it('returns null for a degenerate source, in both stages', () => {
+    expect(getLtx2StageCanvases(0, 1080, '1024p')).toBeNull();
+    expect(getLtx2StageCanvases(Number.NaN, 1080, '1024p')).toBeNull();
   });
 });

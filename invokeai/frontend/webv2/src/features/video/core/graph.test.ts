@@ -789,6 +789,139 @@ describe('compileVideoGraph — LTX-2', () => {
     expect(hasEdge(backendGraph, 'model_loader', 'vocoder', output.id, 'vocoder')).toBe(true);
   });
 
+  it('generates at half the canvas and refines the upscaled latent', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', targetResolution: '1024p' }),
+      model
+    );
+    const base = backendGraph.nodes.denoise_latents;
+    const refine = backendGraph.nodes.refine_latents;
+
+    // The x2 upscaler doubles a latent grid exactly, so the base canvas is the final one halved --
+    // not a separate resolution that happens to be smaller.
+    expect({ height: base?.height, width: base?.width }).toEqual({ height: 512, width: 896 });
+    expect({ height: refine?.height, width: refine?.width }).toEqual({ height: 1024, width: 1792 });
+    expect(hasEdge(backendGraph, 'denoise_latents', 'video_latents', 'latent_upsample', 'video_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'latent_upsample', 'latents', 'refine_latents', 'latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'latent_upsampler', 'latent_upsample', 'latent_upsampler')).toBe(true);
+    // Audio has no spatial extent, so it skips the upscaler -- but it still goes through the refine
+    // denoise, which re-noises both modalities to one level.
+    expect(hasEdge(backendGraph, 'denoise_latents', 'audio_latents', 'refine_latents', 'audio_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'latent_upsample', 'latents', 'video_output', 'video_latents')).toBe(false);
+    expect(hasEdge(backendGraph, 'refine_latents', 'video_latents', 'video_output', 'video_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'refine_latents', 'audio_latents', 'video_output', 'audio_latents')).toBe(true);
+  });
+
+  it('coerces a preset the model does not offer instead of compiling a graph of NaNs', () => {
+    // A record persisted under another family keeps its own preset, and only a model *selection*
+    // re-coerces it. An unknown preset has no short edge, so every dimension would come back NaN --
+    // and NaN compares unequal to itself, so a stage count recovered by comparing canvases would
+    // have said "two". The graph must be the one the panel promised: a single pass at the default.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { targetResolution: '720p' as never }), model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(Object.values(backendGraph.nodes).some((node) => node.type === 'ltx2_latent_upsample')).toBe(false);
+    expect(denoise.width).toBe(1248);
+    expect(denoise.height).toBe(704);
+    for (const node of Object.values(backendGraph.nodes)) {
+      for (const [field, value] of Object.entries(node)) {
+        expect(Number.isNaN(value), `${String(node.type)}.${field} is NaN`).toBe(false);
+      }
+    }
+  });
+
+  it('never lets the refine pass outlast a base pass the user shortened', () => {
+    // Cutting Steps for a quick probe must not leave the expensive half of the run longer than the
+    // half that was just cut.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { steps: 4, targetResolution: '1024p' }), model);
+
+    expect(backendGraph.nodes.denoise_latents?.steps).toBe(4);
+    expect(backendGraph.nodes.refine_latents?.steps).toBe(4);
+  });
+
+  it('gives the refine pass its own step budget where the variant sets one', () => {
+    // Dev pays four forwards a step; inheriting the base pass's 30 would be over an hour of refine
+    // at this canvas. The distilled schedule is fixed, so it has no budget of its own to apply.
+    const dev = ltx2Model('ltx2_dev');
+    const devGraph = compileVideoGraph(ltx2SettingsFor(dev, { targetResolution: '1024p' }), dev).backendGraph;
+
+    expect(devGraph.nodes.denoise_latents?.steps).toBe(30);
+    expect(devGraph.nodes.refine_latents?.steps).toBe(8);
+
+    const distilled = ltx2Model('ltx2_distilled');
+    const distilledGraph = compileVideoGraph(
+      ltx2SettingsFor(distilled, { targetResolution: '1024p' }),
+      distilled
+    ).backendGraph;
+
+    expect(distilledGraph.nodes.refine_latents?.steps).toBe(distilledGraph.nodes.denoise_latents?.steps);
+  });
+
+  it("anchors a first frame on the base pass, at the base pass's canvas", () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        aspectRatioId: '16:9',
+        firstFrameImage: { height: 1080, image_name: 'frame.png', width: 1920 },
+        targetResolution: '1024p',
+      }),
+      model
+    );
+    const conditioning = backendGraph.nodes.image_conditioning;
+
+    // Each pass is anchored at its own canvas. The refine pass re-noises every token, frame 0
+    // included, so the base pass's anchor does not survive into it -- and that encode is half the
+    // size, so it cannot be reused. Without a second encode, two-stage image-to-video would
+    // regenerate the first frame from the prompt alone.
+    expect({ height: conditioning?.height, width: conditioning?.width }).toEqual({ height: 512, width: 896 });
+    expect(
+      hasEdge(backendGraph, 'image_conditioning', 'video_conditioning', 'denoise_latents', 'video_conditioning')
+    ).toBe(true);
+
+    const refineConditioning = backendGraph.nodes.refine_image_conditioning;
+
+    expect({ height: refineConditioning?.height, width: refineConditioning?.width }).toEqual({
+      height: 1024,
+      width: 1792,
+    });
+    expect(
+      hasEdge(backendGraph, 'refine_image_conditioning', 'video_conditioning', 'refine_latents', 'video_conditioning')
+    ).toBe(true);
+  });
+
+  it('adds no second image encode when there is no first frame to anchor', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { targetResolution: '1024p' }), model);
+
+    expect(backendGraph.nodes.refine_image_conditioning).toBeUndefined();
+    expect(Object.values(backendGraph.nodes).some((node) => node.type === 'ltx2_image_conditioning')).toBe(false);
+  });
+
+  it('records the pair of canvases a two-stage run used', () => {
+    const model = ltx2Model('ltx2_dev');
+    const twoStage = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', targetResolution: '1024p' }),
+      model
+    ).backendGraph;
+    const single = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', targetResolution: '704p' }),
+      model
+    ).backendGraph;
+
+    expect(twoStage.nodes.core_metadata).toMatchObject({
+      height: 1024,
+      ltx2_base_height: 512,
+      ltx2_base_width: 896,
+      ltx2_two_stage: true,
+      width: 1792,
+    });
+    // A single-stage run says nothing about stages rather than saying "one".
+    expect(single.nodes.core_metadata).not.toHaveProperty('ltx2_two_stage');
+  });
+
   it('encodes the negative prompt whenever either classifier-free scale will consume it', () => {
     const model = ltx2Model('ltx2_dev');
     const isWired = (settings: Partial<VideoSettings>) => {

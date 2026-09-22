@@ -18,7 +18,7 @@ release's text is the one reproduced here.
 
 from typing import Final
 
-from diffusers.pipelines.ltx2.utils import DISTILLED_SIGMA_VALUES
+from diffusers.pipelines.ltx2.utils import DISTILLED_SIGMA_VALUES, STAGE_2_DISTILLED_SIGMA_VALUES
 
 # --- Video geometry ------------------------------------------------------------------------------
 
@@ -31,6 +31,10 @@ LTX2_TEMPORAL_COMPRESSION: Final = 8
 LTX2_PATCH_SIZE: Final = 1
 LTX2_PATCH_SIZE_T: Final = 1
 LTX2_CANVAS_MULTIPLE: Final = LTX2_SPATIAL_COMPRESSION
+
+# A two-stage run's *final* canvas has to halve onto that grid, because the base pass runs at half
+# of it and the x2 latent upscaler doubles a latent grid exactly.
+LTX2_TWO_STAGE_CANVAS_MULTIPLE: Final = LTX2_CANVAS_MULTIPLE * 2
 
 # The causal VAE encodes the first frame on its own and every further group of 8, so a clip is
 # 8k + 1 pixel frames.
@@ -67,6 +71,12 @@ LTX2_MAX_SHIFT: Final = 2.05
 LTX2_DISTILLED_SIGMAS: Final[tuple[float, ...]] = tuple(DISTILLED_SIGMA_VALUES)
 LTX2_DISTILLED_STEPS: Final = len(LTX2_DISTILLED_SIGMAS)
 
+# Where the refine pass re-enters the schedule. Upstream publishes the distilled second stage as a
+# list rather than a rule -- ``STAGE_2_DISTILLED_SIGMA_VALUES`` -- and it is exactly the tail of the
+# distilled schedule from this level down, which is why the refine pass is built by truncating a
+# checkpoint's own schedule instead of carrying a second one. The equality is pinned by a test.
+LTX2_STAGE_2_NOISE_SCALE: Final = STAGE_2_DISTILLED_SIGMA_VALUES[0]
+
 # LTX-2.5 samples the distilled schedule ancestrally (an SDE Euler step with full noise
 # re-injection); the dev checkpoint's shifted schedule is sampled deterministically.
 LTX2_ANCESTRAL_ETA: Final = 1.0
@@ -76,6 +86,14 @@ LTX2_ANCESTRAL_S_NOISE: Final = 1.0
 # it the loop's first draw would repeat the initial latent noise exactly: both are a standard
 # normal at the same shape from a freshly seeded generator.
 LTX2_ANCESTRAL_NOISE_SEED_OFFSET: Final = 10000
+
+# And the refine pass draws from its own stream, for the same reason one step further on. Both
+# stages are seeded from the request's seed so a run is reproducible, but the forward process the
+# refine pass re-noises with -- ``x = (1 - sigma) * x0 + sigma * eps`` -- assumes ``eps`` is
+# independent of ``x0``. Without an offset the refine's draw begins with exactly the values the base
+# pass's initial noise was drawn from, in a different layout: the same numbers the clip was grown
+# out of, mixed back into it.
+LTX2_REFINE_NOISE_SEED_OFFSET: Final = 20000
 
 LTX2_DEV_STEPS: Final = 30
 

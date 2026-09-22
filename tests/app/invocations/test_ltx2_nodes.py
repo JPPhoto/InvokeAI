@@ -13,8 +13,10 @@ import invokeai.app.invocations.vae.ltx2_latents_to_video as ltx2_latents_to_vid
 from invokeai.app.invocations.fields import LatentsField, LTX2ConditioningField, LTX2VideoConditioningField
 from invokeai.app.invocations.ltx2.ltx2_denoise import LTX2DenoiseInvocation
 from invokeai.app.invocations.ltx2.ltx2_ideal_dimensions import LTX2IdealDimensionsInvocation
+from invokeai.app.invocations.ltx2.ltx2_latent_upsample import LTX2LatentUpsampleInvocation
 from invokeai.app.invocations.ltx2.ltx2_model_loader import LTX2ModelLoaderInvocation
 from invokeai.app.invocations.model import (
+    LTX2LatentUpsamplerField,
     LTX2TransformerField,
     LTX2VocoderField,
     ModelIdentifierField,
@@ -25,6 +27,7 @@ from invokeai.backend.ltx2.image_conditioning import fit_to_canvas, recompress_h
 from invokeai.backend.model_manager.configs.main import Main_Diffusers_LTX2_Config
 from invokeai.backend.model_manager.taxonomy import BaseModelType, LTX2VariantType, ModelFormat, ModelType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import LTX2ConditioningInfo
+from invokeai.backend.util.devices import TorchDevice
 
 
 def _identifier(key: str = "transformer") -> ModelIdentifierField:
@@ -190,6 +193,30 @@ def test_the_ideal_dimensions_pin_the_short_edge(source, preset, expected) -> No
     node = LTX2IdealDimensionsInvocation(id="dims", width=source[0], height=source[1], target_resolution=preset)
     output = node.invoke(MagicMock())
     assert (output.width, output.height) == expected
+    # One pass: the base canvas is the canvas, so a workflow can wire one pair of numbers.
+    assert (output.base_width, output.base_height) == expected
+    assert output.two_stage is False
+
+
+@pytest.mark.parametrize(
+    ("source", "preset", "final", "base"),
+    [
+        ((1920, 1080), "1024p", (1792, 1024), (896, 512)),
+        ((1920, 1080), "1536p", (2752, 1536), (1376, 768)),
+        ((1080, 1920), "1024p", (1024, 1792), (512, 896)),
+    ],
+)
+def test_a_two_stage_preset_resolves_on_the_64_grid_and_names_its_base_pass(source, preset, final, base) -> None:
+    """The node's choice of grid is what makes the base canvas expressible at all: a two-stage canvas
+    off the 64 grid halves onto something the VAE cannot encode, and only a live run would notice."""
+    node = LTX2IdealDimensionsInvocation(id="dims", width=source[0], height=source[1], target_resolution=preset)
+    output = node.invoke(MagicMock())
+
+    assert (output.width, output.height) == final
+    assert (output.base_width, output.base_height) == base
+    assert output.two_stage is True
+    assert (output.base_width * 2, output.base_height * 2) == final
+    assert output.base_width % 32 == 0 and output.base_height % 32 == 0
 
 
 def test_fitting_an_image_to_the_canvas_crops_rather_than_stretches() -> None:
@@ -298,3 +325,145 @@ def test_unpacked_audio_latents_are_refused_before_a_model_is_locked() -> None:
 
     with pytest.raises(ValueError, match=r"packed \[1, L, 128\]"):
         _latents_to_video()._decode_audio_to_wav(context, 5.0)
+
+
+def test_a_refine_pass_without_the_base_passs_audio_is_refused() -> None:
+    """The two modalities are denoised jointly off one pair of timesteps, so the refine pass takes
+    both of stage one's outputs or neither -- wiring only the video would leave the audio to be
+    generated from scratch beside an almost-finished clip."""
+    node = _denoise(latents=LatentsField(latents_name="upscaled"))
+
+    with pytest.raises(ValueError, match="audio latents as well as its video"):
+        node.invoke(_context())
+
+
+def test_audio_latents_without_video_latents_are_refused() -> None:
+    node = _denoise(audio_latents=LatentsField(latents_name="audio"))
+
+    with pytest.raises(ValueError, match="takes both or neither"):
+        node.invoke(_context())
+
+
+def test_the_upscaler_refuses_latents_that_are_not_one_ltx2_clip() -> None:
+    node = LTX2LatentUpsampleInvocation(
+        id="upsample",
+        video_latents=LatentsField(latents_name="latents"),
+        latent_upsampler=LTX2LatentUpsamplerField(latent_upsampler=_identifier("upsampler")),
+        vae=VAEField(vae=_identifier("vae")),
+    )
+    context = _context()
+    context.tensors.load.return_value = torch.zeros(1, 16, 4, 8, 8)
+
+    with pytest.raises(ValueError, match="expects one 5D clip"):
+        node.invoke(context)
+
+
+def test_the_upscaler_hands_the_network_raw_latents_and_returns_normalized_ones(monkeypatch) -> None:
+    """The scale conversion is the whole reason the VAE is wired into this node: the upscaler was
+    trained on the VAE's own latent scale while the transformer reads normalized latents. Swapping
+    the two conversions, or dropping either, leaves a wildly mis-scaled latent that only shows up as
+    garbage after the refine pass -- by which time the base pass has already run."""
+    mean = torch.full((1, 128, 1, 1, 1), 3.0)
+    std = torch.full((1, 128, 1, 1, 1), 2.0)
+    scaling_factor = 0.5
+    seen: dict[str, torch.Tensor] = {}
+
+    class StubUpsampler(torch.nn.Module):
+        # Carries the same submodule names as the real `LTX2LatentUpsamplerModel`, as real modules:
+        # the node hooks them for cancellation, so a stub of bare lists would let a typo'd or
+        # renamed attribute pass here and fail only against the released checkpoint.
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.zeros(1))
+            self.initial_conv = torch.nn.Identity()
+            self.res_blocks = torch.nn.ModuleList([torch.nn.Identity()])
+            self.upsampler = torch.nn.Identity()
+            self.post_upsample_res_blocks = torch.nn.ModuleList([torch.nn.Identity()])
+            self.final_conv = torch.nn.Identity()
+
+        def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+            seen["input"] = hidden_states.detach().clone()
+            return hidden_states.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
+
+    upsampler = StubUpsampler()
+    vae = SimpleNamespace(latents_mean=mean, latents_std=std, config=SimpleNamespace(scaling_factor=scaling_factor))
+
+    context = _context()
+    normalized_in = torch.randn(1, 128, 2, 4, 6)
+    context.tensors.load.return_value = normalized_in
+
+    def save(tensor: torch.Tensor) -> str:
+        seen["saved"] = tensor.clone()
+        return "saved"
+
+    context.tensors.save.side_effect = save
+
+    def load(identifier):
+        if identifier.key == "vae":
+            return SimpleNamespace(model=vae, config=SimpleNamespace(base=BaseModelType.LTX2))
+        loaded = MagicMock()
+        loaded.model_on_device.return_value.__enter__.return_value = (None, upsampler)
+        return loaded
+
+    context.models.load.side_effect = load
+    monkeypatch.setattr(TorchDevice, "choose_torch_device", staticmethod(lambda: torch.device("cpu")))
+
+    node = LTX2LatentUpsampleInvocation(
+        id="upsample",
+        video_latents=LatentsField(latents_name="latents"),
+        latent_upsampler=LTX2LatentUpsamplerField(latent_upsampler=_identifier("upsampler")),
+        vae=VAEField(vae=_identifier("vae")),
+    )
+    output = node.invoke(context)
+
+    # In: denormalized to the VAE's own scale. Out: back on the transformer's.
+    torch.testing.assert_close(seen["input"], normalized_in * std / scaling_factor + mean)
+    torch.testing.assert_close(
+        seen["saved"],
+        (seen["input"].repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2) - mean) * scaling_factor / std,
+    )
+    # Pixel geometry, not `size()[3] * 8`: 4x6 latents doubled is 8x12, at 32 px per latent.
+    assert (output.width, output.height, output.num_frames) == (12 * 32, 8 * 32, (2 - 1) * 8 + 1)
+
+
+def test_the_refine_pass_forwards_the_noise_level_the_node_was_given(monkeypatch) -> None:
+    """`noise_scale` is the only knob this feature adds, and nothing else reaches the schedule it
+    controls without a 22B transformer resident. Hard-coding it at the call site is otherwise free."""
+    import invokeai.app.invocations.ltx2.ltx2_denoise as denoise_module
+
+    captured: dict[str, float] = {}
+
+    def fake_build_refine_state(**kwargs):
+        captured["noise_scale"] = kwargs["noise_scale"]
+        raise _StopAfterState
+
+    monkeypatch.setattr(denoise_module, "build_refine_state", fake_build_refine_state)
+    node = _denoise(
+        latents=LatentsField(latents_name="upscaled"),
+        audio_latents=LatentsField(latents_name="audio"),
+        noise_scale=0.42,
+        cfg_scale=1.0,
+        audio_cfg_scale=1.0,
+        stg_scale=0.0,
+        modality_scale=1.0,
+    )
+
+    context = _context()
+    context.conditioning.load.return_value = SimpleNamespace(
+        conditionings=[
+            LTX2ConditioningInfo(
+                video_embeds=torch.zeros(1, 4, 8),
+                audio_embeds=torch.zeros(1, 4, 6),
+                attention_mask=torch.ones(1, 4, dtype=torch.int64),
+            )
+        ]
+    )
+
+    with pytest.raises(_StopAfterState):
+        node.invoke(context)
+
+    assert captured["noise_scale"] == 0.42
+
+
+class _StopAfterState(Exception):
+    """Ends the invocation once the state has been built, before any model is loaded."""

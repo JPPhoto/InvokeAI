@@ -426,6 +426,23 @@ export const VideoWidgetView = () => {
     () => createListCollection({ items: policy.targetResolutions.map((option) => ({ ...option, value: option.id })) }),
     [policy.targetResolutions]
   );
+  // A two-stage preset generates at half the canvas it names, which the size line below does not
+  // say -- it reports the output size, which is the final one. Without this the whole signal that a
+  // preset costs two passes is the three words in its own label.
+  const twoStageHelpText = useMemo(() => {
+    const option = policy.targetResolutions.find((entry) => entry.id === values.targetResolution);
+
+    if (option?.stages !== 2 || !dimensions) {
+      return undefined;
+    }
+
+    return t('widgets.video.twoStageHelp', {
+      baseHeight: dimensions.height / 2,
+      baseWidth: dimensions.width / 2,
+      height: dimensions.height,
+      width: dimensions.width,
+    });
+  }, [dimensions, policy.targetResolutions, t, values.targetResolution]);
   const aspectRatioValue = useMemo(() => [values.aspectRatioId], [values.aspectRatioId]);
   const targetResolutionValue = useMemo(() => [values.targetResolution], [values.targetResolution]);
 
@@ -655,7 +672,7 @@ export const VideoWidgetView = () => {
               </IconButton>
             </HStack>
           </Field>
-          <Field label={t('widgets.video.targetResolution')}>
+          <Field helpText={twoStageHelpText} label={t('widgets.video.targetResolution')}>
             <Select
               collection={targetResolutionCollection}
               size="xs"
