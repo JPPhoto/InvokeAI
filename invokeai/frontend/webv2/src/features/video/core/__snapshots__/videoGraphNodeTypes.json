@@ -251,6 +251,9 @@
           "video"
         ],
         "ltx2_conditioning_video": [],
+        "ltx2_context_frames": [
+          17
+        ],
         "ltx2_modality_scale": [
           3
         ],
@@ -469,6 +472,9 @@
         "vocoder"
       ],
       "literalInputs": {
+        "context_frames": [
+          17
+        ],
         "height": [
           1024,
           1536,

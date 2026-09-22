@@ -353,6 +353,43 @@ export const LTX2_EXTEND_CONTEXT_FRAMES = 17;
 export const ltx2ExtendJoinFitsInMemory = (width: number, height: number, contextFrames: number): boolean =>
   width * height * 3 * (contextFrames * 2 + 13) <= 512 * 1024 * 1024;
 
+/**
+ * The widest context the join can blend for a given source, on the 8k + 1 grid.
+ *
+ * The memory ceiling is a property of the *source's* pixels, not the generation canvas, so it moves
+ * with the clip the user picked: a 2560x1440 source affords 17 frames with 3% to spare while a 4K
+ * one affords none. Exposed as a live bound rather than a fixed check because the control is now the
+ * user's to drag — without it they could set a value that is refused only at enqueue, after both
+ * encodes and the transformer have already run.
+ *
+ * Returns 0 when even the smallest usable context (9) does not fit, which is the panel's signal that
+ * this source cannot be extended at all.
+ */
+export const ltx2MaxExtendContextFrames = (width: number, height: number): number => {
+  for (
+    let frames = snapLtx2FramesDown(LTX2_NUM_FRAMES_MAX);
+    frames >= 1 + LTX2_NUM_FRAMES_STEP;
+    frames -= LTX2_NUM_FRAMES_STEP
+  ) {
+    if (ltx2ExtendJoinFitsInMemory(width, height, frames)) {
+      return frames;
+    }
+  }
+
+  return 0;
+};
+
+/**
+ * New material a continuation actually adds, in frames.
+ *
+ * The join emits `sum(inputs) - transition_frames * (n - 1)`, and the transition is the context, so
+ * with two clips the source keeps its own length and the generation contributes `numFrames - context`.
+ * Every frame of context is therefore a frame of new video given up — the trade the panel shows
+ * beside the control, because Frames alone does not reveal it.
+ */
+export const ltx2NewFramesForExtend = (numFrames: number, contextFrames: number): number =>
+  Math.max(0, numFrames - contextFrames);
+
 export const LTX2_FPS_MIN = 1;
 export const LTX2_FPS_MAX = 60;
 export const LTX2_FPS_DEFAULT = 24;

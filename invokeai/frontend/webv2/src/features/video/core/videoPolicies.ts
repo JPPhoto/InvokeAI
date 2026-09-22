@@ -35,7 +35,8 @@ import {
   LTX2_NUM_FRAMES_MIN,
   LTX2_NUM_FRAMES_SLIDER_MAX,
   LTX2_EXTEND_CONTEXT_FRAMES,
-  ltx2ExtendJoinFitsInMemory,
+  ltx2MaxExtendContextFrames,
+  ltx2NewFramesForExtend,
   LTX2_NUM_FRAMES_STEP,
   ltx2FramesForClip,
   MINIMAX_H3_FPS,
@@ -802,6 +803,13 @@ export interface VideoModelPolicy {
     fpsVisible: boolean;
     /** False when the schedule is fixed: the steps control shows the count read-only. */
     stepsEditable: boolean;
+    /**
+     * The extend-mode context control, or null when the mode or family does not have one. `max`
+     * moves with the source's own pixels (the join blends at the clip's native resolution), and
+     * `newFrames` is what the run actually adds once the crossfade has consumed the context from
+     * both halves — the number Frames alone does not reveal.
+     */
+    extendContext: { value: number; min: number; max: number; step: number; newFrames: number } | null;
     /** The family's distillation fast path, or null when it has none. */
     accelerator: VideoAcceleratorConfig | null;
     /** Steps for the fast path as currently configured, or null when it has none. */
@@ -817,6 +825,18 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
   // With an accelerator that removes guidance, the backend ignores the scales and the step count
   // outright, so the panel stops offering the controls it would ignore.
   const guidanceDistilled = isGuidanceDistilled(config, settings);
+  // Offered only where it means something: LTX-2's extend mode, with a source picked. The ceiling
+  // is the source's, so it cannot be computed without one.
+  const extendContext =
+    model?.base === 'ltx-2' && resolveVideoMode(settings) === 'extend' && settings.sourceVideo
+      ? {
+          value: settings.ltx2ExtendContextFrames,
+          min: 1 + LTX2_NUM_FRAMES_STEP,
+          max: ltx2MaxExtendContextFrames(settings.sourceVideo.width, settings.sourceVideo.height),
+          step: LTX2_NUM_FRAMES_STEP,
+          newFrames: ltx2NewFramesForExtend(settings.numFrames, settings.ltx2ExtendContextFrames),
+        }
+      : null;
 
   return {
     aspectRatioOptions: getVideoAspectRatioOptions(model),
@@ -843,6 +863,7 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
         ? getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings))
         : null,
       audioOutput: config.audioOutput,
+      extendContext: extendContext,
       cfgLowNoiseVisible: config.cfg.lowNoiseVisible && !guidanceDistilled,
       cfgVisible: config.cfg.visible && !guidanceDistilled,
       fpsVisible: config.fps.editable,
@@ -1812,6 +1833,7 @@ export const getDefaultVideoSettings = (
   const config = getVideoConfig(model);
 
   const base: VideoSettings = {
+    ltx2ExtendContextFrames: LTX2_EXTEND_CONTEXT_FRAMES,
     acceleratorEnabled: false,
     acceleratorLoraKeys: [],
     aspectRatioId: '16:9',
@@ -2422,29 +2444,40 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
   // late and confusingly without one: the generated side after the encoders have run, the source
   // side inside the join, after the whole generation.
   if (mode === 'extend' && model.base === 'ltx-2' && settings.sourceVideo) {
-    if (settings.numFrames <= LTX2_EXTEND_CONTEXT_FRAMES) {
+    // The user's own value now, not a constant, so every message quotes what they actually set.
+    const context = settings.ltx2ExtendContextFrames;
+
+    if (settings.numFrames <= context) {
       reasons.push(
-        `A continuation opens with ${LTX2_EXTEND_CONTEXT_FRAMES} frames of the source, so anything at or ` +
-          `below that would be all replay and no continuation. Raise Frames above ${LTX2_EXTEND_CONTEXT_FRAMES}.`
+        `A continuation opens with ${context} frames of the source, so anything at or ` +
+          `below that would be all replay and no continuation. Raise Frames above ${context}.`
       );
     }
 
-    if (
-      !ltx2ExtendJoinFitsInMemory(settings.sourceVideo.width, settings.sourceVideo.height, LTX2_EXTEND_CONTEXT_FRAMES)
-    ) {
+    const affordable = ltx2MaxExtendContextFrames(settings.sourceVideo.width, settings.sourceVideo.height);
+
+    if (affordable === 0) {
       reasons.push(
-        `The join blends ${LTX2_EXTEND_CONTEXT_FRAMES} frames of the initial video at its own ` +
+        `The join blends the held frames of the initial video at its own ` +
           `${settings.sourceVideo.width}x${settings.sourceVideo.height}, which needs more memory than it is ` +
-          `allowed. Use a source at or below about 2560x1440.`
+          `allowed even at the smallest context. Use a source at or below about 2560x1440.`
+      );
+    } else if (context > affordable) {
+      // Reachable by loading a recalled or stored setting against a larger source than it was made
+      // for; the control itself is bounded, so dragging cannot get here.
+      reasons.push(
+        `Context Frames is ${context}, but blending that many frames of a ` +
+          `${settings.sourceVideo.width}x${settings.sourceVideo.height} source needs more memory than the join ` +
+          `is allowed. Lower it to ${affordable} or less.`
       );
     }
 
     const kept = settings.sourceVideo.endFrame - settings.sourceVideo.startFrame + 1;
 
-    if (kept < LTX2_EXTEND_CONTEXT_FRAMES) {
+    if (kept < context) {
       reasons.push(
-        `The join blends ${LTX2_EXTEND_CONTEXT_FRAMES} frames out of each half, but the initial video's trim ` +
-          `keeps only ${kept}. Keep at least ${LTX2_EXTEND_CONTEXT_FRAMES} frames of it.`
+        `The join blends ${context} frames out of each half, but the initial video's trim ` +
+          `keeps only ${kept}. Keep at least ${context} frames of it, or lower Context Frames.`
       );
     }
   }

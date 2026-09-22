@@ -22,7 +22,9 @@ import {
   getVideoTargetResolutionOptions,
   isSupportedVideoModel,
   isValidVideoNumFrames,
+  LTX2_NUM_FRAMES_STEP,
   MINIMAX_H3_HYBRID_BLOCK_RANGE,
+  snapLtx2FramesDown,
   snapVideoNumFrames,
 } from '@features/video';
 import { SEED_MAX } from '@platform/core/seed';
@@ -97,6 +99,7 @@ export type VideoRecalledField =
   | 'cfg'
   | 'loras'
   | 'components'
+  | 'extendContext'
   | 'media';
 
 export interface VideoRecallResult {
@@ -827,6 +830,21 @@ export const buildVideoRecallSettings = ({
     fields.push('media');
   }
 
+  // Recalled alongside the source rather than with the sampling block: it is only meaningful for a
+  // continuation, and it is not recoverable from anything else in the record -- the output length
+  // folds the source, the generated half and the crossfade together. Snapped on the way in for the
+  // same reason the settings normalizer snaps it: an off-grid value would show a count the run
+  // could not use.
+  const contextFrames = getInteger(metadata, 'ltx2_context_frames');
+
+  if (contextFrames !== null && model?.base === 'ltx-2') {
+    values = {
+      ...values,
+      ltx2ExtendContextFrames: Math.max(1 + LTX2_NUM_FRAMES_STEP, snapLtx2FramesDown(contextFrames)),
+    };
+    fields.push('extendContext');
+  }
+
   return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
 };
 
@@ -843,6 +861,7 @@ const VIDEO_FIELD_LABELS: Record<VideoRecalledField, string> = {
   cfg: 'CFG',
   steps: 'steps',
   components: 'components',
+  extendContext: 'context frames',
   fps: 'FPS',
   frames: 'frames',
   loras: 'concepts',

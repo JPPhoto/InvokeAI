@@ -882,6 +882,10 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     holdAudio: boolean
   ) => {
     const conditioning = addNode(graph, {
+      // Sent explicitly rather than left to the node's own default, so the panel's number and the
+      // run's are the same one. It still reaches the join over an edge from the node's OUTPUT: a
+      // source shorter than this contributes fewer frames, and only the node that read it knows.
+      context_frames: settings.ltx2ExtendContextFrames,
       height: canvas.height,
       id,
       type: 'ltx2_extend_conditioning',
@@ -1156,6 +1160,10 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       ...(policy.ui.audioCfgVisible ? { ltx2_audio_cfg_scale: guidance.audio_cfg_scale } : {}),
       ...(policy.ui.stgVisible ? { ltx2_stg_scale: guidance.stg_scale } : {}),
       ...(policy.ui.modalityVisible ? { ltx2_modality_scale: guidance.modality_scale } : {}),
+      // Only a continuation has one, and it is not recoverable from anything else in the record:
+      // the output length folds the source, the generated half and the crossfade together, so a
+      // recall without this would silently reinstate the default context and a different run.
+      ...(policy.ui.extendContext ? { ltx2_context_frames: settings.ltx2ExtendContextFrames } : {}),
       // Informational, not load-bearing: recall recovers the preset by matching the recorded
       // width/height against each one, and a two-stage preset's canvas is unique among them. These
       // are here for someone reading a clip's metadata, to whom "1792x1024" alone does not say that

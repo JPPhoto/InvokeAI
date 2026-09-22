@@ -9781,6 +9781,12 @@ export type components = {
              */
             source_video_end_frame?: number | null;
             /**
+             * Ltx2 Context Frames
+             * @description Frames of the source an LTX-2 continuation opened with, which the join then crossfaded out of both halves
+             * @default null
+             */
+            ltx2_context_frames?: number | null;
+            /**
              * Fps
              * @description The frame rate of the generated video
              * @default null

@@ -2,6 +2,7 @@ import type { GenerationModelCatalogItem, MainModelConfig } from '@features/gene
 
 import { architectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 import { isLtx2TwoStage, LTX2_DEFAULT_NEGATIVE_PROMPT } from '@features/video/core/dimensions';
+import { LTX2_EXTEND_CONTEXT_FRAMES } from '@features/video/core/dimensions';
 import { isVideoTargetResolution, normalizeVideoSettings } from '@features/video/core/settings';
 import { describe, expect, it } from 'vitest';
 
@@ -373,6 +374,120 @@ describe('Lightning', () => {
     expect(withoutPair).toMatchObject({ cfgScale: 5, acceleratorEnabled: false, steps: 40 });
     // The catalog holds no H3 Turbo LoRA, so H3 falls back to its slow defaults.
     expect(h3Defaults).toMatchObject({ fps: 24, acceleratorEnabled: false, numFrames: 124, steps: 50 });
+  });
+});
+
+describe('LTX-2 extend context control', () => {
+  const model = ltx2('ltx2_dev');
+  const extendSettings = (overrides: Partial<VideoSettings> = {}) => ({
+    ...getDefaultVideoSettings(model, []),
+    sourceVideo: {
+      endFrame: 200,
+      fps: 24,
+      height: 704,
+      numFrames: 201,
+      startFrame: 0,
+      video_name: 's.mp4',
+      width: 1248,
+    },
+    ...overrides,
+  });
+
+  it('offers the control only in extend mode, with a source to size it against', () => {
+    // The ceiling is a property of the SOURCE's pixels -- the join blends at the clip's own
+    // resolution, not the generation canvas -- so without a clip there is nothing to bound.
+    expect(getVideoModelPolicy(model, extendSettings()).ui.extendContext).not.toBeNull();
+    expect(getVideoModelPolicy(model, getDefaultVideoSettings(model, [])).ui.extendContext).toBeNull();
+    expect(getVideoModelPolicy(wanModel('i2v_a14b'), extendSettings()).ui.extendContext).toBeNull();
+  });
+
+  it('bounds the control by what the join can afford for THIS source', () => {
+    // video_concat buffers the crossfade at the source's native resolution and refuses over
+    // 512 MiB, so a larger clip affords a shorter context. Without a live bound the user could set
+    // a value refused only at enqueue -- after both encodes and the transformer have run.
+    const hd = getVideoModelPolicy(model, extendSettings()).ui.extendContext;
+    const uhd = getVideoModelPolicy(
+      model,
+      extendSettings({
+        sourceVideo: {
+          endFrame: 200,
+          fps: 24,
+          height: 2160,
+          numFrames: 201,
+          startFrame: 0,
+          video_name: 's.mp4',
+          width: 3840,
+        },
+      })
+    ).ui.extendContext;
+
+    expect(hd?.max ?? 0).toBeGreaterThan(LTX2_EXTEND_CONTEXT_FRAMES);
+    // 4K cannot blend even the smallest usable context; 0 is the panel's "not extendable" signal.
+    expect(uhd).toMatchObject({ max: 0 });
+  });
+
+  it('reports the new material left after the join consumes the context', () => {
+    // output = source + numFrames - context, so every held frame costs a frame of new video. That
+    // trade is invisible in Frames alone, which is why the control states it.
+    const at17 = getVideoModelPolicy(model, extendSettings({ numFrames: 121 })).ui.extendContext;
+    const at49 = getVideoModelPolicy(model, extendSettings({ ltx2ExtendContextFrames: 49, numFrames: 121 })).ui
+      .extendContext;
+
+    expect(at17).toMatchObject({ newFrames: 104 });
+    expect(at49).toMatchObject({ newFrames: 72 });
+  });
+
+  it('refuses a context the source cannot afford, naming what would fit', () => {
+    // Not reachable by dragging (the control is bounded), but a recalled or stored value can carry
+    // a context made for a smaller source.
+    const reasons = getVideoValidationReasons(
+      model,
+      extendSettings({
+        ltx2ExtendContextFrames: 97,
+        sourceVideo: {
+          endFrame: 200,
+          fps: 24,
+          height: 1440,
+          numFrames: 201,
+          startFrame: 0,
+          video_name: 's.mp4',
+          width: 2560,
+        },
+      })
+    );
+
+    expect(reasons.join(' ')).toMatch(/Context Frames is 97/);
+  });
+
+  it('refuses a trim that keeps fewer frames than the join will blend', () => {
+    const reasons = getVideoValidationReasons(
+      model,
+      extendSettings({
+        ltx2ExtendContextFrames: 49,
+        sourceVideo: {
+          endFrame: 20,
+          fps: 24,
+          height: 704,
+          numFrames: 201,
+          startFrame: 0,
+          video_name: 's.mp4',
+          width: 1248,
+        },
+      })
+    );
+
+    expect(reasons.join(' ')).toMatch(/keeps only 21/);
+  });
+
+  it('snaps a stored off-grid value onto the VAE grid', () => {
+    // The node snaps a ragged request DOWN silently, so an unsnapped setting would leave the panel
+    // showing a count the run did not use.
+    expect(normalizeVideoSettings({ ...extendSettings(), ltx2ExtendContextFrames: 24 })).toMatchObject({
+      ltx2ExtendContextFrames: 17,
+    });
+    expect(normalizeVideoSettings({ ...extendSettings(), ltx2ExtendContextFrames: 3 })).toMatchObject({
+      ltx2ExtendContextFrames: 9,
+    });
   });
 });
 

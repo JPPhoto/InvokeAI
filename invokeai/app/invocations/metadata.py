@@ -233,7 +233,7 @@ CORE_METADATA_VERSION = "1.0.0"
     title="Core Metadata",
     tags=["metadata"],
     category="metadata",
-    version="2.6.0",
+    version="2.7.0",
     classification=Classification.Internal,
 )
 class CoreMetadataInvocation(BaseInvocation):
@@ -328,6 +328,11 @@ class CoreMetadataInvocation(BaseInvocation):
     source_video_end_frame: Optional[int] = InputField(
         default=None,
         description="The last frame (inclusive) of the source video that was kept",
+    )
+    ltx2_context_frames: Optional[int] = InputField(
+        default=None,
+        description="Frames of the source an LTX-2 continuation opened with, which the join then crossfaded "
+        "out of both halves",
     )
     fps: Optional[int] = InputField(
         default=None,
