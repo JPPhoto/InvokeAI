@@ -1,6 +1,11 @@
 import type { ImageWithDims } from '@features/generation/contracts';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models';
-import type { VideoReferenceItem, VideoSourceClip, VideoWidgetValues } from '@features/video/core/types';
+import type {
+  VideoConditioningClip,
+  VideoReferenceItem,
+  VideoSourceClip,
+  VideoWidgetValues,
+} from '@features/video/core/types';
 
 import { createListCollection, HStack, Stack, Switch, Text } from '@chakra-ui/react';
 import { GenerationSettingsSection, SeedField } from '@features/generation/components';
@@ -12,6 +17,7 @@ import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
   canPlaceReferenceExtendAnchor,
+  isVideoTargetResolution,
   pinReferenceExtendAnchor,
   normalizeVideoWidgetValues,
   resolveVideoMode,
@@ -20,6 +26,7 @@ import {
 import {
   getAcceleratorLoraChangeResult,
   getAcceleratorToggleResult,
+  getEffectiveVideoTiming,
   getVideoDimensions,
   getVideoModelPolicy,
   getVideoModelSelectionResult,
@@ -38,6 +45,7 @@ import { useTranslation } from 'react-i18next';
 import { areVideoValuesEqual } from './videoComparators';
 import { VideoComponentsSection } from './VideoComponentsSection';
 import { VideoConceptsSection } from './VideoConceptsSection';
+import { VideoConditioningClipField } from './VideoConditioningClipField';
 import { VideoPromptFields } from './VideoFormFields';
 import { VideoFrameImageField } from './VideoFrameImageField';
 import { VideoReferenceListField } from './VideoReferenceListField';
@@ -54,9 +62,7 @@ const ASPECT_RATIO_COLLECTION = createListCollection({
 });
 
 const toTargetResolution = (value: string | undefined): VideoWidgetValues['targetResolution'] | null =>
-  value === '480p' || value === '720p' || value === '1080p' || value === '768 highres' || value === '768 lowres'
-    ? value
-    : null;
+  isVideoTargetResolution(value) ? value : null;
 
 const DURATION_FORMATTER = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
@@ -129,10 +135,13 @@ export const VideoWidgetView = () => {
   );
   const policy = useMemo(() => getVideoModelPolicy(values.model ?? undefined, values), [values]);
   const dimensions = useMemo(() => getVideoDimensions(values.model ?? undefined, values), [values]);
+  // What the run will actually use: a conditioning clip decides the length, and in the video role
+  // the frame rate too. The stored values stay put underneath, so clearing the clip restores them.
+  const timing = useMemo(() => getEffectiveVideoTiming(values.model ?? undefined, values), [values]);
   const durationSeconds = getVideoDurationSeconds(
-    values.numFrames,
+    timing.numFrames,
     // In extend mode the extension inherits the SOURCE clip's frame rate.
-    policy.fps.editable ? (values.sourceVideo?.fps ?? values.fps) : policy.fps.defaultValue
+    policy.fps.editable ? (values.sourceVideo?.fps ?? timing.fps) : policy.fps.defaultValue
   );
 
   const patch = useCallback((next: Partial<VideoWidgetValues>) => patchValues(next), [patchValues]);
@@ -214,6 +223,9 @@ export const VideoWidgetView = () => {
       },
       cfgScale: (cfgScale: number) => patch({ cfgScale }),
       cfgScaleLowNoise: (cfgScaleLowNoise: number) => patch({ cfgScaleLowNoise }),
+      audioCfgScale: (audioCfgScale: number) => patch({ audioCfgScale }),
+      modalityScale: (modalityScale: number) => patch({ modalityScale }),
+      stgScale: (stgScale: number) => patch({ stgScale }),
       fps: (fps: number) => patch({ fps }),
       steps: (steps: number) => patch({ steps }),
       targetResolution: ({ value }: { value: string[] }) => {
@@ -238,10 +250,25 @@ export const VideoWidgetView = () => {
   const maxVideoReferences = policy.references?.maxVideos ?? 3;
   const setFirstFrame = useCallback(
     (firstFrameImage: ImageWithDims | null) =>
-      patch({ firstFrameImage, ...(firstFrameImage ? { sourceVideo: null } : {}) }),
+      patch({ firstFrameImage, ...(firstFrameImage ? { conditioningClip: null, sourceVideo: null } : {}) }),
     [patch]
   );
-  const setLastFrame = useCallback((lastFrameImage: ImageWithDims | null) => patch({ lastFrameImage }), [patch]);
+  const setLastFrame = useCallback(
+    (lastFrameImage: ImageWithDims | null) =>
+      patch({ lastFrameImage, ...(lastFrameImage ? { conditioningClip: null } : {}) }),
+    [patch]
+  );
+  // A conditioning clip claims a whole modality, so it excludes every other conditioning slot --
+  // and each of those clears it in turn. The role a dropped clip arrives in comes from the gallery
+  // record: an uploaded soundtrack has no picture to condition on.
+  const setConditioningClip = useCallback(
+    (conditioningClip: VideoConditioningClip | null) =>
+      patch({
+        conditioningClip,
+        ...(conditioningClip ? { firstFrameImage: null, lastFrameImage: null, references: [], sourceVideo: null } : {}),
+      }),
+    [patch]
+  );
   // This setter tracks references separately from patch-only field setters. Rebudget the linked tail with frame
   // count so backend truncation cannot discard its seam end; derivation must tolerate intermediate input values.
   const setNumFrames = useCallback(
@@ -275,10 +302,14 @@ export const VideoWidgetView = () => {
 
           return;
         }
-        patch({ references, sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
+        patch({
+          references,
+          sourceVideo,
+          ...(sourceVideo ? { conditioningClip: null, firstFrameImage: null } : {}),
+        });
         return;
       }
-      patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
+      patch({ sourceVideo, ...(sourceVideo ? { conditioningClip: null, firstFrameImage: null } : {}) });
     },
     [maxVideoReferences, patch, projectId, referenceExtend, t, values.numFrames]
   );
@@ -299,7 +330,12 @@ export const VideoWidgetView = () => {
       patch({
         references: next,
         ...(next.length > 0
-          ? { firstFrameImage: null, lastFrameImage: null, ...(referenceExtend ? {} : { sourceVideo: null }) }
+          ? {
+              conditioningClip: null,
+              firstFrameImage: null,
+              lastFrameImage: null,
+              ...(referenceExtend ? {} : { sourceVideo: null }),
+            }
           : {}),
       });
     },
@@ -341,19 +377,43 @@ export const VideoWidgetView = () => {
   const clearFirstFrame = useCallback(() => patch({ firstFrameImage: null }), [patch]);
   const clearLastFrame = useCallback(() => patch({ lastFrameImage: null }), [patch]);
   const clearSourceVideo = useCallback(() => patch({ sourceVideo: null }), [patch]);
+  const clearConditioningClip = useCallback(() => patch({ conditioningClip: null }), [patch]);
 
   const targetResolutionCollection = useMemo(
     () => createListCollection({ items: policy.targetResolutions.map((option) => ({ ...option, value: option.id })) }),
     [policy.targetResolutions]
   );
+  // A two-stage preset generates at half the canvas it names, which the size line below does not
+  // say -- it reports the output size, which is the final one. Without this the whole signal that a
+  // preset costs two passes is the three words in its own label.
+  const twoStageHelpText = useMemo(() => {
+    const option = policy.targetResolutions.find((entry) => entry.id === values.targetResolution);
+
+    if (option?.stages !== 2 || !dimensions) {
+      return undefined;
+    }
+
+    return t('widgets.video.twoStageHelp', {
+      baseHeight: dimensions.height / 2,
+      baseWidth: dimensions.width / 2,
+      height: dimensions.height,
+      width: dimensions.width,
+    });
+  }, [dimensions, policy.targetResolutions, t, values.targetResolution]);
   const aspectRatioValue = useMemo(() => [values.aspectRatioId], [values.aspectRatioId]);
   const targetResolutionValue = useMemo(() => [values.targetResolution], [values.targetResolution]);
 
   const framesSlider = useMemo(
     () =>
       policy.frames.kind === 'grid'
-        ? { max: policy.frames.max, min: policy.frames.min, step: policy.frames.step }
+        ? {
+            inputMax: policy.frames.max,
+            max: policy.frames.sliderMax ?? policy.frames.max,
+            min: policy.frames.min,
+            step: policy.frames.step,
+          }
         : {
+            inputMax: policy.frames.choices[policy.frames.choices.length - 1] ?? 0,
             max: policy.frames.choices[policy.frames.choices.length - 1] ?? 0,
             min: policy.frames.choices[0] ?? 0,
             step:
@@ -362,18 +422,35 @@ export const VideoWidgetView = () => {
     [policy.frames]
   );
 
+  const hasAdvancedGuidance = policy.ui.audioCfgVisible || policy.ui.stgVisible || policy.ui.modalityVisible;
   const mode = resolveVideoMode(values);
   const supportsFirstFrame = policy.modes.includes('first-frame') || policy.modes.includes('first-last');
   const supportsLastFrame = policy.modes.includes('first-last') || policy.modes.includes('last-frame');
   const supportsExtend = policy.modes.includes('extend');
   const supportsReferences = policy.modes.includes('reference');
+  const supportsConditioningClip = policy.modes.includes('audio-to-video') || policy.modes.includes('video-to-audio');
   const supportsInitialVideo = supportsExtend || referenceExtend;
   // Use the setter's capacity predicate: recalled unflagged references can be adopted without consuming a slot,
   // and must not disable clip trimming.
   const initialVideoCapBlocked =
     referenceExtend &&
     !canPlaceReferenceExtendAnchor(values.references, values.sourceVideo?.video_name, maxVideoReferences);
-  const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
+  // The aspect-ratio control is locked by media that pins the frame. A clip in the `audio` role
+  // does not: its picture is what gets generated, so the ratio is still the user's to choose.
+  const hasConditioningMedia = Boolean(
+    values.firstFrameImage || values.lastFrameImage || values.sourceVideo || values.conditioningClip?.role === 'video'
+  );
+  const otherMediaSet = Boolean(
+    values.firstFrameImage || values.lastFrameImage || values.sourceVideo || values.references.length > 0
+  );
+  const conditioningDerivedText = values.conditioningClip
+    ? t(
+        values.conditioningClip.role === 'audio'
+          ? 'widgets.video.conditioningDerivedAudio'
+          : 'widgets.video.conditioningDerivedVideo',
+        { fps: timing.fps, frames: timing.numFrames }
+      )
+    : undefined;
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
   // Media determines output proportions. Show its ratio source while disabled, preserving the saved preset for
   // when media is removed.
@@ -393,6 +470,7 @@ export const VideoWidgetView = () => {
       }`
     : t('widgets.video.derivedSizeUnavailable');
   const fpsLockedForExtend = policy.ui.fpsVisible && mode === 'extend';
+  const fpsLocked = fpsLockedForExtend || timing.fpsFromClip;
   const durationText =
     durationSeconds === null
       ? undefined
@@ -488,6 +566,9 @@ export const VideoWidgetView = () => {
       {!supportsReferences && values.references.length > 0 ? (
         <StaleMediaStub label={t('widgets.video.staleReferences')} onClear={clearReferences} />
       ) : null}
+      {!supportsConditioningClip && values.conditioningClip ? (
+        <StaleMediaStub label={t('widgets.video.staleConditioningClip')} onClear={clearConditioningClip} />
+      ) : null}
 
       {supportsReferences ? (
         <GenerationSettingsSection label={t('widgets.video.references')} sectionId="video-references" defaultOpen>
@@ -527,6 +608,24 @@ export const VideoWidgetView = () => {
         </GenerationSettingsSection>
       ) : null}
 
+      {supportsConditioningClip ? (
+        <GenerationSettingsSection
+          label={t('widgets.video.conditioningClip')}
+          sectionId="video-conditioning-clip"
+          defaultOpen={Boolean(values.conditioningClip)}
+        >
+          <Stack gap="3" p="2">
+            <VideoConditioningClipField
+              conditioningClip={values.conditioningClip}
+              derivedText={conditioningDerivedText}
+              disabled={otherMediaSet}
+              disabledReason={otherMediaSet ? t('widgets.video.conditioningClipBlocked') : undefined}
+              onChange={setConditioningClip}
+            />
+          </Stack>
+        </GenerationSettingsSection>
+      ) : null}
+
       <GenerationSettingsSection label={t('widgets.video.dimensions')} sectionId="video-dimensions" defaultOpen>
         <Stack gap="3" p="2">
           <Field helpText={derivedSizeText} label={t('widgets.video.aspectRatio')}>
@@ -551,7 +650,7 @@ export const VideoWidgetView = () => {
               </IconButton>
             </HStack>
           </Field>
-          <Field label={t('widgets.video.targetResolution')}>
+          <Field helpText={twoStageHelpText} label={t('widgets.video.targetResolution')}>
             <Select
               collection={targetResolutionCollection}
               size="xs"
@@ -560,24 +659,36 @@ export const VideoWidgetView = () => {
             />
           </Field>
           <ScrubberField
-            helpText={durationText}
+            disabled={timing.numFramesFromClip}
+            helpText={
+              timing.numFramesFromClip
+                ? `${t('widgets.video.framesFromClip')}${durationText ? ` ${durationText}` : ''}`
+                : durationText
+            }
+            inputMax={framesSlider.inputMax}
             label={t('widgets.video.frames')}
             max={framesSlider.max}
             min={framesSlider.min}
             step={framesSlider.step}
-            value={values.numFrames}
+            value={timing.numFrames}
             onChange={setNumFrames}
           />
           {policy.ui.fpsVisible ? (
             <ScrubberField
-              disabled={fpsLockedForExtend}
-              helpText={fpsLockedForExtend ? t('widgets.video.fpsExtendLocked') : undefined}
+              disabled={fpsLocked}
+              helpText={
+                timing.fpsFromClip
+                  ? t('widgets.video.fpsFromClip')
+                  : fpsLockedForExtend
+                    ? t('widgets.video.fpsExtendLocked')
+                    : undefined
+              }
               inputMax={policy.fps.max}
               label={t('widgets.video.fps')}
               max={60}
               min={policy.fps.min}
               step={1}
-              value={values.fps}
+              value={timing.fps}
               onChange={set.fps}
             />
           ) : (
@@ -607,16 +718,23 @@ export const VideoWidgetView = () => {
               </Switch.Root>
             </Field>
           ) : null}
-          <ScrubberField
-            hint="steps"
-            inputMax={500}
-            label={t('widgets.video.steps')}
-            max={100}
-            min={policy.minSteps}
-            step={1}
-            value={values.steps}
-            onChange={set.steps}
-          />
+          {policy.ui.stepsEditable ? (
+            <ScrubberField
+              defaultValue={policy.defaults.steps}
+              hint="steps"
+              inputMax={500}
+              label={t('widgets.video.steps')}
+              max={100}
+              min={policy.minSteps}
+              step={1}
+              value={values.steps}
+              onChange={set.steps}
+            />
+          ) : (
+            <Text color="fg.muted" fontSize="2xs">
+              {t('widgets.video.stepsFixed', { steps: policy.defaults.steps })}
+            </Text>
+          )}
           {policy.ui.cfgVisible ? (
             <ScrubberField
               hint="cfgScale"
@@ -650,6 +768,52 @@ export const VideoWidgetView = () => {
           />
         </Stack>
       </GenerationSettingsSection>
+
+      {hasAdvancedGuidance ? (
+        <GenerationSettingsSection label={t('widgets.video.advancedGuidance')} sectionId="video-guidance">
+          <Stack gap="3" p="2">
+            {policy.ui.audioCfgVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.audioCfgScale ?? undefined}
+                helpText={t('widgets.video.audioCfgHelp')}
+                inputMax={100}
+                label={t('widgets.video.audioCfg')}
+                max={15}
+                min={1}
+                step={0.1}
+                value={values.audioCfgScale ?? policy.defaults.audioCfgScale ?? 1}
+                onChange={set.audioCfgScale}
+              />
+            ) : null}
+            {policy.ui.stgVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.stgScale ?? undefined}
+                helpText={t('widgets.video.stgHelp')}
+                inputMax={10}
+                label={t('widgets.video.stg')}
+                max={3}
+                min={0}
+                step={0.1}
+                value={values.stgScale ?? policy.defaults.stgScale ?? 0}
+                onChange={set.stgScale}
+              />
+            ) : null}
+            {policy.ui.modalityVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.modalityScale ?? undefined}
+                helpText={t('widgets.video.modalityHelp')}
+                inputMax={10}
+                label={t('widgets.video.modality')}
+                max={5}
+                min={1}
+                step={0.1}
+                value={values.modalityScale ?? policy.defaults.modalityScale ?? 1}
+                onChange={set.modalityScale}
+              />
+            ) : null}
+          </Stack>
+        </GenerationSettingsSection>
+      ) : null}
 
       <VideoConceptsSection loras={values.loras} model={values.model} onChangeLoras={setLoras} />
       <VideoComponentsSection values={values} onPatch={patch} />

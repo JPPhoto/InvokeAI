@@ -149,6 +149,7 @@ export const syncVideoWidgetValuesWithModels = (
     h3TextEncoderModel: syncComponent('h3TextEncoderModel', base.h3TextEncoderModel),
     h3TransformerModel: syncComponent('h3TransformerModel', base.h3TransformerModel),
     loras,
+    ltx2TextEncoderModel: syncComponent('ltx2TextEncoderModel', base.ltx2TextEncoderModel),
     model,
     modelKey: model?.key ?? base.modelKey,
     vae: syncComponent('vae', base.vae),
@@ -174,6 +175,7 @@ export const syncVideoWidgetValuesWithModels = (
     next.h3TransformerModel === values.h3TransformerModel &&
     next.h3TextEncoderModel === values.h3TextEncoderModel &&
     next.h3HybridBaseModel === values.h3HybridBaseModel &&
+    next.ltx2TextEncoderModel === values.ltx2TextEncoderModel &&
     next.references === values.references &&
     next.loras.length === values.loras.length &&
     next.loras.every((lora, index) => lora.model === values.loras[index]?.model);
@@ -187,7 +189,7 @@ export const getVideoWidgetValidationReasons = (
   models?: readonly ModelConfig[]
 ): string[] => {
   if (!values.model) {
-    return ['Video needs a Wan 2.2 or MiniMax H3 main model.'];
+    return ['Video needs a Wan 2.2, MiniMax H3 or LTX-2 main model.'];
   }
 
   const reasons = getVideoValidationReasons(values.model, values);

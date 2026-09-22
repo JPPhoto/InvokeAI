@@ -226,7 +226,7 @@ describe('getVideoWidgetValidationReasons', () => {
   it('requires a model first', () => {
     const values = { ...createDefaultVideoWidgetValues(), model: null };
 
-    expect(getVideoWidgetValidationReasons(values)).toEqual(['Video needs a Wan 2.2 or MiniMax H3 main model.']);
+    expect(getVideoWidgetValidationReasons(values)).toEqual(['Video needs a Wan 2.2, MiniMax H3 or LTX-2 main model.']);
   });
 
   it('passes through settings validation and availability checks', () => {

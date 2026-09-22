@@ -116,6 +116,7 @@ const SINGLETON_LINK_TYPES: ReadonlySet<ModelTaxonomyType> = new Set<ModelTaxono
   'qwen3_vl_encoder',
   'mistral_encoder',
   'gemma2_encoder',
+  'gemma4_encoder',
 ]);
 
 /** The full candidate rule for the link picker: compatible bases, and no same-type pair of a single-slot type. */

@@ -40,6 +40,7 @@ GUIDANCE_FIELD: dict[BaseModelType, tuple[str, str]] = {
     BaseModelType.Anima: ("anima_denoise", "guidance_scale"),
     BaseModelType.ErnieImage: ("ernie_image_denoise", "guidance_scale"),
     BaseModelType.Wan: ("wan_denoise", "guidance_scale"),
+    BaseModelType.LTX2: ("ltx2_denoise", "cfg_scale"),
     BaseModelType.ZImage: ("z_image_denoise", "guidance_scale"),
 }
 """Where the one guidance slider's value ends up, per architecture.

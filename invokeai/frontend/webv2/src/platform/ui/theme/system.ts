@@ -111,6 +111,7 @@ const categoricalPalettes = Object.fromEntries(
     gold: '#f6d365',
     ice: '#b3e5fc',
     lavender: '#bd9fff',
+    mint: '#7fd8b5',
     periwinkle: '#a5b4fc',
     sage: '#a3b18a',
     silver: '#d4d4d5',

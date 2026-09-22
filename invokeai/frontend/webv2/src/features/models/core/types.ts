@@ -24,6 +24,8 @@ export type ModelBase =
   | 'wan'
   /** MiniMax H3. A video architecture that generates video with synchronized audio. */
   | 'minimax-h3'
+  /** LTX-2. A video architecture that generates video with synchronized audio. */
+  | 'ltx-2'
   | 'external'
   | 'unknown'
   | (string & {});
@@ -47,6 +49,7 @@ export type ModelTaxonomyType =
   | 'wan_t5_encoder'
   | 'mistral_encoder'
   | 'gemma2_encoder'
+  | 'gemma4_encoder'
   | 'pid_decoder'
   | 'siglip'
   | 'spandrel_image_to_image'
@@ -74,6 +77,7 @@ export type ModelFileFormat =
   | 'qwen3_vl_encoder'
   | 'wan_t5_encoder'
   | 'gemma2_encoder'
+  | 'gemma4_encoder'
   | 'bnb_quantized_int8b'
   | 'bnb_quantized_nf4b'
   | 'gguf_quantized'

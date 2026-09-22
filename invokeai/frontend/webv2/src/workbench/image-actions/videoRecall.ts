@@ -4,7 +4,12 @@ import type {
   LoraModelConfig,
   MainModelConfig,
 } from '@features/generation/contracts';
-import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } from '@features/video';
+import type {
+  VideoAspectRatioId,
+  VideoConditioningRole,
+  VideoTargetResolution,
+  VideoWidgetValues,
+} from '@features/video';
 
 import { isLoraCompatibleWithModel, isLoraModelConfig } from '@features/generation/settings';
 import {
@@ -50,6 +55,10 @@ const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
   'minimax_h3_flf2v',
   'minimax_h3_extend_video',
   'minimax_h3_ref2v',
+  'ltx2_t2v',
+  'ltx2_i2v',
+  'ltx2_a2v',
+  'ltx2_v2a',
 ]);
 
 export type VideoRecallKind = 'all' | 'remix' | 'prompts' | 'seed';
@@ -234,6 +243,18 @@ const getImageName = (metadata: unknown, key: string): string | null => {
   return typeof field?.image_name === 'string' ? field.image_name : null;
 };
 
+/** The whole-modality conditioning clip, from the LTX-2 extras the graph records. */
+const getRecallableConditioningClip = (metadata: unknown): VideoRecallConditioningClip | null => {
+  const field = getRecord(metadata, 'ltx2_conditioning_video');
+  const role = isRecord(metadata) ? metadata.ltx2_conditioning_role : undefined;
+
+  if (typeof field?.video_name !== 'string' || (role !== 'audio' && role !== 'video')) {
+    return null;
+  }
+
+  return { name: field.video_name, role };
+};
+
 const getSourceVideoName = (metadata: unknown): string | null => {
   const field = getRecord(metadata, 'source_video');
 
@@ -284,6 +305,8 @@ const VIDEO_COMPONENT_METADATA_KEYS = [
   ['minimax_h3_component_source', 'componentSourceModel'],
   ['minimax_h3_text_encoder_model', 'h3TextEncoderModel'],
   ['minimax_h3_hybrid_base_model', 'h3HybridBaseModel'],
+  ['ltx2_component_source', 'componentSourceModel'],
+  ['ltx2_text_encoder_model', 'ltx2TextEncoderModel'],
 ] as const;
 
 /**
@@ -303,6 +326,7 @@ export const getVideoSizeRecall = (
     for (const option of getVideoTargetResolutionOptions(model)) {
       const derived = getVideoDimensions(model, {
         aspectRatioId,
+        conditioningClip: null,
         firstFrameImage: null,
         lastFrameImage: null,
         sourceVideo: null,
@@ -376,7 +400,14 @@ export const getVideoRecallCapabilities = (metadata: unknown): VideoRecallCapabi
  * against the gallery (existence + dimensions/probe data the metadata does not
  * carry) before they become widget values.
  */
+export interface VideoRecallConditioningClip {
+  name: string;
+  role: VideoConditioningRole;
+}
+
 export interface VideoRecallMediaNames {
+  /** The LTX-2 whole-modality conditioning clip, which excludes every other slot below. */
+  conditioningClip: VideoRecallConditioningClip | null;
   firstFrameName: string | null;
   lastFrameName: string | null;
   sourceVideoName: string | null;
@@ -449,6 +480,7 @@ export const buildVideoRecallSettings = ({
   // Hold prompts outside values until return so model-default transitions cannot overwrite them.
   let promptPatch: Partial<VideoWidgetValues> | null = null;
   const mediaNames: VideoRecallMediaNames = {
+    conditioningClip: null,
     firstFrameName: null,
     lastFrameName: null,
     references: [],
@@ -496,10 +528,17 @@ export const buildVideoRecallSettings = ({
 
   if (recalledModel && recalledModel.key !== values.model?.key) {
     // The canonical family transition first, so frames/fps/resolution snap to
-    // the recalled model before its recorded values land on top.
+    // the recalled model before its recorded values land on top. Its negative
+    // prompt is held back: what the clip recorded is authoritative, and an
+    // empty recording deliberately leaves the panel's own alone (below), which
+    // a family default seeded on the way in would silently overrule -- the
+    // recalled clip would then be re-run against a list it never used.
+    const carriedNegativePrompt = values.negativePrompt;
+
     values = {
       ...getVideoModelSelectionResult({ currentSettings: values, model: recalledModel, models }).settings,
       model: recalledModel,
+      negativePrompt: carriedNegativePrompt,
     };
     fields.push('model');
   } else if (recalledModel) {
@@ -523,16 +562,18 @@ export const buildVideoRecallSettings = ({
     fields.push('frames');
   }
 
+  const policy = getVideoModelPolicy(model, values);
   const steps = getInteger(metadata, 'steps');
 
-  if (steps !== null && steps >= 1) {
+  // A fixed-schedule checkpoint ignores whatever step count reaches it, so recalling one would
+  // leave a disabled control showing a number the run will not use — and re-record it next time.
+  if (policy.ui.stepsEditable && steps !== null && steps >= 1) {
     values = { ...values, steps };
     fields.push('steps');
   }
 
   const cfgScale = getNumber(metadata, 'cfg_scale');
   const cfgScaleLowNoise = getNumber(metadata, 'wan_guidance_scale_low_noise');
-  const policy = getVideoModelPolicy(model, values);
 
   if (policy.ui.cfgVisible && cfgScale !== null && cfgScale >= 1) {
     values = {
@@ -545,6 +586,26 @@ export const buildVideoRecallSettings = ({
         : {}),
     };
     fields.push('cfg');
+  }
+
+  // The per-modality scales ride with CFG: they are the same run's guidance,
+  // and a family that does not offer a control must not be handed a number.
+  const guidanceRecall = [
+    { floor: 1, key: 'audioCfgScale', metadataKey: 'ltx2_audio_cfg_scale', visible: policy.ui.audioCfgVisible },
+    { floor: 0, key: 'stgScale', metadataKey: 'ltx2_stg_scale', visible: policy.ui.stgVisible },
+    { floor: 1, key: 'modalityScale', metadataKey: 'ltx2_modality_scale', visible: policy.ui.modalityVisible },
+  ] as const;
+
+  for (const { floor, key, metadataKey, visible } of guidanceRecall) {
+    const recalled = getNumber(metadata, metadataKey);
+
+    if (visible && recalled !== null && recalled >= floor) {
+      values = { ...values, [key]: recalled };
+
+      if (!fields.includes('cfg')) {
+        fields.push('cfg');
+      }
+    }
   }
 
   const fps = getInteger(metadata, 'fps');
@@ -653,10 +714,12 @@ export const buildVideoRecallSettings = ({
 
   const media = getRecallableMediaNames(metadata);
   const references = getRecallableReferences(metadata);
+  const conditioningClip = getRecallableConditioningClip(metadata);
   // Judged against the ORIGINAL panel state: the model transition above may
   // already have cleared media the new family cannot consume, and that change
   // is still part of what this recall did.
   const hadMedia = Boolean(
+    currentValues.conditioningClip ||
     currentValues.firstFrameImage ||
     currentValues.lastFrameImage ||
     currentValues.sourceVideo ||
@@ -665,10 +728,22 @@ export const buildVideoRecallSettings = ({
 
   // All/remix recall clears current media before restoring recorded names because media determines graph family.
   if (hadMedia) {
-    values = { ...values, firstFrameImage: null, lastFrameImage: null, references: [], sourceVideo: null };
+    values = {
+      ...values,
+      conditioningClip: null,
+      firstFrameImage: null,
+      lastFrameImage: null,
+      references: [],
+      sourceVideo: null,
+    };
   }
 
-  if (references.length > 0) {
+  if (conditioningClip) {
+    // First, and alone: the clip holds a whole modality clean, so no other slot could have been
+    // filled on the run being recalled.
+    mediaNames.conditioningClip = conditioningClip;
+    fields.push('media');
+  } else if (references.length > 0) {
     // References replace the frame slots, but a recorded source video rides
     // ALONGSIDE them: Ref2VA reference-extend appends the new clip to it.
     mediaNames.references = references;

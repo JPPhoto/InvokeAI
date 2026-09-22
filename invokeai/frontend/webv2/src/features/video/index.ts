@@ -2,6 +2,8 @@
 export type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
+  VideoConditioningClip,
+  VideoConditioningRole,
   VideoGenerationMode,
   VideoReferenceConditioning,
   VideoReferenceImageDetail,
@@ -15,7 +17,9 @@ export type {
 export {
   clearDeletedVideoMedia,
   cloneVideoWidgetValues,
+  createVideoConditioningClip,
   createVideoSourceClip,
+  getDefaultConditioningRole,
   getDefaultReferenceConditioning,
   isImageWithDims,
   isVideoAspectRatioId,

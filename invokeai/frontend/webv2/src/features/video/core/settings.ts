@@ -16,8 +16,12 @@ import {
 import { isSeedMode } from '@platform/core/seed';
 
 import type {
+  Ltx2TargetResolution,
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
+  VideoClipRef,
+  VideoConditioningClip,
+  VideoConditioningRole,
   VideoGenerationMode,
   VideoReferenceConditioning,
   VideoReferenceImageDetail,
@@ -59,11 +63,13 @@ export const isVideoAspectRatioId = (value: unknown): value is VideoAspectRatioI
 
 export const WAN_TARGET_RESOLUTIONS: readonly WanTargetResolution[] = ['480p', '720p', '1080p'];
 export const MINIMAX_H3_TARGET_RESOLUTIONS: readonly MiniMaxH3TargetResolution[] = ['768 highres', '768 lowres'];
+export const LTX2_TARGET_RESOLUTIONS: readonly Ltx2TargetResolution[] = ['512p', '704p', '768p', '1024p', '1536p'];
 
 export const isVideoTargetResolution = (value: unknown): value is VideoTargetResolution =>
   typeof value === 'string' &&
   ((WAN_TARGET_RESOLUTIONS as readonly string[]).includes(value) ||
-    (MINIMAX_H3_TARGET_RESOLUTIONS as readonly string[]).includes(value));
+    (MINIMAX_H3_TARGET_RESOLUTIONS as readonly string[]).includes(value) ||
+    (LTX2_TARGET_RESOLUTIONS as readonly string[]).includes(value));
 
 export const isImageWithDims = (value: unknown): value is ImageWithDims =>
   isRecord(value) &&
@@ -71,15 +77,28 @@ export const isImageWithDims = (value: unknown): value is ImageWithDims =>
   hasFiniteNumber(value, 'width') &&
   hasFiniteNumber(value, 'height');
 
-export const isVideoSourceClip = (value: unknown): value is VideoSourceClip =>
+export const isVideoClipRef = (value: unknown): value is VideoClipRef =>
   isRecord(value) &&
   typeof value.video_name === 'string' &&
   hasFiniteNumber(value, 'width') &&
   hasFiniteNumber(value, 'height') &&
   hasFiniteNumber(value, 'numFrames') &&
-  hasFiniteNumber(value, 'fps') &&
+  hasFiniteNumber(value, 'fps');
+
+export const isVideoSourceClip = (value: unknown): value is VideoSourceClip =>
+  isRecord(value) &&
   hasFiniteNumber(value, 'startFrame') &&
-  hasFiniteNumber(value, 'endFrame');
+  hasFiniteNumber(value, 'endFrame') &&
+  isVideoClipRef(value);
+
+export const isVideoConditioningRole = (value: unknown): value is VideoConditioningRole =>
+  value === 'audio' || value === 'video';
+
+export const isVideoConditioningClip = (value: unknown): value is VideoConditioningClip =>
+  isRecord(value) &&
+  isVideoClipRef(value.clip) &&
+  isVideoConditioningRole(value.role) &&
+  typeof value.fpsKnown === 'boolean';
 
 /** Upstream Ref2VA's reference caps (mirrored by the backend's validate_reference_kinds). */
 export const VIDEO_REFERENCE_MAX_VIDEOS = 3;
@@ -257,10 +276,19 @@ const areAcceleratorLorasPresent = (keys: readonly string[], loras: readonly Gen
  * reference extension.
  */
 export const resolveVideoMode = (
-  settings: Pick<VideoSettings, 'firstFrameImage' | 'lastFrameImage' | 'sourceVideo' | 'references'>
+  settings: Pick<
+    VideoSettings,
+    'firstFrameImage' | 'lastFrameImage' | 'sourceVideo' | 'references' | 'conditioningClip'
+  >
 ): VideoGenerationMode => {
   if (settings.references.length > 0) {
     return 'reference';
+  }
+
+  // Ahead of the frame and clip slots because a conditioning clip excludes them all: it holds one
+  // whole modality clean, which is the same mask the other conditioning modes write into.
+  if (settings.conditioningClip) {
+    return settings.conditioningClip.role === 'audio' ? 'audio-to-video' : 'video-to-audio';
   }
 
   if (settings.sourceVideo) {
@@ -311,6 +339,12 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
   // A first frame and a source video are mutually exclusive; if a stale
   // project somehow holds both, the first frame wins deterministically.
   const sourceVideo = !firstFrameImage && isVideoSourceClip(values.sourceVideo) ? values.sourceVideo : null;
+  // One conditioning clip at a time, and never alongside a first frame or an initial video: those
+  // condition the same stream this one would hold, and the model samples exactly one modality.
+  const conditioningClip =
+    !firstFrameImage && !sourceVideo && isVideoConditioningClip(values.conditioningClip)
+      ? values.conditioningClip
+      : null;
   const loras = Array.isArray(values.loras) ? values.loras.filter(isVideoLora) : [];
   const acceleratorLoraKeys = getStringArray(values.acceleratorLoraKeys);
   // Clear acceleration when any required accelerator LoRA disappears instead of claiming an inactive fast path.
@@ -326,6 +360,10 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
       hasFiniteNumber(values, 'cfgScaleLowNoise') && (values.cfgScaleLowNoise as number) >= 1
         ? (values.cfgScaleLowNoise as number)
         : null,
+    // Null is the healed value for every per-family guidance scale; the model transition fills the family default.
+    audioCfgScale: hasFiniteNumber(values, 'audioCfgScale') ? (values.audioCfgScale as number) : null,
+    modalityScale: hasFiniteNumber(values, 'modalityScale') ? (values.modalityScale as number) : null,
+    stgScale: hasFiniteNumber(values, 'stgScale') ? (values.stgScale as number) : null,
     firstFrameImage,
     fps: hasFiniteNumber(values, 'fps') ? (values.fps as number) : SETTINGS_FALLBACKS.fps,
     h3HybridBaseModel: isMainModelConfig(values.h3HybridBaseModel) ? values.h3HybridBaseModel : null,
@@ -340,6 +378,7 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     ),
     h3TextEncoderModel: isModelIdentifierConfig(values.h3TextEncoderModel) ? values.h3TextEncoderModel : null,
     h3TransformerModel: isMainModelConfig(values.h3TransformerModel) ? values.h3TransformerModel : null,
+    ltx2TextEncoderModel: isModelIdentifierConfig(values.ltx2TextEncoderModel) ? values.ltx2TextEncoderModel : null,
     acceleratorEnabled,
     acceleratorLoraKeys: acceleratorEnabled ? acceleratorLoraKeys : [],
     lastFrameImage: !hasReferences && isImageWithDims(values.lastFrameImage) ? values.lastFrameImage : null,
@@ -371,6 +410,7 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
       : typeof values.shouldRandomizeSeed === 'boolean' && !values.shouldRandomizeSeed
         ? 'fixed'
         : 'random',
+    conditioningClip,
     sourceVideo,
     steps: hasFiniteNumber(values, 'steps') ? (values.steps as number) : SETTINGS_FALLBACKS.steps,
     targetResolution: isVideoTargetResolution(values.targetResolution)
@@ -406,9 +446,13 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
     hasFiniteNumber(values, 'negativePromptHeightPx') &&
     hasFiniteNumber(values, 'positivePromptHeightPx') &&
     (values.cfgScaleLowNoise === null || hasFiniteNumber(values, 'cfgScaleLowNoise')) &&
+    (values.audioCfgScale === null || hasFiniteNumber(values, 'audioCfgScale')) &&
+    (values.stgScale === null || hasFiniteNumber(values, 'stgScale')) &&
+    (values.modalityScale === null || hasFiniteNumber(values, 'modalityScale')) &&
     (values.firstFrameImage === null || isImageWithDims(values.firstFrameImage)) &&
     (values.lastFrameImage === null || isImageWithDims(values.lastFrameImage)) &&
     (values.sourceVideo === null || isVideoSourceClip(values.sourceVideo)) &&
+    (values.conditioningClip === null || isVideoConditioningClip(values.conditioningClip)) &&
     !(values.firstFrameImage !== null && values.sourceVideo !== null) &&
     Array.isArray(values.references) &&
     values.references.every(isVideoReferenceItem) &&
@@ -425,6 +469,7 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
     (values.h3TransformerModel === null || isMainModelConfig(values.h3TransformerModel)) &&
     (values.h3TextEncoderModel === null || isModelIdentifierConfig(values.h3TextEncoderModel)) &&
     (values.h3HybridBaseModel === null || isMainModelConfig(values.h3HybridBaseModel)) &&
+    (values.ltx2TextEncoderModel === null || isModelIdentifierConfig(values.ltx2TextEncoderModel)) &&
     hasFiniteNumber(values, 'h3HybridStartBlock')
   );
 };
@@ -459,12 +504,16 @@ export const cloneVideoWidgetValues = (values: VideoWidgetValues): VideoWidgetVa
   h3TransformerModel: values.h3TransformerModel ? { ...values.h3TransformerModel } : null,
   lastFrameImage: values.lastFrameImage ? { ...values.lastFrameImage } : null,
   loras: values.loras.map((lora) => ({ ...lora, model: { ...lora.model } })),
+  ltx2TextEncoderModel: values.ltx2TextEncoderModel ? { ...values.ltx2TextEncoderModel } : null,
   model: values.model ? { ...values.model } : null,
   references: values.references.map((reference) =>
     reference.kind === 'video'
       ? { ...reference, clip: { ...reference.clip } }
       : { ...reference, image: { ...reference.image } }
   ),
+  conditioningClip: values.conditioningClip
+    ? { ...values.conditioningClip, clip: { ...values.conditioningClip.clip } }
+    : null,
   sourceVideo: values.sourceVideo ? { ...values.sourceVideo } : null,
   vae: values.vae ? { ...values.vae } : null,
   wanLowNoiseModel: values.wanLowNoiseModel ? { ...values.wanLowNoiseModel } : null,
@@ -507,6 +556,30 @@ export const createVideoSourceClip = (item: {
  */
 export const getDefaultReferenceConditioning = (mediaOrigin: string | null | undefined): VideoReferenceConditioning =>
   mediaOrigin === 'audio_upload' ? 'audio' : 'video_audio';
+
+/**
+ * An audio_upload record is a bare soundtrack, so it can only condition the audio side; every other clip
+ * defaults to video.
+ */
+export const getDefaultConditioningRole = (mediaOrigin: string | null | undefined): VideoConditioningRole =>
+  mediaOrigin === 'audio_upload' ? 'audio' : 'video';
+
+export const createVideoConditioningClip = (item: {
+  durationSeconds: number;
+  fps?: number;
+  height: number;
+  mediaOrigin?: string;
+  name: string;
+  width: number;
+}): VideoConditioningClip => {
+  const { endFrame: _endFrame, startFrame: _startFrame, ...clip } = createVideoSourceClip(item);
+
+  return {
+    clip,
+    fpsKnown: typeof item.fps === 'number' && Number.isFinite(item.fps) && item.fps > 0,
+    role: getDefaultConditioningRole(item.mediaOrigin),
+  };
+};
 
 /**
  * Audio-only references cannot anchor visual continuity. Preserve them as user references and select or append a
@@ -824,6 +897,7 @@ export const clearDeletedVideoMedia = <T extends object>(
   removedVideoNames: ReadonlySet<string>
 ): T => {
   const slots = values as {
+    conditioningClip?: unknown;
     firstFrameImage?: unknown;
     lastFrameImage?: unknown;
     sourceVideo?: unknown;
@@ -832,6 +906,8 @@ export const clearDeletedVideoMedia = <T extends object>(
   const clearFirst = isImageWithDims(slots.firstFrameImage) && removedImageNames.has(slots.firstFrameImage.image_name);
   const clearLast = isImageWithDims(slots.lastFrameImage) && removedImageNames.has(slots.lastFrameImage.image_name);
   const clearSource = isVideoSourceClip(slots.sourceVideo) && removedVideoNames.has(slots.sourceVideo.video_name);
+  const clearConditioning =
+    isVideoConditioningClip(slots.conditioningClip) && removedVideoNames.has(slots.conditioningClip.clip.video_name);
   const references = Array.isArray(slots.references) ? slots.references : null;
   const keptReferences = references?.filter(
     (entry) =>
@@ -842,7 +918,7 @@ export const clearDeletedVideoMedia = <T extends object>(
   );
   const clearReferences = keptReferences !== undefined && keptReferences.length !== references?.length;
 
-  if (!clearFirst && !clearLast && !clearSource && !clearReferences) {
+  if (!clearFirst && !clearLast && !clearSource && !clearConditioning && !clearReferences) {
     return values;
   }
 
@@ -853,6 +929,7 @@ export const clearDeletedVideoMedia = <T extends object>(
     ...(clearFirst ? { firstFrameImage: null } : {}),
     ...(clearLast ? { lastFrameImage: null } : {}),
     ...(clearSource ? { sourceVideo: null } : {}),
+    ...(clearConditioning ? { conditioningClip: null } : {}),
     ...(clearReferences ? { references: keptReferences } : {}),
   } as T;
 };

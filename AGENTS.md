@@ -67,6 +67,7 @@ If required independent review is unavailable, self-review the corresponding foc
 - Preserve the existing Python/accelerator environment and `uv.lock`. Fresh test setup: `uv sync --locked --extra test`; do not routinely replace accelerator backends.
 - Root Python checks: `uv tool run ruff@0.11.2 check <paths>` and `uv tool run ruff@0.11.2 format --check <paths>`. Use 120-column formatting, absolute imports, and configured vendored-code exclusions.
 - Focused tests: `uv run --no-sync pytest <test-paths>`; full CI: `uv run --no-sync pytest -n logical`. Hardware/quiet-machine timing tests use `-m slow` on development machines; excluded by default and CI. See `tests/AGENTS.md` for isolation rules.
+- `-n logical` is sized for CI runners that own the machine. On a development box cap workers (`-n 4`, or plain `pytest`), set `OMP_NUM_THREADS` when a run must stay light, and do not start a suite while a generation is running.
 - `uv run --no-sync mypy scripts/invokeai-web.py` uses current exclusions; it is an optional diagnostic, not a CI gate or comprehensive type coverage.
 - Select checks by behavior; run required milestone gates before review. Repeat unchanged checks only for a reason.
 - After test dependencies are available, install hooks per checkout: `uv run --no-sync pre-commit install`. Committing configuration does not install hooks.

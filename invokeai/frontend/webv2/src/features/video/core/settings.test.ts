@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { VideoReferenceItem, VideoSettings } from './types';
+import type { VideoReferenceItem, VideoSettings, VideoWidgetValues } from './types';
 
 import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
@@ -23,6 +23,7 @@ import {
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
   isVideoSettings,
+  createVideoConditioningClip,
   isVideoSourceClip,
   normalizeVideoSettings,
   normalizeVideoWidgetValues,
@@ -45,6 +46,8 @@ const SOURCE_VIDEO = {
   width: 832,
 };
 
+const CONDITIONING_CLIP = { fps: 24, height: 704, numFrames: 96, video_name: 'conditioning.mp4', width: 1248 };
+
 const createSettings = (overrides: Partial<VideoSettings> = {}): VideoSettings => ({
   ...getDefaultVideoSettings(),
   ...overrides,
@@ -61,6 +64,44 @@ describe('resolveVideoMode', () => {
     expect(resolveVideoMode(createSettings({ sourceVideo: SOURCE_VIDEO }))).toBe('extend');
     // A last frame with a source video is still extend — it is the destination anchor.
     expect(resolveVideoMode(createSettings({ lastFrameImage: LAST_FRAME, sourceVideo: SOURCE_VIDEO }))).toBe('extend');
+  });
+
+  it("reads the conditioning clip's role as the mode, ahead of every frame and clip slot", () => {
+    expect(
+      resolveVideoMode(createSettings({ conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' } }))
+    ).toBe('audio-to-video');
+    expect(
+      resolveVideoMode(createSettings({ conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'video' } }))
+    ).toBe('video-to-audio');
+    // Not reachable through the setters, but a recalled or stored record can hold both; the mode
+    // has to name the one that would actually run, which validation then refuses.
+    expect(
+      resolveVideoMode(
+        createSettings({
+          conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' },
+          sourceVideo: SOURCE_VIDEO,
+        })
+      )
+    ).toBe('audio-to-video');
+  });
+});
+
+describe('createVideoConditioningClip', () => {
+  it('takes an uploaded soundtrack for its audio and anything else for its picture', () => {
+    const item = { durationSeconds: 4, fps: 24, height: 704, name: 'clip.mp4', width: 1248 };
+
+    // An `audio_upload` record is a bare soundtrack wrapped as a video: it has no picture to
+    // condition on, so the only role it can fill is the audio one.
+    expect(createVideoConditioningClip({ ...item, mediaOrigin: 'audio_upload' }).role).toBe('audio');
+    expect(createVideoConditioningClip(item).role).toBe('video');
+  });
+
+  it('carries no trim bounds, which the conditioning nodes would not honour', () => {
+    const clip = createVideoConditioningClip({ durationSeconds: 4, fps: 24, height: 704, name: 'c.mp4', width: 1248 });
+
+    expect(clip.clip).not.toHaveProperty('startFrame');
+    expect(clip.clip).not.toHaveProperty('endFrame');
+    expect(clip.clip).toEqual({ fps: 24, height: 704, numFrames: 96, video_name: 'c.mp4', width: 1248 });
   });
 });
 
@@ -90,6 +131,16 @@ describe('normalizeVideoSettings', () => {
   it('folds a low-noise CFG below 1 back into reuse-primary', () => {
     expect(normalizeVideoSettings({ ...createSettings(), cfgScaleLowNoise: 0.5 })?.cfgScaleLowNoise).toBeNull();
     expect(normalizeVideoSettings({ ...createSettings(), cfgScaleLowNoise: 1 })?.cfgScaleLowNoise).toBe(1);
+  });
+
+  it('does not call a record with a garbage conditioning clip valid settings', () => {
+    // The guard's whole job is deciding whether a stored record can be used as-is; a slot it does
+    // not look at is a slot that reaches the graph builder unchecked.
+    const clip = { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' as const };
+
+    expect(isVideoSettings(createSettings({ conditioningClip: clip }))).toBe(true);
+    expect(isVideoSettings({ ...createSettings(), conditioningClip: { clip: CONDITIONING_CLIP } })).toBe(false);
+    expect(isVideoSettings({ ...createSettings(), conditioningClip: 'nonsense' })).toBe(false);
   });
 
   it('rejects non-records but heals partial records field-by-field, upscale-style', () => {
@@ -434,6 +485,47 @@ describe('getDefaultReferenceImageDetail', () => {
   });
 });
 
+describe('normalizeVideoSettings — the conditioning clip', () => {
+  const clip = { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' as const };
+
+  it('drops a clip stored beside a slot that claims the same conditioning mask', () => {
+    // A rolled-back or hand-edited project can hold both. Keeping them would resolve to a mode
+    // whose graph silently ignores one of the two.
+    expect(
+      normalizeVideoSettings({ ...createSettings({ firstFrameImage: FIRST_FRAME }), conditioningClip: clip })
+        ?.conditioningClip
+    ).toBeNull();
+    expect(
+      normalizeVideoSettings({ ...createSettings({ sourceVideo: SOURCE_VIDEO }), conditioningClip: clip })
+        ?.conditioningClip
+    ).toBeNull();
+    expect(normalizeVideoSettings(createSettings({ conditioningClip: clip }))?.conditioningClip).toEqual(clip);
+  });
+
+  it('drops a malformed clip rather than passing it to the graph builder', () => {
+    for (const malformed of [
+      { clip: CONDITIONING_CLIP },
+      { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'soundtrack' },
+      { clip: { video_name: 'c.mp4' }, fpsKnown: true, role: 'audio' },
+      { clip: CONDITIONING_CLIP, fpsKnown: 'yes', role: 'audio' },
+      'nonsense',
+    ]) {
+      expect(
+        normalizeVideoSettings({ ...createSettings(), conditioningClip: malformed } as unknown as VideoSettings)
+          ?.conditioningClip,
+        JSON.stringify(malformed)
+      ).toBeNull();
+    }
+  });
+
+  it('deep-copies the clip so a clone cannot alias the original', () => {
+    const cloned = cloneVideoWidgetValues(createSettings({ conditioningClip: clip }) as VideoWidgetValues);
+
+    expect(cloned.conditioningClip).toEqual(clip);
+    expect(cloned.conditioningClip?.clip).not.toBe(clip.clip);
+  });
+});
+
 describe('clearDeletedVideoMedia', () => {
   const withMedia = createSettings({
     firstFrameImage: FIRST_FRAME,
@@ -455,6 +547,17 @@ describe('clearDeletedVideoMedia', () => {
     const clipCleared = clearDeletedVideoMedia(withClip, new Set(), new Set(['clip.mp4']));
 
     expect(clipCleared.sourceVideo).toBeNull();
+
+    // A conditioning clip is a gallery video too: left behind, it would compile a graph naming
+    // a deleted record and fail at the conditioning node rather than in the panel.
+    const withConditioning = createSettings({
+      conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' },
+    });
+
+    expect(
+      clearDeletedVideoMedia(withConditioning, new Set(), new Set(['conditioning.mp4'])).conditioningClip
+    ).toBeNull();
+    expect(clearDeletedVideoMedia(withConditioning, new Set(), new Set(['other.mp4']))).toBe(withConditioning);
   });
 
   it('clears a reference the exclusion masking would hide from a normalized snapshot', () => {
