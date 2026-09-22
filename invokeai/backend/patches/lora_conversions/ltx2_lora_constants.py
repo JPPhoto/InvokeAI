@@ -29,7 +29,7 @@ LTX2_LORA_TRANSFORMER_PREFIX = "lora_transformer-"
 # would also match nested prefixes like ``diffusion_model.transformer.blocks...``, which the
 # probe would then admit but the converter would map onto nonexistent module paths (the LoRA
 # would silently apply zero layers).
-_PEFT_PREFIX_RE = r"^(?:(?:diffusion_model|transformer|base_model\.model\.transformer)\.)?"
+_PEFT_PREFIX_RE = r"^(?:(?:model\.diffusion_model|diffusion_model|transformer|base_model\.model\.transformer)\.)?"
 
 # Submodules unique to LTX-2 among the supported architectures, in the checkpoint's native
 # naming. All of them exist only because LTX-2 is a *dual-stream* video+audio transformer:
@@ -73,9 +73,19 @@ _NON_LTX2_ANTI_RES = (
 _UNSUPPORTED_LTX2_VARIANT_SUFFIXES = (
     ".lokr_w1",
     ".lokr_w2",
+    ".lokr_w1_a",
+    ".lokr_w2_a",
     ".hada_w1_a",
     ".hada_w2_a",
+    # Both DoRA spellings. LTX-2 LoRAs are published in the PEFT layout, so the PEFT/ai-toolkit
+    # magnitude names are the ones this family will actually meet -- and DoRA is the only variant
+    # that reaches this guard at all, because it carries `lora_A`/`lora_B` and so passes the generic
+    # "has a LoRA suffix" test that LoKR and LoHA files fail on their own. Checking only the kohya
+    # spelling let a DoRA file install and then fail inside the denoise, after the 22B transformer
+    # had loaded -- exactly the deferral this guard exists to prevent.
     ".dora_scale",
+    ".lora_magnitude_vector.weight",
+    ".magnitude",
 )
 
 

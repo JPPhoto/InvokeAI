@@ -668,7 +668,6 @@ ltx2_bundle: list[StarterModel] = [
     ltx2_5_text_encoder_int8,
     ltx2_5_dev_transformer_int8,
     ltx2_5_distilled_transformer_int8,
-    ltx2_5_distilled_lora,
 ]
 
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {

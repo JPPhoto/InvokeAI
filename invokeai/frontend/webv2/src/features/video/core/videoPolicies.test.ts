@@ -32,6 +32,7 @@ import {
   snapVideoNumFrames,
   WAN_LIGHTNING_ACCELERATOR,
 } from './videoPolicies';
+import { syncVideoWidgetValuesWithModels } from './widgetValues';
 
 const wanModel = (variant: string, format = 'gguf_quantized', key = `wan-${variant}-${format}`): MainModelConfig => ({
   base: 'wan',
@@ -558,6 +559,26 @@ describe('LTX-2 distilled accelerator', () => {
       modalityScale: 1,
       steps: 8,
       stgScale: 0,
+    });
+  });
+
+  it('restores the whole recipe when the accelerator LoRA leaves the catalog entirely', () => {
+    // A different route than unticking it in Concepts: this one runs when the LoRA is deleted in
+    // Model Manager. It goes through `syncVideoWidgetValues`, which copies named fields out of the
+    // change result -- so a field the result restores but the copy does not name is silently lost,
+    // leaving a guided Dev run with its audio, STG and modality guidance pinned at identity.
+    const model = ltx2('ltx2_dev');
+    const on = getAcceleratorToggleResult(getDefaultVideoSettings(model, []), model, [DISTILLED], true).settings;
+    // The LoRA is gone from the catalog: only the main model remains.
+    const synced = syncVideoWidgetValuesWithModels({ ...on, loras: [], model }, [model]);
+
+    expect(synced).toMatchObject({
+      acceleratorEnabled: false,
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      steps: 30,
+      stgScale: 1,
     });
   });
 

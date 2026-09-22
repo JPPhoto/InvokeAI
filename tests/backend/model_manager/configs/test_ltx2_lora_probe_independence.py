@@ -22,10 +22,14 @@ import torch
 from invokeai.backend.model_manager.configs.identification_utils import NotAMatchError
 from invokeai.backend.model_manager.configs.lora import (
     LoRA_LyCORIS_Anima_Config,
+    LoRA_LyCORIS_FLUX_Config,
+    LoRA_LyCORIS_Flux2_Config,
     LoRA_LyCORIS_Krea2_Config,
     LoRA_LyCORIS_LTX2_Config,
     LoRA_LyCORIS_MiniMaxH3_Config,
+    LoRA_LyCORIS_QwenImage_Config,
     LoRA_LyCORIS_Wan_Config,
+    LoRA_LyCORIS_ZImage_Config,
 )
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 
@@ -156,7 +160,19 @@ def test_an_ltx2_lora_identifies_as_ltx2(prefix: str) -> None:
 
 @pytest.mark.parametrize(
     "other",
-    [LoRA_LyCORIS_Wan_Config, LoRA_LyCORIS_MiniMaxH3_Config, LoRA_LyCORIS_Anima_Config, LoRA_LyCORIS_Krea2_Config],
+    [
+        LoRA_LyCORIS_Wan_Config,
+        LoRA_LyCORIS_MiniMaxH3_Config,
+        LoRA_LyCORIS_Anima_Config,
+        LoRA_LyCORIS_Krea2_Config,
+        # These four also precede the LTX-2 entry in the union, so they are the ones whose order
+        # actually decides which config claims a file. Omitting them left the exclusivity this
+        # file's docstring promises resting on the four that happen to come after.
+        LoRA_LyCORIS_FLUX_Config,
+        LoRA_LyCORIS_Flux2_Config,
+        LoRA_LyCORIS_QwenImage_Config,
+        LoRA_LyCORIS_ZImage_Config,
+    ],
     ids=lambda cls: cls.__name__,
 )
 def test_an_ltx2_lora_is_rejected_by_every_other_probe(other) -> None:
@@ -194,16 +210,36 @@ def test_the_ltx2_probe_requires_a_lora_suffix() -> None:
     assert not matched
 
 
-def test_the_ltx2_probe_rejects_lycoris_variants() -> None:
-    """LoKR/LoHA/DoRA are a different patch shape than the conversion emits. Refusing at install
-    turns a generation-time failure into a clear 'not supported'."""
+@pytest.mark.parametrize(
+    "magnitude_key",
+    [
+        "dora_scale",
+        # The PEFT / ai-toolkit spelling. LTX-2 LoRAs ship in the PEFT layout, so this is the one
+        # the family will actually meet -- and DoRA is the only variant that reaches this guard,
+        # since LoKR and LoHA files carry no lora_A/lora_B and fail the generic suffix test first.
+        "lora_magnitude_vector.weight",
+        "magnitude",
+    ],
+)
+def test_the_ltx2_probe_rejects_dora_in_either_spelling(magnitude_key: str) -> None:
+    """A different patch shape than the conversion emits. Admitting one defers the failure to the
+    denoise -- after the 22B transformer has loaded -- which is what this guard exists to prevent."""
     sd = _ltx2_distilled_keys()
-    sd["diffusion_model.transformer_blocks.0.attn1.to_q.dora_scale"] = _z(4096)
+    sd[f"diffusion_model.transformer_blocks.0.attn1.to_q.{magnitude_key}"] = _z(4096)
 
     matched, error = _probe(LoRA_LyCORIS_LTX2_Config, sd)
 
     assert not matched
     assert "LoKR/LoHA/DoRA" in str(error)
+
+
+def test_the_ltx2_probe_takes_the_comfy_prefix_the_converter_handles() -> None:
+    """The converter strips `model.diffusion_model.` (diffusers' own rename table does), so refusing
+    it at install would reject a file that converts perfectly."""
+    matched, result = _probe(LoRA_LyCORIS_LTX2_Config, _ltx2_distilled_keys("model.diffusion_model."))
+
+    assert matched, result
+    assert result.base is BaseModelType.LTX2
 
 
 def test_the_ltx2_probe_rejects_nested_prefixes() -> None:
