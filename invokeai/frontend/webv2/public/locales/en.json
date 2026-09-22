@@ -2564,7 +2564,6 @@
       "viewing": "Viewing",
       "workflow": "Workflow",
       "workflowJsonLabel": "Video workflow JSON",
-      "showAllActivePreviews": "Show all active previews",
       "zoom": "Zoom",
       "zoomLevel": "Zoom {{percent}}%",
       "zoomPercent": "{{percent}}%",

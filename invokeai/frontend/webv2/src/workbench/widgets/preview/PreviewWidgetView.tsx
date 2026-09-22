@@ -2,7 +2,7 @@ import type { SystemStyleObject } from '@chakra-ui/react';
 import type { QueueActiveSession, QueueItem } from '@features/queue/contracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
-import { Box, Flex, SimpleGrid, Stack, Text } from '@chakra-ui/react';
+import { Box, Flex, Stack, Text } from '@chakra-ui/react';
 import { useDndMonitor, type DragEndEvent } from '@dnd-kit/core';
 import {
   galleryImages,
@@ -30,16 +30,12 @@ import {
 } from '@features/gallery/contracts';
 import { galleryBoardsOptions } from '@features/gallery/queries';
 import { createGenerateFormValuesSelector } from '@features/generation/react';
-import { getDeterminateProgressPercent } from '@features/queue/contracts';
-import { useDeviceLabel } from '@features/queue/devices';
 import {
   consumeQueueItemSwapProgressImage,
-  useItemProgress,
   useQueueItemBridgeProgressImage,
   useQueueItemProgressImage,
   useQueueItemSwapProgressImage,
 } from '@features/queue/react';
-import { Button } from '@platform/ui';
 import {
   imageUrlToStreamingSource,
   progressImageToStreamingSource,
@@ -72,7 +68,6 @@ import { PreviewCompare } from './PreviewCompare';
 import { resolvePreviewCompareDrop } from './previewCompareDnd';
 import { usePreviewDensity, type PreviewDensity } from './previewDensity';
 import { PreviewFilmstrip } from './PreviewFilmstrip';
-import { PreviewTileFooter } from './PreviewFooter';
 import {
   PreviewFrame,
   type PreviewMediaSource,
@@ -144,15 +139,6 @@ const getBoardName = (
 
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
-/**
- * A multi-session tile floats its status island over its stage and reserves
- * that much bottom padding for it. Its stage padding stays compact for the
- * same reason the grid exists at all: at four sessions each cell is a quarter
- * of the widget.
- */
-const PREVIEW_TILE_OVERLAY_RESERVE = '3.25rem';
-const PREVIEW_TILE_STAGE_PADDING = '3';
-
 /** Pinned to the floating window body's top edge, under the title bar's divider. */
 const FLOATING_RAIL_SX: SystemStyleObject = {
   display: 'flex',
@@ -193,11 +179,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [galleryValues.semanticImageQuery]
   );
   const selectedItemKey = selectedItem ? toGalleryItemKey(selectedItem) : null;
-  const liveGalleryPlaceholders = useMemo(
-    () => livePreview.sessions.filter((session) => session.state === 'running'),
-    [livePreview.sessions]
-  );
-  const pinnedSession = livePreview.sessions.find((session) => session.id === livePreview.pinnedSessionId);
   const activeGalleryPlaceholder =
     livePreview.sessions.find((session) => session.id === livePreview.followedSessionId) ?? null;
   const shouldFollowLive = activeGalleryPlaceholder !== null;
@@ -208,16 +189,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     toGalleryItemKey({ kind: 'image', name: compareImage.imageName }) !== selectedItemKey;
   const { t } = useTranslation();
   const navigationBoundaryRef = useRef<HTMLDivElement | null>(null);
-  const overviewButtonRef = useCallback((element: HTMLButtonElement | null) => {
-    if (!element) {
-      return;
-    }
-    return () => {
-      if (document.activeElement === element) {
-        queueMicrotask(() => navigationBoundaryRef.current?.focus({ preventScroll: true }));
-      }
-    };
-  }, []);
   const loupeControlsRef = useRef<PreviewLoupeControls | null>(null);
   // The header's zoom commands close over the controls ref, so they are stable
   // per mount; the readout itself streams through `previewStageStore`.
@@ -485,6 +456,37 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   // action strip's image + actions) for the widget frame; the chrome renders
   // outside this view, so an external store is the sync channel. Cleared on
   // unmount so stale chrome never outlives us.
+  const filmstrip = useMemo<PreviewFilmstripProps | null>(
+    () =>
+      isFilmstripVisible && density !== 'minimal'
+        ? {
+            followedSessionId: livePreview.followedSessionId,
+            isSessionPinned: livePreview.pinnedSessionId !== null,
+            items: boardItems,
+            onCompare: compareFilmstripItem,
+            onContextMenu: openFilmstripItemContextMenu,
+            onFollowSession: livePreview.follow,
+            onSelect: selectPreviewItem,
+            onUnpinSession: livePreview.showAll,
+            sessions: livePreview.gallerySessions,
+            shouldAntialiasLiveImage: antialiasProgressImages,
+          }
+        : null,
+    [
+      antialiasProgressImages,
+      boardItems,
+      compareFilmstripItem,
+      density,
+      isFilmstripVisible,
+      livePreview.follow,
+      livePreview.followedSessionId,
+      livePreview.gallerySessions,
+      livePreview.pinnedSessionId,
+      livePreview.showAll,
+      openFilmstripItemContextMenu,
+      selectPreviewItem,
+    ]
+  );
   const hasHeaderItem = !shouldFollowLive && contextMenuItem !== null;
   useEffect(() => {
     previewHeaderStore.set({
@@ -602,34 +604,12 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
         w="full"
         onKeyDown={handleNavigationKeyDown}
       >
-        {shouldFollowLive && pinnedSession ? (
-          <Button
-            ref={overviewButtonRef}
-            alignSelf="start"
-            flexShrink={0}
-            // Clears the centre region's floating header islands, which
-            // otherwise sit on top of the first row of the widget body.
-            ms="2"
-            mt="var(--wb-center-chrome-inset, 0px)"
-            size="2xs"
-            variant="ghost"
-            onClick={livePreview.showAll}
-          >
-            {t('widgets.preview.showAllActivePreviews')}
-          </Button>
-        ) : null}
-        {shouldFollowLive && !pinnedSession && liveGalleryPlaceholders.length > 1 ? (
-          <LivePreviewTiles
-            placeholders={liveGalleryPlaceholders}
-            shouldAntialiasProgressImage={antialiasProgressImages}
-          />
-        ) : shouldFollowLive && activeGalleryPlaceholder ? (
+        {shouldFollowLive && activeGalleryPlaceholder ? (
           <LivePreview
             density={density}
-            filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
+            filmstrip={filmstrip}
             placeholder={activeGalleryPlaceholder}
             shouldAntialiasProgressImage={antialiasProgressImages}
-            onSelectItem={selectPreviewItem}
           />
         ) : selectedItem ? (
           <>
@@ -646,28 +626,22 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
             ) : selectedItem.kind === 'image' ? (
               <SelectedImagePreview
                 density={density}
-                filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
+                filmstrip={filmstrip}
                 isItemCurrent={isItemCurrent}
                 item={selectedItem}
                 loupeControlsRef={loupeControlsRef}
                 shouldAntialiasProgressImage={antialiasProgressImages}
-                onCompareItem={compareFilmstripItem}
                 onContextMenu={openItemContextMenu}
-                onItemContextMenu={openFilmstripItemContextMenu}
-                onSelectItem={selectPreviewItem}
               />
             ) : (
               <SelectedVideoPreview
                 density={density}
-                filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
+                filmstrip={filmstrip}
                 isItemCurrent={isItemCurrent}
                 item={selectedItem}
                 videoControllerRef={videoControllerRef}
                 onContextMenu={openItemContextMenu}
                 onCopyAvailabilityChange={handleVideoCopyAvailabilityChange}
-                onCompareItem={compareFilmstripItem}
-                onItemContextMenu={openFilmstripItemContextMenu}
-                onSelectItem={selectPreviewItem}
               />
             )}
             <ImageContextMenu
@@ -763,18 +737,17 @@ const SelectedVideoPreview = ({
   );
 };
 
+/** The filmstrip's inputs, or null when the strip is hidden. */
+type PreviewFilmstripProps = Omit<Parameters<typeof PreviewFilmstrip>[0], 'density' | 'selectedItemKey'>;
+
 interface SelectedMediaPreviewProps {
   density: PreviewDensity;
-  /** Board thumbnails for the filmstrip, or null when the strip is hidden. */
-  filmstripItems: GalleryItem[] | null;
+  filmstrip: PreviewFilmstripProps | null;
   isItemCurrent: (itemKey: GalleryItemKey) => boolean;
   item: GalleryItem;
   loupeControlsRef?: Ref<PreviewLoupeControls>;
   onCopyAvailabilityChange?: (itemKey: GalleryItemKey, isAvailable: boolean) => void;
-  onCompareItem: (item: GalleryItem) => void;
   onContextMenu: (x: number, y: number) => void;
-  onItemContextMenu: (item: GalleryItem, x: number, y: number) => void;
-  onSelectItem: (item: GalleryItem) => void;
   videoControllerRef?: Ref<PreviewVideoFrameController>;
 }
 
@@ -784,19 +757,14 @@ interface SelectedMediaPreviewProps {
  * toggling the strip refits the media rather than covering it. Live and
  * finished renders MUST pass through the same scaffold — the denoise→done
  * boundary may change only the pixels inside the frame, never the geometry
- * around it.
+ * around it. Several live sessions are the filmstrip's leading thumbs, never
+ * a grid: the stage shows one of them large and the strip keeps the rest in
+ * reach.
  */
 const PreviewMediaScaffold = ({ children }: { children: ReactNode }) => (
   <Flex direction="column" h="full" minH="0" position="relative" w="full">
     {children}
   </Flex>
-);
-
-/** The floating island a multi-session tile's status footer sits in. */
-const PreviewOverlayStack = ({ children }: { children: ReactNode }) => (
-  <Stack bottom="2" gap="2" insetX="2" position="absolute" zIndex="1">
-    {children}
-  </Stack>
 );
 
 const getMediaStagePadding = (density: PreviewDensity): string => (density === 'full' ? '6' : '3');
@@ -805,7 +773,7 @@ const { setStageElement, setZoom: setZoomReadout } = previewStageStore;
 const SelectedMediaPreview = ({
   density,
   dragItem,
-  filmstripItems,
+  filmstrip,
   frameHeight,
   frameWidth,
   holdSource,
@@ -816,10 +784,7 @@ const SelectedMediaPreview = ({
   onSourceLoaded,
   shouldAntialiasHoldImage,
   source,
-  onCompareItem,
   onContextMenu,
-  onItemContextMenu,
-  onSelectItem,
   videoControllerRef,
 }: SelectedMediaPreviewProps & {
   dragItem?: GalleryItemRef;
@@ -853,16 +818,7 @@ const SelectedMediaPreview = ({
         onContextMenu={onContextMenu}
       />
     </Flex>
-    {filmstripItems ? (
-      <PreviewFilmstrip
-        density={density}
-        items={filmstripItems}
-        selectedItemKey={toGalleryItemKey(item)}
-        onCompare={onCompareItem}
-        onContextMenu={onItemContextMenu}
-        onSelect={onSelectItem}
-      />
-    ) : null}
+    {filmstrip ? <PreviewFilmstrip {...filmstrip} density={density} selectedItemKey={toGalleryItemKey(item)} /> : null}
   </PreviewMediaScaffold>
 );
 
@@ -874,16 +830,14 @@ const SelectedMediaPreview = ({
  */
 const LivePreview = ({
   density,
-  filmstripItems,
+  filmstrip,
   placeholder,
   shouldAntialiasProgressImage,
-  onSelectItem,
 }: {
   density: PreviewDensity;
-  filmstripItems: GalleryItem[] | null;
+  filmstrip: PreviewFilmstripProps | null;
   placeholder: QueueActiveSession;
   shouldAntialiasProgressImage: boolean;
-  onSelectItem: (item: GalleryItem) => void;
 }) => {
   // The followed slot's own frame, not the store-wide latest: with two slots
   // live (a long video next to a quick image batch) the latest belongs to
@@ -920,96 +874,10 @@ const LivePreview = ({
         source={source}
         variant="framed"
       />
-      {filmstripItems ? (
-        <PreviewFilmstrip density={density} items={filmstripItems} selectedItemKey={null} onSelect={onSelectItem} />
-      ) : null}
+      {filmstrip ? <PreviewFilmstrip {...filmstrip} density={density} selectedItemKey={null} /> : null}
     </PreviewMediaScaffold>
   );
 };
-
-/**
- * One tile in the multi-session grid.
- *
- * Subscribes to its own slot's progress image rather than receiving it from the
- * parent, so a frame from one GPU's session re-renders only that tile.
- */
-export const LivePreviewTile = ({
-  placeholder,
-  shouldAntialiasProgressImage,
-}: {
-  placeholder: QueueActiveSession;
-  shouldAntialiasProgressImage: boolean;
-}) => {
-  const { t } = useTranslation();
-  const progressImage = useQueueItemProgressImage(placeholder.queueItemId, placeholder.itemIndex);
-  // Keyed by the backend item id, not the local one: two slots of the same batch can
-  // be running on two GPUs, and the local-keyed store holds one entry for both.
-  const itemProgress = useItemProgress(placeholder.backendItemId);
-  const deviceLabel = useDeviceLabel(itemProgress?.device);
-  const previewImage = useStreamingImageSource({
-    liveImage: progressImageToStreamingSource(progressImage),
-  });
-  const source = useMemo<PreviewMediaSource | null>(
-    () =>
-      previewImage
-        ? {
-            itemKey: `image:live:${placeholder.id}`,
-            kind: 'image',
-            source: previewImage,
-          }
-        : null,
-    [placeholder.id, previewImage]
-  );
-
-  const percent = getDeterminateProgressPercent(itemProgress?.percentage);
-  // Device identity and progress read from the footer, not from a badge over
-  // the image: a tile is the same media card as any other preview surface, and
-  // the one thing that must never differ between them is the frame itself.
-  const tileDeviceLabel = deviceLabel ? t('widgets.queue.device.shortLabel', { index: deviceLabel.index }) : null;
-
-  return (
-    <PreviewMediaScaffold>
-      <PreviewFrame
-        frameHeight={previewImage?.height ?? placeholder.height}
-        frameWidth={previewImage?.width ?? placeholder.width}
-        isLive
-        padding={PREVIEW_TILE_STAGE_PADDING}
-        paddingBottom={PREVIEW_TILE_OVERLAY_RESERVE}
-        shouldAntialiasLiveImage={shouldAntialiasProgressImage}
-        source={source}
-        variant="framed"
-      />
-      <PreviewOverlayStack>
-        <PreviewTileFooter deviceLabel={tileDeviceLabel} percent={percent} />
-      </PreviewOverlayStack>
-    </PreviewMediaScaffold>
-  );
-};
-
-/**
- * Side-by-side previews for concurrent sessions (multi-GPU).
- *
- * Only mounted for two or more live slots; a single session keeps the full-size
- * single-frame preview so nothing changes on a single-GPU install. The grid is a
- * plain auto-fit so two GPUs sit side by side and four wrap to a 2×2.
- */
-export const LivePreviewTiles = ({
-  placeholders,
-  shouldAntialiasProgressImage,
-}: {
-  placeholders: QueueActiveSession[];
-  shouldAntialiasProgressImage: boolean;
-}) => (
-  <SimpleGrid gap="2" h="full" minH="0" columns={placeholders.length > 2 ? 2 : placeholders.length}>
-    {placeholders.map((placeholder) => (
-      <LivePreviewTile
-        key={placeholder.id}
-        placeholder={placeholder}
-        shouldAntialiasProgressImage={shouldAntialiasProgressImage}
-      />
-    ))}
-  </SimpleGrid>
-);
 
 const EmptyPreview = () => {
   const { t } = useTranslation();

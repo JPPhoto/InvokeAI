@@ -1633,7 +1633,9 @@ describe('preview keyboard navigation boundary', () => {
 
     await render();
 
-    expect(host?.querySelectorAll<HTMLImageElement>('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(
+      host?.querySelectorAll<HTMLImageElement>('img[src^="data:image/png"]:not([data-preview-filmstrip] img)')
+    ).toHaveLength(1);
   });
 
   it("shows the followed slot's own frame even when the store-wide latest frame is gone", async () => {
@@ -1693,7 +1695,7 @@ describe('preview keyboard navigation boundary', () => {
     expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-one"]')).toBeNull();
   });
 
-  it('pins one concurrent session, returns to overview, and continues after the pinned session settles', async () => {
+  it('keeps every concurrent session in the filmstrip, follows the newest session, and pins on request', async () => {
     mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2] }];
     mocks.project.settings.showProgressImagesInViewer = true;
     mocks.runningProgressTargets = [
@@ -1702,17 +1704,44 @@ describe('preview keyboard navigation boundary', () => {
     ];
     mocks.slotProgressImage = { dataUrl: 'data:image/png;base64,live', width: 64, height: 64 };
     await render();
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(2);
-    await act(() => followControls.pin('queue-item-live:2'));
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
-    expect(followControls.pinnedSessionId).toBe('queue-item-live:2');
+    const liveThumbs = () => [...host!.querySelectorAll<HTMLElement>('[data-preview-live-thumb]')];
+    const followedThumb = () =>
+      host!.querySelector<HTMLElement>('[data-preview-live-thumb][aria-current="true"]')?.dataset.previewLiveThumb;
+    // One stage, two thumbs: never a grid. The session that started last is on the stage.
+    expect(liveThumbs()).toHaveLength(2);
+    expect(host?.querySelectorAll('[data-preview-filmstrip] img[src^="data:image/png"]')).toHaveLength(2);
+    expect(followedThumb()).toBe('queue-item-live:2');
+
+    // Frames from the other slot do not move the stage: following the latest
+    // frame is what used to flip it several times a second.
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,live',
+      height: 64,
+      target: { itemIndex: 1, queueItemId: queueItem.id },
+      width: 64,
+    });
+    await rerender();
+    expect(followedThumb()).toBe('queue-item-live:2');
+    expect(followControls.pinnedSessionId).toBeNull();
+
+    await act(() => followControls.pin('queue-item-live:1'));
+    expect(followedThumb()).toBe('queue-item-live:1');
+    expect(host!.querySelector('[data-preview-live-thumb="queue-item-live:1"]')?.getAttribute('aria-pressed')).toBe(
+      'true'
+    );
+    expect(host!.querySelector<HTMLElement>('[data-preview-live-pinned]')?.dataset.previewLiveThumb).toBe(
+      'queue-item-live:1'
+    );
     await act(() => followControls.showAll());
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(2);
+    expect(followedThumb()).toBe('queue-item-live:2');
+    expect(host!.querySelector('[data-preview-live-pinned]')).toBeNull();
+
     await act(() => followControls.pin('queue-item-live:2'));
     mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
     await rerender();
+    // The pinned session settled, so the pin releases and the stage moves on.
     expect(followControls.pinnedSessionId).toBeNull();
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(followedThumb()).toBe('queue-item-live:1');
   });
 
   it('keeps live previews available during similarity search and temporary comparison override', async () => {
@@ -1724,7 +1753,7 @@ describe('preview keyboard navigation boundary', () => {
     values.semanticImageQuery = { kind: 'text', query: 'blue sky' };
     values.compareImage = mocks.recentImages[1];
     await render();
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(host?.querySelectorAll('img[src^="data:image/png"]:not([data-preview-filmstrip] img)')).toHaveLength(1);
     await act(() => followControls.pin('queue-item-live:1'));
     mocks.project.id = 'project-2';
     mocks.project.queue.items = [];

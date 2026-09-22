@@ -1,5 +1,6 @@
 /* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { GalleryImageItem, GalleryVideoItem } from '@features/gallery';
+import type { QueueProgressSession } from '@features/queue/contracts';
 import type * as queueDevicesModule from '@features/queue/devices';
 import type { ImageActions } from '@workbench/image-actions';
 
@@ -15,7 +16,6 @@ import { page } from 'vitest/browser';
 
 import { PreviewActionStrip } from './PreviewActionStrip';
 import { PreviewFilmstrip } from './PreviewFilmstrip';
-import { LivePreviewTile } from './PreviewWidgetView';
 
 const sharedImage: GalleryImageItem = {
   boardId: 'none',
@@ -96,6 +96,12 @@ void i18n.use(initReactI18next).init({
         common: { countOfTotal: '{{count}} of {{total}}', edit: 'Edit', generating: 'Generating' },
         widgets: {
           canvas: { import: { control: 'Control Layer', raster: 'Raster Layer' } },
+          gallery: {
+            progressPreparing: 'Preparing',
+            progressQueued: 'Queued',
+            progressSession: '{{name}} {{index}}/{{total}}',
+            progressSettling: 'Finishing',
+          },
           preview: {
             copyCurrentFrame: 'Copy Current Frame',
             details: 'Details',
@@ -457,81 +463,180 @@ describe('Preview mixed media actions', () => {
   });
 });
 
-describe('Multi-session live preview tiles', () => {
-  const placeholder = {
-    backendItemId: 1,
-    boardId: 'none',
-    label: 'Generate',
-    sourceId: 'generate' as const,
-    itemCount: 1,
-    state: 'running' as const,
+describe('PreviewFilmstrip live sessions', () => {
+  const session = (id: string, state: QueueProgressSession['state'], backendItemId = 1): QueueProgressSession => ({
+    backendItemId,
     height: 512,
-    id: 'queue-1:0',
-    itemIndex: 0,
+    id,
+    itemCount: 2,
+    itemIndex: Number(id.split(':')[1]),
+    label: 'Generate',
     queueItemId: 'queue-1',
+    sourceId: 'generate',
+    state,
     width: 512,
-  };
+  });
 
-  const renderTile = async () => {
+  it('leads the strip with one thumb per slot, naming device and progress, and follows a running one on click', async () => {
+    mocks.itemProgress = { device: 'cuda:1', percentage: 0.4 };
+    mocks.deviceLabel = { index: 1 };
+    const onFollowSession = vi.fn();
+    const onUnpinSession = vi.fn();
+
+    // A single board item would hide the strip; the live sessions earn it.
     await render(
       <DndContext>
-        <LivePreviewTile placeholder={placeholder} shouldAntialiasProgressImage={false} />
+        <PreviewFilmstrip
+          density="full"
+          followedSessionId="queue-1:1"
+          items={[sharedImage]}
+          selectedItemKey={null}
+          sessions={[session('queue-1:1', 'running'), session('queue-1:2', 'queued', 2)]}
+          onFollowSession={onFollowSession}
+          onSelect={() => undefined}
+          onUnpinSession={onUnpinSession}
+        />
       </DndContext>
     );
 
-    return Array.from(host!.querySelectorAll<HTMLElement>('p')).map((element) => element.textContent ?? '');
-  };
+    const thumbs = [...host!.querySelectorAll<HTMLButtonElement>('[data-preview-live-thumb]')];
+    expect(thumbs.map((thumb) => thumb.getAttribute('aria-label'))).toEqual([
+      'Generate 1/2 · GPU 1 · 40%',
+      'Generate 2/2 · GPU 1 · Queued',
+    ]);
+    // Live thumbs come first; the item thumb follows them.
+    expect(host!.querySelector('button')).toBe(thumbs[0]);
+    expect(thumbs[0]?.getAttribute('aria-current')).toBe('true');
+    expect(thumbs[1]?.getAttribute('aria-current')).toBeNull();
+    expect(thumbs[1]?.getAttribute('aria-disabled')).toBe('true');
 
-  it('reports percent from the footer when no device label is available', async () => {
-    mocks.itemProgress = { device: null, percentage: 0.4 };
-    mocks.deviceLabel = null;
-
-    const footerText = await renderTile();
-
-    expect(footerText).toContain('40%');
+    await interact(() => thumbs[1]?.click());
+    expect(onFollowSession).not.toHaveBeenCalled();
+    await interact(() => thumbs[0]?.click());
+    expect(onFollowSession).toHaveBeenCalledExactlyOnceWith('queue-1:1');
+    expect(onUnpinSession).not.toHaveBeenCalled();
   });
 
-  it('names the device alongside percent once the label resolves', async () => {
-    mocks.itemProgress = { device: 'cuda:1', percentage: 0.4 };
-    mocks.deviceLabel = { index: 1 };
-
-    const footerText = await renderTile();
-
-    expect(footerText).toContain('GPU 1');
-    expect(footerText).toContain('40%');
-  });
-
-  it('still declares itself live before progress is quantified', async () => {
-    // A silent tile reads as a stuck one when several sessions race, so the
-    // footer says "Generating" rather than going blank.
+  it('reads as a pressed toggle while pinned and unpins on the next click', async () => {
     mocks.itemProgress = { device: null, percentage: null };
     mocks.deviceLabel = null;
-
-    const footerText = await renderTile();
-
-    expect(footerText).toContain('Generating');
-  });
-
-  it('carries no caption over the image itself', async () => {
-    // The frame must be indistinguishable from a finished item's, so that
-    // nothing moves at the moment denoising ends.
-    mocks.itemProgress = { device: 'cuda:1', percentage: 0.4 };
-    mocks.deviceLabel = { index: 1 };
+    const onFollowSession = vi.fn();
+    const onUnpinSession = vi.fn();
 
     await render(
       <DndContext>
-        <LivePreviewTile placeholder={placeholder} shouldAntialiasProgressImage={false} />
+        <PreviewFilmstrip
+          density="compact"
+          followedSessionId="queue-1:1"
+          isSessionPinned
+          items={[]}
+          selectedItemKey={null}
+          sessions={[session('queue-1:1', 'running'), session('queue-1:2', 'settling', 2)]}
+          onFollowSession={onFollowSession}
+          onSelect={() => undefined}
+          onUnpinSession={onUnpinSession}
+        />
       </DndContext>
     );
 
-    const image = host!.querySelector('img');
-    const captionInsideFrame = image?.closest('div')?.querySelector('p, span');
+    const [pinned, settling] = [...host!.querySelectorAll<HTMLButtonElement>('[data-preview-live-thumb]')];
+    // A silent thumb reads as a stuck one, so it says it is preparing.
+    expect(pinned?.getAttribute('aria-label')).toBe('Generate 1/2 · Preparing');
+    expect(pinned?.getAttribute('aria-pressed')).toBe('true');
+    // The pin shows in place of the progress ring, so the next click reads as "unpin".
+    expect(pinned?.hasAttribute('data-preview-live-pinned')).toBe(true);
+    expect(pinned?.querySelector('[data-scope="progress-circle"]')).toBeNull();
+    expect(settling?.hasAttribute('data-preview-live-pinned')).toBe(false);
+    expect(settling?.getAttribute('aria-label')).toBe('Generate 2/2 · Finishing');
+    expect(settling?.getAttribute('aria-pressed')).toBeNull();
 
-    expect(image).not.toBeNull();
-    expect(captionInsideFrame).toBeNull();
+    await interact(() => pinned?.click());
+    expect(onUnpinSession).toHaveBeenCalledOnce();
+    expect(onFollowSession).not.toHaveBeenCalled();
+  });
+
+  it('earns the strip for a lone item only while a session is live', async () => {
+    mocks.itemProgress = null;
+    mocks.deviceLabel = null;
+    const strip = () => host!.querySelector('[data-preview-filmstrip]');
+
+    await render(
+      <DndContext>
+        <PreviewFilmstrip density="full" items={[sharedImage]} selectedItemKey={null} onSelect={() => undefined} />
+      </DndContext>
+    );
+    expect(strip()).toBeNull();
+
+    await render(
+      <DndContext>
+        <PreviewFilmstrip
+          density="full"
+          items={[sharedImage]}
+          selectedItemKey={null}
+          sessions={[session('queue-1:1', 'running')]}
+          onSelect={() => undefined}
+        />
+      </DndContext>
+    );
+    expect(strip()).not.toBeNull();
+  });
+
+  it('hands focus back to the preview region when the focused live thumb finishes', async () => {
+    mocks.itemProgress = { device: null, percentage: 0.5 };
+    mocks.deviceLabel = null;
+    const strip = (sessions: QueueProgressSession[]) => (
+      // The preview's navigation boundary is a focusable region too.
+      // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      <div role="region" tabIndex={0} data-testid="preview-region">
+        <DndContext>
+          <PreviewFilmstrip
+            density="full"
+            items={[sharedImage, sharedVideo]}
+            selectedItemKey={null}
+            sessions={sessions}
+            onSelect={() => undefined}
+          />
+        </DndContext>
+      </div>
+    );
+
+    await render(strip([session('queue-1:1', 'running')]));
+    const thumb = host!.querySelector<HTMLButtonElement>('[data-preview-live-thumb]')!;
+    await interact(() => thumb.focus());
+    expect(document.activeElement).toBe(thumb);
+
+    await render(strip([]));
+    await interact(() => undefined);
+    expect(document.activeElement).toBe(host!.querySelector('[data-testid="preview-region"]'));
+  });
+
+  it('keeps focus on a thumb that becomes the followed one', async () => {
+    mocks.itemProgress = { device: null, percentage: 0.5 };
+    mocks.deviceLabel = null;
+    const strip = (followedSessionId: string | null) => (
+      // oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      <div role="region" tabIndex={0}>
+        <DndContext>
+          <PreviewFilmstrip
+            density="full"
+            followedSessionId={followedSessionId}
+            items={[]}
+            selectedItemKey={null}
+            sessions={[session('queue-1:1', 'running'), session('queue-1:2', 'running', 2)]}
+            onSelect={() => undefined}
+          />
+        </DndContext>
+      </div>
+    );
+
+    await render(strip('queue-1:1'));
+    const second = host!.querySelector<HTMLButtonElement>('[data-preview-live-thumb="queue-1:2"]')!;
+    await interact(() => second.focus());
+
+    // The click that follows it re-renders it as current; focus must stay put.
+    await render(strip('queue-1:2'));
+    await interact(() => undefined);
+    expect(document.activeElement).toBe(second);
+    expect(second.getAttribute('aria-current')).toBe('true');
   });
 });
-
-vi.mock('./livePreviewFollow', () => ({
-  useLivePreviewFollow: () => ({ sessions: [], pinnedSessionId: null, pin: vi.fn(), showAll: vi.fn() }),
-}));
