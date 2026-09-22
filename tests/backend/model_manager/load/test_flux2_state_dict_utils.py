@@ -287,3 +287,25 @@ def test_a_bias_beside_a_quantized_weight_does_not_become_a_second_destination()
     converted = convert_flux2_bfl_to_diffusers(dict(sd))
 
     assert converted["transformer_blocks.0.attn.to_out.0.weight_scale"] == torch.tensor(2.0)
+
+
+def test_the_exported_module_map_reports_a_declined_split_as_one_module() -> None:
+    """What the header's hints and int8 markers are re-keyed with.
+
+    They name layers in the BFL scheme and have to follow the weights, and until now they followed a
+    probe: for a fused qkv whose rows are not divisible by three it answered "three modules" while
+    the converter left the weight where it was, so `full_precision_matrix_mult` and an int8 marker
+    were fanned onto three modules that do not exist. The map reports what happened instead.
+    """
+    split: dict[str, list[str]] = {}
+    convert_flux2_bfl_to_diffusers({"double_blocks.0.img_attn.qkv.weight": torch.zeros(6, 4)}, module_map=split)
+
+    declined: dict[str, list[str]] = {}
+    convert_flux2_bfl_to_diffusers({"double_blocks.0.img_attn.qkv.weight": torch.zeros(7, 4)}, module_map=declined)
+
+    assert split["double_blocks.0.img_attn.qkv"] == [
+        "transformer_blocks.0.attn.to_q",
+        "transformer_blocks.0.attn.to_k",
+        "transformer_blocks.0.attn.to_v",
+    ]
+    assert declined["double_blocks.0.img_attn.qkv"] == ["double_blocks.0.img_attn.qkv"]

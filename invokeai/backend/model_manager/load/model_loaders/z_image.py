@@ -84,6 +84,12 @@ from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_ex
 def _remap_z_image_layer_paths(layer_names: Any) -> dict[str, list[str]]:
     """Map native Z-Image layer paths to their diffusers equivalents.
 
+    A probe, where FLUX.2's equivalent was replaced by the conversion's own record. The difference is
+    that this converter *raises* on a fused ``qkv`` whose rows are not divisible by three rather than
+    leaving the key alone, so a probe and the conversion cannot disagree about it -- and the second
+    caller below works on payloads popped out *before* the conversion, which no record of that
+    conversion could cover.
+
     ``_quantization_metadata`` names its layers in the checkpoint's own scheme, but the scales are
     extracted after the state dict has been renamed. Rather than restating the rename rules — which
     would drift — each name is pushed through the real converter as a lone ``<name>.weight`` entry
