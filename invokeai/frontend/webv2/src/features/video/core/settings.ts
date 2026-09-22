@@ -19,6 +19,9 @@ import type {
   Ltx2TargetResolution,
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
+  VideoClipRef,
+  VideoConditioningClip,
+  VideoConditioningRole,
   VideoGenerationMode,
   VideoReferenceConditioning,
   VideoReferenceImageDetail,
@@ -79,15 +82,28 @@ export const isImageWithDims = (value: unknown): value is ImageWithDims =>
   hasFiniteNumber(value, 'width') &&
   hasFiniteNumber(value, 'height');
 
-export const isVideoSourceClip = (value: unknown): value is VideoSourceClip =>
+export const isVideoClipRef = (value: unknown): value is VideoClipRef =>
   isRecord(value) &&
   typeof value.video_name === 'string' &&
   hasFiniteNumber(value, 'width') &&
   hasFiniteNumber(value, 'height') &&
   hasFiniteNumber(value, 'numFrames') &&
-  hasFiniteNumber(value, 'fps') &&
+  hasFiniteNumber(value, 'fps');
+
+export const isVideoSourceClip = (value: unknown): value is VideoSourceClip =>
+  isRecord(value) &&
   hasFiniteNumber(value, 'startFrame') &&
-  hasFiniteNumber(value, 'endFrame');
+  hasFiniteNumber(value, 'endFrame') &&
+  isVideoClipRef(value);
+
+export const isVideoConditioningRole = (value: unknown): value is VideoConditioningRole =>
+  value === 'audio' || value === 'video';
+
+export const isVideoConditioningClip = (value: unknown): value is VideoConditioningClip =>
+  isRecord(value) &&
+  isVideoClipRef(value.clip) &&
+  isVideoConditioningRole(value.role) &&
+  typeof value.fpsKnown === 'boolean';
 
 /** Upstream Ref2VA's reference caps (mirrored by the backend's validate_reference_kinds). */
 export const VIDEO_REFERENCE_MAX_VIDEOS = 3;
@@ -338,10 +354,19 @@ const areAcceleratorLorasPresent = (keys: readonly string[], loras: readonly Gen
  * `reference` and the graph appends the new clip to the source.
  */
 export const resolveVideoMode = (
-  settings: Pick<VideoSettings, 'firstFrameImage' | 'lastFrameImage' | 'sourceVideo' | 'references'>
+  settings: Pick<
+    VideoSettings,
+    'firstFrameImage' | 'lastFrameImage' | 'sourceVideo' | 'references' | 'conditioningClip'
+  >
 ): VideoGenerationMode => {
   if (settings.references.length > 0) {
     return 'reference';
+  }
+
+  // Ahead of the frame and clip slots because a conditioning clip excludes them all: it holds one
+  // whole modality clean, which is the same mask the other conditioning modes write into.
+  if (settings.conditioningClip) {
+    return settings.conditioningClip.role === 'audio' ? 'audio-to-video' : 'video-to-audio';
   }
 
   if (settings.sourceVideo) {
@@ -402,6 +427,12 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
   // A first frame and a source video are mutually exclusive; if a stale
   // project somehow holds both, the first frame wins deterministically.
   const sourceVideo = !firstFrameImage && isVideoSourceClip(values.sourceVideo) ? values.sourceVideo : null;
+  // One conditioning clip at a time, and never alongside a first frame or an initial video: those
+  // condition the same stream this one would hold, and the model samples exactly one modality.
+  const conditioningClip =
+    !firstFrameImage && !sourceVideo && isVideoConditioningClip(values.conditioningClip)
+      ? values.conditioningClip
+      : null;
   const loras = Array.isArray(values.loras) ? values.loras.filter(isVideoLora) : [];
   const acceleratorLoraKeys = getStringArray(values.acceleratorLoraKeys);
   // The flag means "the accelerator LoRAs the toggle added are active": if any
@@ -467,6 +498,7 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
       : typeof values.shouldRandomizeSeed === 'boolean' && !values.shouldRandomizeSeed
         ? 'fixed'
         : 'random',
+    conditioningClip,
     sourceVideo,
     steps: hasFiniteNumber(values, 'steps') ? (values.steps as number) : SETTINGS_FALLBACKS.steps,
     targetResolution: isVideoTargetResolution(values.targetResolution)
@@ -508,6 +540,7 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
     (values.firstFrameImage === null || isImageWithDims(values.firstFrameImage)) &&
     (values.lastFrameImage === null || isImageWithDims(values.lastFrameImage)) &&
     (values.sourceVideo === null || isVideoSourceClip(values.sourceVideo)) &&
+    (values.conditioningClip === null || isVideoConditioningClip(values.conditioningClip)) &&
     !(values.firstFrameImage !== null && values.sourceVideo !== null) &&
     Array.isArray(values.references) &&
     values.references.every(isVideoReferenceItem) &&
@@ -566,6 +599,9 @@ export const cloneVideoWidgetValues = (values: VideoWidgetValues): VideoWidgetVa
       ? { ...reference, clip: { ...reference.clip } }
       : { ...reference, image: { ...reference.image } }
   ),
+  conditioningClip: values.conditioningClip
+    ? { ...values.conditioningClip, clip: { ...values.conditioningClip.clip } }
+    : null,
   sourceVideo: values.sourceVideo ? { ...values.sourceVideo } : null,
   vae: values.vae ? { ...values.vae } : null,
   wanLowNoiseModel: values.wanLowNoiseModel ? { ...values.wanLowNoiseModel } : null,
@@ -625,6 +661,32 @@ export const createVideoSourceClip = (item: {
  */
 export const getDefaultReferenceConditioning = (mediaOrigin: string | null | undefined): VideoReferenceConditioning =>
   mediaOrigin === 'audio_upload' ? 'audio' : 'video_audio';
+
+/**
+ * Which stream a freshly dropped conditioning clip is taken for. An `audio_upload` record is a
+ * bare soundtrack wrapped as a video and has no picture worth conditioning on, so it can only be
+ * the audio side. Anything else defaults to `video` -- every clip has a picture, while asking for
+ * the soundtrack of one that turns out to be silent fails at run time.
+ */
+export const getDefaultConditioningRole = (mediaOrigin: string | null | undefined): VideoConditioningRole =>
+  mediaOrigin === 'audio_upload' ? 'audio' : 'video';
+
+export const createVideoConditioningClip = (item: {
+  durationSeconds: number;
+  fps?: number;
+  height: number;
+  mediaOrigin?: string;
+  name: string;
+  width: number;
+}): VideoConditioningClip => {
+  const { endFrame: _endFrame, startFrame: _startFrame, ...clip } = createVideoSourceClip(item);
+
+  return {
+    clip,
+    fpsKnown: typeof item.fps === 'number' && Number.isFinite(item.fps) && item.fps > 0,
+    role: getDefaultConditioningRole(item.mediaOrigin),
+  };
+};
 
 /**
  * Whether a video reference can serve as the reference-extend ANCHOR.
@@ -1137,6 +1199,7 @@ export const clearDeletedVideoMedia = <T extends object>(
   removedVideoNames: ReadonlySet<string>
 ): T => {
   const slots = values as {
+    conditioningClip?: unknown;
     firstFrameImage?: unknown;
     lastFrameImage?: unknown;
     sourceVideo?: unknown;
@@ -1145,6 +1208,8 @@ export const clearDeletedVideoMedia = <T extends object>(
   const clearFirst = isImageWithDims(slots.firstFrameImage) && removedImageNames.has(slots.firstFrameImage.image_name);
   const clearLast = isImageWithDims(slots.lastFrameImage) && removedImageNames.has(slots.lastFrameImage.image_name);
   const clearSource = isVideoSourceClip(slots.sourceVideo) && removedVideoNames.has(slots.sourceVideo.video_name);
+  const clearConditioning =
+    isVideoConditioningClip(slots.conditioningClip) && removedVideoNames.has(slots.conditioningClip.clip.video_name);
   const references = Array.isArray(slots.references) ? slots.references : null;
   const keptReferences = references?.filter(
     (entry) =>
@@ -1155,7 +1220,7 @@ export const clearDeletedVideoMedia = <T extends object>(
   );
   const clearReferences = keptReferences !== undefined && keptReferences.length !== references?.length;
 
-  if (!clearFirst && !clearLast && !clearSource && !clearReferences) {
+  if (!clearFirst && !clearLast && !clearSource && !clearConditioning && !clearReferences) {
     return values;
   }
 
@@ -1166,6 +1231,7 @@ export const clearDeletedVideoMedia = <T extends object>(
     ...(clearFirst ? { firstFrameImage: null } : {}),
     ...(clearLast ? { lastFrameImage: null } : {}),
     ...(clearSource ? { sourceVideo: null } : {}),
+    ...(clearConditioning ? { conditioningClip: null } : {}),
     ...(clearReferences ? { references: keptReferences } : {}),
   } as T;
 };

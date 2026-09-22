@@ -282,6 +282,7 @@ describe('buildVideoRecallSettings', () => {
 
     expect(result?.fields).toContain('media');
     expect(result?.mediaNames).toEqual({
+      conditioningClip: null,
       firstFrameName: 'first.png',
       lastFrameName: null,
       references: [],

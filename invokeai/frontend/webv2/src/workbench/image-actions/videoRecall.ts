@@ -4,7 +4,12 @@ import type {
   LoraModelConfig,
   MainModelConfig,
 } from '@features/generation/contracts';
-import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } from '@features/video';
+import type {
+  VideoAspectRatioId,
+  VideoConditioningRole,
+  VideoTargetResolution,
+  VideoWidgetValues,
+} from '@features/video';
 
 import { isLoraCompatibleWithModel, isLoraModelConfig } from '@features/generation/settings';
 import {
@@ -58,6 +63,8 @@ const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
   'minimax_h3_ref2v',
   'ltx2_t2v',
   'ltx2_i2v',
+  'ltx2_a2v',
+  'ltx2_v2a',
 ]);
 
 export type VideoRecallKind = 'all' | 'remix' | 'prompts' | 'seed';
@@ -246,6 +253,18 @@ const getImageName = (metadata: unknown, key: string): string | null => {
   return typeof field?.image_name === 'string' ? field.image_name : null;
 };
 
+/** The whole-modality conditioning clip, from the LTX-2 extras the graph records. */
+const getRecallableConditioningClip = (metadata: unknown): VideoRecallConditioningClip | null => {
+  const field = getRecord(metadata, 'ltx2_conditioning_video');
+  const role = isRecord(metadata) ? metadata.ltx2_conditioning_role : undefined;
+
+  if (typeof field?.video_name !== 'string' || (role !== 'audio' && role !== 'video')) {
+    return null;
+  }
+
+  return { name: field.video_name, role };
+};
+
 const getSourceVideoName = (metadata: unknown): string | null => {
   const field = getRecord(metadata, 'source_video');
 
@@ -322,6 +341,7 @@ export const getVideoSizeRecall = (
     for (const option of getVideoTargetResolutionOptions(model)) {
       const derived = getVideoDimensions(model, {
         aspectRatioId,
+        conditioningClip: null,
         firstFrameImage: null,
         lastFrameImage: null,
         sourceVideo: null,
@@ -401,7 +421,14 @@ export const getVideoRecallCapabilities = (metadata: unknown): VideoRecallCapabi
  * against the gallery (existence + dimensions/probe data the metadata does not
  * carry) before they become widget values.
  */
+export interface VideoRecallConditioningClip {
+  name: string;
+  role: VideoConditioningRole;
+}
+
 export interface VideoRecallMediaNames {
+  /** The LTX-2 whole-modality conditioning clip, which excludes every other slot below. */
+  conditioningClip: VideoRecallConditioningClip | null;
   firstFrameName: string | null;
   lastFrameName: string | null;
   sourceVideoName: string | null;
@@ -480,6 +507,7 @@ export const buildVideoRecallSettings = ({
   // recalled prompts must survive that. Merged in at each return instead.
   let promptPatch: Partial<VideoWidgetValues> | null = null;
   const mediaNames: VideoRecallMediaNames = {
+    conditioningClip: null,
     firstFrameName: null,
     lastFrameName: null,
     references: [],
@@ -732,10 +760,12 @@ export const buildVideoRecallSettings = ({
 
   const media = getRecallableMediaNames(metadata);
   const references = getRecallableReferences(metadata);
+  const conditioningClip = getRecallableConditioningClip(metadata);
   // Judged against the ORIGINAL panel state: the model transition above may
   // already have cleared media the new family cannot consume, and that change
   // is still part of what this recall did.
   const hadMedia = Boolean(
+    currentValues.conditioningClip ||
     currentValues.firstFrameImage ||
     currentValues.lastFrameImage ||
     currentValues.sourceVideo ||
@@ -746,10 +776,22 @@ export const buildVideoRecallSettings = ({
   // recall must reproduce the recorded media EXACTLY: whatever the panel held
   // is cleared, and the executor re-hydrates the recorded names on top.
   if (hadMedia) {
-    values = { ...values, firstFrameImage: null, lastFrameImage: null, references: [], sourceVideo: null };
+    values = {
+      ...values,
+      conditioningClip: null,
+      firstFrameImage: null,
+      lastFrameImage: null,
+      references: [],
+      sourceVideo: null,
+    };
   }
 
-  if (references.length > 0) {
+  if (conditioningClip) {
+    // First, and alone: the clip holds a whole modality clean, so no other slot could have been
+    // filled on the run being recalled.
+    mediaNames.conditioningClip = conditioningClip;
+    fields.push('media');
+  } else if (references.length > 0) {
     // References replace the frame slots, but a recorded source video rides
     // ALONGSIDE them: Ref2VA reference-extend appends the new clip to it.
     mediaNames.references = references;

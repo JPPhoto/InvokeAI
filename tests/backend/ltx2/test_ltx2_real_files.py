@@ -358,3 +358,91 @@ def test_an_image_conditioning_survives_the_round_trip_to_the_first_decoded_fram
     original = torch.from_numpy(np.asarray(source, dtype=np.float32) / 255.0).permute(2, 0, 1)
     psnr = 10 * torch.log10(1.0 / torch.mean((decoded[:, 0] - original) ** 2))
     assert float(psnr) > 25.0, f"the VAE round trip lost the conditioning frame ({float(psnr):.1f} dB)"
+
+
+@requires_weights
+def test_a_recording_encodes_to_the_audio_rate_the_transformer_reads_and_survives_the_round_trip() -> None:
+    """The conditioning front end against the released weights.
+
+    The release ships no standalone log-mel module: the transform is lifted off the vocoder's own
+    bandwidth-extension stage and re-strided to the audio VAE's hop. Two things have to hold for
+    that to be the right transform, and neither can be checked without the real filters.
+
+    First the *rate*: LTX-2 reads 25 audio latents per second everywhere else, and at the vocoder's
+    own hop (half the VAE's) this would produce 50 -- a clip conditioned at double speed.
+
+    Second the *domain*: generation decodes a latent to a mel and hands that mel to the vocoder, so
+    the mel this module computes has to be the one the VAE decoded. That is checked here directly,
+    by running the released chain forwards and this module backwards over the same signal: any
+    difference of filterbank, window or rate convention shows up as the two mels disagreeing, where
+    a shape check alone would pass. A mel basis left at its constructed zeros, for instance, has
+    exactly the right shape and represents silence.
+    """
+    from invokeai.backend.ltx2.audio_conditioning import build_mel_transform, encode_audio_latents
+    from invokeai.backend.ltx2.constants import LTX2_AUDIO_LATENTS_PER_SECOND
+    from invokeai.backend.ltx2.packing import denormalize_audio_latents, unpack_audio_latents
+    from invokeai.backend.util.audio_resample import resample_sinc
+
+    device = _accelerator()
+    audio_vae = _loader(LTX2FolderModel, device)._load_model(_folder_config(), SubModelType.AudioVAE)
+    vocoder = _loader(LTX2FolderModel, device)._load_model(_folder_config(), SubModelType.Vocoder)
+    audio_vae = audio_vae.to(device).eval()
+    vocoder = vocoder.to(device).eval()
+
+    vae_rate = int(audio_vae.config.sample_rate)
+    hop = int(audio_vae.config.mel_hop_length)
+    out_rate = int(vocoder.config.output_sampling_rate)
+    # The filterbank is fitted for the rate the vocoder is fed, which is the VAE's own -- the
+    # higher rate is what it synthesises. If these ever diverge, the transform is being applied to
+    # a signal it was not fitted for and everything below is measuring the wrong thing.
+    assert int(vocoder.config.input_sampling_rate) == vae_rate
+
+    # A 3 Hz amplitude-modulated tone: the loudness contour a soundtrack conditions a picture on.
+    seconds = 2.0
+    time = torch.arange(int(vae_rate * seconds), dtype=torch.float32) / vae_rate
+    tone = torch.sin(2 * torch.pi * 300 * time) * (0.5 + 0.5 * torch.sin(2 * torch.pi * 3 * time)) * 0.5
+    latents = encode_audio_latents(audio_vae, vocoder, torch.stack([tone, tone]), sample_rate=vae_rate)
+
+    assert latents.shape == (1, int(seconds * LTX2_AUDIO_LATENTS_PER_SECOND), 128)
+    assert torch.isfinite(latents).all()
+    # Denormalizing and unpacking has to land on the VAE's own 8-channel, 16-bin grid rather than a
+    # transposed or half-length one.
+    unpacked = unpack_audio_latents(
+        denormalize_audio_latents(latents, audio_vae.latents_mean.cpu(), audio_vae.latents_std.cpu())
+    )
+    assert unpacked.shape == (1, 8, int(seconds * LTX2_AUDIO_LATENTS_PER_SECOND), 16)
+
+    # Forwards through the release: a latent becomes the VAE's own mel, which the vocoder speaks.
+    with torch.inference_mode():
+        released = denormalize_audio_latents(
+            torch.randn(1, 75, 128, generator=torch.Generator().manual_seed(5)).cumsum(1).div(8.0).to(device),
+            audio_vae.latents_mean,
+            audio_vae.latents_std,
+        )
+        vae_mel = audio_vae.decode(
+            unpack_audio_latents(released).to(next(iter(audio_vae.parameters())).dtype), return_dict=False
+        )[0].float()
+        waveform = vocoder(vae_mel.to(next(iter(vocoder.parameters())).dtype))[0].float().cpu()
+
+    # Backwards through this module, over that waveform.
+    transform = build_mel_transform(vocoder, hop_length=hop)
+    audio = resample_sinc(waveform, out_rate, vae_rate)
+    padding = -audio.shape[-1] % hop
+    audio = torch.nn.functional.pad(audio, (0, padding)) if padding else audio
+    mine, *_ = transform(audio[None].to(device=device, dtype=transform.mel_basis.dtype).flatten(0, 1))
+    mine = mine.unflatten(0, (1, audio.shape[0])).transpose(2, 3).float()
+
+    assert mine.shape == vae_mel.shape, "the re-analysed mel is not the shape the VAE decodes to"
+
+    frames = min(vae_mel.shape[2], mine.shape[2])
+    pair = [side[..., :frames, :].flatten() for side in (vae_mel, mine)]
+    centered = [side - side.mean() for side in pair]
+    agreement = float((centered[0] * centered[1]).sum() / (centered[0].norm() * centered[1].norm()).clamp_min(1e-8))
+
+    # The residual is the vocoder's own phase reconstruction and the 48 k -> 16 k resample, not a
+    # difference of domain; a mismatched filterbank or rate lands far below this.
+    assert agreement > 0.9, f"this module's mel is not the one the VAE decoded ({agreement:.3f})"
+
+    del audio_vae, vocoder
+    gc.collect()
+    TorchDevice.empty_cache()

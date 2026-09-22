@@ -3,6 +3,7 @@
 import pytest
 import torch
 
+from invokeai.backend.ltx2.constants import LTX2_FRAME_MODULUS
 from invokeai.backend.ltx2.packing import (
     audio_latent_count,
     base_canvas,
@@ -12,6 +13,7 @@ from invokeai.backend.ltx2.packing import (
     require_patch_geometry,
     resolve_canvas,
     snap_num_frames,
+    snap_num_frames_down,
     unpack_audio_latents,
     unpack_video_latents,
     validate_canvas,
@@ -75,6 +77,25 @@ def test_snapping_a_frame_count_rounds_a_tie_up(requested: int, expected: int) -
     """A 5-frame request is equidistant from 1 and 9; a single still frame is not what it meant."""
     assert snap_num_frames(requested) == expected
     validate_num_frames(snap_num_frames(requested))
+
+
+@pytest.mark.parametrize("requested", [1, 8, 9, 10, 16, 17, 96, 97, 121, 481, 1000])
+def test_a_conditioning_clip_never_claims_more_frames_than_it_supplied(requested: int) -> None:
+    """Conditioning snaps DOWN where a request snaps to the nearest: a clip has the frames it has,
+    and rounding up would pad picture (or silence) for the model to hold clean. Stated as the
+    property rather than a table -- the largest valid count that does not exceed the input."""
+    snapped = snap_num_frames_down(requested)
+
+    validate_num_frames(snapped)
+    assert snapped <= requested
+    assert requested - snapped < LTX2_FRAME_MODULUS
+
+
+def test_snapping_down_a_count_under_one_frame_group_leaves_a_single_frame() -> None:
+    """The floor, which the conditioning nodes then reject as too short rather than generating it."""
+    assert snap_num_frames_down(0) == 1
+    assert snap_num_frames_down(1) == 1
+    assert snap_num_frames_down(8) == 1
 
 
 @pytest.mark.parametrize("size", [(704, 1250), (700, 1248), (0, 1248)])

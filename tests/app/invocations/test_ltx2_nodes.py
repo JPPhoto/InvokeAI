@@ -5,16 +5,28 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 import torch
 from PIL import Image
 
+import invokeai.app.invocations.ltx2.ltx2_audio_conditioning as ltx2_audio_conditioning
+import invokeai.app.invocations.ltx2.ltx2_video_conditioning as ltx2_video_conditioning
 import invokeai.app.invocations.vae.ltx2_latents_to_video as ltx2_latents_to_video
-from invokeai.app.invocations.fields import LatentsField, LTX2ConditioningField, LTX2VideoConditioningField
+from invokeai.app.invocations.fields import (
+    LatentsField,
+    LTX2AudioConditioningField,
+    LTX2ConditioningField,
+    LTX2FullVideoConditioningField,
+    LTX2VideoConditioningField,
+    VideoField,
+)
+from invokeai.app.invocations.ltx2.ltx2_audio_conditioning import LTX2AudioConditioningInvocation
 from invokeai.app.invocations.ltx2.ltx2_denoise import LTX2DenoiseInvocation
 from invokeai.app.invocations.ltx2.ltx2_ideal_dimensions import LTX2IdealDimensionsInvocation
 from invokeai.app.invocations.ltx2.ltx2_latent_upsample import LTX2LatentUpsampleInvocation
 from invokeai.app.invocations.ltx2.ltx2_model_loader import LTX2ModelLoaderInvocation
+from invokeai.app.invocations.ltx2.ltx2_video_conditioning import LTX2VideoConditioningInvocation
 from invokeai.app.invocations.model import (
     LTX2LatentUpsamplerField,
     LTX2TransformerField,
@@ -23,7 +35,14 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.invocations.vae.ltx2_latents_to_video import LTX2LatentsToVideoInvocation
+from invokeai.backend.ltx2.constants import (
+    LTX2_AUDIO_LATENT_CHANNELS,
+    LTX2_AUDIO_LATENT_MEL_BINS,
+    LTX2_LATENT_CHANNELS,
+)
+from invokeai.backend.ltx2.denoise import build_denoise_state
 from invokeai.backend.ltx2.image_conditioning import fit_to_canvas, recompress_h264
+from invokeai.backend.ltx2.packing import audio_latent_count, latent_frame_count, validate_num_frames
 from invokeai.backend.model_manager.configs.main import Main_Diffusers_LTX2_Config
 from invokeai.backend.model_manager.taxonomy import BaseModelType, LTX2VariantType, ModelFormat, ModelType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import LTX2ConditioningInfo
@@ -463,6 +482,284 @@ def test_the_refine_pass_forwards_the_noise_level_the_node_was_given(monkeypatch
         node.invoke(context)
 
     assert captured["noise_scale"] == 0.42
+
+
+# ---------------------------------------------------------------------------
+# Whole-modality conditioning: a clip's soundtrack, or its picture
+
+
+def _audio_conditioning(**kwargs) -> LTX2AudioConditioningInvocation:
+    defaults = {
+        "video": VideoField(video_name="clip.mp4"),
+        "audio_vae": VAEField(vae=_identifier("audio_vae")),
+        "vocoder": LTX2VocoderField(vocoder=_identifier("vocoder")),
+    }
+    return LTX2AudioConditioningInvocation(id="audio_cond", **{**defaults, **kwargs})
+
+
+def _video_conditioning(**kwargs) -> LTX2VideoConditioningInvocation:
+    defaults = {"video": VideoField(video_name="clip.mp4"), "vae": VAEField(vae=_identifier("vae"))}
+    return LTX2VideoConditioningInvocation(id="video_cond", **{**defaults, **kwargs})
+
+
+def _ltx2_vae_context(base: BaseModelType = BaseModelType.LTX2) -> MagicMock:
+    context = _context()
+    context.models.load.return_value.config.base = base
+    context.models.load.return_value.model_on_device.return_value.__enter__.return_value = (None, MagicMock())
+    return context
+
+
+def test_a_clip_with_no_soundtrack_says_so_instead_of_conditioning_on_silence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A silent clip would encode to a valid, uniformly quiet latent -- the model would hold it
+    clean and generate a picture scored against nothing."""
+    monkeypatch.setattr(ltx2_audio_conditioning, "extract_audio_pcm", lambda *_a, **_k: None)
+
+    with pytest.raises(ValueError, match="no audio track"):
+        _audio_conditioning().invoke(_ltx2_vae_context())
+
+
+@pytest.mark.parametrize("node", ["audio", "video"])
+def test_a_conditioning_node_refuses_a_vae_from_another_architecture(
+    monkeypatch: pytest.MonkeyPatch, node: str
+) -> None:
+    monkeypatch.setattr(ltx2_audio_conditioning, "extract_audio_pcm", lambda *_a, **_k: (np.zeros((2, 48000)), 48000))
+    invocation = _audio_conditioning() if node == "audio" else _video_conditioning()
+
+    with pytest.raises(ValueError, match="Expected an LTX-2"):
+        invocation.invoke(_ltx2_vae_context(BaseModelType.Wan))
+
+
+@pytest.mark.parametrize(
+    ("audio_latents", "fps", "expected_frames"),
+    [
+        # 25 audio latents per second: 100 latents is four seconds, which at 24 fps is 96 frames
+        # and snaps DOWN to 89 -- the clip is never asked to cover more picture than it has sound.
+        (100, 24.0, 89),
+        (100, 30.0, 113),
+        # A rate that divides evenly still snaps down rather than to the nearest.
+        (75, 24.0, 65),
+    ],
+)
+def test_the_soundtracks_length_decides_the_frame_count(
+    monkeypatch: pytest.MonkeyPatch, audio_latents: int, fps: float, expected_frames: int
+) -> None:
+    monkeypatch.setattr(ltx2_audio_conditioning, "extract_audio_pcm", lambda *_a, **_k: (np.zeros((2, 48000)), 48000))
+    monkeypatch.setattr(
+        ltx2_audio_conditioning,
+        "encode_audio_latents",
+        lambda *_a, **_k: torch.zeros(1, audio_latents, LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS),
+    )
+    context = _ltx2_vae_context()
+    context.tensors.save.return_value = "audio_conditioning"
+
+    output = _audio_conditioning(fps=fps).invoke(context)
+
+    assert output.num_frames == expected_frames
+    validate_num_frames(output.num_frames)
+    assert output.fps == fps
+    # The saved soundtrack is trimmed to the span the frame count covers, so the field reports that
+    # count rather than everything the encoder produced -- see the seam test below.
+    assert output.audio_conditioning.num_audio_latents == audio_latent_count(expected_frames, fps)
+    # The output field carries the clip back to the decode node, which muxes the original
+    # recording in place of the generated soundtrack.
+    assert output.audio_conditioning.source_video_name == "clip.mp4"
+
+
+@pytest.mark.parametrize(
+    ("audio_latents", "fps"),
+    [(100, 24.0), (100, 30.0), (75, 24.0), (125, 25.0), (251, 24.0), (1000, 60.0), (63, 16.0)],
+)
+def test_the_soundtrack_this_node_saves_is_the_one_the_denoise_asks_for(
+    monkeypatch: pytest.MonkeyPatch, audio_latents: int, fps: float
+) -> None:
+    """The seam between the two halves of audio-to-video, which neither side can check alone.
+
+    This node decides the frame count; `build_denoise_state` then sizes the audio stream from that
+    count and refuses a tensor of any other length. Because the count is snapped DOWN, it spans
+    slightly less than the recording -- so saving the whole encode makes the two disagree on every
+    real soundtrack, and the run dies after the text encoder has already paid for itself.
+    """
+    monkeypatch.setattr(ltx2_audio_conditioning, "extract_audio_pcm", lambda *_a, **_k: (np.zeros((2, 48000)), 48000))
+    monkeypatch.setattr(
+        ltx2_audio_conditioning,
+        "encode_audio_latents",
+        lambda *_a, **_k: torch.zeros(1, audio_latents, LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS),
+    )
+    saved: dict[str, torch.Tensor] = {}
+    context = _ltx2_vae_context()
+
+    def capture(tensor: torch.Tensor) -> str:
+        saved["latents"] = tensor
+        return "audio"
+
+    context.tensors.save.side_effect = capture
+
+    output = _audio_conditioning(fps=fps).invoke(context)
+
+    # The real denoise state, built exactly as the graph builds it: the node's own frame count and
+    # frame rate, and the tensor it actually saved.
+    state = build_denoise_state(
+        num_frames=output.num_frames,
+        height=512,
+        width=768,
+        fps=output.fps,
+        seed=1,
+        distilled=False,
+        num_steps=2,
+        frozen_audio_latents=saved["latents"],
+    )
+
+    assert state.audio_conditioning_mask is not None
+    assert state.audio_conditioning_mask.shape == (1, state.audio_latents_count)
+    assert state.audio_latents.shape[1] == state.audio_latents_count
+    # And the node reports what it saved, so the field is not a second, divergent source of truth.
+    assert output.audio_conditioning.num_audio_latents == saved["latents"].shape[1]
+
+
+def test_a_soundtrack_under_one_frame_group_is_refused_with_its_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ltx2_audio_conditioning, "extract_audio_pcm", lambda *_a, **_k: (np.zeros((2, 4800)), 48000))
+    monkeypatch.setattr(
+        ltx2_audio_conditioning,
+        "encode_audio_latents",
+        lambda *_a, **_k: torch.zeros(1, 5, LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS),
+    )
+
+    with pytest.raises(ValueError, match="0.20s long"):
+        _audio_conditioning().invoke(_ltx2_vae_context())
+
+
+def test_the_conditioning_clip_drops_its_ragged_tail_rather_than_padding_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Padding would invent picture for the model to score a soundtrack against; the frames past
+    the last whole group are simply not part of the generation."""
+    frames = [np.full((64, 64, 3), index % 256, dtype=np.uint8) for index in range(20)]
+    encoded: dict[str, torch.Tensor] = {}
+
+    monkeypatch.setattr(ltx2_video_conditioning, "iter_video_frames", lambda *_a, **_k: iter(frames))
+
+    def encode(pixels):
+        encoded["pixels"] = pixels
+        latent_frames = latent_frame_count(17)
+        return SimpleNamespace(
+            latent_dist=SimpleNamespace(
+                mode=lambda: torch.zeros(1, LTX2_LATENT_CHANNELS, latent_frames, 512 // 32, 768 // 32)
+            )
+        )
+
+    # The encode is tiled, so the stub carries the compression ratios and the tiling attributes
+    # `scoped_ltx2_tiling` snapshots and restores -- a VAE missing them is one this node cannot run.
+    vae = SimpleNamespace(
+        config=SimpleNamespace(scaling_factor=1.0),
+        enable_tiling=lambda **_kwargs: None,
+        encode=encode,
+        latents_mean=torch.zeros(LTX2_LATENT_CHANNELS),
+        latents_std=torch.ones(LTX2_LATENT_CHANNELS),
+        buffers=lambda: iter([]),
+        encoder=torch.nn.Identity(),
+        parameters=lambda: iter([torch.zeros(1)]),
+        spatial_compression_ratio=32,
+        temporal_compression_ratio=8,
+        use_framewise_encoding=False,
+        use_framewise_decoding=False,
+        use_tiling=False,
+    )
+    context = _ltx2_vae_context()
+    context.models.load.return_value.model_on_device.return_value.__enter__.return_value = (None, vae)
+    context.tensors.save.return_value = "video_conditioning"
+
+    output = _video_conditioning(width=768, height=512).invoke(context)
+
+    # 20 frames is two whole groups plus three: 17 frames run, three are dropped.
+    assert output.num_frames == 17
+    assert encoded["pixels"].shape == (1, 3, 17, 512, 768)
+    # And the frames arrive in [-1, 1] with the VAE's own scaling, not raw bytes. The conversion
+    # runs in the VAE's dtype to avoid a second copy of the clip, so the order of operations
+    # matters: `x / 127.5 - 1` cancels at mid-grey in bf16 and loses the value entirely.
+    sources = torch.tensor([index % 256 for index in range(17)], dtype=torch.float32)
+    expected = sources.div(127.5).sub(1.0)
+    assert torch.allclose(encoded["pixels"][0, 0, :, 0, 0].float(), expected, atol=2e-3)
+    assert output.video_conditioning.width == 768
+    assert output.video_conditioning.height == 512
+
+
+def test_a_conditioning_clip_under_one_frame_group_is_refused_with_its_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        ltx2_video_conditioning,
+        "iter_video_frames",
+        lambda *_a, **_k: iter([np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(5)]),
+    )
+
+    with pytest.raises(ValueError, match="decoded to 5 frame"):
+        _video_conditioning().invoke(_ltx2_vae_context())
+
+
+@pytest.mark.parametrize(
+    "conditioning",
+    [
+        {
+            "audio_conditioning": LTX2AudioConditioningField(
+                latents_name="audio", num_audio_latents=100, num_frames=89, fps=24.0, source_video_name="clip.mp4"
+            )
+        },
+        {
+            "full_video_conditioning": LTX2FullVideoConditioningField(
+                latents_name="video", width=1248, height=704, num_frames=89, fps=24.0
+            )
+        },
+    ],
+)
+def test_a_held_modality_cannot_be_combined_with_a_refine_pass(conditioning: dict) -> None:
+    """The refine pass re-noises every token, so the held stream would have to be re-encoded at the
+    second canvas. Refused before the transformer loads rather than silently dropped."""
+    node = _denoise(
+        latents=LatentsField(latents_name="upscaled"),
+        audio_latents=LatentsField(latents_name="audio"),
+        num_frames=89,
+        **conditioning,
+    )
+
+    with pytest.raises(ValueError, match="does not run a refine pass"):
+        node.invoke(_context())
+
+
+@pytest.mark.parametrize(
+    ("conditioning", "expected"),
+    [
+        (
+            {
+                "audio_conditioning": LTX2AudioConditioningField(
+                    latents_name="audio", num_audio_latents=93, num_frames=89, fps=30.0, source_video_name="clip.mp4"
+                )
+            },
+            "fps 30.0 vs 24.0",
+        ),
+        (
+            {
+                "full_video_conditioning": LTX2FullVideoConditioningField(
+                    latents_name="video", width=768, height=704, num_frames=89, fps=24.0
+                )
+            },
+            "width 768 vs 1248",
+        ),
+    ],
+)
+def test_a_conditioning_prepared_for_a_different_run_is_named_before_the_transformer_loads(
+    conditioning: dict, expected: str
+) -> None:
+    """`fps` is the one the latent shapes cannot catch -- no tensor encodes it -- and it sets the
+    audio stream's length, so a mismatch would quietly generate a soundtrack for the wrong
+    duration. The canvas and frame count are checked here too, where the message can name them."""
+    node = _denoise(num_frames=89, fps=24.0, width=1248, height=704, **conditioning)
+
+    with pytest.raises(ValueError, match=expected):
+        node.invoke(_context())
 
 
 class _StopAfterState(Exception):

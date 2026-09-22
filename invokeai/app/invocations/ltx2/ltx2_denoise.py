@@ -17,7 +17,9 @@ from invokeai.app.invocations.fields import (
     Input,
     InputField,
     LatentsField,
+    LTX2AudioConditioningField,
     LTX2ConditioningField,
+    LTX2FullVideoConditioningField,
     LTX2VideoConditioningField,
     OutputField,
 )
@@ -76,7 +78,7 @@ class LTX2DenoiseOutput(BaseInvocationOutput):
     title="Denoise - LTX-2",
     tags=["ltx", "ltx2", "video", "audio", "denoise"],
     category="latents",
-    version="1.1.0",
+    version="1.2.0",
     classification=Classification.Prototype,
 )
 class LTX2DenoiseInvocation(BaseInvocation):
@@ -106,6 +108,18 @@ class LTX2DenoiseInvocation(BaseInvocation):
         description=FieldDescriptions.ltx2_video_conditioning,
         input=Input.Connection,
         title="Image Conditioning",
+    )
+    audio_conditioning: LTX2AudioConditioningField | None = InputField(
+        default=None,
+        description=FieldDescriptions.ltx2_audio_conditioning,
+        input=Input.Connection,
+        title="Audio Conditioning",
+    )
+    full_video_conditioning: LTX2FullVideoConditioningField | None = InputField(
+        default=None,
+        description=FieldDescriptions.ltx2_full_video_conditioning,
+        input=Input.Connection,
+        title="Video Conditioning",
     )
     width: int = InputField(default=1248, gt=0, multiple_of=LTX2_CANVAS_MULTIPLE, description="Canvas width.")
     height: int = InputField(default=704, gt=0, multiple_of=LTX2_CANVAS_MULTIPLE, description="Canvas height.")
@@ -248,6 +262,24 @@ class LTX2DenoiseInvocation(BaseInvocation):
         assert isinstance(info, LTX2ConditioningInfo)
         return info
 
+    def _require_matching(
+        self,
+        node_title: str,
+        integers: dict[str, tuple[int, int]],
+        floats: dict[str, tuple[float, float]],
+    ) -> None:
+        """Refuse a conditioning encode prepared for a different run than this node will make."""
+        mismatched = [
+            f"{name} {theirs} vs {mine}"
+            for name, (theirs, mine) in ((*integers.items(), *floats.items()))
+            if (theirs != mine if name not in floats else abs(float(theirs) - float(mine)) > 1e-6)
+        ]
+        if mismatched:
+            raise ValueError(
+                f"The conditioning from {node_title} was prepared for a different run than this denoise: "
+                f"{', '.join(mismatched)}. Wire this node's own values into that one, or take its outputs."
+            )
+
     def _load_image_latents(self, context: InvocationContext) -> torch.Tensor | None:
         if self.video_conditioning is None:
             return None
@@ -281,6 +313,40 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 "Audio latents were wired without video latents. The refine pass takes both or neither; "
                 "a base pass generates its own audio."
             )
+        frozen = self.audio_conditioning is not None or self.full_video_conditioning is not None
+
+        # A refine pass re-noises every token, so a modality held clean in the base pass would be
+        # regenerated here unless it were re-applied -- and for video that needs a fresh encode at
+        # the refine canvas, exactly as the first frame does. Rather than silently drop the
+        # conditioning, the combination is refused until that path exists.
+        if frozen and self.latents is not None:
+            raise ValueError(
+                "Audio- and video-conditioned generation does not run a refine pass yet: the held "
+                "modality would have to be re-encoded at the second canvas. Use a single-stage "
+                "target resolution."
+            )
+
+        # The geometry each conditioning field carries is checked here rather than left to the
+        # latent-shape check in `build_denoise_state`: that one cannot see `fps` at all -- no tensor
+        # shape encodes it -- and a mismatch there would surface as a raw tuple after the text
+        # encoder has run. A graph that sets these separately from the node is a wiring mistake.
+        if self.audio_conditioning is not None:
+            self._require_matching(
+                "Audio Conditioning - LTX-2",
+                {"num_frames": (self.audio_conditioning.num_frames, self.num_frames)},
+                {"fps": (self.audio_conditioning.fps, self.fps)},
+            )
+        if self.full_video_conditioning is not None:
+            self._require_matching(
+                "Video Conditioning - LTX-2",
+                {
+                    "num_frames": (self.full_video_conditioning.num_frames, self.num_frames),
+                    "width": (self.full_video_conditioning.width, self.width),
+                    "height": (self.full_video_conditioning.height, self.height),
+                },
+                {"fps": (self.full_video_conditioning.fps, self.fps)},
+            )
+
         distilled = self._resolve_distilled()
         guidance = self._resolve_guidance(context, distilled)
         if distilled and self.steps != LTX2_DISTILLED_STEPS:
@@ -328,6 +394,16 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 num_steps=self.steps,
                 image_latents=self._load_image_latents(context),
                 conditioning_strength=self.video_conditioning.strength if self.video_conditioning else 1.0,
+                frozen_audio_latents=(
+                    context.tensors.load(self.audio_conditioning.latents_name)
+                    if self.audio_conditioning is not None
+                    else None
+                ),
+                frozen_video_latents=(
+                    context.tensors.load(self.full_video_conditioning.latents_name)
+                    if self.full_video_conditioning is not None
+                    else None
+                ),
             )
 
         device = TorchDevice.choose_torch_device()

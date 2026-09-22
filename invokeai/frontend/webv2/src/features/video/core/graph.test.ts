@@ -757,6 +757,9 @@ const LTX2_COMPONENTS: MainModelConfig = {
 };
 const LTX2_ENCODER = { base: 'ltx-2', key: 'gemma4', name: 'LTX-2.5 Text Encoder', type: 'gemma4_encoder' as const };
 
+/** A four-second 24 fps clip: 96 frames, which snaps DOWN to 89 on the VAE's 8n + 1 grid. */
+const LTX2_CLIP = { fps: 24, height: 704, numFrames: 96, video_name: 'clip.mp4', width: 1248 };
+
 const ltx2SettingsFor = (model: MainModelConfig, overrides: Partial<VideoSettings> = {}): VideoSettings =>
   settingsFor(model, {
     componentSourceModel: model.format === 'diffusers' ? null : LTX2_COMPONENTS,
@@ -920,6 +923,74 @@ describe('compileVideoGraph — LTX-2', () => {
     });
     // A single-stage run says nothing about stages rather than saying "one".
     expect(single.nodes.core_metadata).not.toHaveProperty('ltx2_two_stage');
+  });
+
+  it("conditions on a clip's soundtrack and takes the length from the encoder, not the panel", () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { conditioningClip: { clip: LTX2_CLIP, fpsKnown: true, role: 'audio' }, numFrames: 121 }),
+      model
+    );
+    const conditioning = nodeOfType(backendGraph, 'ltx2_audio_conditioning');
+    const output = nodeOfType(backendGraph, 'ltx2_latents_to_video');
+
+    expect(conditioning.video).toEqual({ video_name: LTX2_CLIP.video_name });
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', conditioning.id, 'audio_vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', conditioning.id, 'vocoder')).toBe(true);
+    expect(hasEdge(backendGraph, conditioning.id, 'audio_conditioning', 'denoise_latents', 'audio_conditioning')).toBe(
+      true
+    );
+    // The soundtrack's own length is authoritative: the panel's 121 gives way to the clip's 89,
+    // and the encoder's own count is wired in over even that.
+    expect(hasEdge(backendGraph, conditioning.id, 'num_frames', 'denoise_latents', 'num_frames')).toBe(true);
+    expect(backendGraph.nodes.denoise_latents).toMatchObject({ num_frames: 89 });
+    // The user's recording is muxed back in rather than a vocoder's copy of its own latents.
+    expect(hasEdge(backendGraph, conditioning.id, 'audio_conditioning', output.id, 'source_audio')).toBe(true);
+  });
+
+  it("conditions on a clip's picture at the canvas its own ratio resolves to", () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      // A 4:3 clip against a 16:9 preset: the clip wins, so the conditioning encode and the
+      // denoise have to agree on the canvas or `_load_image_latents`' geometry check fires.
+      ltx2SettingsFor(model, {
+        aspectRatioId: '16:9',
+        conditioningClip: { clip: { ...LTX2_CLIP, height: 480, width: 640 }, fpsKnown: true, role: 'video' },
+      }),
+      model
+    );
+    const conditioning = nodeOfType(backendGraph, 'ltx2_video_conditioning');
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    // Both sides come from the same expression, so equality alone would still hold if the canvas
+    // stopped following the clip -- they would simply both be 16:9. Pin the ratio itself.
+    expect(Number(denoise.width) / Number(denoise.height)).toBeCloseTo(4 / 3, 1);
+    expect(conditioning.width).toBe(denoise.width);
+    expect(conditioning.height).toBe(denoise.height);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', conditioning.id, 'vae')).toBe(true);
+    expect(
+      hasEdge(backendGraph, conditioning.id, 'video_conditioning', 'denoise_latents', 'full_video_conditioning')
+    ).toBe(true);
+    expect(hasEdge(backendGraph, conditioning.id, 'num_frames', 'denoise_latents', 'num_frames')).toBe(true);
+    // The picture is the given one, so the run adopts the clip's rate, not the panel's.
+    expect(denoise.fps).toBe(LTX2_CLIP.fps);
+    // Its own soundtrack is the thing being generated, so nothing is muxed back in.
+    expect(nodeOfType(backendGraph, 'ltx2_latents_to_video').source_audio).toBeUndefined();
+  });
+
+  it('records the conditioning clip and the frames that ran, for recall', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { conditioningClip: { clip: LTX2_CLIP, fpsKnown: true, role: 'audio' }, numFrames: 121 }),
+      model
+    );
+
+    expect(backendGraph.nodes.core_metadata).toMatchObject({
+      generation_mode: 'ltx2_a2v',
+      ltx2_conditioning_role: 'audio',
+      ltx2_conditioning_video: { video_name: LTX2_CLIP.video_name },
+      num_frames: 89,
+    });
   });
 
   it('encodes the negative prompt whenever either classifier-free scale will consume it', () => {

@@ -11,18 +11,55 @@ import type { SeedMode } from '@platform/core/seed';
  * How a video generation is conditioned. There is no explicit mode selector:
  * the mode is inferred from which inputs are filled — see `resolveVideoMode`.
  */
-export type VideoGenerationMode = 'txt2vid' | 'first-frame' | 'last-frame' | 'first-last' | 'extend' | 'reference';
+export type VideoGenerationMode =
+  | 'txt2vid'
+  | 'first-frame'
+  | 'last-frame'
+  | 'first-last'
+  | 'extend'
+  | 'reference'
+  | 'audio-to-video'
+  | 'video-to-audio';
 
-/** A gallery video selected as the clip to extend, with the trim range to keep. */
-export interface VideoSourceClip {
+/** A gallery video's identity and geometry, as the panel stores it. */
+export interface VideoClipRef {
   video_name: string;
   width: number;
   height: number;
   numFrames: number;
   fps: number;
+}
+
+/** A gallery video selected as the clip to extend, with the trim range to keep. */
+export interface VideoSourceClip extends VideoClipRef {
   /** Inclusive trim bounds forwarded to `extract_video_range`; negative indices count from the end. */
   startFrame: number;
   endFrame: number;
+}
+
+/** Which stream of a conditioning clip the model is given, and which it therefore generates. */
+export type VideoConditioningRole = 'audio' | 'video';
+
+/**
+ * A clip supplied as conditioning for the *other* modality: its soundtrack with the picture
+ * generated (`audio`), or its picture with the soundtrack generated (`video`).
+ *
+ * One slot rather than two, because the two modes are mutually exclusive -- LTX-2 holds one
+ * modality clean and samples the other, so a clip can only be given in one role at a time.
+ */
+export interface VideoConditioningClip {
+  /**
+   * Whole-clip, untrimmed: `ltx2_audio_conditioning` and `ltx2_video_conditioning` consume the
+   * whole recording, so trim bounds here would be state the graph does not honour.
+   */
+  clip: VideoClipRef;
+  role: VideoConditioningRole;
+  /**
+   * Whether the gallery actually knew the clip's frame rate. A video record's `fps` is nullable,
+   * and `clip.fps` then holds the panel's fallback -- a guess, which must not become the rate a
+   * held picture is played and timed at. False leaves the frame-rate control to the user.
+   */
+  fpsKnown: boolean;
 }
 
 /**
@@ -117,6 +154,8 @@ export interface VideoSettings {
    * linked tail reference provides continuity).
    */
   sourceVideo: VideoSourceClip | null;
+  /** A clip conditioning the opposite modality; null unless the family offers a2v/v2a. */
+  conditioningClip: VideoConditioningClip | null;
   /**
    * Ref2VA references, in conditioning order (up to 3 videos and 9 images).
    * Mutually exclusive with `firstFrameImage`/`lastFrameImage`; `sourceVideo`

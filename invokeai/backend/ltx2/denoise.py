@@ -4,7 +4,7 @@ One transformer forward produces both modalities' velocity predictions, so a gui
 pass for video *and* audio; the two are combined separately afterwards (see
 :mod:`invokeai.backend.ltx2.guidance`) and stepped down the same sigma schedule.
 
-Conditioning -- a first frame today, keyframes and a frozen modality later -- is carried by one
+Conditioning -- a first frame or a whole held modality today, keyframes later -- is carried by one
 mechanism: a per-token mask over the packed video sequence. A conditioned token's timestep is
 forced to 0 for every forward, and its value is restored from the clean latents after every step,
 so the anchor neither drifts nor gets renoised by the ancestral sampler.
@@ -78,6 +78,17 @@ class LTX2DenoiseState:
     eta: float
     noise_seed: int
 
+    audio_conditioning_mask: torch.Tensor | None = None
+    """How strongly each audio row is held to its conditioning, 0 (free) to 1 (clean).
+
+    Shape: (1, audio latents). The mirror of ``conditioning_mask`` on the other modality: LTX-2
+    conditions both streams through one mechanism, so audio-to-video is an all-ones mask here and
+    video-to-audio is an all-ones mask on the video side.
+    """
+
+    clean_audio_latents: torch.Tensor | None = None
+    """Packed, normalized audio latents the mask holds rows to. Shape: (1, audio latents, 128)."""
+
     @property
     def num_steps(self) -> int:
         return self.sigmas.numel() - 1
@@ -94,13 +105,33 @@ def build_denoise_state(
     num_steps: int,
     image_latents: torch.Tensor | None = None,
     conditioning_strength: float = 1.0,
+    frozen_audio_latents: torch.Tensor | None = None,
+    frozen_video_latents: torch.Tensor | None = None,
 ) -> LTX2DenoiseState:
     """Noise, schedule and conditioning mask for one run.
 
     ``image_latents`` is a clean, normalized ``(1, 128, 1, h, w)`` encode of the first frame; when
     given it becomes latent frame 0, held to ``conditioning_strength``. Noise is drawn on the CPU
     (video first, then audio) so a request is reproducible across devices.
+
+    ``frozen_audio_latents`` and ``frozen_video_latents`` hold a whole modality clean instead: the
+    first is audio-to-video, the second video-to-audio. They are the same mask mechanism as the
+    first frame, with every row set rather than one -- which is why the two modes need no machinery
+    of their own beyond an encode. Giving both would leave nothing to sample, so it is refused.
     """
+    if frozen_audio_latents is not None and frozen_video_latents is not None:
+        raise ValueError(
+            "Audio and video cannot both be held: that would leave nothing for the model to generate. "
+            "Condition on one modality or the other."
+        )
+    # A held clip already covers frame 0, so the first-frame encode would be overwritten rather
+    # than combined -- two different pictures asked for in the same rows. Holding a soundtrack
+    # alongside a first frame is a different matter and stays allowed: those are separate streams.
+    if frozen_video_latents is not None and image_latents is not None:
+        raise ValueError(
+            "A first frame cannot be combined with a whole-clip video conditioning: the clip already "
+            "supplies frame 0. Wire one or the other."
+        )
     validate_canvas(height, width)
     validate_num_frames(num_frames)
 
@@ -148,9 +179,36 @@ def build_denoise_state(
         conditioning_mask = pack_video_latents(mask).squeeze(-1)
         video_latents = torch.lerp(video_latents, clean_video_latents, conditioning_mask.unsqueeze(-1))
 
+    audio_latents = pack_audio_latents(audio_noise)
+    audio_conditioning_mask: torch.Tensor | None = None
+    clean_audio_latents: torch.Tensor | None = None
+
+    if frozen_audio_latents is not None:
+        expected_audio = (1, audio_count, LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS)
+        if tuple(frozen_audio_latents.shape) != expected_audio:
+            raise ValueError(
+                f"The conditioning soundtrack is {tuple(frozen_audio_latents.shape)} but a "
+                f"{num_frames}-frame clip at {fps:g} fps needs {expected_audio}. Derive the frame "
+                f"count from the soundtrack rather than setting it separately."
+            )
+        clean_audio_latents = frozen_audio_latents.to(device="cpu", dtype=torch.float32)
+        audio_conditioning_mask = torch.ones((1, audio_count), dtype=torch.float32)
+        audio_latents = clean_audio_latents.clone()
+
+    if frozen_video_latents is not None:
+        expected_video = (1, LTX2_LATENT_CHANNELS, latent_frames, latent_height, latent_width)
+        if tuple(frozen_video_latents.shape) != expected_video:
+            raise ValueError(
+                f"The conditioning clip is {tuple(frozen_video_latents.shape)} but {width}x{height} "
+                f"at {num_frames} frames needs {expected_video}."
+            )
+        clean_video_latents = pack_video_latents(frozen_video_latents.to(device="cpu", dtype=torch.float32))
+        conditioning_mask = torch.ones((1, clean_video_latents.shape[1]), dtype=torch.float32)
+        video_latents = clean_video_latents.clone()
+
     return LTX2DenoiseState(
         video_latents=video_latents,
-        audio_latents=pack_audio_latents(audio_noise),
+        audio_latents=audio_latents,
         sigmas=build_sigmas(
             distilled=distilled,
             num_steps=num_steps,
@@ -162,6 +220,8 @@ def build_denoise_state(
         audio_latents_count=audio_count,
         conditioning_mask=conditioning_mask,
         clean_video_latents=clean_video_latents,
+        audio_conditioning_mask=audio_conditioning_mask,
+        clean_audio_latents=clean_audio_latents,
         # LTX-2.5 samples its distilled schedule ancestrally and its shifted schedule
         # deterministically; eta is what selects between the two branches of one step.
         eta=LTX2_ANCESTRAL_ETA if distilled else 0.0,
@@ -310,6 +370,12 @@ def denoise(
         conditioning_mask = state.conditioning_mask.to(device=device, dtype=torch.float32)
         clean_video_latents = state.clean_video_latents.to(device=device, dtype=torch.float32)
 
+    audio_mask = clean_audio_latents = None
+    if state.audio_conditioning_mask is not None:
+        assert state.clean_audio_latents is not None
+        audio_mask = state.audio_conditioning_mask.to(device=device, dtype=torch.float32)
+        clean_audio_latents = state.clean_audio_latents.to(device=device, dtype=torch.float32)
+
     # Three of the four passes read the *same* conditioning and differ only in their model flags,
     # so the device copies are made once per distinct conditioning rather than once per pass.
     positive_encoders = _encoder_inputs(positive, device=device, dtype=dtype)
@@ -337,6 +403,7 @@ def denoise(
             # A conditioned token is presented as fully denoised; `sigma`/`audio_sigma` stay the
             # plain step value, which is what the prompt-AdaLN and the cross-modality gates read.
             video_timestep = timestep if conditioning_mask is None else timestep.unsqueeze(-1) * (1 - conditioning_mask)
+            audio_timestep = timestep if audio_mask is None else timestep.unsqueeze(-1) * (1 - audio_mask)
 
             video_input = video_latents.to(dtype)
             audio_input = audio_latents.to(dtype)
@@ -347,7 +414,7 @@ def denoise(
                     hidden_states=video_input,
                     audio_hidden_states=audio_input,
                     timestep=video_timestep,
-                    audio_timestep=timestep,
+                    audio_timestep=audio_timestep,
                     sigma=timestep,
                     num_frames=state.latent_frames,
                     height=state.latent_height,
@@ -374,6 +441,8 @@ def denoise(
             audio_x0 = guidance.combine_audio(audio_predictions)
             if conditioning_mask is not None:
                 video_x0 = torch.lerp(video_x0, clean_video_latents, conditioning_mask.unsqueeze(-1))
+            if audio_mask is not None:
+                audio_x0 = torch.lerp(audio_x0, clean_audio_latents, audio_mask.unsqueeze(-1))
 
             if step_callback is not None:
                 step_callback(index + 1, total_steps, video_x0)
@@ -388,6 +457,8 @@ def denoise(
                 # token's own value and its (already blended) prediction, which for a fully clean
                 # anchor is the anchor, and for a partial one is the interpolation the mask asks for.
                 video_latents = torch.lerp(video_latents, clean_video_latents, conditioning_mask.unsqueeze(-1))
+            if audio_mask is not None and state.eta > 0:
+                audio_latents = torch.lerp(audio_latents, clean_audio_latents, audio_mask.unsqueeze(-1))
 
     return video_latents, audio_latents
 

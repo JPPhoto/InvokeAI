@@ -35,6 +35,7 @@ import {
   LTX2_NUM_FRAMES_MIN,
   LTX2_NUM_FRAMES_SLIDER_MAX,
   LTX2_NUM_FRAMES_STEP,
+  ltx2FramesForClip,
   MINIMAX_H3_FPS,
   MINIMAX_H3_NUM_FRAMES_CHOICES,
   MINIMAX_H3_NUM_FRAMES_DEFAULT,
@@ -349,9 +350,9 @@ const LTX2_COMMON = {
   fps: { defaultValue: LTX2_FPS_DEFAULT, editable: true, max: LTX2_FPS_MAX, min: LTX2_FPS_MIN },
   frames: LTX2_FRAMES,
   minSteps: 1,
-  // Text-to-video and first-frame image-to-video, both with a generated
-  // soundtrack. Keyframes, extension and the audio-conditioned modes follow.
-  modes: ['txt2vid', 'first-frame'] as const,
+  // Text-to-video and first-frame image-to-video, both with a generated soundtrack, plus the two
+  // whole-modality conditioned modes. Keyframes and extension follow.
+  modes: ['txt2vid', 'first-frame', 'audio-to-video', 'video-to-audio'] as const,
   pixelMultiple: LTX2_CANVAS_MULTIPLE,
   targetResolutions: LTX2_TARGET_RESOLUTION_OPTIONS,
 };
@@ -488,6 +489,15 @@ const getVideoConfig = (
   model: Pick<MainModelConfig, 'base' | 'type' | 'variant' | 'format'> | undefined
 ): VideoVariantConfig => getVideoVariantConfig(model) ?? FALLBACK_VARIANT_CONFIG;
 
+/**
+ * Whether a mode can run a two-stage target resolution. A conditioning clip cannot: `ltx2_denoise`
+ * refuses a refine pass alongside a held-clean modality, because the refine pass re-noises every
+ * token and the held stream would have to be re-encoded at the refine canvas the way a first frame
+ * is. Asked by validation and by the graph-coverage matrix, so the two cannot disagree.
+ */
+export const isTwoStageSupportedForMode = (mode: VideoGenerationMode): boolean =>
+  mode !== 'audio-to-video' && mode !== 'video-to-audio';
+
 export const getVideoModes = (model: MainModelConfig | undefined): readonly VideoGenerationMode[] =>
   getVideoConfig(model).modes;
 
@@ -553,7 +563,7 @@ export const isValidVideoNumFrames = (model: MainModelConfig | undefined, numFra
   );
 };
 
-export type VideoDimensionSource = 'aspect-ratio' | 'first-frame' | 'last-frame' | 'source-video';
+export type VideoDimensionSource = 'aspect-ratio' | 'first-frame' | 'last-frame' | 'source-video' | 'conditioning-clip';
 
 export interface ResolvedVideoDimensions extends VideoDimensions {
   source: VideoDimensionSource;
@@ -571,19 +581,29 @@ export const getVideoDimensions = (
   model: MainModelConfig | undefined,
   settings: Pick<
     VideoSettings,
-    'aspectRatioId' | 'targetResolution' | 'firstFrameImage' | 'lastFrameImage' | 'sourceVideo'
+    'aspectRatioId' | 'targetResolution' | 'firstFrameImage' | 'lastFrameImage' | 'sourceVideo' | 'conditioningClip'
   >
 ): ResolvedVideoDimensions | null => {
   const config = getVideoConfig(model);
   const targetResolution = coerceTargetResolution(config, settings.targetResolution);
 
-  const media = settings.sourceVideo
-    ? { ...settings.sourceVideo, source: 'source-video' as const }
-    : settings.firstFrameImage
-      ? { ...settings.firstFrameImage, source: 'first-frame' as const }
-      : settings.lastFrameImage
-        ? { ...settings.lastFrameImage, source: 'last-frame' as const }
-        : null;
+  // Only in the `video` role: there the clip's picture *is* the generation, fitted to the canvas
+  // the preset picks for its ratio. In the `audio` role the picture is what gets made, so the
+  // aspect-ratio control still owns the frame.
+  const conditioningPicture =
+    settings.conditioningClip?.role === 'video' && config.modes.includes('video-to-audio')
+      ? settings.conditioningClip.clip
+      : null;
+
+  const media = conditioningPicture
+    ? { ...conditioningPicture, source: 'conditioning-clip' as const }
+    : settings.sourceVideo
+      ? { ...settings.sourceVideo, source: 'source-video' as const }
+      : settings.firstFrameImage
+        ? { ...settings.firstFrameImage, source: 'first-frame' as const }
+        : settings.lastFrameImage
+          ? { ...settings.lastFrameImage, source: 'last-frame' as const }
+          : null;
 
   const inputs = media ?? { ...getVideoAspectRatioParts(settings.aspectRatioId), source: 'aspect-ratio' as const };
 
@@ -600,6 +620,50 @@ export const getVideoDimensions = (
           );
 
   return dimensions ? { ...dimensions, source: inputs.source } : null;
+};
+
+/**
+ * The frame count and frame rate a run will actually use. A conditioning clip decides both for
+ * the modality it holds clean: its picture is as long as it is, and its soundtrack covers as many
+ * frames as the chosen rate spans. The panel's own stored values are left untouched underneath, so
+ * clearing the clip restores what the user had set.
+ *
+ * Only ever the clip's when the model supports the mode -- a clip left behind by a model switch is
+ * stale state the panel offers to clear, not a timing source.
+ */
+export interface EffectiveVideoTiming {
+  numFrames: number;
+  fps: number;
+  /** True when the conditioning clip decided the value, i.e. the control is showing a derived number. */
+  numFramesFromClip: boolean;
+  fpsFromClip: boolean;
+}
+
+export const getEffectiveVideoTiming = (
+  model: MainModelConfig | undefined,
+  settings: Pick<
+    VideoSettings,
+    'conditioningClip' | 'firstFrameImage' | 'fps' | 'lastFrameImage' | 'numFrames' | 'references' | 'sourceVideo'
+  >
+): EffectiveVideoTiming => {
+  const conditioning = settings.conditioningClip;
+
+  if (!conditioning || !getVideoConfig(model).modes.includes(resolveVideoMode(settings))) {
+    return { fps: settings.fps, fpsFromClip: false, numFrames: settings.numFrames, numFramesFromClip: false };
+  }
+
+  // The picture is the given one, so its own rate is the run's -- but only when the gallery knew
+  // that rate. A generated picture is made at whatever rate the panel asks for, and only the
+  // length follows from the soundtrack.
+  const fpsFromClip = conditioning.role === 'video' && conditioning.fpsKnown;
+  const fps = fpsFromClip ? conditioning.clip.fps : settings.fps;
+
+  return {
+    fps,
+    fpsFromClip,
+    numFrames: ltx2FramesForClip(conditioning, fps),
+    numFramesFromClip: true,
+  };
 };
 
 export const getVideoPromptPolicy = (
@@ -1598,6 +1662,7 @@ export const getDefaultVideoSettings = (
     batchCount: 1,
     cfgScale: config.defaults.cfgScale,
     cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
+    conditioningClip: null,
     // A single-file H3 main cannot run without a Diffusers install in the
     // Model Components slot, so defaults (and reset, which reuses them) seed
     // one from the catalog instead of starting un-invokable.
@@ -1749,6 +1814,14 @@ export const getVideoModelSelectionResult = ({
   if (next.sourceVideo && !modes.includes('extend') && !config.references?.extend) {
     next.sourceVideo = null;
     addClearedLabel(clearedLabels, 'Initial video');
+  }
+
+  if (next.conditioningClip && !modes.includes(resolveVideoMode(next))) {
+    // Left behind, this is the one slot that still drives the canvas on a family that cannot run
+    // it -- and it disables the aspect-ratio control while doing so, so the panel could not be
+    // corrected from the panel.
+    next.conditioningClip = null;
+    addClearedLabel(clearedLabels, 'Conditioning clip');
   }
 
   // The frame count is snapped BEFORE the tail reference is derived: the window
@@ -1986,12 +2059,14 @@ export const getVideoModelSelectionResult = ({
 // Validation
 
 const VIDEO_MODE_DESCRIPTIONS: Record<VideoGenerationMode, string> = {
+  'audio-to-video': 'generating video for an existing soundtrack',
   extend: 'extending a video',
   'first-frame': 'starting from a first frame',
   'first-last': 'first-to-last-frame interpolation',
   'last-frame': 'ending on a last frame',
   reference: 'reference-conditioned generation',
   txt2vid: 'text-to-video',
+  'video-to-audio': 'generating a soundtrack for an existing clip',
 };
 
 const hasModelKey = (models: readonly ModelConfig[], key: string, type?: string): boolean =>
@@ -2054,6 +2129,17 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     reasons.push('A first frame and an initial video cannot be combined. Clear one of them.');
   }
 
+  if (
+    settings.conditioningClip &&
+    (settings.firstFrameImage || settings.lastFrameImage || settings.sourceVideo || settings.references.length > 0)
+  ) {
+    // Every one of these writes into the same conditioning mask the clip fills wholesale, and
+    // `resolveVideoMode` would silently drop the clip rather than run something it cannot express.
+    reasons.push(
+      'A conditioning clip cannot be combined with first/last frames, an initial video or references. Clear one side.'
+    );
+  }
+
   if (settings.references.length > 0 && (settings.firstFrameImage || settings.lastFrameImage)) {
     reasons.push('References cannot be combined with first/last frames. Clear one side.');
   }
@@ -2112,21 +2198,41 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     }
   }
 
-  if (!isValidVideoNumFrames(model, settings.numFrames)) {
-    reasons.push(
+  // The effective values rather than the stored ones: a conditioning clip decides both, and the
+  // stored numbers it overrides are the user's own -- still theirs once the clip is cleared.
+  const timing = getEffectiveVideoTiming(model, settings);
+
+  if (!isValidVideoNumFrames(model, timing.numFrames)) {
+    const framesFloor = config.frames.kind === 'grid' ? config.frames.min : (config.frames.choices[0] ?? 0);
+    const framesCeiling =
       config.frames.kind === 'grid'
-        ? `Frame count must be between ${config.frames.min} and ${config.frames.max} in steps of ${config.frames.step} (${describeVideoFramesGrid(config.frames)}).`
-        : `Frame count must be one of the ${model.name} grid values (17·n + 5, ${config.frames.choices[0]}–${config.frames.choices[config.frames.choices.length - 1]}).`
+        ? config.frames.max
+        : (config.frames.choices[config.frames.choices.length - 1] ?? 0);
+
+    reasons.push(
+      timing.numFramesFromClip
+        ? `The conditioning clip works out to ${timing.numFrames} frames, outside the ${framesFloor}-${framesCeiling} ${model.name} generates. Use a ${timing.numFrames < framesFloor ? 'longer' : 'shorter'} clip${settings.conditioningClip?.role === 'audio' ? ', or change the frame rate' : ''}.`
+        : config.frames.kind === 'grid'
+          ? `Frame count must be between ${config.frames.min} and ${config.frames.max} in steps of ${config.frames.step} (${describeVideoFramesGrid(config.frames)}).`
+          : `Frame count must be one of the ${model.name} grid values (17·n + 5, ${config.frames.choices[0]}–${config.frames.choices[config.frames.choices.length - 1]}).`
     );
   }
 
   // fps and steps are integer fields on the backend nodes; a fractional value
-  // would fail pydantic coercion at enqueue, so reject it here instead.
-  if (!Number.isInteger(settings.fps) || settings.fps < config.fps.min || settings.fps > config.fps.max) {
+  // would fail pydantic coercion at enqueue, so reject it here instead. A rate read off a clip is
+  // exempt from the integer rule -- LTX-2's own fps fields are floats, and 29.97 is a real clip.
+  if (
+    !Number.isFinite(timing.fps) ||
+    (!timing.fpsFromClip && !Number.isInteger(timing.fps)) ||
+    timing.fps < config.fps.min ||
+    timing.fps > config.fps.max
+  ) {
     reasons.push(
-      config.fps.editable
-        ? `FPS must be a whole number between ${config.fps.min} and ${config.fps.max}.`
-        : `${model.name} generates at a fixed ${config.fps.defaultValue} FPS.`
+      timing.fpsFromClip
+        ? `The conditioning clip runs at ${timing.fps} fps, outside the ${config.fps.min}-${config.fps.max} fps range ${model.name} supports.`
+        : config.fps.editable
+          ? `FPS must be a whole number between ${config.fps.min} and ${config.fps.max}.`
+          : `${model.name} generates at a fixed ${config.fps.defaultValue} FPS.`
     );
   }
 
@@ -2138,6 +2244,15 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
   // only re-enter its schedule at the bottom -- which the backend refuses, after the base pass and
   // the upscale have already run. Refused here so the cost is never paid.
   const preset = config.targetResolutions.find((option) => option.id === settings.targetResolution);
+
+  // `ltx2_denoise` refuses a refine pass alongside a held-clean modality: the refine pass re-noises
+  // every token, so the conditioning would have to be re-encoded at the refine canvas the way a
+  // first frame is. Caught here, before the base pass and the upscale have been paid for.
+  if (preset?.stages === 2 && !isTwoStageSupportedForMode(mode)) {
+    reasons.push(
+      `${VIDEO_MODE_DESCRIPTIONS[mode][0]?.toUpperCase()}${VIDEO_MODE_DESCRIPTIONS[mode].slice(1)} does not run a two-stage target resolution. Pick a single-stage resolution, or clear the conditioning clip.`
+    );
+  }
 
   if (preset?.stages === 2 && Number.isInteger(settings.steps) && settings.steps < LTX2_MIN_TWO_STAGE_STEPS) {
     reasons.push(

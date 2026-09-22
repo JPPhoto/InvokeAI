@@ -8,6 +8,8 @@ import torch
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.backend.ltx2.constants import (
     LTX2_ANCESTRAL_NOISE_SEED_OFFSET,
+    LTX2_AUDIO_LATENT_CHANNELS,
+    LTX2_AUDIO_LATENT_MEL_BINS,
     LTX2_LATENT_CHANNELS,
     LTX2_REFINE_NOISE_SEED_OFFSET,
     LTX2_STAGE_2_NOISE_SCALE,
@@ -40,7 +42,7 @@ def _conditioning(seed: int) -> LTX2ConditioningInfo:
 class TransformerStub(torch.nn.Module):
     """Returns a velocity that denoises toward a fixed target, and records every call."""
 
-    def __init__(self, target: torch.Tensor | None = None) -> None:
+    def __init__(self, target: torch.Tensor | None = None, audio_target: torch.Tensor | None = None) -> None:
         super().__init__()
         self.config = SimpleNamespace(timestep_scale_multiplier=1000, patch_size=1, patch_size_t=1)
         self.rope = SimpleNamespace(
@@ -52,17 +54,20 @@ class TransformerStub(torch.nn.Module):
         self.transformer_blocks = torch.nn.ModuleList([torch.nn.Identity()])
         self.calls: list[dict] = []
         self.target = target
+        self.audio_target = audio_target
 
     def forward(self, **kwargs):
         # Run the block the cancel hook is attached to, the way the real forward does.
         self.transformer_blocks[0](kwargs["hidden_states"])
         self.calls.append(kwargs)
         video, audio = kwargs["hidden_states"].float(), kwargs["audio_hidden_states"].float()
-        if self.target is None:
-            return torch.zeros_like(video), torch.zeros_like(audio)
-        # x0 = x - sigma * v, so this velocity predicts `target` at any sigma.
+        # x0 = x - sigma * v, so this velocity predicts the target at any sigma.
         sigma = float(kwargs["sigma"][0]) / 1000.0
-        return (video - self.target) / max(sigma, 1e-6), torch.zeros_like(audio)
+        video_velocity = torch.zeros_like(video) if self.target is None else (video - self.target) / max(sigma, 1e-6)
+        audio_velocity = (
+            torch.zeros_like(audio) if self.audio_target is None else (audio - self.audio_target) / max(sigma, 1e-6)
+        )
+        return video_velocity, audio_velocity
 
 
 def _denoise(transformer, state, guidance, negative=None, **kwargs):
@@ -185,8 +190,140 @@ def test_the_ancestral_branch_renoises_and_puts_the_anchor_back() -> None:
     )
     assert state.eta == 1.0
 
-    video, _ = _denoise(TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS)), state, LTX2Guidance(**OFF))
+    transformer = TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS))
+    video, _ = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    # At every forward, not just at the end: the final step lands on x0 whatever came before it, so
+    # an output-only check would pass with the anchor re-noised at each of the seven steps between.
+    anchor_rows = LATENT[1] * LATENT[2]
+    packed_anchor = pack_video_latents(image_latents)
+    for call in transformer.calls:
+        assert torch.allclose(call["hidden_states"].float()[:, :anchor_rows], packed_anchor, atol=1e-5)
     assert torch.allclose(unpack_video_latents(video, *LATENT)[:, :, :1], image_latents, atol=1e-5)
+
+
+AUDIO_ROWS = audio_latent_count(FRAMES, 24.0)
+AUDIO_WIDTH = LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS
+
+
+def _soundtrack(seed: int = 3) -> torch.Tensor:
+    return torch.randn(1, AUDIO_ROWS, AUDIO_WIDTH, generator=torch.Generator().manual_seed(seed))
+
+
+def _clip(seed: int = 4) -> torch.Tensor:
+    return torch.randn(1, LTX2_LATENT_CHANNELS, *LATENT, generator=torch.Generator().manual_seed(seed))
+
+
+def test_a_held_soundtrack_is_clean_at_every_forward_while_the_picture_is_sampled() -> None:
+    """Audio-to-video is the first-frame mechanism with every audio row set instead of one video
+    row. The model has to be HANDED the recording at every forward -- a soundtrack that only
+    reappeared in the output would have been a different one all the way through the run, which is
+    what the picture was actually scored against."""
+    soundtrack = _soundtrack()
+    # An audio target the model would pull toward if the rows were not held, so "unchanged" is a
+    # statement about the mask rather than about a stub that predicts no motion.
+    transformer = TransformerStub(
+        target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS), audio_target=torch.zeros(1, AUDIO_ROWS, AUDIO_WIDTH)
+    )
+
+    video, audio = _denoise(transformer, _state(frozen_audio_latents=soundtrack), LTX2Guidance(**OFF))
+
+    for call in transformer.calls:
+        assert call["audio_timestep"].shape == (1, AUDIO_ROWS)
+        assert torch.equal(call["audio_timestep"][0], torch.zeros(AUDIO_ROWS))
+        assert torch.allclose(call["audio_hidden_states"].float(), soundtrack, atol=1e-5)
+        # The picture is what is being generated, so its rows are noised as usual.
+        assert (call["timestep"] > 0).all()
+
+    assert torch.allclose(audio, soundtrack, atol=1e-5)
+    assert not torch.allclose(video, torch.zeros_like(video))
+
+
+def test_a_held_picture_is_clean_at_every_forward_while_the_soundtrack_is_sampled() -> None:
+    clip = _clip()
+    packed = pack_video_latents(clip)
+    # The soundtrack is what is being generated here, so the stub has to actually move it --
+    # otherwise "the audio was sampled" is a statement about a stub that predicts no motion.
+    transformer = TransformerStub(
+        target=torch.zeros(1, ROWS, LTX2_LATENT_CHANNELS),
+        audio_target=torch.full((1, AUDIO_ROWS, AUDIO_WIDTH), 5.0),
+    )
+
+    video, audio = _denoise(transformer, _state(frozen_video_latents=clip), LTX2Guidance(**OFF))
+
+    for call in transformer.calls:
+        assert call["timestep"].shape == (1, ROWS)
+        assert torch.equal(call["timestep"][0], torch.zeros(ROWS))
+        assert torch.allclose(call["hidden_states"].float(), packed, atol=1e-5)
+        assert (call["audio_timestep"] > 0).all()
+
+    assert torch.allclose(unpack_video_latents(video, *LATENT), clip, atol=1e-5)
+    assert torch.allclose(audio, torch.full((1, AUDIO_ROWS, AUDIO_WIDTH), 5.0), atol=1e-4)
+
+
+def test_the_ancestral_branch_puts_a_held_soundtrack_back() -> None:
+    """The distilled schedule re-noises every row at every step; without the restore the held
+    soundtrack would drift away from the recording it was encoded from."""
+    soundtrack = _soundtrack()
+    state = build_denoise_state(
+        num_frames=FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        fps=24.0,
+        seed=7,
+        distilled=True,
+        num_steps=8,
+        frozen_audio_latents=soundtrack,
+    )
+
+    transformer = TransformerStub(audio_target=torch.zeros(1, AUDIO_ROWS, AUDIO_WIDTH))
+    _, audio = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    # Every forward, not just the output: the last step lands on x0 whatever happened before it,
+    # so an output-only check would pass with the recording re-noised at every step in between.
+    for call in transformer.calls:
+        assert torch.allclose(call["audio_hidden_states"].float(), soundtrack, atol=1e-5)
+    assert torch.allclose(audio, soundtrack, atol=1e-5)
+
+
+def test_a_first_frame_still_anchors_a_soundtrack_conditioned_run() -> None:
+    """The two hold different streams, so they compose: a picture that starts from a given frame
+    and follows a given soundtrack."""
+    image_latents = torch.randn(1, LTX2_LATENT_CHANNELS, 1, LATENT[1], LATENT[2])
+    state = _state(image_latents=image_latents, frozen_audio_latents=_soundtrack())
+
+    video, audio = _denoise(
+        TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS)), state, LTX2Guidance(**OFF)
+    )
+
+    assert torch.allclose(unpack_video_latents(video, *LATENT)[:, :, :1], image_latents, atol=1e-5)
+    assert torch.allclose(audio, state.clean_audio_latents, atol=1e-5)
+
+
+def test_holding_both_modalities_leaves_nothing_to_generate_and_is_refused() -> None:
+    with pytest.raises(ValueError, match="nothing for the model to generate"):
+        _state(frozen_audio_latents=_soundtrack(), frozen_video_latents=_clip())
+
+
+def test_a_first_frame_beside_a_whole_clip_conditioning_is_refused() -> None:
+    """Both write frame 0. Silently overwriting one with the other would drop a picture the graph
+    paid an encode for."""
+    with pytest.raises(ValueError, match="first frame cannot be combined"):
+        _state(
+            image_latents=torch.randn(1, LTX2_LATENT_CHANNELS, 1, LATENT[1], LATENT[2]), frozen_video_latents=_clip()
+        )
+
+
+def test_a_soundtrack_of_the_wrong_length_names_the_frame_count_it_implies() -> None:
+    """The frame count must be derived from the soundtrack; a mismatch means the graph set it
+    separately, and the message has to say which way to fix it."""
+    with pytest.raises(ValueError, match="Derive the frame count from the soundtrack"):
+        _state(frozen_audio_latents=torch.randn(1, AUDIO_ROWS + 1, AUDIO_WIDTH))
+
+
+def test_a_conditioning_clip_encoded_for_another_canvas_is_refused() -> None:
+    with pytest.raises(ValueError, match="conditioning clip is"):
+        _state(frozen_video_latents=torch.randn(1, LTX2_LATENT_CHANNELS, LATENT[0], LATENT[1] + 1, LATENT[2]))
 
 
 def test_a_cancel_stops_the_run_inside_a_forward() -> None:

@@ -25,9 +25,10 @@ register(
             None: MainModelDefaultSettings(steps=30, cfg_scale=3.0, width=1248, height=704),
         }
     ),
-    # Video only in this version: text-to-video and first-frame image-to-video, with synchronized
-    # audio generated alongside. Keyframes, extension and the audio/video-conditioned modes follow.
-    ModalityFacet(frozenset({"t2v", "i2v"}), metadata_slug="ltx2"),
+    # Text-to-video and first-frame image-to-video, both with synchronized audio generated
+    # alongside, plus the two whole-modality conditioned modes: a picture for a given soundtrack
+    # and a soundtrack for a given picture. Keyframes and extension follow.
+    ModalityFacet(frozenset({"t2v", "i2v", "a2v", "v2a"}), metadata_slug="ltx2"),
     FeaturesFacet(
         # The negative prompt only reaches the model through classifier-free guidance, which the
         # distilled variant runs without.

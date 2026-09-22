@@ -1,4 +1,8 @@
-"""Windowed-sinc audio resampling for MiniMax H3 reference soundtracks.
+"""Windowed-sinc audio resampling for model soundtrack conditioning.
+
+Two families feed a soundtrack to a model at a rate it was trained on -- MiniMax H3's reference
+clips and LTX-2's audio conditioning -- and both need the same resampler, so it lives here rather
+than under either one.
 
 MiniMax H3's reference implementation resamples soundtracks with
 ``torchaudio.transforms.Resample`` at its defaults (``lowpass_filter_width=6``,

@@ -7,6 +7,7 @@ import type { WorkbenchCommands } from '@workbench/workbenchStore';
 import { galleryImages, galleryItems, galleryVideos } from '@features/gallery';
 import {
   createDefaultVideoWidgetValues,
+  createVideoConditioningClip,
   createVideoSourceClip,
   getDefaultReferenceConditioning,
   getVideoModelPolicy,
@@ -147,6 +148,41 @@ export const executeVideoRecall = async ({
           lastFrameImage: { height: lastFrame.height, image_name: lastFrame.imageName, width: lastFrame.width },
         };
         recalledMedia = true;
+      }
+
+      const { conditioningClip } = result.mediaNames;
+
+      if (conditioningClip) {
+        try {
+          const clipItem = await galleryItems.resolve({ kind: 'video', name: conditioningClip.name }, owner.signal);
+
+          assertAccountScopeCurrent(owner);
+          if (clipItem?.kind === 'video') {
+            // The recorded role, not the one a fresh drop would default to: the run held that
+            // modality clean, and the other role is a different generation entirely.
+            result.values = {
+              ...result.values,
+              conditioningClip: {
+                ...createVideoConditioningClip({
+                  durationSeconds: clipItem.durationSeconds,
+                  fps: clipItem.fps,
+                  height: clipItem.height,
+                  name: clipItem.name,
+                  width: clipItem.width,
+                }),
+                role: conditioningClip.role,
+              },
+              firstFrameImage: null,
+              lastFrameImage: null,
+              references: [],
+              sourceVideo: null,
+            };
+            recalledMedia = true;
+          }
+        } catch {
+          assertAccountScopeCurrent(owner);
+          // The clip is gone; the rest of the recall still applies.
+        }
       }
 
       if (sourceVideoName) {
