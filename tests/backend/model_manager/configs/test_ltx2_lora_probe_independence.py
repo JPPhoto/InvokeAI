@@ -22,8 +22,8 @@ import torch
 from invokeai.backend.model_manager.configs.identification_utils import NotAMatchError
 from invokeai.backend.model_manager.configs.lora import (
     LoRA_LyCORIS_Anima_Config,
-    LoRA_LyCORIS_FLUX_Config,
     LoRA_LyCORIS_Flux2_Config,
+    LoRA_LyCORIS_FLUX_Config,
     LoRA_LyCORIS_Krea2_Config,
     LoRA_LyCORIS_LTX2_Config,
     LoRA_LyCORIS_MiniMaxH3_Config,
