@@ -155,7 +155,7 @@ class FluxVAELoader(ModelLoader):
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
             try:
-                vae_dtype = torch.tensor([1.0], dtype=torch.bfloat16, device=self._torch_device).dtype
+                vae_dtype = torch.empty(0, dtype=torch.bfloat16, device=self._torch_device).dtype
             except TypeError:
                 vae_dtype = torch.float32
         else:
@@ -181,7 +181,7 @@ class Flux2VAEDiffusersLoader(ModelLoader):
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
             try:
-                vae_dtype = torch.tensor([1.0], dtype=torch.bfloat16, device=self._torch_device).dtype
+                vae_dtype = torch.empty(0, dtype=torch.bfloat16, device=self._torch_device).dtype
             except TypeError:
                 vae_dtype = torch.float32
         else:
@@ -281,7 +281,7 @@ class Flux2VAELoader(ModelLoader):
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
             try:
-                vae_dtype = torch.tensor([1.0], dtype=torch.bfloat16, device=self._torch_device).dtype
+                vae_dtype = torch.empty(0, dtype=torch.bfloat16, device=self._torch_device).dtype
             except TypeError:
                 vae_dtype = torch.float32
         else:

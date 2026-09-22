@@ -11,18 +11,55 @@ import type { SeedMode } from '@platform/core/seed';
  * How a video generation is conditioned. There is no explicit mode selector:
  * the mode is inferred from which inputs are filled — see `resolveVideoMode`.
  */
-export type VideoGenerationMode = 'txt2vid' | 'first-frame' | 'last-frame' | 'first-last' | 'extend' | 'reference';
+export type VideoGenerationMode =
+  | 'txt2vid'
+  | 'first-frame'
+  | 'last-frame'
+  | 'first-last'
+  | 'extend'
+  | 'reference'
+  | 'audio-to-video'
+  | 'video-to-audio';
 
-/** A gallery video selected as the clip to extend, with the trim range to keep. */
-export interface VideoSourceClip {
+/** A gallery video's identity and geometry, as the panel stores it. */
+export interface VideoClipRef {
   video_name: string;
   width: number;
   height: number;
   numFrames: number;
   fps: number;
+}
+
+/** A gallery video selected as the clip to extend, with the trim range to keep. */
+export interface VideoSourceClip extends VideoClipRef {
   /** Inclusive trim bounds forwarded to `extract_video_range`; negative indices count from the end. */
   startFrame: number;
   endFrame: number;
+}
+
+/** Which stream of a conditioning clip the model is given, and which it therefore generates. */
+export type VideoConditioningRole = 'audio' | 'video';
+
+/**
+ * A clip supplied as conditioning for the *other* modality: its soundtrack with the picture
+ * generated (`audio`), or its picture with the soundtrack generated (`video`).
+ *
+ * One slot rather than two, because the two modes are mutually exclusive -- LTX-2 holds one
+ * modality clean and samples the other, so a clip can only be given in one role at a time.
+ */
+export interface VideoConditioningClip {
+  /**
+   * Whole-clip, untrimmed: `ltx2_audio_conditioning` and `ltx2_video_conditioning` consume the
+   * whole recording, so trim bounds here would be state the graph does not honour.
+   */
+  clip: VideoClipRef;
+  role: VideoConditioningRole;
+  /**
+   * Whether the gallery actually knew the clip's frame rate. A video record's `fps` is nullable,
+   * and `clip.fps` then holds the panel's fallback -- a guess, which must not become the rate a
+   * held picture is played and timed at. False leaves the frame-rate control to the user.
+   */
+  fpsKnown: boolean;
 }
 
 /**
@@ -81,7 +118,9 @@ export type VideoReferenceItem =
 
 export type WanTargetResolution = '480p' | '720p' | '1080p';
 export type MiniMaxH3TargetResolution = '768 highres' | '768 lowres';
-export type VideoTargetResolution = WanTargetResolution | MiniMaxH3TargetResolution;
+/** LTX-2 presets pin the canvas's SHORT edge; the long edge follows the aspect ratio. */
+export type Ltx2TargetResolution = '512p' | '704p' | '768p' | '1024p' | '1536p';
+export type VideoTargetResolution = WanTargetResolution | MiniMaxH3TargetResolution | Ltx2TargetResolution;
 
 /**
  * The preset ratios the video panel offers. No `Free` and no width/height
@@ -115,6 +154,8 @@ export interface VideoSettings {
    * linked tail reference provides continuity).
    */
   sourceVideo: VideoSourceClip | null;
+  /** A clip conditioning the opposite modality; null unless the family offers a2v/v2a. */
+  conditioningClip: VideoConditioningClip | null;
   /**
    * Ref2VA references, in conditioning order (up to 3 videos and 9 images).
    * Mutually exclusive with `firstFrameImage`/`lastFrameImage`; `sourceVideo`
@@ -131,11 +172,36 @@ export interface VideoSettings {
   /** Guidance for the low-noise half of a Wan A14B schedule; null reuses `cfgScale`. */
   cfgScaleLowNoise: number | null;
   /**
+   * LTX-2 guides its audio stream separately from its video, and far harder
+   * (the release uses 7 against video's 3). Null on a family with one guidance
+   * scale, the way `cfgScaleLowNoise` is null outside Wan A14B.
+   */
+  audioCfgScale: number | null;
+  /**
+   * LTX-2 spatio-temporal guidance: steers away from a pass whose self-attention
+   * is skipped in one transformer block, which sharpens motion. 0 turns it off
+   * and saves a forward per step. Null on families without it.
+   */
+  stgScale: number | null;
+  /**
+   * LTX-2 modality-isolation guidance: steers away from a pass with the
+   * audio/video cross-attention disabled, tightening the two streams'
+   * agreement. 1 turns it off. Null on families without it.
+   */
+  modalityScale: number | null;
+  /**
    * The family's distillation fast path: the Lightning LoRA pair at 4 steps /
    * CFG 1 for Wan A14B, the Turbo LoRA at 6 steps for MiniMax H3. Toggling it
    * patches steps/CFG and the `loras` list — see `getAcceleratorToggleResult`
    * — so the flag records intent, not hidden state.
    */
+  /**
+   * Frames of the source an LTX-2 continuation opens with, held clean so the model reads the clip's
+   * motion rather than just its last still. On the VAE's 8k + 1 grid, and it is spent twice over:
+   * the generation reproduces these frames, and the join then crossfades exactly them out of both
+   * halves — so raising it costs new material one frame for one against a fixed Frames budget.
+   */
+  ltx2ExtendContextFrames: number;
   acceleratorEnabled: boolean;
   /**
    * The keys of the LoRA entries the accelerator toggle added. Turning the
@@ -169,6 +235,12 @@ export interface VideoSettings {
   h3TransformerModel: MainModelConfig | null;
   /** Optional single-file MiniMax H3 Qwen3-VL text-encoder override. */
   h3TextEncoderModel: ModelIdentifierConfig | null;
+  /**
+   * LTX-2's Lightricks-tuned Gemma-4 text encoder. Required, not an override:
+   * no LTX-2 main carries text-encoder weights, so a generation cannot run
+   * without one selected.
+   */
+  ltx2TextEncoderModel: ModelIdentifierConfig | null;
   /**
    * MiniMax H3 hybrid: with a Ref2VA transformer selected, an FL2VA checkpoint
    * that supplies every weight except the AdaLN modulation projections from
