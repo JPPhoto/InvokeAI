@@ -3,13 +3,13 @@ import type { ModelConfig } from '@features/models';
 import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type { WorkflowSubmissionPlan } from '@features/workflow/graph';
+import type { LogNamespace } from '@platform/logging/contracts';
 import type {
   CanvasDocumentContractV3,
   CanvasPlacementContract,
   CanvasStateContractV3,
   CanvasStagingCandidateContract,
 } from '@workbench/canvas-engine/api';
-import type { DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 import type { GraphContract } from '@workbench/graphContracts';
 import type { InvocationRoute, InvocationSourceId, ResultDestination } from '@workbench/invocationContracts';
 import type {
@@ -74,6 +74,7 @@ import {
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
 import { planSeedSubmission } from '@platform/core/seed';
+import { describeError } from '@platform/logging/normalize';
 import { WIDGET_REGIONS } from '@workbench/layoutContracts';
 import { prependProjectEvent, PROJECT_EVENT_LIMIT } from '@workbench/projectEvents';
 
@@ -446,8 +447,9 @@ type WorkbenchReducerAction =
       type: 'recordError';
       message: string;
       area?: string;
-      context?: { error?: string; layerId?: string };
-      namespace?: DeveloperLogNamespace;
+      /** `error` may be a raw Error; notifications show its message and diagnostics keep its stack. */
+      context?: { error?: unknown; [key: string]: unknown };
+      namespace?: LogNamespace;
       projectId?: string;
     }
   | { type: 'setBackendConnectionStatus'; status: WorkbenchState['backendConnection']['status']; error?: string }
@@ -5019,7 +5021,7 @@ export const __workbenchReducerInternal = (
       );
     }
     case 'recordError': {
-      const detail = action.context?.error;
+      const detail = describeError(action.context?.error);
       return addNotification(
         state,
         createNotification({

@@ -219,7 +219,8 @@ const createCleanupAccumulator = (): { run: (step: () => void) => void; throwIfF
 
 export interface CanvasEngineErrorReport {
   area: 'canvas-engine';
-  context: { error: string; layerId: string };
+  /** The raw failure; notifications show its message and diagnostics keep its stack. */
+  context: { error: unknown; layerId: string };
   message:
     | 'Layer thumbnail rasterization failed'
     | 'Bitmap persistence failed'
@@ -333,7 +334,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const reportError = (message: CanvasEngineErrorReport['message'], layerId: string, error: unknown): void =>
     opts.reportError({
       area: 'canvas-engine',
-      context: { error: error instanceof Error ? error.message : String(error), layerId },
+      context: { error, layerId },
       message,
       namespace: 'canvas',
       projectId,

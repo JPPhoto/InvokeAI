@@ -5035,7 +5035,10 @@ describe('requestLayerThumbnail', () => {
     expect(reportError).toHaveBeenCalledWith(
       expect.objectContaining({
         area: 'canvas-engine',
-        context: expect.objectContaining({ error: 'decode failed', layerId: 'a' }),
+        context: expect.objectContaining({
+          error: expect.objectContaining({ message: 'decode failed' }),
+          layerId: 'a',
+        }),
         message: 'Layer thumbnail rasterization failed',
         namespace: 'canvas',
         projectId: 'p1',

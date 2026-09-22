@@ -279,11 +279,10 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
   );
   const perfSource = useMemo<WorkflowPerfSource>(
     () => ({
-      instanceId: runtime.instanceId,
-      kind: 'widget',
+      area: 'editor',
+      namespace: 'workflows',
       projectId,
-      region: runtime.region,
-      typeId: runtime.typeId,
+      widget: { instanceId: runtime.instanceId, region: runtime.region, typeId: runtime.typeId },
     }),
     [projectId, runtime.instanceId, runtime.region, runtime.typeId]
   );

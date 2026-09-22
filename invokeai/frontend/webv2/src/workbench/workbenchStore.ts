@@ -7,6 +7,7 @@ import {
   type GalleryImage,
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
+import { recordLogEvent } from '@platform/logging/logger';
 import { createExternalStore } from '@platform/state/externalStore';
 import { closeWidgetOverlays } from '@platform/ui/widgetOverlayRegistry';
 import { hasActiveQueueRuns, hasInFlightQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
@@ -14,7 +15,6 @@ import { hasActiveQueueRuns, hasInFlightQueueRuns } from '@workbench/queue-integ
 import type { CanvasEditIntent } from './autoRoutePolicy';
 import type { CanvasProjectMutation } from './canvasProjectMutations';
 
-import { recordDiagnosticEntry } from './diagnostics/logger';
 import { clearLayerPanelStates, reconcileLayerPanelStates } from './layerPanelState';
 import { createLayoutPresetActivator, loadLayoutPresetWidgets } from './layoutPresetActivation';
 import { resolveSavedLayoutPreset } from './layoutPresetSnapshots';
@@ -601,6 +601,7 @@ const hasPersistedStateChanged = (previous: WorkbenchState, next: WorkbenchState
 const getDiagnosticProjectId = (state: WorkbenchState, projectId?: string): string | undefined =>
   projectId ?? getActiveProject(state)?.id;
 
+/** The store is the one diagnostic owner for reported errors, widget failures and autosave outcomes. */
 const recordDiagnosticForAction = (
   action: WorkbenchAction,
   previousState: WorkbenchState,
@@ -608,19 +609,22 @@ const recordDiagnosticForAction = (
 ): void => {
   switch (action.type) {
     case 'recordError': {
-      const projectId = getDiagnosticProjectId(nextState, action.projectId);
+      const { error, ...context } = action.context ?? {};
 
-      if (!projectId) {
-        return;
-      }
-
-      recordDiagnosticEntry({
-        context: action.context,
-        level: 'error',
-        message: action.message,
-        namespace: action.namespace ?? 'system',
-        source: { area: action.area ?? 'runtime', kind: 'workbench', projectId },
-      });
+      recordLogEvent(
+        'error',
+        {
+          area: action.area ?? 'runtime',
+          namespace: action.namespace ?? 'system',
+          projectId: getDiagnosticProjectId(nextState, action.projectId),
+        },
+        {
+          context: Object.keys(context).length > 0 ? context : undefined,
+          error,
+          message: action.message,
+          name: `${action.namespace ?? 'system'}.${action.area ?? 'runtime'}`,
+        }
+      );
       break;
     }
     case 'recordWidgetFailure': {
@@ -628,19 +632,15 @@ const recordDiagnosticForAction = (
         return;
       }
 
-      const projectId = getDiagnosticProjectId(nextState);
-
-      if (!projectId) {
-        return;
-      }
-
-      recordDiagnosticEntry({
-        context: { widgetId: action.failure.widgetId },
-        level: 'error',
-        message: action.failure.details,
-        namespace: 'system',
-        source: { area: 'widget-failure', kind: 'workbench', projectId },
-      });
+      recordLogEvent(
+        'error',
+        { area: 'widget-failure', namespace: 'system', projectId: getDiagnosticProjectId(nextState) },
+        {
+          context: { details: action.failure.details, widgetId: action.failure.widgetId },
+          message: action.failure.message,
+          name: 'widget.registration-failed',
+        }
+      );
       break;
     }
     case 'closeProject': {
@@ -648,18 +648,96 @@ const recordDiagnosticForAction = (
         return;
       }
 
-      const projectId = getDiagnosticProjectId(nextState, action.projectId);
-
-      if (!projectId) {
+      recordLogEvent(
+        'error',
+        {
+          area: 'project-lifecycle',
+          namespace: 'system',
+          projectId: getDiagnosticProjectId(nextState, action.projectId),
+        },
+        { message: 'At least one project must remain open.', name: 'project.close-refused' }
+      );
+      break;
+    }
+    case 'markQueueItemBackendSubmitted': {
+      recordLogEvent(
+        'info',
+        { area: 'submission', namespace: 'queue', projectId: action.projectId },
+        {
+          context: {
+            backendBatchId: action.backendBatchId,
+            backendItemIds: action.backendItemIds,
+            queueItemId: action.queueItemId,
+          },
+          message: 'Queue item accepted by the backend',
+          name: 'queue.submitted',
+        }
+      );
+      break;
+    }
+    case 'setQueueItemStatus': {
+      if (Object.is(previousState, nextState)) {
         return;
       }
 
-      recordDiagnosticEntry({
-        level: 'error',
-        message: 'At least one project must remain open.',
-        namespace: 'system',
-        source: { area: 'project-lifecycle', kind: 'workbench', projectId },
-      });
+      const level = action.status === 'failed' ? 'error' : 'debug';
+
+      recordLogEvent(
+        level,
+        { area: 'history', namespace: 'queue', projectId: action.projectId },
+        {
+          context: { queueItemId: action.queueItemId, reason: action.error, status: action.status },
+          message:
+            action.status === 'failed'
+              ? `Queue item failed${action.error ? `: ${action.error}` : ''}`
+              : `Queue item ${action.status}`,
+          name: action.status === 'failed' ? 'queue.item-failed' : 'queue.item-status',
+        }
+      );
+      break;
+    }
+    case 'hydrateWorkbench': {
+      recordLogEvent(
+        'info',
+        { area: 'hydration', namespace: 'persistence' },
+        {
+          context: { activeProjectId: nextState.activeProjectId, projectCount: nextState.projects.length },
+          message: 'Workbench hydrated',
+          name: 'persistence.hydrated',
+        }
+      );
+      break;
+    }
+    case 'autosaveStarted': {
+      recordLogEvent(
+        'debug',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { message: 'Autosave started', name: 'persistence.autosave-started' }
+      );
+      break;
+    }
+    case 'autosaveSucceeded': {
+      recordLogEvent(
+        'debug',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { context: { savedAt: action.savedAt }, message: 'Autosave succeeded', name: 'persistence.autosave-succeeded' }
+      );
+      break;
+    }
+    case 'autosavePending': {
+      recordLogEvent(
+        'warn',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { context: { reason: action.error }, message: 'Autosave needs attention', name: 'persistence.autosave-pending' }
+      );
+      break;
+    }
+    case 'autosaveFailed': {
+      recordLogEvent(
+        'error',
+        { area: 'autosave', namespace: 'persistence', projectId: nextState.activeProjectId },
+        { context: { reason: action.error }, message: 'Autosave failed', name: 'persistence.autosave-failed' }
+      );
       break;
     }
   }

@@ -1,6 +1,7 @@
 import type { ProjectGraphAction } from '@features/workflow/core/document';
 import type { ForLoopValidationReason } from '@features/workflow/core/forLoops';
 import type { ProjectGraphState, XYPosition } from '@features/workflow/core/types';
+import type { LogSource } from '@platform/logging/contracts';
 
 export type WorkflowRegion = 'left' | 'right' | 'bottom' | 'center' | 'dialog' | 'popover' | 'floating';
 
@@ -113,10 +114,5 @@ export interface GraphPreviewSourceState {
   getProvenance?: (nodeId: string, fieldName: string) => GraphPreviewProvenance | null;
 }
 
-export interface WorkflowPerfSource {
-  instanceId: string;
-  kind: 'widget';
-  projectId: string;
-  region: WorkflowRegion;
-  typeId: string;
-}
+/** Attribution for editor timings. */
+export type WorkflowPerfSource = LogSource;

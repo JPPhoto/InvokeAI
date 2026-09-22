@@ -1726,7 +1726,7 @@
       },
       "developerLogEnabled": {
         "label": "Record diagnostic logs",
-        "description": "Record selected diagnostic events in the Diagnostics widget."
+        "description": "Record selected diagnostic events in the Diagnostics widget. Warnings and errors from every namespace are recorded by default."
       },
       "developerPerformanceTimingsEnabled": {
         "label": "Collect performance timings",
@@ -1734,7 +1734,7 @@
       },
       "developerLogNamespaces": {
         "label": "Log namespaces",
-        "description": "Choose which diagnostic sources to record."
+        "description": "Choose which diagnostic sources to record. New namespaces are not added to a saved selection; use Reset logging defaults."
       },
       "generationDevices": {
         "label": "Generation devices",
@@ -1788,7 +1788,17 @@
         "server": "Server",
         "workspace": "Data & workspace",
         "about": "About"
-      }
+      },
+      "developerConsoleOutputEnabled": {
+        "label": "Mirror logs to the browser console",
+        "description": "Write recorded events to the developer console as well. The same level and namespace filters apply."
+      },
+      "developerLoggingReset": {
+        "label": "Reset logging defaults",
+        "description": "Restore the default level, namespaces, console and timing settings, including namespaces added in newer versions."
+      },
+      "resetLoggingDefaults": "Reset to defaults",
+      "loggingDefaultsActive": "Default logging settings are active."
     }
   },
   "shell": {

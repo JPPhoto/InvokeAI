@@ -10,6 +10,7 @@ import {
   type Capabilities,
 } from '@features/identity';
 import { ModelInstallRuntime } from '@features/models';
+import { createLogger } from '@platform/logging/logger';
 import {
   createHashHistory,
   createRootRoute,
@@ -37,6 +38,9 @@ import { SocketHubRuntime } from './SocketHubRuntime';
  * The authenticated layout owns setup/login guards; lazy /app keeps editor code out of Launchpad. Hash history
  * supports the relative base without server deep-path fallback.
  */
+
+/** Route render and loader failures reach the router's catch boundary; record them once there. */
+const routerLogger = createLogger({ area: 'router', namespace: 'app' });
 
 const RouterError = ({ error }: ErrorComponentProps) => {
   'use no memo';
@@ -215,6 +219,13 @@ const RouterPending = () => <WorkbenchSplashScreen messageKey="splash.loadingApp
 
 export const router = createRouter({
   defaultNotFoundComponent: () => <Navigate to="/" />,
+  defaultOnCatch: (error, errorInfo) =>
+    routerLogger.error({
+      context: errorInfo?.componentStack ? { componentStack: errorInfo.componentStack } : undefined,
+      error,
+      message: 'Route rendering failed',
+      name: 'app.route-failed',
+    }),
   defaultPendingComponent: RouterPending,
   defaultPreload: 'intent',
   history: createHashHistory(),

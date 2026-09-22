@@ -1,9 +1,9 @@
+import type { Logger, LogNamespace } from '@platform/logging/contracts';
 import type { SettingsContribution } from '@platform/ui/settings/contracts';
 import type { TFunction } from 'i18next';
 import type { ComponentType, ExoticComponent, JSXElementConstructor, SVGProps } from 'react';
 
 import type { DeferredResource, DeferredResourceStatus } from './deferredResource';
-import type { DeveloperLogNamespace } from './diagnostics/contracts';
 import type { GraphId } from './graphContracts';
 import type { InvocationSourceId } from './invocationContracts';
 import type { WidgetRegion } from './layoutContracts';
@@ -142,14 +142,8 @@ export interface WidgetRuntimeApi<State extends Record<string, unknown> = Record
 }
 
 export interface WidgetDiagnosticsApi {
-  logger: (namespace: DeveloperLogNamespace) => {
-    debug: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    error: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    fatal: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    info: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    trace: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-    warn: (messageOrContext: string | Record<string, unknown>, message?: string) => void;
-  };
+  /** A logger attributed to this widget instance and its project. */
+  logger: (namespace: LogNamespace) => Logger;
 }
 
 export interface WidgetRuntimeStateApi<State extends Record<string, unknown> = Record<string, unknown>> {

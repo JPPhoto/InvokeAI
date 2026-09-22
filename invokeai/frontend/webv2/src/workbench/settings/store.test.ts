@@ -1,5 +1,6 @@
 import type * as accountLifecycleModule from '@platform/state/accountLifecycle';
 
+import { LOG_NAMESPACES } from '@platform/logging/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProjectSettings } from './contracts';
@@ -406,11 +407,27 @@ describe('normalizeWorkbenchPreferences diagnostics', () => {
         developerPerformanceTimingsEnabled: true,
       })
     ).toMatchObject({
+      developerConsoleOutputEnabled: false,
       developerLogEnabled: true,
       developerLogLevel: 'warn',
       developerLogNamespaces: ['system'],
       developerPerformanceTimingsEnabled: true,
     });
+  });
+
+  it('records warnings from every namespace by default and keeps a saved narrower selection', () => {
+    expect(store.normalizeWorkbenchPreferences({}).developerLogNamespaces).toEqual(LOG_NAMESPACES);
+    // The previous default was persisted by any settings write; it is not a user's narrowed choice.
+    expect(
+      store.normalizeWorkbenchPreferences({ developerLogNamespaces: ['workflows', 'queue', 'system'] })
+        .developerLogNamespaces
+    ).toEqual(LOG_NAMESPACES);
+    expect(
+      store.normalizeWorkbenchPreferences({ developerLogNamespaces: ['workflows', 'queue'] }).developerLogNamespaces
+    ).toEqual(['queue', 'workflows']);
+    expect(
+      store.normalizeWorkbenchPreferences({ developerConsoleOutputEnabled: true }).developerConsoleOutputEnabled
+    ).toBe(true);
   });
 });
 

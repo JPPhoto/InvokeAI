@@ -1,6 +1,6 @@
+import type { LogNamespace } from '@platform/logging/contracts';
 import type { SettingFieldProps } from '@platform/ui/settings/contracts';
 import type { WorkbenchThemeId } from '@theme/themes';
-import type { DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 
 import { Box, chakra, Checkbox, Flex, HStack, Icon, SimpleGrid, Stack, Text, useSlotRecipe } from '@chakra-ui/react';
 import { Button, ConfirmDialog } from '@platform/ui';
@@ -8,6 +8,7 @@ import { resolveSettingsText } from '@platform/ui/settings/contracts';
 import { ModifiedSettingIndicator } from '@platform/ui/settings/ModifiedSettingIndicator';
 import { themeCardRecipe } from '@theme/recipes';
 import { previewSwatches, THEMES, type ThemeDefinition } from '@theme/system';
+import { areLoggingPreferencesDefault, resetLoggingPreferences } from '@workbench/diagnostics/loggingPreferences';
 import { clearAllWorkbenchData } from '@workbench/projects/syncedPersistence';
 import { useOptionalWorkbenchCommands, useOptionalWorkbenchPersistenceService } from '@workbench/WorkbenchContext';
 import { CheckIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
@@ -86,7 +87,7 @@ export const DeveloperNamespacesSettings = () => {
   const developerLogNamespaces = useWorkbenchPreferenceSelector((preferences) => preferences.developerLogNamespaces);
   const enabledNamespaces = useMemo(() => new Set(developerLogNamespaces), [developerLogNamespaces]);
   const toggleNamespace = useCallback(
-    (namespace: DeveloperLogNamespace, checked: boolean) => {
+    (namespace: LogNamespace, checked: boolean) => {
       const next = checked
         ? [...developerLogNamespaces, namespace]
         : developerLogNamespaces.filter((candidate) => candidate !== namespace);
@@ -118,8 +119,8 @@ const DeveloperNamespaceCheckbox = ({
   toggleNamespace,
 }: {
   checked: boolean;
-  namespace: DeveloperLogNamespace;
-  toggleNamespace: (namespace: DeveloperLogNamespace, checked: boolean) => void;
+  namespace: LogNamespace;
+  toggleNamespace: (namespace: LogNamespace, checked: boolean) => void;
 }) => {
   const handleCheckedChange = useCallback(
     (event: { checked: boolean | 'indeterminate' }) => toggleNamespace(namespace, event.checked === true),
@@ -134,6 +135,26 @@ const DeveloperNamespaceCheckbox = ({
         {formatSettingLabel(namespace)}
       </Checkbox.Label>
     </Checkbox.Root>
+  );
+};
+
+export const LoggingResetSettings = () => {
+  const { t } = useTranslation();
+  const isDefault = useWorkbenchPreferenceSelector(areLoggingPreferencesDefault);
+  const reset = useCallback(() => void resetLoggingPreferences(), []);
+
+  return (
+    <HStack gap="3">
+      <Button disabled={isDefault} size="sm" variant="outline" onClick={reset}>
+        <RotateCcwIcon />
+        {t('settings.catalog.resetLoggingDefaults')}
+      </Button>
+      {isDefault ? (
+        <Text color="fg.muted" fontSize="xs">
+          {t('settings.catalog.loggingDefaultsActive')}
+        </Text>
+      ) : null}
+    </HStack>
   );
 };
 
@@ -229,6 +250,9 @@ const CustomSettingField = ({ field }: SettingFieldProps) => {
       break;
     case 'developerLogNamespaces':
       editor = <DeveloperNamespacesSettings />;
+      break;
+    case 'developerLoggingReset':
+      editor = <LoggingResetSettings />;
       break;
     case 'workspaceActions':
       editor = <WorkspaceSettings />;

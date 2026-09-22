@@ -1,7 +1,7 @@
 import type { WorkbenchLanguage } from '@platform/i18n/languages';
+import type { LogLevel, LogNamespace } from '@platform/logging/contracts';
 import type { SettingsTarget } from '@platform/ui/settings/contracts';
 import type { WorkbenchThemeId } from '@theme/themes';
-import type { DeveloperLogLevel, DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 import type { ProjectSortId, ProjectsViewId } from '@workbench/launchpad/projects/projectLibraryView';
 
 export type { ProjectSortId, ProjectsViewId } from '@workbench/launchpad/projects/projectLibraryView';
@@ -62,8 +62,10 @@ export interface WorkbenchPreferences {
   /** Color prompt syntax in prompt fields; changes rendering only. */
   showPromptSyntaxHighlighting: boolean;
   developerLogEnabled: boolean;
-  developerLogLevel: DeveloperLogLevel;
-  developerLogNamespaces: DeveloperLogNamespace[];
+  developerLogLevel: LogLevel;
+  developerLogNamespaces: LogNamespace[];
+  /** Mirror recorded entries to the browser console; obeys the same recording filters. */
+  developerConsoleOutputEnabled: boolean;
   developerPerformanceTimingsEnabled: boolean;
   /** Always snap workflow nodes to the grid (Ctrl snaps temporarily when off). */
   workflowSnapToGrid: boolean;
