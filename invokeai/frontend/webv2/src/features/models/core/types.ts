@@ -179,7 +179,6 @@ export type ModelInstallStatus =
 
 export interface ModelInstallDownloadPart {
   source?: string;
-  url?: string;
   local_path?: string;
   bytes: number;
   total_bytes: number;
@@ -197,7 +196,19 @@ export interface ModelInstallJob {
   id: number;
   status: ModelInstallStatus;
   /** Local path, URL, or HF repo id — may be a string or a structured source. */
-  source: string | { repo_id?: string; url?: string; path?: string; type?: string; [key: string]: unknown };
+  source:
+    | string
+    | {
+        repo_id?: string;
+        url?: string;
+        path?: string;
+        type?: string;
+        variant?: string | null;
+        subfolder?: string | null;
+        provider_id?: string;
+        provider_model_id?: string;
+        [key: string]: unknown;
+      };
   error?: string | null;
   error_reason?: string | null;
   error_traceback?: string | null;
