@@ -460,30 +460,105 @@ describe('LTX-2 distilled accelerator', () => {
     );
   });
 
-  it('brings the negative prompt back if a scale is raised with the toggle still on', () => {
-    // Off-recipe but legal. What must not happen is the field staying hidden while the prompt
-    // silently counts again -- the graph wires it whenever a scale is above 1, toggle or no toggle.
+  it('stops offering every control the distilled path would ignore', () => {
+    // The graph sends `schedule: 'distilled'` whenever the accelerator is on, and the backend then
+    // DISCARDS the guidance scales and the step count (`_resolve_guidance` and the step clamp both
+    // log that they are ignoring what was asked). Leaving those scrubbers editable would let a user
+    // set a value, see it accepted, and get a run that silently used something else.
     const model = ltx2('ltx2_dev');
-    const raisedVideoCfg = getVideoPromptPolicy(model, {
+    const guided = getVideoModelPolicy(model, getDefaultVideoSettings(model, []));
+    const accelerated = getVideoModelPolicy(model, {
+      ...getDefaultVideoSettings(model, []),
       acceleratorEnabled: true,
-      audioCfgScale: 1,
+    });
+
+    expect(guided.ui).toMatchObject({
+      audioCfgVisible: true,
+      cfgVisible: true,
+      modalityVisible: true,
+      stepsEditable: true,
+      stgVisible: true,
+    });
+    expect(accelerated.ui).toMatchObject({
+      audioCfgVisible: false,
+      cfgVisible: false,
+      modalityVisible: false,
+      stepsEditable: false,
+      stgVisible: false,
+    });
+    // Same presentation the distilled checkpoint gives, which is the model this now is.
+    const checkpoint = getVideoModelPolicy(ltx2('ltx2_distilled'), getDefaultVideoSettings(ltx2('ltx2_distilled')));
+
+    expect(accelerated.ui.stepsEditable).toBe(checkpoint.ui.stepsEditable);
+    expect(accelerated.ui.cfgVisible).toBe(checkpoint.ui.cfgVisible);
+    expect(accelerated.prompt.negativeVisible).toBe(checkpoint.prompt.negativeVisible);
+  });
+
+  it('restores the whole recipe when the accelerator LoRA is disabled, not just steps and CFG', () => {
+    // Turning the accelerator off by unticking its LoRA in Concepts goes through a different path
+    // than the toggle. If that path restores only steps and CFG, the run is the undistilled Dev
+    // model with audio CFG, modality and STG still pinned at the accelerator's identity values --
+    // guided sampling with three quarters of its guidance off, and nothing says so.
+    const model = ltx2('ltx2_dev');
+    const on = getAcceleratorToggleResult(getDefaultVideoSettings(model, []), model, [DISTILLED], true).settings;
+    const disabled = on.loras.map((entry) => ({ ...entry, isEnabled: false }));
+    const result = getAcceleratorLoraChangeResult({ ...on, loras: disabled }, model, [DISTILLED], disabled);
+
+    expect(result.outcome).toBe('disabled');
+    expect(result.settings).toMatchObject({
+      acceleratorEnabled: false,
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      steps: 30,
+      stgScale: 1,
+    });
+  });
+
+  it('treats the negative prompt as unused even if a stale scale says otherwise', () => {
+    // The panel cannot produce this, but recall can: metadata carrying a guided CFG alongside the
+    // accelerator's LoRA set. The graph still sends `schedule: 'distilled'` whenever the toggle is
+    // on, and the backend discards the scale -- so the answer must follow the accelerator, not the
+    // stale number, or the panel claims a prompt is in use that the run throws away.
+    const policy = getVideoPromptPolicy(ltx2('ltx2_dev'), {
+      acceleratorEnabled: true,
+      audioCfgScale: 7,
       cfgScale: 3,
       cfgScaleLowNoise: null,
       negativePromptEnabled: true,
       wanLowNoiseModel: null,
     });
-    // LTX-2's audio stream is guided on its own scale, so it alone is enough.
-    const raisedAudioCfg = getVideoPromptPolicy(model, {
-      acceleratorEnabled: true,
-      audioCfgScale: 7,
-      cfgScale: 1,
-      cfgScaleLowNoise: null,
-      negativePromptEnabled: true,
-      wanLowNoiseModel: null,
-    });
 
-    expect(raisedVideoCfg).toMatchObject({ negativeUsedInGraph: true, negativeVisible: true });
-    expect(raisedAudioCfg).toMatchObject({ negativeUsedInGraph: true, negativeVisible: true });
+    expect(policy).toMatchObject({ negativeUsedInGraph: false, negativeVisible: false });
+  });
+
+  it('writes the guidance recipe when the accelerator LoRA is swapped for another', () => {
+    // The recorded LoRA is gone and a replacement is found, so the accelerator stays on under a
+    // different file. That path has to write the same recipe the toggle does, or the swap silently
+    // leaves guidance wherever it happened to be.
+    const model = ltx2('ltx2_dev');
+    const settings = {
+      ...getDefaultVideoSettings(model, []),
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: ['a-release-that-is-gone'],
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      stgScale: 1,
+    };
+    // The distilled LoRA is present and on; the key the toggle recorded is not.
+    const present = [{ isEnabled: true, model: DISTILLED, weight: 1 }];
+    const result = getAcceleratorLoraChangeResult({ ...settings, loras: present }, model, [DISTILLED], present);
+
+    expect(result.outcome).toBe('switched');
+    expect(result.settings).toMatchObject({
+      acceleratorEnabled: true,
+      audioCfgScale: 1,
+      cfgScale: 1,
+      modalityScale: 1,
+      steps: 8,
+      stgScale: 0,
+    });
   });
 
   it('leaves families whose accelerator keeps guidance alone', () => {

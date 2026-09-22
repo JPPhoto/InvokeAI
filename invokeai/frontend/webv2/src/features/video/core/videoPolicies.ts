@@ -697,6 +697,24 @@ export const getEffectiveVideoTiming = (
   };
 };
 
+/**
+ * Whether the run is guidance-free because an accelerator made it so.
+ *
+ * An accelerator that declares a guidance triple drives every scale to its identity AND makes the
+ * graph send `schedule: 'distilled'`. The backend then *discards* the guidance scales and the step
+ * count outright (`_resolve_guidance` and the step clamp in `ltx2_denoise.py`, both of which log
+ * that they are ignoring what was asked). So those controls are not merely redundant while the
+ * accelerator is on -- they cannot take effect at all, and the panel must stop offering them.
+ *
+ * Which is to say: an accelerated Dev model *is* the family's distilled variant, and presents like
+ * it. Families whose accelerator declares no guidance (Wan, MiniMax H3) only change steps and CFG
+ * and are unaffected.
+ */
+const isGuidanceDistilled = (
+  config: VideoVariantConfig,
+  settings: Pick<VideoSettings, 'acceleratorEnabled'>
+): boolean => settings.acceleratorEnabled && config.accelerator?.guidance !== undefined;
+
 export const getVideoPromptPolicy = (
   model: MainModelConfig | undefined,
   settings: Pick<
@@ -728,18 +746,18 @@ export const getVideoPromptPolicy = (
   // CFG of 1 that disabled it: the toggle did. Families whose accelerator declares no guidance
   // (Wan, MiniMax H3) are unaffected.
   //
-  // Gated on guidance being actually inactive, not merely on the toggle: raising a scale back above
-  // 1 with the accelerator still on is off-recipe but legal, and it makes the negative prompt count
-  // again -- so the field has to come back rather than stay hidden while silently taking effect.
-  const guidanceActive = settings.cfgScale > 1 || lowNoiseCfgActive || audioCfgActive;
-  const hiddenByAccelerator =
-    settings.acceleratorEnabled && config.accelerator?.guidance !== undefined && !guidanceActive;
+  // Not conditioned on the live scale values: with the accelerator on the backend discards them, so
+  // there is no state in which raising one makes the negative prompt count again. The scales are
+  // not editable in that state either (see `isGuidanceDistilled`), so this cannot strand a value.
+  const guidanceDistilled = isGuidanceDistilled(config, settings);
   const negativeUsedInGraph =
+    !guidanceDistilled &&
     settings.negativePromptEnabled &&
-    (config.negativePrompt.usage === 'always' || (config.negativePrompt.usage === 'cfg-gated' && guidanceActive));
+    (config.negativePrompt.usage === 'always' ||
+      (config.negativePrompt.usage === 'cfg-gated' && (settings.cfgScale > 1 || lowNoiseCfgActive || audioCfgActive)));
 
   return {
-    negativeVisible: config.negativePrompt.visible && !hiddenByAccelerator,
+    negativeVisible: config.negativePrompt.visible && !guidanceDistilled,
     negativeUsedInGraph,
     ...(config.negativePrompt.usage === 'cfg-gated' ? { negativeHelpTextKey: 'widgets.video.negativeCfgHelp' } : {}),
   };
@@ -796,6 +814,9 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
   // The H3 task (fl2va vs ref2va) lives on the selected model itself: a
   // single-file transformer checkpoint carries its own variant.
   const config = getVideoConfig(model);
+  // With an accelerator that removes guidance, the backend ignores the scales and the step count
+  // outright, so the panel stops offering the controls it would ignore.
+  const guidanceDistilled = isGuidanceDistilled(config, settings);
 
   return {
     aspectRatioOptions: getVideoAspectRatioOptions(model),
@@ -812,7 +833,7 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
-      audioCfgVisible: config.guidance.audioVisible,
+      audioCfgVisible: config.guidance.audioVisible && !guidanceDistilled,
       // The step count the help text quotes is the one the *running*
       // accelerator LoRA was distilled for — with the 8-step LightX2V Turbo
       // LoRA on, "6 steps" would be a lie. It is deliberately NOT folded into
@@ -822,12 +843,14 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
         ? getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings))
         : null,
       audioOutput: config.audioOutput,
-      cfgLowNoiseVisible: config.cfg.lowNoiseVisible,
-      cfgVisible: config.cfg.visible,
+      cfgLowNoiseVisible: config.cfg.lowNoiseVisible && !guidanceDistilled,
+      cfgVisible: config.cfg.visible && !guidanceDistilled,
       fpsVisible: config.fps.editable,
-      modalityVisible: config.guidance.modalityVisible,
-      stepsEditable: config.stepsEditable,
-      stgVisible: config.guidance.stgVisible,
+      modalityVisible: config.guidance.modalityVisible && !guidanceDistilled,
+      // The distilled schedule is a fixed step count the backend clamps to; an editable scrubber
+      // here would silently do nothing.
+      stepsEditable: config.stepsEditable && !guidanceDistilled,
+      stgVisible: config.guidance.stgVisible && !guidanceDistilled,
     },
   };
 };
@@ -1304,6 +1327,7 @@ export const getAcceleratorLoraChangeResult = (
         acceleratorLoraKeys: replacement.map((lora) => lora.key),
         cfgScale: config.accelerator.cfgScale,
         cfgScaleLowNoise: config.accelerator.cfgScaleLowNoise,
+        ...config.accelerator.guidance,
         steps: getAcceleratorSteps(config.accelerator, replacement),
       },
     };
@@ -1318,6 +1342,17 @@ export const getAcceleratorLoraChangeResult = (
       acceleratorLoraKeys: [],
       cfgScale: config.defaults.cfgScale,
       cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
+      // The same restore the toggle-off path does. Without it, turning the accelerator off by
+      // disabling its LoRA leaves the extra scales at the identity values the accelerator wrote --
+      // a guided run with three quarters of its guidance silently off, which is the washed-out
+      // output this file works to prevent. Only for accelerators that set them in the first place.
+      ...(config.accelerator?.guidance
+        ? {
+            audioCfgScale: config.defaults.audioCfgScale,
+            modalityScale: config.defaults.modalityScale,
+            stgScale: config.defaults.stgScale,
+          }
+        : {}),
       steps: config.defaults.steps,
     },
   };

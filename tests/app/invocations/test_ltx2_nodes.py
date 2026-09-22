@@ -34,6 +34,7 @@ from invokeai.app.invocations.ltx2.ltx2_latent_upsample import LTX2LatentUpsampl
 from invokeai.app.invocations.ltx2.ltx2_model_loader import LTX2ModelLoaderInvocation
 from invokeai.app.invocations.ltx2.ltx2_video_conditioning import LTX2VideoConditioningInvocation
 from invokeai.app.invocations.model import (
+    LoRAField,
     LTX2LatentUpsamplerField,
     LTX2TransformerField,
     LTX2VocoderField,
@@ -92,13 +93,13 @@ def test_the_schedule_follows_the_variant_unless_it_is_set_explicitly(
     """Sampling a distilled checkpoint on the dev schedule returns noise, so the default reads the
     variant the loader stamped rather than trusting a literal in the graph."""
     node = _denoise(transformer=LTX2TransformerField(transformer=_identifier(), variant=variant), schedule=schedule)
-    assert node._resolve_distilled() is expected
+    assert node._resolve_distilled(_context()) is expected
 
 
 def test_an_unstamped_transformer_cannot_resolve_the_schedule_automatically() -> None:
     node = _denoise(transformer=LTX2TransformerField(transformer=_identifier(), variant=None), schedule="auto")
     with pytest.raises(ValueError, match="Auto"):
-        node._resolve_distilled()
+        node._resolve_distilled(_context())
 
 
 def test_the_distilled_schedule_ignores_the_guidance_scales_and_says_so() -> None:
@@ -1378,21 +1379,64 @@ def test_a_last_frame_encode_wired_into_the_first_frame_slot_is_refused() -> Non
         node._load_image_latents(_context())
 
 
-def test_the_reservation_grows_with_the_loras_that_will_be_patched_in() -> None:
-    """A LoRA is not free headroom. The distilled accelerator is rank 450 over 1660 layers -- about
-    8.3 GiB of patch tensors in bf16 -- plus the transient a sidecar-patched layer holds while it
-    computes the low-rank residual. Reserving the same bytes with and without it packs VRAM with
-    weights and dies in the first forward."""
+def test_the_reservation_is_sized_from_what_the_patches_weigh() -> None:
+    """The reservation is subtracted from VRAM *before* any weight streams in, so it is not a
+    ceiling -- every byte over-reserved is a byte of transformer that stays in host RAM and is
+    streamed each forward. A per-LoRA constant big enough for the rank-450 distilled accelerator
+    (8.3 GiB over 1660 layers) would charge a rank-16 style LoRA the same, and two of them would
+    exceed a 24 GB card's whole budget on their own."""
     node_type = LTX2DenoiseInvocation
     rows, audio = 13728, 300
+    small, large = 8 * 1024**2, 9 * 1024**3
 
     bare = node_type._estimate_working_memory(rows, audio)
-    with_one = node_type._estimate_working_memory(rows, audio, 1)
-    with_two = node_type._estimate_working_memory(rows, audio, 2)
 
-    assert with_one > bare
-    # The per-LoRA term dominates, so a second LoRA has to add roughly as much as the first.
-    assert with_two - with_one >= 8 * 1024**3
+    # Proportional to the patch, not to the count.
+    assert node_type._estimate_working_memory(rows, audio, small) - bare == small + 1024**3
+    assert node_type._estimate_working_memory(rows, audio, large) - bare == large + 1024**3
+    # A small LoRA must not be charged like a large one -- the defect a flat constant has.
+    assert (
+        node_type._estimate_working_memory(rows, audio, large)
+        > node_type._estimate_working_memory(rows, audio, small) + 8 * 1024**3
+    )
+
+
+def test_an_auto_schedule_with_a_lora_applied_says_so() -> None:
+    """`auto` follows the transformer's VARIANT, which names the checkpoint -- and a LoRA does not
+    change it. A step-distillation LoRA on a Dev checkpoint therefore resolves to the guided
+    ~30-step schedule and samples the LoRA's 8 steps on it. The panel sets `schedule` explicitly to
+    avoid this; a hand-built graph (or the shipped workflow, whose default is `auto`) cannot be told
+    any other way, and the resulting clip looks like a broken model rather than a wiring mistake."""
+    node = _denoise(
+        num_frames=121,
+        transformer=LTX2TransformerField(
+            transformer=_identifier("transformer"),
+            loras=[LoRAField(lora=_identifier("distilled-lora"), weight=1.0)],
+            variant="ltx2_dev",
+        ),
+    )
+    context = _context()
+
+    assert node._resolve_distilled(context) is False
+    warning = " ".join(str(call) for call in context.logger.warning.call_args_list)
+    assert "Distilled" in warning
+
+    # Said once, and only when it could be wrong: no LoRAs, or an explicit schedule, stays quiet.
+    quiet = _context()
+    _denoise(num_frames=121, schedule="distilled")._resolve_distilled(quiet)
+
+    assert quiet.logger.warning.call_count == 0
+
+
+def test_a_directly_patched_lora_reserves_nothing_for_itself() -> None:
+    """Only the sidecar path leaves patch tensors on the device; the direct path returns each patch
+    to the CPU as it applies it. The caller passes zero for that case, and charging for it anyway
+    would cost a bf16 run -- the shipped Dev starter -- gigabytes of residency for nothing."""
+    rows, audio = 13728, 300
+
+    assert LTX2DenoiseInvocation._estimate_working_memory(
+        rows, audio, 0
+    ) == LTX2DenoiseInvocation._estimate_working_memory(rows, audio)
 
 
 def test_the_reservation_covers_the_keyframe_rows_the_transformer_attends_over(monkeypatch) -> None:
