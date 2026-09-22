@@ -701,7 +701,12 @@ export const getVideoPromptPolicy = (
   model: MainModelConfig | undefined,
   settings: Pick<
     VideoSettings,
-    'audioCfgScale' | 'cfgScale' | 'cfgScaleLowNoise' | 'negativePromptEnabled' | 'wanLowNoiseModel'
+    | 'acceleratorEnabled'
+    | 'audioCfgScale'
+    | 'cfgScale'
+    | 'cfgScaleLowNoise'
+    | 'negativePromptEnabled'
+    | 'wanLowNoiseModel'
   >
 ) => {
   const config = getVideoConfig(model);
@@ -716,13 +721,25 @@ export const getVideoPromptPolicy = (
   // And LTX-2's audio stream is guided on its own scale, off one shared unconditional pass
   // (`LTX2Guidance.passes`): audio CFG above 1 consumes the negative prompt even at video CFG 1.
   const audioCfgActive = config.guidance.audioVisible && settings.audioCfgScale !== null && settings.audioCfgScale > 1;
+  // An accelerator that declares a guidance triple drives every scale to its identity, which makes
+  // the run guidance-free -- the same model the family's distilled *checkpoint* variant is, and that
+  // variant declares `usage: 'never'`. Presenting the accelerated model any differently leaves a
+  // populated negative prompt on screen that silently stops mattering, and the user never typed the
+  // CFG of 1 that disabled it: the toggle did. Families whose accelerator declares no guidance
+  // (Wan, MiniMax H3) are unaffected.
+  //
+  // Gated on guidance being actually inactive, not merely on the toggle: raising a scale back above
+  // 1 with the accelerator still on is off-recipe but legal, and it makes the negative prompt count
+  // again -- so the field has to come back rather than stay hidden while silently taking effect.
+  const guidanceActive = settings.cfgScale > 1 || lowNoiseCfgActive || audioCfgActive;
+  const hiddenByAccelerator =
+    settings.acceleratorEnabled && config.accelerator?.guidance !== undefined && !guidanceActive;
   const negativeUsedInGraph =
     settings.negativePromptEnabled &&
-    (config.negativePrompt.usage === 'always' ||
-      (config.negativePrompt.usage === 'cfg-gated' && (settings.cfgScale > 1 || lowNoiseCfgActive || audioCfgActive)));
+    (config.negativePrompt.usage === 'always' || (config.negativePrompt.usage === 'cfg-gated' && guidanceActive));
 
   return {
-    negativeVisible: config.negativePrompt.visible,
+    negativeVisible: config.negativePrompt.visible && !hiddenByAccelerator,
     negativeUsedInGraph,
     ...(config.negativePrompt.usage === 'cfg-gated' ? { negativeHelpTextKey: 'widgets.video.negativeCfgHelp' } : {}),
   };

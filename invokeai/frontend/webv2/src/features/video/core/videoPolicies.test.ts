@@ -225,6 +225,7 @@ describe('getVideoDimensions', () => {
 
 describe('getVideoPromptPolicy', () => {
   const promptSettings = (overrides: Partial<Parameters<typeof getVideoPromptPolicy>[1]> = {}) => ({
+    acceleratorEnabled: false,
     audioCfgScale: null,
     cfgScale: 5,
     cfgScaleLowNoise: null,
@@ -420,6 +421,84 @@ describe('LTX-2 distilled accelerator', () => {
       stgScale: 1,
     });
     expect(off.loras).toEqual([]);
+  });
+
+  it('hides the negative prompt once guidance is gone, like the distilled checkpoint', () => {
+    // The accelerator drives every scale to identity, so the negative prompt stops being used --
+    // but LTX-2 is the only family that pre-fills it, so leaving it on screen shows a populated box
+    // full of terms that silently do nothing, under a CFG of 1 the user never typed.
+    const model = ltx2('ltx2_dev');
+    const guided = getVideoPromptPolicy(model, {
+      acceleratorEnabled: false,
+      audioCfgScale: 7,
+      cfgScale: 3,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+    const accelerated = getVideoPromptPolicy(model, {
+      acceleratorEnabled: true,
+      audioCfgScale: 1,
+      cfgScale: 1,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+
+    expect(guided).toMatchObject({ negativeUsedInGraph: true, negativeVisible: true });
+    expect(accelerated).toMatchObject({ negativeUsedInGraph: false, negativeVisible: false });
+    // The same shape the distilled checkpoint presents, which is the model an accelerated Dev is.
+    expect(accelerated.negativeVisible).toBe(
+      getVideoPromptPolicy(ltx2('ltx2_distilled'), {
+        acceleratorEnabled: false,
+        audioCfgScale: null,
+        cfgScale: 1,
+        cfgScaleLowNoise: null,
+        negativePromptEnabled: true,
+        wanLowNoiseModel: null,
+      }).negativeVisible
+    );
+  });
+
+  it('brings the negative prompt back if a scale is raised with the toggle still on', () => {
+    // Off-recipe but legal. What must not happen is the field staying hidden while the prompt
+    // silently counts again -- the graph wires it whenever a scale is above 1, toggle or no toggle.
+    const model = ltx2('ltx2_dev');
+    const raisedVideoCfg = getVideoPromptPolicy(model, {
+      acceleratorEnabled: true,
+      audioCfgScale: 1,
+      cfgScale: 3,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+    // LTX-2's audio stream is guided on its own scale, so it alone is enough.
+    const raisedAudioCfg = getVideoPromptPolicy(model, {
+      acceleratorEnabled: true,
+      audioCfgScale: 7,
+      cfgScale: 1,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+
+    expect(raisedVideoCfg).toMatchObject({ negativeUsedInGraph: true, negativeVisible: true });
+    expect(raisedAudioCfg).toMatchObject({ negativeUsedInGraph: true, negativeVisible: true });
+  });
+
+  it('leaves families whose accelerator keeps guidance alone', () => {
+    // Wan and H3 declare no guidance triple, so their accelerator drops CFG but does not make the
+    // run guidance-free -- their negative prompt stays visible, exactly as before.
+    const wan = getVideoPromptPolicy(wanModel('t2v_a14b'), {
+      acceleratorEnabled: true,
+      audioCfgScale: null,
+      cfgScale: 1,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+
+    expect(wan.negativeVisible).toBe(true);
   });
 
   it('is not offered on the distilled checkpoint, which already is the fast path', () => {
