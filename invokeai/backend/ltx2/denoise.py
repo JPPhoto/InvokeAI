@@ -24,6 +24,7 @@ from invokeai.backend.ltx2.constants import (
     LTX2_AUDIO_LATENT_MEL_BINS,
     LTX2_LATENT_CHANNELS,
     LTX2_REFINE_NOISE_SEED_OFFSET,
+    LTX2_TEMPORAL_COMPRESSION,
 )
 from invokeai.backend.ltx2.guidance import (
     PASS_MODALITY,
@@ -36,6 +37,7 @@ from invokeai.backend.ltx2.packing import (
     audio_latent_count,
     pack_audio_latents,
     pack_video_latents,
+    prepare_keyframe_coords,
     validate_canvas,
     validate_num_frames,
     video_latent_shape,
@@ -89,9 +91,188 @@ class LTX2DenoiseState:
     clean_audio_latents: torch.Tensor | None = None
     """Packed, normalized audio latents the mask holds rows to. Shape: (1, audio latents, 128)."""
 
+    keyframe_coords: torch.Tensor | None = None
+    """RoPE coordinates for keyframe tokens appended to the sequence. Shape: (1, 3, patches, 2).
+
+    A frame held at latent index 0 overwrites tokens already in the grid; one held anywhere else has
+    nowhere in the grid to go, so it rides on the end of the sequence carrying its own position.
+    """
+
+    keyframe_tokens: int = 0
+    """How many rows on the end of ``video_latents`` are appended keyframes rather than generation.
+
+    They are conditioning the model reads, not picture it makes, so they are trimmed off before the
+    latents are unpacked -- both for the decode and for the progress preview.
+    """
+
+    @property
+    def generated_tokens(self) -> int:
+        """Rows of ``video_latents`` that are the generation itself."""
+        return self.video_latents.shape[1] - self.keyframe_tokens
+
     @property
     def num_steps(self) -> int:
         return self.sigmas.numel() - 1
+
+
+def _hold_audio_prefix(
+    audio_latents: torch.Tensor,
+    prefix: torch.Tensor | None,
+    audio_count: int,
+    fps: float,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """Hold the opening of the soundtrack, leaving the rest to be generated.
+
+    A continuation replays the source's last moments so the model can see its motion, and the join
+    then crossfades exactly those frames out of both halves. The picture survives that because it is
+    held -- both clips render the same instant, so the blend is of like for like. Without this the
+    soundtrack does not: it is sampled freely from the first step, so the blend fades *newly
+    invented* audio in against the source's real audio, and the new soundtrack audibly begins one
+    overlap early.
+
+    The mask is per row and already drives everything downstream, so holding a prefix needs no
+    change to the loop -- only ones at the front of it instead of everywhere.
+    """
+    if prefix is None:
+        return audio_latents, None, None
+
+    held = prefix.shape[1] if prefix.ndim == 3 else 0
+    expected = (1, held, LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS)
+    if prefix.ndim != 3 or tuple(prefix.shape) != expected or not 0 < held <= audio_count:
+        raise ValueError(
+            f"The held opening of the soundtrack is {tuple(prefix.shape)} but this clip has "
+            f"{audio_count} audio latents at {fps:g} fps, so it needs (1, 1..{audio_count}, "
+            f"{LTX2_AUDIO_LATENT_CHANNELS * LTX2_AUDIO_LATENT_MEL_BINS})."
+        )
+
+    clean = torch.zeros_like(audio_latents)
+    clean[:, :held] = prefix.to(device="cpu", dtype=torch.float32)
+    mask = torch.zeros((1, audio_count), dtype=torch.float32)
+    mask[:, :held] = 1.0
+
+    return torch.lerp(audio_latents, clean, mask.unsqueeze(-1)), mask, clean
+
+
+def _validated_anchor(
+    image_latents: torch.Tensor,
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    width: int,
+    height: int,
+    hint: str,
+) -> torch.Tensor:
+    """A leading anchor: one latent frame for image-to-video, several for a video extension.
+
+    A still frame tells the model where a clip starts but nothing about how it was moving, so an
+    extension seeded from one tends to stall or lurch at the join. Several latent frames of the
+    source carry its motion into the new clip, and they are held the same way -- the mask simply
+    covers more of the front of the grid.
+    """
+    anchor = image_latents.to(device="cpu", dtype=torch.float32)
+    valid = (
+        anchor.ndim == 5
+        and anchor.shape[:2] == (1, LTX2_LATENT_CHANNELS)
+        and 0 < anchor.shape[2] <= latent_frames
+        and anchor.shape[3:] == (latent_height, latent_width)
+    )
+    if not valid:
+        raise ValueError(
+            f"The image conditioning was encoded at {tuple(anchor.shape)} but this generation needs "
+            f"(1, {LTX2_LATENT_CHANNELS}, 1..{latent_frames}, {latent_height}, {latent_width}). {hint}"
+        )
+
+    return anchor
+
+
+def _append_keyframe(
+    video_latents: torch.Tensor,
+    conditioning_mask: torch.Tensor | None,
+    clean_video_latents: torch.Tensor | None,
+    *,
+    keyframe_latents: torch.Tensor | None,
+    keyframe_latent_index: int | None,
+    keyframe_strength: float,
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    num_frames: int,
+    width: int,
+    height: int,
+    fps: float,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, int]:
+    """Append a held frame to the end of a packed sequence, with the mask and coordinates it needs.
+
+    Shared by the base and refine passes so a last frame survives a two-stage run the way a first
+    frame does: the refine pass re-noises every token, so a keyframe that was only appended in
+    stage one would be regenerated from the prompt in stage two.
+
+    Returns the sequence, mask, clean values, the keyframe's RoPE coordinates and how many rows were
+    appended; with no keyframe the first three are returned unchanged.
+    """
+    if keyframe_latents is None:
+        return video_latents, conditioning_mask, clean_video_latents, None, 0
+
+    if keyframe_latent_index is None or keyframe_latent_index <= 0:
+        raise ValueError(
+            f"A keyframe needs a latent index above 0; got {keyframe_latent_index}. Frame 0 is the "
+            f"first frame, which is held by overwriting the grid rather than appending."
+        )
+    if keyframe_latent_index >= latent_frames:
+        raise ValueError(
+            f"A keyframe at latent index {keyframe_latent_index} is outside a {num_frames}-frame clip, "
+            f"which has {latent_frames} latent frames."
+        )
+    if not 0.0 < keyframe_strength <= 1.0:
+        raise ValueError(f"Keyframe strength must be in (0, 1]; got {keyframe_strength}.")
+
+    keyframe = keyframe_latents.to(device="cpu", dtype=torch.float32)
+    if (
+        keyframe.ndim != 5
+        or keyframe.shape[:2] != (1, LTX2_LATENT_CHANNELS)
+        or keyframe.shape[3:]
+        != (
+            latent_height,
+            latent_width,
+        )
+    ):
+        raise ValueError(
+            f"The keyframe was encoded at {tuple(keyframe.shape)} but this generation needs "
+            f"(1, {LTX2_LATENT_CHANNELS}, frames, {latent_height}, {latent_width}). Re-run the "
+            f"conditioning node at {width}x{height}."
+        )
+
+    # Drawn after everything else, so adding a last frame does not reshuffle the noise the rest of
+    # the clip would have had -- the same seed keeps the same generation.
+    keyframe_noise = randn_tensor(keyframe.shape, generator=generator, device=torch.device("cpu"), dtype=torch.float32)
+    keyframe_clean = pack_video_latents(keyframe)
+    keyframe_tokens = keyframe_clean.shape[1]
+
+    if conditioning_mask is None:
+        conditioning_mask = torch.zeros((1, video_latents.shape[1]), dtype=torch.float32)
+        clean_video_latents = torch.zeros_like(video_latents)
+    assert clean_video_latents is not None
+
+    video_latents = torch.cat(
+        [video_latents, torch.lerp(pack_video_latents(keyframe_noise), keyframe_clean, keyframe_strength)], dim=1
+    )
+    conditioning_mask = torch.cat(
+        [conditioning_mask, torch.full((1, keyframe_tokens), keyframe_strength, dtype=torch.float32)], dim=1
+    )
+    clean_video_latents = torch.cat([clean_video_latents, keyframe_clean], dim=1)
+    # `(index - 1) * 8 + 1` is the pixel frame a latent frame starts at: latent 0 covers pixel frame 0
+    # alone and every later latent covers the eight after it (`VideoConditionByKeyframeIndex`).
+    keyframe_coords = prepare_keyframe_coords(
+        keyframe.shape[2],
+        latent_height,
+        latent_width,
+        pixel_frame_index=(keyframe_latent_index - 1) * LTX2_TEMPORAL_COMPRESSION + 1,
+        num_pixel_frames=(keyframe.shape[2] - 1) * LTX2_TEMPORAL_COMPRESSION + 1,
+        fps=fps,
+    )
+
+    return video_latents, conditioning_mask, clean_video_latents, keyframe_coords, keyframe_tokens
 
 
 def build_denoise_state(
@@ -107,6 +288,10 @@ def build_denoise_state(
     conditioning_strength: float = 1.0,
     frozen_audio_latents: torch.Tensor | None = None,
     frozen_video_latents: torch.Tensor | None = None,
+    audio_prefix_latents: torch.Tensor | None = None,
+    keyframe_latents: torch.Tensor | None = None,
+    keyframe_latent_index: int | None = None,
+    keyframe_strength: float = 1.0,
 ) -> LTX2DenoiseState:
     """Noise, schedule and conditioning mask for one run.
 
@@ -118,7 +303,19 @@ def build_denoise_state(
     first is audio-to-video, the second video-to-audio. They are the same mask mechanism as the
     first frame, with every row set rather than one -- which is why the two modes need no machinery
     of their own beyond an encode. Giving both would leave nothing to sample, so it is refused.
+
+    ``keyframe_latents`` holds a frame at ``keyframe_latent_index``, which must be non-zero -- index
+    0 is what ``image_latents`` is for. It cannot overwrite grid tokens the way the first frame does,
+    because the grid has one value per position and the generation needs that position too; instead
+    the frame is *appended* to the sequence with coordinates naming where in time it belongs, and the
+    same mask drives it. The appended rows are trimmed before anything unpacks the result. This is
+    what makes a last frame (and, with ``image_latents``, first-to-last interpolation) possible.
     """
+    if frozen_audio_latents is not None and audio_prefix_latents is not None:
+        raise ValueError(
+            "The soundtrack cannot be held whole and held at its opening at the same time. A "
+            "continuation holds its opening; audio-to-video holds all of it."
+        )
     if frozen_audio_latents is not None and frozen_video_latents is not None:
         raise ValueError(
             "Audio and video cannot both be held: that would leave nothing for the model to generate. "
@@ -127,6 +324,14 @@ def build_denoise_state(
     # A held clip already covers frame 0, so the first-frame encode would be overwritten rather
     # than combined -- two different pictures asked for in the same rows. Holding a soundtrack
     # alongside a first frame is a different matter and stays allowed: those are separate streams.
+    # A held clip covers every row, so an appended keyframe would be orphaned: the frozen branch
+    # below replaces the whole sequence and the keyframe's rows go with it, leaving its coordinates
+    # and token count pointing at tokens that are no longer there.
+    if frozen_video_latents is not None and keyframe_latents is not None:
+        raise ValueError(
+            "A keyframe cannot be combined with a whole-clip video conditioning: the clip already "
+            "supplies every frame. Wire one or the other."
+        )
     if frozen_video_latents is not None and image_latents is not None:
         raise ValueError(
             "A first frame cannot be combined with a whole-clip video conditioning: the clip already "
@@ -162,22 +367,47 @@ def build_denoise_state(
     clean_video_latents: torch.Tensor | None = None
 
     if image_latents is not None:
-        expected = (1, LTX2_LATENT_CHANNELS, 1, latent_height, latent_width)
-        if tuple(image_latents.shape) != expected:
-            raise ValueError(
-                f"The image conditioning was encoded at {tuple(image_latents.shape)} but this "
-                f"generation needs {expected}. Re-run the conditioning node at {width}x{height}."
-            )
-        clean = torch.zeros_like(video_noise)
-        clean[:, :, 0] = image_latents.to(device="cpu", dtype=torch.float32)[:, :, 0]
+        anchor = _validated_anchor(
+            image_latents,
+            latent_frames,
+            latent_height,
+            latent_width,
+            width,
+            height,
+            hint=(
+                f"Re-run the conditioning node at {width}x{height}. If this is a continuation, the "
+                f"held opening is longer than the clip being generated -- raise Frames, or lower the "
+                f"conditioning node's context length."
+            ),
+        )
         if not 0.0 < conditioning_strength <= 1.0:
             raise ValueError(f"Image conditioning strength must be in (0, 1]; got {conditioning_strength}.")
+        held = anchor.shape[2]
+        clean = torch.zeros_like(video_noise)
+        clean[:, :, :held] = anchor
         mask = torch.zeros((1, 1, latent_frames, latent_height, latent_width), dtype=torch.float32)
-        mask[:, :, 0] = conditioning_strength
+        mask[:, :, :held] = conditioning_strength
 
         clean_video_latents = pack_video_latents(clean)
         conditioning_mask = pack_video_latents(mask).squeeze(-1)
         video_latents = torch.lerp(video_latents, clean_video_latents, conditioning_mask.unsqueeze(-1))
+
+    video_latents, conditioning_mask, clean_video_latents, keyframe_coords, keyframe_tokens = _append_keyframe(
+        video_latents,
+        conditioning_mask,
+        clean_video_latents,
+        keyframe_latents=keyframe_latents,
+        keyframe_latent_index=keyframe_latent_index,
+        keyframe_strength=keyframe_strength,
+        latent_frames=latent_frames,
+        latent_height=latent_height,
+        latent_width=latent_width,
+        num_frames=num_frames,
+        width=width,
+        height=height,
+        fps=fps,
+        generator=generator,
+    )
 
     audio_latents = pack_audio_latents(audio_noise)
     audio_conditioning_mask: torch.Tensor | None = None
@@ -194,6 +424,10 @@ def build_denoise_state(
         clean_audio_latents = frozen_audio_latents.to(device="cpu", dtype=torch.float32)
         audio_conditioning_mask = torch.ones((1, audio_count), dtype=torch.float32)
         audio_latents = clean_audio_latents.clone()
+
+    audio_latents, prefix_mask, prefix_clean = _hold_audio_prefix(audio_latents, audio_prefix_latents, audio_count, fps)
+    if prefix_mask is not None:
+        audio_conditioning_mask, clean_audio_latents = prefix_mask, prefix_clean
 
     if frozen_video_latents is not None:
         expected_video = (1, LTX2_LATENT_CHANNELS, latent_frames, latent_height, latent_width)
@@ -222,6 +456,8 @@ def build_denoise_state(
         clean_video_latents=clean_video_latents,
         audio_conditioning_mask=audio_conditioning_mask,
         clean_audio_latents=clean_audio_latents,
+        keyframe_coords=keyframe_coords,
+        keyframe_tokens=keyframe_tokens,
         # LTX-2.5 samples its distilled schedule ancestrally and its shifted schedule
         # deterministically; eta is what selects between the two branches of one step.
         eta=LTX2_ANCESTRAL_ETA if distilled else 0.0,
@@ -243,6 +479,10 @@ def build_refine_state(
     noise_scale: float,
     image_latents: torch.Tensor | None = None,
     conditioning_strength: float = 1.0,
+    keyframe_latents: torch.Tensor | None = None,
+    keyframe_latent_index: int | None = None,
+    keyframe_strength: float = 1.0,
+    audio_prefix_latents: torch.Tensor | None = None,
 ) -> LTX2DenoiseState:
     """The refine pass's state: stage one's result re-entered partway down the schedule.
 
@@ -261,7 +501,10 @@ def build_refine_state(
     the refine pass re-noises every token, frame 0 included, so at the released entry level about
     nine tenths of the anchored frame's signal is replaced by noise and nothing restores it. Without
     this the first frame would be regenerated from the prompt alone, and a two-stage run would
-    quietly mean something different by "first frame" than a single-stage one.
+    quietly mean something different by "first frame" than a single-stage one. ``keyframe_latents`` is
+    the same argument for a held last frame: appended tokens are not carried through the upsampler,
+    so stage two has to be given the frame again or a two-stage run would end somewhere else than a
+    single-stage one.
     """
     validate_canvas(height, width)
     validate_num_frames(num_frames)
@@ -307,28 +550,59 @@ def build_refine_state(
     clean_video_latents: torch.Tensor | None = None
 
     if image_latents is not None:
-        expected_anchor = (1, LTX2_LATENT_CHANNELS, 1, latent_height, latent_width)
-        if tuple(image_latents.shape) != expected_anchor:
-            raise ValueError(
-                f"The refine pass's image conditioning was encoded at {tuple(image_latents.shape)} "
-                f"but this pass needs {expected_anchor}. Encode it at the refine canvas "
-                f"({width}x{height}), not the base pass's."
-            )
+        anchor = _validated_anchor(
+            image_latents,
+            latent_frames,
+            latent_height,
+            latent_width,
+            width,
+            height,
+            # The likeliest mistake here is not a wrong canvas but the base pass's own encode, which
+            # is half the size and passes every check a single-stage run would make.
+            hint=f"Encode it at the refine canvas ({width}x{height}), not the base pass's.",
+        )
         if not 0.0 < conditioning_strength <= 1.0:
             raise ValueError(f"Image conditioning strength must be in (0, 1]; got {conditioning_strength}.")
 
+        held = anchor.shape[2]
         clean = torch.zeros((1, LTX2_LATENT_CHANNELS, latent_frames, latent_height, latent_width))
-        clean[:, :, 0] = image_latents.to(device="cpu", dtype=torch.float32)[:, :, 0]
+        clean[:, :, :held] = anchor
         mask = torch.zeros((1, 1, latent_frames, latent_height, latent_width), dtype=torch.float32)
-        mask[:, :, 0] = conditioning_strength
+        mask[:, :, :held] = conditioning_strength
 
         clean_video_latents = pack_video_latents(clean)
         conditioning_mask = pack_video_latents(mask).squeeze(-1)
         video_latents = torch.lerp(video_latents, clean_video_latents, conditioning_mask.unsqueeze(-1))
 
+    video_latents, conditioning_mask, clean_video_latents, keyframe_coords, keyframe_tokens = _append_keyframe(
+        video_latents,
+        conditioning_mask,
+        clean_video_latents,
+        keyframe_latents=keyframe_latents,
+        keyframe_latent_index=keyframe_latent_index,
+        keyframe_strength=keyframe_strength,
+        latent_frames=latent_frames,
+        latent_height=latent_height,
+        latent_width=latent_width,
+        num_frames=num_frames,
+        width=width,
+        height=height,
+        fps=fps,
+        generator=generator,
+    )
+
+    # Re-held here for the same reason the video anchor is: this pass re-noises every row, so a
+    # soundtrack opening held only in stage one is gone by stage two and the join's audio blend goes
+    # back to fading in invented sound one overlap early.
+    refined_audio, audio_prefix_mask, audio_prefix_clean = _hold_audio_prefix(
+        torch.lerp(audio, audio_noise, sigma), audio_prefix_latents, audio_count, fps
+    )
+
     return LTX2DenoiseState(
         video_latents=video_latents,
-        audio_latents=torch.lerp(audio, audio_noise, sigma),
+        audio_latents=refined_audio,
+        audio_conditioning_mask=audio_prefix_mask,
+        clean_audio_latents=audio_prefix_clean,
         sigmas=sigmas,
         latent_frames=latent_frames,
         latent_height=latent_height,
@@ -338,6 +612,8 @@ def build_refine_state(
         clean_video_latents=clean_video_latents,
         eta=LTX2_ANCESTRAL_ETA if distilled else 0.0,
         noise_seed=seed + LTX2_REFINE_NOISE_SEED_OFFSET + LTX2_ANCESTRAL_NOISE_SEED_OFFSET,
+        keyframe_coords=keyframe_coords,
+        keyframe_tokens=keyframe_tokens,
     )
 
 
@@ -389,6 +665,10 @@ def denoise(
     video_coords = transformer.rope.prepare_video_coords(
         1, state.latent_frames, state.latent_height, state.latent_width, device, fps=fps
     )
+    if state.keyframe_coords is not None:
+        # Appended tokens need appended positions, in the same order: the coordinates are what tell
+        # the model *when* the held frame is, and without them it would read as more of frame 0.
+        video_coords = torch.cat([video_coords, state.keyframe_coords.to(device=device)], dim=2)
     audio_coords = transformer.audio_rope.prepare_audio_coords(1, state.audio_latents_count, device)
 
     timestep_scale = float(transformer.config.timestep_scale_multiplier)
@@ -460,7 +740,9 @@ def denoise(
             if audio_mask is not None and state.eta > 0:
                 audio_latents = torch.lerp(audio_latents, clean_audio_latents, audio_mask.unsqueeze(-1))
 
-    return video_latents, audio_latents
+    # The keyframe rows are conditioning the model read, not picture it made, and they sit outside
+    # the latent grid's geometry -- unpacking with them still attached would reshape garbage.
+    return video_latents[:, : state.generated_tokens], audio_latents
 
 
 def _encoder_inputs(
@@ -481,15 +763,30 @@ def _step_noise(
     generator: torch.Generator,
     device: torch.device,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-    """The ancestral step's re-injected noise, drawn video-first from one CPU generator."""
+    """The ancestral step's re-injected noise, drawn video-first from one CPU generator.
+
+    Drawn for the GENERATED grid, never for the appended keyframe rows, and then padded back out.
+    Those rows are put straight back by the mask restore, so their noise is discarded either way --
+    but drawing it would consume a different amount of the shared stream at every step, which
+    shifts the audio noise and, from the next step on, the picture too. A last frame would then not
+    change how a clip ends, it would change the clip: at a fixed seed on the distilled checkpoint
+    (the only schedule that takes this branch) adding one regenerates everything.
+    """
     if state.eta <= 0:
         return None, None
+    generated = state.generated_tokens
     video_noise = randn_tensor(
-        video_latents.shape, generator=generator, device=torch.device("cpu"), dtype=torch.float32
+        (video_latents.shape[0], generated, video_latents.shape[2]),
+        generator=generator,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
     )
     audio_noise = randn_tensor(
         audio_latents.shape, generator=generator, device=torch.device("cpu"), dtype=torch.float32
     )
+    if video_noise.shape[1] != video_latents.shape[1]:
+        video_noise = torch.nn.functional.pad(video_noise, (0, 0, 0, video_latents.shape[1] - generated))
+
     return video_noise.to(device), audio_noise.to(device)
 
 

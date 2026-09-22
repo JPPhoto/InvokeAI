@@ -65,6 +65,9 @@ const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
   'ltx2_i2v',
   'ltx2_a2v',
   'ltx2_v2a',
+  'ltx2_lf2v',
+  'ltx2_flf2v',
+  'ltx2_extend_video',
 ]);
 
 export type VideoRecallKind = 'all' | 'remix' | 'prompts' | 'seed';

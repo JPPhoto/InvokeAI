@@ -60,7 +60,10 @@ const WAN_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
 
 const LTX2_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
   'audio-to-video': 'ltx2_a2v',
+  extend: 'ltx2_extend_video',
   'first-frame': 'ltx2_i2v',
+  'first-last': 'ltx2_flf2v',
+  'last-frame': 'ltx2_lf2v',
   txt2vid: 'ltx2_t2v',
   'video-to-audio': 'ltx2_v2a',
 };
@@ -843,23 +846,102 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
   }
   addEdge(graph, seed, 'value', denoise, 'seed');
 
-  if (mode === 'first-frame') {
-    if (!settings.firstFrameImage) {
-      throw new Error('A first frame is required for image-to-video generation.');
-    }
+  let extendConditioning: BackendInvocationContract | null = null;
 
-    // The base pass's canvas: the refine pass inherits the anchored first frame through the
-    // latents it is handed, and an encode made here could not be re-applied at twice the size.
-    const imageConditioning = addNode(graph, {
-      height: stages.base.height,
-      id: 'image_conditioning',
-      image: toImageField(settings.firstFrameImage),
-      type: 'ltx2_image_conditioning',
-      width: stages.base.width,
+  /**
+   * The tail of the clip being continued, encoded at one canvas and held as the opening of one
+   * pass. Read from the TRIMMED source, not the gallery file: the join's source half ends at the
+   * user's trim, so anchoring on the raw file's last frames would dissolve two unrelated moments
+   * into each other wherever the trim cut something off. The literal is what keeps the node's
+   * required field valid in the graph JSON; the edge is what the run actually reads.
+   */
+  const addExtendAnchor = (
+    id: string,
+    sourceVideo: NonNullable<VideoSettings['sourceVideo']>,
+    extract: BackendInvocationContract,
+    canvas: { width: number; height: number },
+    pass: BackendInvocationContract,
+    holdAudio: boolean
+  ) => {
+    const conditioning = addNode(graph, {
+      height: canvas.height,
+      id,
+      type: 'ltx2_extend_conditioning',
+      video: { video_name: sourceVideo.video_name },
+      width: canvas.width,
     });
 
-    addEdge(graph, modelLoader, 'vae', imageConditioning, 'vae');
-    addEdge(graph, imageConditioning, 'video_conditioning', denoise, 'video_conditioning');
+    addEdge(graph, extract, 'video', conditioning, 'video');
+    addEdge(graph, modelLoader, 'vae', conditioning, 'vae');
+    addEdge(graph, conditioning, 'video_conditioning', pass, 'video_conditioning');
+    // The same span of the source's sound as the picture it holds. Without it the join fades newly
+    // invented audio in against the source's real audio, and the new soundtrack starts one overlap
+    // early -- audible as the cut-over arriving a fraction of a second too soon.
+    //
+    // Only one anchor encodes it. The canvas never reaches the audio path, so a two-stage run's two
+    // anchors would read the same trimmed clip, load the audio VAE and vocoder, and produce byte-
+    // identical latents twice; the second pass is fed from the first instead.
+    if (holdAudio) {
+      addEdge(graph, modelLoader, 'audio_vae', conditioning, 'audio_vae');
+      addEdge(graph, modelLoader, 'vocoder', conditioning, 'vocoder');
+      addEdge(graph, extract, 'fps', conditioning, 'fps');
+      addEdge(graph, conditioning, 'audio_conditioning', pass, 'audio_prefix_conditioning');
+    }
+
+    return conditioning;
+  };
+
+  /**
+   * A held frame, encoded at one canvas and wired into one pass. Index 0 overwrites the grid's
+   * opening tokens; anything else is appended to the model's sequence as a keyframe, which is what
+   * lets a last frame coexist with a first one. Each pass needs its own encode at its own canvas --
+   * see the refine block below for why.
+   */
+  const addHeldFrame = (
+    id: string,
+    image: NonNullable<VideoSettings['firstFrameImage']>,
+    canvas: { width: number; height: number },
+    pass: BackendInvocationContract,
+    frameIndex: number
+  ) => {
+    const conditioning = addNode(graph, {
+      frame_index: frameIndex,
+      height: canvas.height,
+      id,
+      image: toImageField(image),
+      type: 'ltx2_image_conditioning',
+      width: canvas.width,
+    });
+
+    addEdge(graph, modelLoader, 'vae', conditioning, 'vae');
+    addEdge(
+      graph,
+      conditioning,
+      'video_conditioning',
+      pass,
+      frameIndex === 0 ? 'video_conditioning' : 'keyframe_conditioning'
+    );
+
+    return conditioning;
+  };
+
+  // The generation opens either from a still or from the tail of the clip being continued; a last
+  // frame rides on top of either as a keyframe. `-1` is resolved against the run's own frame count
+  // by the denoise node, so the encode does not go stale when the length changes.
+  // Keyed on the MODE rather than on whichever slot still holds something. Validation refuses every
+  // bad combination before a graph is built, so this is the second line rather than the first -- but
+  // a held frame reaching the graph unasked is both a silent change of output and, beside a
+  // whole-clip conditioning, a shape failure inside the transformer, and the sibling MiniMax builder
+  // guards the same way.
+  const holdsFirstFrame = (mode === 'first-frame' || mode === 'first-last') && settings.firstFrameImage;
+  const holdsLastFrame =
+    (mode === 'last-frame' || mode === 'first-last' || mode === 'extend') && settings.lastFrameImage;
+
+  if (holdsFirstFrame) {
+    addHeldFrame('image_conditioning', holdsFirstFrame, stages.base, denoise, 0);
+  }
+  if (holdsLastFrame) {
+    addHeldFrame('last_frame_conditioning', holdsLastFrame, stages.base, denoise, -1);
   }
 
   // The conditioning clip, in whichever role it was given. Both nodes report the frame count they
@@ -868,6 +950,7 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
   // gallery's own frame count is duration x fps rounded.
   const conditioningClip = settings.conditioningClip;
   let audioConditioning: BackendInvocationContract | null = null;
+  let heldVideoConditioning: BackendInvocationContract | null = null;
 
   if (mode === 'audio-to-video' || mode === 'video-to-audio') {
     if (!conditioningClip) {
@@ -903,6 +986,7 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
       addEdge(graph, modelLoader, 'vae', videoConditioning, 'vae');
       addEdge(graph, videoConditioning, 'video_conditioning', denoise, 'full_video_conditioning');
       addEdge(graph, videoConditioning, 'num_frames', denoise, 'num_frames');
+      heldVideoConditioning = videoConditioning;
     }
   }
 
@@ -943,30 +1027,29 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     addEdge(graph, upsample, 'latents', refine, 'latents');
     addEdge(graph, denoise, 'audio_latents', refine, 'audio_latents');
 
-    if (mode === 'first-frame' && settings.firstFrameImage) {
-      // A second encode, at the refine canvas. The refine pass re-noises every token including
-      // frame 0, so the base pass's anchor does not survive into it -- and the base pass's encode
-      // is half this size, so it cannot be re-used. Without this, two-stage image-to-video would
-      // regenerate the first frame from the prompt alone.
-      const refineConditioning = addNode(graph, {
-        height: stages.final.height,
-        id: 'refine_image_conditioning',
-        image: toImageField(settings.firstFrameImage),
-        type: 'ltx2_image_conditioning',
-        width: stages.final.width,
-      });
-
-      addEdge(graph, modelLoader, 'vae', refineConditioning, 'vae');
-      addEdge(graph, refineConditioning, 'video_conditioning', refine, 'video_conditioning');
+    // A second encode of every held frame, at the refine canvas. The refine pass re-noises every
+    // token -- frame 0 included, and appended keyframes are not carried through the upsampler at
+    // all -- and the base pass's encodes are half this size, so they cannot be re-used. Without
+    // this, a two-stage run would regenerate its held frames from the prompt alone and quietly
+    // mean something different by "first frame" than a single-stage one.
+    if (holdsFirstFrame) {
+      addHeldFrame('refine_image_conditioning', holdsFirstFrame, stages.final, refine, 0);
+    }
+    if (holdsLastFrame) {
+      addHeldFrame('refine_last_frame_conditioning', holdsLastFrame, stages.final, refine, -1);
     }
 
     finalDenoise = refine;
   }
 
+  // An extension's own clip is an intermediate: what the user asked for is the joined result, and
+  // `addSourceJoin` names the join `video_output`, so the decode has to give that id up or it would
+  // be silently overwritten by it.
+  const joining = mode === 'extend' && settings.sourceVideo !== null;
   const output = addNode(graph, {
     fps: timing.fps,
-    id: 'video_output',
-    is_intermediate: false,
+    id: joining ? 'extension_clip' : 'video_output',
+    is_intermediate: joining,
     type: 'ltx2_latents_to_video',
     use_cache: false,
   });
@@ -979,14 +1062,76 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     // replace the user's recording with a vocoder's copy of itself.
     addEdge(graph, audioConditioning, 'audio_conditioning', output, 'source_audio');
   }
+  if (heldVideoConditioning) {
+    // And the mirror of it: the picture was the given half here, so the user's own frames are
+    // written out rather than the held latents being decoded back into a cover-cropped copy.
+    addEdge(graph, heldVideoConditioning, 'video_conditioning', output, 'source_video');
+  }
   addEdge(graph, modelLoader, 'vae', output, 'vae');
   addEdge(graph, modelLoader, 'audio_vae', output, 'audio_vae');
   addEdge(graph, modelLoader, 'vocoder', output, 'vocoder');
 
+  // An extension is joined back onto the clip it continues. The generated half opens with the
+  // source's own tail -- held clean, so both clips render the same moment -- and the crossfade
+  // consumes exactly those frames from each side, which is what stops them playing twice. Its
+  // length comes over an edge rather than as a literal: a source shorter than the requested
+  // context contributes fewer frames, and only the node that read it knows how many.
+  const join = joining && settings.sourceVideo ? addSourceJoin(graph, settings.sourceVideo, output) : null;
+
+  if (join && settings.sourceVideo) {
+    // Built here rather than with the other conditioning because it reads the TRIMMED clip, which
+    // only exists once the join has been laid out.
+    extendConditioning = addExtendAnchor(
+      'extend_conditioning',
+      settings.sourceVideo,
+      join.extract,
+      stages.base,
+      denoise,
+      true
+    );
+    if (twoStage) {
+      // Appended or not, a held anchor does not survive the refine pass's re-noise, and the
+      // upsampler never sees it -- so stage two is given the tail again at its own canvas. Its
+      // sound is not canvas-dependent, so it comes from the first anchor rather than a second
+      // encode of the same audio.
+      addExtendAnchor(
+        'refine_extend_conditioning',
+        settings.sourceVideo,
+        join.extract,
+        stages.final,
+        finalDenoise,
+        false
+      );
+      addEdge(graph, extendConditioning, 'audio_conditioning', finalDenoise, 'audio_prefix_conditioning');
+    }
+
+    addEdge(graph, extendConditioning, 'context_frames', join.concat, 'transition_frames');
+    // The continuation inherits the source's own frame rate, read off the trimmed clip at run time
+    // rather than from the gallery's record of it -- a video row's fps is nullable, and a guess
+    // here would play the two halves at different speeds and mistime the generated soundtrack.
+    addEdge(graph, join.extract, 'fps', denoise, 'fps');
+    addEdge(graph, join.extract, 'fps', output, 'fps');
+    if (twoStage) {
+      addEdge(graph, join.extract, 'fps', finalDenoise, 'fps');
+    }
+    // The join's own fps is deliberately left unset: `video_concat` then takes the first input's
+    // rate, which is this same trimmed clip, and refuses the join outright if the two halves
+    // disagree. Wiring it would be worse in three ways -- the field is `Optional[int]`, so the edge
+    // is float -> int and the graph is refused at enqueue before anything runs; an int cannot carry
+    // 23.976; and forcing a rate would retime rather than catch a mismatch.
+  }
+
+  const joined = join?.concat ?? null;
+
   addVideoMetadata({
     extras: {
       cfg_scale: guidance.cfg_scale,
-      fps: timing.fps,
+      // What will actually be delivered: a continuation runs at the source's rate, every other mode
+      // at the panel's. Recorded rounded, mirroring what the clip reports back.
+      // For a continuation this is the gallery's reading of the source, which is the best number
+      // available when the graph is built -- the run itself takes the clip's true rate off the
+      // extract node, so a fractional source is delivered at 23.976 and recorded as 24.
+      fps: joined && settings.sourceVideo ? Math.round(settings.sourceVideo.fps) : timing.fps,
       ltx2_text_encoder_model: settings.ltx2TextEncoderModel,
       ...(componentSource ? { ltx2_component_source: componentSource } : {}),
       ...(policy.ui.audioCfgVisible ? { ltx2_audio_cfg_scale: guidance.audio_cfg_scale } : {}),
@@ -1014,7 +1159,9 @@ const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): B
     height: dimensions.height,
     model,
     negativeWired,
-    outputs: [output],
+    // The joined clip is the result; the generated half is kept as an intermediate, and both carry
+    // the metadata so either can be recalled.
+    outputs: joined ? [output, joined] : [output],
     settings,
     width: dimensions.width,
   });

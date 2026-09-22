@@ -42,10 +42,10 @@ from invokeai.backend.ltx2.constants import (
 from invokeai.backend.ltx2.denoise import build_denoise_state, build_refine_state, denoise, preview_latent_frame
 from invokeai.backend.ltx2.guidance import LTX2Guidance
 from invokeai.backend.ltx2.packing import (
+    latent_frame_count,
     require_patch_geometry,
     unpack_video_latents,
     validate_num_frames,
-    video_sequence_length,
 )
 from invokeai.backend.model_manager.taxonomy import BaseModelType, LTX2VariantType
 from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
@@ -78,7 +78,7 @@ class LTX2DenoiseOutput(BaseInvocationOutput):
     title="Denoise - LTX-2",
     tags=["ltx", "ltx2", "video", "audio", "denoise"],
     category="latents",
-    version="1.2.0",
+    version="1.4.0",
     classification=Classification.Prototype,
 )
 class LTX2DenoiseInvocation(BaseInvocation):
@@ -109,11 +109,26 @@ class LTX2DenoiseInvocation(BaseInvocation):
         input=Input.Connection,
         title="Image Conditioning",
     )
+    keyframe_conditioning: LTX2VideoConditioningField | None = InputField(
+        default=None,
+        description="A frame held somewhere other than the start -- a last frame, or any interior "
+        "keyframe. Its own `frame_index` says where; -1 is the last frame.",
+        input=Input.Connection,
+        title="Keyframe Conditioning",
+    )
     audio_conditioning: LTX2AudioConditioningField | None = InputField(
         default=None,
         description=FieldDescriptions.ltx2_audio_conditioning,
         input=Input.Connection,
         title="Audio Conditioning",
+    )
+    audio_prefix_conditioning: LTX2AudioConditioningField | None = InputField(
+        default=None,
+        description="The opening of the soundtrack, held while the rest is generated. A continuation "
+        "uses it so the join blends the source's real sound against a reproduction of itself rather "
+        "than against newly invented sound.",
+        input=Input.Connection,
+        title="Audio Prefix Conditioning",
     )
     full_video_conditioning: LTX2FullVideoConditioningField | None = InputField(
         default=None,
@@ -280,9 +295,52 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 f"{', '.join(mismatched)}. Wire this node's own values into that one, or take its outputs."
             )
 
+    def _resolve_keyframe(self, context: InvocationContext) -> tuple[torch.Tensor | None, int | None]:
+        """The held frame and the latent index it belongs at, with negatives resolved.
+
+        The index is resolved here rather than at the conditioning node because that node does not
+        know how long the clip is -- which is what lets one encode stay valid when the frame count
+        changes, instead of silently landing at the wrong instant.
+        """
+        if self.keyframe_conditioning is None:
+            return None, None
+
+        if (self.keyframe_conditioning.width, self.keyframe_conditioning.height) != (self.width, self.height):
+            raise ValueError(
+                f"The keyframe conditioning was prepared for a {self.keyframe_conditioning.width}x"
+                f"{self.keyframe_conditioning.height} canvas but this denoise runs at {self.width}x{self.height}. "
+                "Re-run Image Conditioning - LTX-2 with matching width and height."
+            )
+
+        latent_frames = latent_frame_count(self.num_frames)
+        index = self.keyframe_conditioning.frame_index
+        resolved = latent_frames + index if index < 0 else index
+
+        if resolved == 0:
+            raise ValueError(
+                "A keyframe at the first frame is what Image Conditioning's own output is for: wire it to "
+                "Image Conditioning rather than Keyframe Conditioning, or give it a non-zero frame index."
+            )
+        if not 0 < resolved < latent_frames:
+            raise ValueError(
+                f"Keyframe index {index} resolves to latent frame {resolved}, which is outside a "
+                f"{self.num_frames}-frame clip ({latent_frames} latent frames)."
+            )
+
+        return context.tensors.load(self.keyframe_conditioning.latents_name), resolved
+
     def _load_image_latents(self, context: InvocationContext) -> torch.Tensor | None:
         if self.video_conditioning is None:
             return None
+        if self.video_conditioning.frame_index != 0:
+            # The field's own description says a negative index makes the frame last, and this slot
+            # cannot honour that: it overwrites the opening grid tokens. Silently holding it at
+            # frame 0 would do the opposite of what the graph asked for.
+            raise ValueError(
+                f"Image Conditioning holds a frame at the start, but this one was encoded for frame "
+                f"{self.video_conditioning.frame_index}. Wire it to Keyframe Conditioning instead, or "
+                f"set its frame index to 0."
+            )
         if (self.video_conditioning.width, self.video_conditioning.height) != (self.width, self.height):
             raise ValueError(
                 f"The image conditioning was prepared for a {self.video_conditioning.width}x"
@@ -336,6 +394,17 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 {"num_frames": (self.audio_conditioning.num_frames, self.num_frames)},
                 {"fps": (self.audio_conditioning.fps, self.fps)},
             )
+        if self.audio_prefix_conditioning is not None:
+            # Only the rate: this field's `num_frames` is the HELD span, not the clip's, and it is
+            # the rate that cannot be recovered from any tensor shape. A prefix sized at one rate
+            # and held at another covers a different stretch of time than the picture it belongs
+            # to, so the join crossfades real source audio into the new material -- silently, since
+            # the row count stays well inside what the clip has room for.
+            self._require_matching(
+                "Extend Conditioning - LTX-2",
+                {},
+                {"fps": (self.audio_prefix_conditioning.fps, self.fps)},
+            )
         if self.full_video_conditioning is not None:
             self._require_matching(
                 "Video Conditioning - LTX-2",
@@ -365,6 +434,13 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 )
             negative = self._load_conditioning(context, self.negative_conditioning)
 
+        keyframe_latents, keyframe_index = self._resolve_keyframe(context)
+        audio_prefix_latents = (
+            context.tensors.load(self.audio_prefix_conditioning.latents_name)
+            if self.audio_prefix_conditioning is not None
+            else None
+        )
+
         if self.latents is not None:
             state = build_refine_state(
                 video_latents=context.tensors.load(self.latents.latents_name),
@@ -382,6 +458,10 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 # mean something different on a two-stage preset.
                 image_latents=self._load_image_latents(context),
                 conditioning_strength=self.video_conditioning.strength if self.video_conditioning else 1.0,
+                keyframe_latents=keyframe_latents,
+                keyframe_latent_index=keyframe_index,
+                keyframe_strength=self.keyframe_conditioning.strength if self.keyframe_conditioning else 1.0,
+                audio_prefix_latents=audio_prefix_latents,
             )
         else:
             state = build_denoise_state(
@@ -394,6 +474,10 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 num_steps=self.steps,
                 image_latents=self._load_image_latents(context),
                 conditioning_strength=self.video_conditioning.strength if self.video_conditioning else 1.0,
+                keyframe_latents=keyframe_latents,
+                keyframe_latent_index=keyframe_index,
+                keyframe_strength=self.keyframe_conditioning.strength if self.keyframe_conditioning else 1.0,
+                audio_prefix_latents=audio_prefix_latents,
                 frozen_audio_latents=(
                     context.tensors.load(self.audio_conditioning.latents_name)
                     if self.audio_conditioning is not None
@@ -409,7 +493,11 @@ class LTX2DenoiseInvocation(BaseInvocation):
         device = TorchDevice.choose_torch_device()
         inference_dtype = TorchDevice.choose_bfloat16_safe_dtype(device)
         estimated_working_memory = self._estimate_working_memory(
-            video_sequence_length(self.num_frames, self.height, self.width), state.audio_latents_count
+            # The sequence as built, not the grid: a held keyframe rides on the end of it and is
+            # attended over in every forward -- 858 rows on top of 13728 at 1248x704 x121 -- and the
+            # fit is tightest exactly where running out is most expensive.
+            state.video_latents.shape[1],
+            state.audio_latents_count,
         )
 
         transformer_info = context.models.load(self.transformer.transformer)

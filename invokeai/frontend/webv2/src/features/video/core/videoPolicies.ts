@@ -34,6 +34,8 @@ import {
   LTX2_NUM_FRAMES_MAX,
   LTX2_NUM_FRAMES_MIN,
   LTX2_NUM_FRAMES_SLIDER_MAX,
+  LTX2_EXTEND_CONTEXT_FRAMES,
+  ltx2ExtendJoinFitsInMemory,
   LTX2_NUM_FRAMES_STEP,
   ltx2FramesForClip,
   MINIMAX_H3_FPS,
@@ -350,9 +352,10 @@ const LTX2_COMMON = {
   fps: { defaultValue: LTX2_FPS_DEFAULT, editable: true, max: LTX2_FPS_MAX, min: LTX2_FPS_MIN },
   frames: LTX2_FRAMES,
   minSteps: 1,
-  // Text-to-video and first-frame image-to-video, both with a generated soundtrack, plus the two
-  // whole-modality conditioned modes. Keyframes and extension follow.
-  modes: ['txt2vid', 'first-frame', 'audio-to-video', 'video-to-audio'] as const,
+  // Every conditioning shape the family supports: text-to-video, a held first and/or last frame,
+  // continuing an existing clip, and the two whole-modality modes -- all with a generated
+  // soundtrack.
+  modes: ['txt2vid', 'first-frame', 'last-frame', 'first-last', 'extend', 'audio-to-video', 'video-to-audio'] as const,
   pixelMultiple: LTX2_CANVAS_MULTIPLE,
   targetResolutions: LTX2_TARGET_RESOLUTION_OPTIONS,
 };
@@ -2259,6 +2262,38 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
       `A two-stage target resolution needs at least ${LTX2_MIN_TWO_STAGE_STEPS} steps; the second pass ` +
         `refines what the first produced and cannot run in one.`
     );
+  }
+
+  // An LTX-2 continuation replays the front of the source and then joins the two halves by
+  // crossfading exactly those frames out of each. Both sides therefore have a floor, and both fail
+  // late and confusingly without one: the generated side after the encoders have run, the source
+  // side inside the join, after the whole generation.
+  if (mode === 'extend' && model.base === 'ltx-2' && settings.sourceVideo) {
+    if (settings.numFrames <= LTX2_EXTEND_CONTEXT_FRAMES) {
+      reasons.push(
+        `A continuation opens with ${LTX2_EXTEND_CONTEXT_FRAMES} frames of the source, so anything at or ` +
+          `below that would be all replay and no continuation. Raise Frames above ${LTX2_EXTEND_CONTEXT_FRAMES}.`
+      );
+    }
+
+    if (
+      !ltx2ExtendJoinFitsInMemory(settings.sourceVideo.width, settings.sourceVideo.height, LTX2_EXTEND_CONTEXT_FRAMES)
+    ) {
+      reasons.push(
+        `The join blends ${LTX2_EXTEND_CONTEXT_FRAMES} frames of the initial video at its own ` +
+          `${settings.sourceVideo.width}x${settings.sourceVideo.height}, which needs more memory than it is ` +
+          `allowed. Use a source at or below about 2560x1440.`
+      );
+    }
+
+    const kept = settings.sourceVideo.endFrame - settings.sourceVideo.startFrame + 1;
+
+    if (kept < LTX2_EXTEND_CONTEXT_FRAMES) {
+      reasons.push(
+        `The join blends ${LTX2_EXTEND_CONTEXT_FRAMES} frames out of each half, but the initial video's trim ` +
+          `keeps only ${kept}. Keep at least ${LTX2_EXTEND_CONTEXT_FRAMES} frames of it.`
+      );
+    }
   }
 
   if (config.cfg.visible && (!Number.isFinite(settings.cfgScale) || settings.cfgScale < 1)) {

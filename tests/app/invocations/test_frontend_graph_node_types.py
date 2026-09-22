@@ -27,6 +27,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, InvocationRegistry
 from invokeai.app.services.shared.graph import *  # noqa: F401 F403 -- imports all invocations, populating the registry
+from invokeai.app.services.shared.graph import are_connection_types_compatible
 
 _WEBV2 = Path(__file__).parents[3] / "invokeai" / "frontend" / "webv2" / "src" / "features"
 
@@ -59,6 +60,42 @@ def _invocation(node_type: str) -> type[BaseInvocation]:
         f"tests/app/invocations/test_node_discovery.py."
     )
     return cls
+
+
+CONNECTION_CASES = [
+    (name, connection) for name, contract in CONTRACTS.items() for connection in sorted(contract.get("connections", []))
+]
+
+
+@pytest.mark.parametrize(
+    ("contract", "connection"), CONNECTION_CASES, ids=lambda case: case if isinstance(case, str) else str(case)
+)
+def test_every_connection_the_panel_compiles_is_one_the_queue_will_accept(contract: str, connection: str) -> None:
+    """Field NAMES matching is not enough: a float wired into an int names two real fields and is
+    still refused, and `Graph.validate_self` runs on every enqueue -- so the whole generation dies
+    at submit, before anything runs, with no partial output to diagnose from. Checking the names
+    alone let exactly that ship in a video extension (`extract_video_range.fps` is a float,
+    `video_concat.fps` an `Optional[int]`); both sides of the fixture recorded the field happily.
+    """
+    source_type, source_field, destination_type, destination_field = connection.split(" ")
+    source_output = _invocation(source_type).get_output_annotation()
+    destination = _invocation(destination_type)
+
+    assert source_field in source_output.model_fields, (
+        f"webv2 reads '{source_field}' off a '{source_type}' node, which its output does not have."
+    )
+    assert destination_field in destination.model_fields, (
+        f"webv2 wires into '{destination_type}.{destination_field}', which that node does not have."
+    )
+
+    from_annotation = source_output.model_fields[source_field].annotation
+    to_annotation = destination.model_fields[destination_field].annotation
+
+    assert are_connection_types_compatible(from_annotation, to_annotation), (
+        f"webv2 connects {source_type}.{source_field} ({from_annotation}) into "
+        f"{destination_type}.{destination_field} ({to_annotation}), which the queue refuses as an "
+        f"invalid edge at enqueue."
+    )
 
 
 # The number of architectures each panel supports. A contract that silently stopped being

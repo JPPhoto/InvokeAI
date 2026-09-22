@@ -2,6 +2,7 @@
 
 import tempfile
 from collections.abc import Iterator
+from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from invokeai.app.invocations.fields import (
     InputField,
     LatentsField,
     LTX2AudioConditioningField,
+    LTX2FullVideoConditioningField,
     WithBoard,
     WithMetadata,
 )
@@ -24,6 +26,7 @@ from invokeai.app.services.session_processor.session_processor_common import Can
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.video_audio import extract_audio_pcm
 from invokeai.app.util.video_encoding import make_mp4_writer, write_stereo_wav
+from invokeai.app.util.video_thumbnails import iter_video_frames
 from invokeai.backend.ltx2.constants import (
     LTX2_DEFAULT_FPS,
     LTX2_DEFAULT_TEMPORAL_TILE,
@@ -49,7 +52,7 @@ def _iter_decoded_frames(decoded: torch.Tensor) -> Iterator[np.ndarray]:
     title="Latents to Video - LTX-2",
     tags=["latents", "video", "audio", "vae", "l2v", "ltx", "ltx2"],
     category="latents",
-    version="1.1.0",
+    version="1.2.0",
     classification=Classification.Prototype,
 )
 class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
@@ -62,6 +65,13 @@ class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
         "supplied rather than the generated audio being decoded.",
         input=Input.Connection,
         title="Source Audio",
+    )
+    source_video: LTX2FullVideoConditioningField | None = InputField(
+        default=None,
+        description="The clip whose soundtrack was generated. When set, its own frames are written out "
+        "instead of the held video latents being decoded.",
+        input=Input.Connection,
+        title="Source Video",
     )
     audio_latents: LatentsField | None = InputField(
         default=None,
@@ -91,12 +101,23 @@ class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
 
     @torch.no_grad()
     def invoke(self, context: InvocationContext) -> VideoOutput:
-        decoded = self._decode_video(context)
+        # Video-to-audio holds the picture and samples only the sound, so decoding those latents
+        # would hand back a cover-cropped VAE round trip of footage the user already has. Their own
+        # frames are written instead -- the mirror of what audio-to-video does for the soundtrack.
+        source = self._source_frames(context) if self.source_video is not None else None
+        decoded = None if source is not None else self._decode_video(context)
         if context.util.is_canceled():
             raise CanceledException
 
-        num_frames = decoded.shape[1]
-        height, width = decoded.shape[2:]
+        if source is not None:
+            assert self.source_video is not None
+            source_frames, height, width = source
+            num_frames = self.source_video.num_frames
+        else:
+            assert decoded is not None
+            source_frames = None
+            num_frames = decoded.shape[1]
+            height, width = decoded.shape[2:]
         duration = num_frames / float(self.fps)
 
         # The soundtrack is decoded and trimmed before the writer opens: the WAV has to exist, and
@@ -123,7 +144,8 @@ class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
             context.util.signal_progress(f"Encoding MP4 ({num_frames} frames @ {self.fps} fps)")
             writer = make_mp4_writer(tmp_path, float(self.fps), audio_path=wav_path)
             try:
-                _write_video_frames(writer, _iter_decoded_frames(decoded), context.util.is_canceled)
+                frames = iter(source_frames) if source_frames is not None else _iter_decoded_frames(decoded)
+                _write_video_frames(writer, frames, context.util.is_canceled)
             finally:
                 writer.close()
             del decoded
@@ -180,6 +202,47 @@ class LTX2LatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
             )
         TorchDevice.empty_cache()
         return decoded
+
+    def _source_frames(self, context: InvocationContext) -> tuple[Iterator[np.ndarray], int, int]:
+        """The held clip's own frames, at its own resolution, trimmed to what was generated.
+
+        Not fitted to the generation canvas: the canvas is what the *model* had to see, and handing
+        it back would return the user's footage cropped. What they asked for is their clip with a
+        soundtrack, so the framing they shot is what comes back.
+
+        Streamed rather than collected, and that is not a detail: these are full-resolution frames,
+        so a 4K clip of 241 would be 5.6 GiB of host memory that no budget in the model cache knows
+        about. Only the first frame is held, to report the geometry the writer needs. Returns the
+        remaining frames, the height and the width.
+        """
+        assert self.source_video is not None
+        name = self.source_video.source_video_name
+        wanted = self.source_video.num_frames
+        decoded = iter_video_frames(context.videos.get_path(name), is_canceled=context.util.is_canceled)
+
+        context.util.signal_progress("Reading the source clip for its new soundtrack")
+        first = next(decoded, None)
+        if first is None:
+            raise ValueError(f"'{name}' decoded no frames, but the soundtrack was generated for {wanted}.")
+
+        height, width = first.shape[:2]
+
+        def frames() -> Iterator[np.ndarray]:
+            written = 0
+            for frame in chain([first], decoded):
+                if written >= wanted:
+                    return
+                written += 1
+                yield frame
+            # Raised at the end rather than up front: counting first would mean decoding the clip
+            # twice, and the invocation fails here so no truncated video is ever saved.
+            if written < wanted:
+                raise ValueError(
+                    f"'{name}' now decodes to {written} frame(s) but the soundtrack was generated for "
+                    f"{wanted}. The clip has changed since it was encoded."
+                )
+
+        return frames(), height, width
 
     def _extract_source_audio_to_wav(self, context: InvocationContext, video_duration_s: float) -> Path:
         """The conditioning clip's own soundtrack, trimmed or padded to the generated duration.

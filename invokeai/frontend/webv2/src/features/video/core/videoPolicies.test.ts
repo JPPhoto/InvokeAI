@@ -1537,14 +1537,11 @@ const LTX2_ENCODER = {
 };
 
 describe('LTX-2 policy', () => {
-  it('offers text-to-video, first-frame and whole-modality conditioning on both checkpoints', () => {
-    expect(getVideoModes(ltx2('ltx2_dev'))).toEqual(['txt2vid', 'first-frame', 'audio-to-video', 'video-to-audio']);
-    expect(getVideoModes(ltx2('ltx2_distilled'))).toEqual([
-      'txt2vid',
-      'first-frame',
-      'audio-to-video',
-      'video-to-audio',
-    ]);
+  it('offers every conditioning shape on both checkpoints', () => {
+    const modes = ['txt2vid', 'first-frame', 'last-frame', 'first-last', 'extend', 'audio-to-video', 'video-to-audio'];
+
+    expect(getVideoModes(ltx2('ltx2_dev'))).toEqual(modes);
+    expect(getVideoModes(ltx2('ltx2_distilled'))).toEqual(modes);
   });
 
   describe('whole-modality conditioning clips', () => {
@@ -1614,6 +1611,71 @@ describe('LTX-2 policy', () => {
       const stale = { ...settingsFor(wan), conditioningClip: { clip: CLIP, fpsKnown: true, role: 'video' as const } };
 
       expect(getVideoDimensions(wan, stale)?.source).toBe('aspect-ratio');
+    });
+
+    it('refuses a continuation with no room left to continue', () => {
+      // The generation opens by replaying the source's tail, so a frame count at or below that is
+      // all context and no continuation. Left to the backend it fails after both encoders have run,
+      // with a shape error about an anchor that does not fit its clip.
+      const clip = {
+        endFrame: 94,
+        fps: 24,
+        height: 704,
+        numFrames: 96,
+        startFrame: 0,
+        video_name: 's.mp4',
+        width: 1248,
+      };
+      const extending = (numFrames: number) =>
+        settingsFor(model, {
+          componentSourceModel: LTX2_COMPONENTS,
+          ltx2TextEncoderModel: LTX2_ENCODER,
+          numFrames,
+          sourceVideo: clip,
+        });
+
+      expect(getVideoValidationReasons(model, extending(17)).join(' ')).toContain('Raise Frames above 17');
+      expect(getVideoValidationReasons(model, extending(9)).join(' ')).toContain('Raise Frames above 17');
+      expect(getVideoValidationReasons(model, extending(25))).toEqual([]);
+    });
+
+    it('refuses a source the join could not afford to blend', () => {
+      // The crossfade is buffered at the SOURCE's own resolution, not the generation canvas, and
+      // `video_concat` refuses over 512 MiB. Unchecked, that refusal lands after both encodes, the
+      // transformer and the decode -- and neither remedy it names is reachable from the panel.
+      const atSize = (width: number, height: number) =>
+        settingsFor(model, {
+          componentSourceModel: LTX2_COMPONENTS,
+          ltx2TextEncoderModel: LTX2_ENCODER,
+          numFrames: 121,
+          sourceVideo: { endFrame: 94, fps: 24, height, numFrames: 96, startFrame: 0, video_name: 's.mp4', width },
+        });
+
+      expect(getVideoValidationReasons(model, atSize(2560, 1440))).toEqual([]);
+      expect(getVideoValidationReasons(model, atSize(3840, 2160)).join(' ')).toContain('at or below about 2560x1440');
+    });
+
+    it('refuses a trim the join could not blend out of', () => {
+      // The other side of the same arithmetic: the crossfade takes 17 frames from EACH half, so a
+      // source trimmed shorter than that fails inside the join -- after the whole generation.
+      const trimmed = (kept: number) =>
+        settingsFor(model, {
+          componentSourceModel: LTX2_COMPONENTS,
+          ltx2TextEncoderModel: LTX2_ENCODER,
+          numFrames: 121,
+          sourceVideo: {
+            endFrame: kept - 1,
+            fps: 24,
+            height: 704,
+            numFrames: 96,
+            startFrame: 0,
+            video_name: 's.mp4',
+            width: 1248,
+          },
+        });
+
+      expect(getVideoValidationReasons(model, trimmed(10)).join(' ')).toContain('keeps only 10');
+      expect(getVideoValidationReasons(model, trimmed(17))).toEqual([]);
     });
 
     it('derives the canvas from the clip only when its picture is the given one', () => {

@@ -757,6 +757,16 @@ const LTX2_COMPONENTS: MainModelConfig = {
 };
 const LTX2_ENCODER = { base: 'ltx-2', key: 'gemma4', name: 'LTX-2.5 Text Encoder', type: 'gemma4_encoder' as const };
 
+const LTX2_SOURCE_CLIP = {
+  endFrame: 94,
+  fps: 24,
+  height: 704,
+  numFrames: 96,
+  startFrame: 0,
+  video_name: 'source.mp4',
+  width: 1248,
+};
+
 /** A four-second 24 fps clip: 96 frames, which snaps DOWN to 89 on the VAE's 8n + 1 grid. */
 const LTX2_CLIP = { fps: 24, height: 704, numFrames: 96, video_name: 'clip.mp4', width: 1248 };
 
@@ -975,7 +985,12 @@ describe('compileVideoGraph — LTX-2', () => {
     // The picture is the given one, so the run adopts the clip's rate, not the panel's.
     expect(denoise.fps).toBe(LTX2_CLIP.fps);
     // Its own soundtrack is the thing being generated, so nothing is muxed back in.
-    expect(nodeOfType(backendGraph, 'ltx2_latents_to_video').source_audio).toBeUndefined();
+    const decode = nodeOfType(backendGraph, 'ltx2_latents_to_video');
+
+    expect(decode.source_audio).toBeUndefined();
+    // But the picture was the given half, so the user's own frames are written out rather than the
+    // held latents being decoded into a cover-cropped copy of footage they already have.
+    expect(hasEdge(backendGraph, conditioning.id, 'video_conditioning', decode.id, 'source_video')).toBe(true);
   });
 
   it('records the conditioning clip and the frames that ran, for recall', () => {
@@ -991,6 +1006,188 @@ describe('compileVideoGraph — LTX-2', () => {
       ltx2_conditioning_video: { video_name: LTX2_CLIP.video_name },
       num_frames: 89,
     });
+  });
+
+  it('holds a last frame as a keyframe, so it can coexist with a first one', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { firstFrameImage: FIRST_FRAME, lastFrameImage: LAST_FRAME }),
+      model
+    );
+    const first = backendGraph.nodes.image_conditioning;
+    const last = backendGraph.nodes.last_frame_conditioning;
+
+    // Index 0 overwrites the grid's opening tokens; -1 is appended to the sequence instead, which
+    // is the only reason both can be held at once.
+    expect(first).toMatchObject({ frame_index: 0 });
+    expect(last).toMatchObject({ frame_index: -1 });
+    expect(
+      hasEdge(backendGraph, 'image_conditioning', 'video_conditioning', 'denoise_latents', 'video_conditioning')
+    ).toBe(true);
+    expect(
+      hasEdge(backendGraph, 'last_frame_conditioning', 'video_conditioning', 'denoise_latents', 'keyframe_conditioning')
+    ).toBe(true);
+    expect(backendGraph.nodes.core_metadata).toMatchObject({ generation_mode: 'ltx2_flf2v' });
+  });
+
+  it('holds a last frame alone for last-frame-only generation', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { lastFrameImage: LAST_FRAME }), model);
+
+    expect(backendGraph.nodes.image_conditioning).toBeUndefined();
+    expect(backendGraph.nodes.last_frame_conditioning).toMatchObject({ frame_index: -1 });
+    expect(backendGraph.nodes.core_metadata).toMatchObject({ generation_mode: 'ltx2_lf2v' });
+  });
+
+  it('re-encodes every held frame at the refine canvas', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        aspectRatioId: '16:9',
+        firstFrameImage: FIRST_FRAME,
+        lastFrameImage: LAST_FRAME,
+        targetResolution: '1024p',
+      }),
+      model
+    );
+
+    // The refine pass re-noises every token, and appended keyframes never go through the upsampler
+    // at all -- so both frames have to be encoded again, at this pass's own (doubled) canvas.
+    expect(backendGraph.nodes.refine_image_conditioning).toMatchObject({ frame_index: 0, height: 1024, width: 1792 });
+    expect(backendGraph.nodes.refine_last_frame_conditioning).toMatchObject({ frame_index: -1, height: 1024 });
+    expect(backendGraph.nodes.image_conditioning).toMatchObject({ height: 512, width: 896 });
+    expect(
+      hasEdge(
+        backendGraph,
+        'refine_last_frame_conditioning',
+        'video_conditioning',
+        'refine_latents',
+        'keyframe_conditioning'
+      )
+    ).toBe(true);
+  });
+
+  it('continues a clip from its own tail and consumes the overlap in the join', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { sourceVideo: LTX2_SOURCE_CLIP }), model);
+    const extend = nodeOfType(backendGraph, 'ltx2_extend_conditioning');
+    const concat = nodeOfType(backendGraph, 'video_concat');
+
+    expect(hasEdge(backendGraph, extend.id, 'video_conditioning', 'denoise_latents', 'video_conditioning')).toBe(true);
+    // The generated clip opens with the source's own tail, so the crossfade has to consume exactly
+    // those frames -- and only the node that read the clip knows how many it got.
+    expect(hasEdge(backendGraph, extend.id, 'context_frames', concat.id, 'transition_frames')).toBe(true);
+    expect(concat).toMatchObject({ transition: 'crossfade' });
+    // Both halves play at one speed, and the rate is read off the trimmed source at run time
+    // rather than from the gallery's record of it -- a video row's fps is nullable.
+    const extract = nodeOfType(backendGraph, 'extract_video_range');
+
+    // The denoise and the decode take the clip's true float rate.
+    expect(hasEdge(backendGraph, extract.id, 'fps', 'denoise_latents', 'fps')).toBe(true);
+    expect(hasEdge(backendGraph, extract.id, 'fps', backendGraph.nodes.extension_clip!.id, 'fps')).toBe(true);
+    // The join's fps is left unset on purpose: video_concat takes the first input's rate, which is
+    // this same clip. Wiring it is float -> Optional[int], which the queue refuses at enqueue.
+    expect(hasEdge(backendGraph, extract.id, 'fps', concat.id, 'fps')).toBe(false);
+    expect(concat).not.toHaveProperty('fps');
+    expect(extract).not.toHaveProperty('fps');
+
+    // And the anchor is the TRIMMED clip, not the gallery file: the join's source half ends at the
+    // user's trim, so anchoring past it would dissolve two unrelated moments together.
+    expect(hasEdge(backendGraph, extract.id, 'video', extend.id, 'video')).toBe(true);
+    // The join is the result; the generated half is kept as an intermediate beside it.
+    expect(backendGraph.nodes.extension_clip).toMatchObject({ is_intermediate: true });
+    expect(concat.is_intermediate).toBe(false);
+    expect(backendGraph.nodes.core_metadata).toMatchObject({ generation_mode: 'ltx2_extend_video' });
+  });
+
+  it('holds the source\u2019s closing sound over the span the join crossfades', () => {
+    // The join fades the held frames out of both halves. The picture survives it because both clips
+    // render the same instant; the soundtrack only does if it is held over the same span. Left
+    // generated, the blend fades invented audio in against the source\u2019s real audio and the new
+    // soundtrack starts one overlap early -- an audible seam at the junction.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { sourceVideo: LTX2_SOURCE_CLIP }), model);
+    const extend = nodeOfType(backendGraph, 'ltx2_extend_conditioning');
+
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', extend.id, 'audio_vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', extend.id, 'vocoder')).toBe(true);
+    // The rate the held frames are counted at has to be the clip\u2019s own, or the held sound spans a
+    // different stretch of time than the held picture.
+    expect(hasEdge(backendGraph, nodeOfType(backendGraph, 'extract_video_range').id, 'fps', extend.id, 'fps')).toBe(
+      true
+    );
+    expect(hasEdge(backendGraph, extend.id, 'audio_conditioning', 'denoise_latents', 'audio_prefix_conditioning')).toBe(
+      true
+    );
+    // Held, not muxed. The decode's source_audio channel replaces the generated soundtrack wholesale
+    // with the source file's own -- right for audio-to-video, silently wrong here, where everything
+    // past the overlap is meant to be new sound.
+    expect(
+      hasEdge(backendGraph, extend.id, 'audio_conditioning', backendGraph.nodes.extension_clip!.id, 'source_audio')
+    ).toBe(false);
+  });
+
+  it('holds the closing sound through a two-stage continuation, encoding it once', () => {
+    // Stage two re-noises every audio row, so a prefix wired only into stage one is gone by the
+    // join and the seam is back with nothing else looking different. But the canvas never reaches
+    // the audio path, so a second anchor would re-read the clip, load the audio VAE and vocoder,
+    // and produce identical latents -- stage two is fed from stage one's encode instead.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', sourceVideo: LTX2_SOURCE_CLIP, targetResolution: '1024p' }),
+      model
+    );
+
+    expect(
+      hasEdge(backendGraph, 'extend_conditioning', 'audio_conditioning', 'refine_latents', 'audio_prefix_conditioning')
+    ).toBe(true);
+    // The refine anchor holds picture only: no audio models, so it never opens the soundtrack.
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', 'refine_extend_conditioning', 'audio_vae')).toBe(false);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', 'refine_extend_conditioning', 'vocoder')).toBe(false);
+  });
+
+  it('re-anchors a two-stage continuation at the refine canvas', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', sourceVideo: LTX2_SOURCE_CLIP, targetResolution: '1024p' }),
+      model
+    );
+
+    // Without this the refine pass continues from nothing and the join cuts between two unrelated
+    // shots -- the same failure two-stage image-to-video had before it re-encoded its first frame.
+    expect(backendGraph.nodes.refine_extend_conditioning).toMatchObject({ height: 1024, width: 1792 });
+    expect(backendGraph.nodes.extend_conditioning).toMatchObject({ height: 512, width: 896 });
+    expect(
+      hasEdge(backendGraph, 'refine_extend_conditioning', 'video_conditioning', 'refine_latents', 'video_conditioning')
+    ).toBe(true);
+  });
+
+  it('lands a continuation on a destination frame', () => {
+    // The only path where both new mechanisms meet: a multi-frame leading anchor from the source's
+    // tail, and an appended keyframe at the end. The panel offers it deliberately -- the Last Frame
+    // field has its own copy for the extend case.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { lastFrameImage: LAST_FRAME, sourceVideo: LTX2_SOURCE_CLIP }),
+      model
+    );
+    const extend = nodeOfType(backendGraph, 'ltx2_extend_conditioning');
+
+    expect(hasEdge(backendGraph, extend.id, 'video_conditioning', 'denoise_latents', 'video_conditioning')).toBe(true);
+    expect(backendGraph.nodes.last_frame_conditioning).toMatchObject({ frame_index: -1 });
+    expect(
+      hasEdge(backendGraph, 'last_frame_conditioning', 'video_conditioning', 'denoise_latents', 'keyframe_conditioning')
+    ).toBe(true);
+    // Still an extension: the join and its crossfade are unchanged by the destination frame.
+    expect(
+      hasEdge(
+        backendGraph,
+        extend.id,
+        'context_frames',
+        nodeOfType(backendGraph, 'video_concat').id,
+        'transition_frames'
+      )
+    ).toBe(true);
   });
 
   it('encodes the negative prompt whenever either classifier-free scale will consume it', () => {
