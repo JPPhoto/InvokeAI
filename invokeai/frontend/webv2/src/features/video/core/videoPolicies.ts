@@ -1770,8 +1770,8 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     reasons.push('CFG must be at least 1.');
   }
 
-  if (config.cfg.lowNoiseVisible && settings.cfgScaleLowNoise !== null && settings.cfgScaleLowNoise < 0) {
-    reasons.push('CFG (Low Noise) must be at least 0.');
+  if (config.cfg.lowNoiseVisible && settings.cfgScaleLowNoise !== null && settings.cfgScaleLowNoise < 1) {
+    reasons.push('CFG (Low Noise) must be at least 1.');
   }
 
   if (settings.acceleratorEnabled && !config.accelerator) {

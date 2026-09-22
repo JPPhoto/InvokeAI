@@ -270,7 +270,7 @@ export const getUpscaleValidationReasons = (values: UpscaleWidgetValues, models?
   addRangeReason(reasons, 'Tile size', values.tileSize, UPSCALE_TILE_SIZE_MIN, UPSCALE_TILE_SIZE_MAX);
   addRangeReason(reasons, 'Tile overlap', values.tileOverlap, UPSCALE_TILE_OVERLAP_MIN, UPSCALE_TILE_OVERLAP_MAX);
   addRangeReason(reasons, 'Steps', values.steps, 1, 1000);
-  addRangeReason(reasons, 'CFG scale', values.cfgScale, 0, 100);
+  addRangeReason(reasons, 'CFG scale', values.cfgScale, 1, 100);
   addRangeReason(reasons, 'Seed', values.seed, 0, SEED_MAX);
 
   if (models) {

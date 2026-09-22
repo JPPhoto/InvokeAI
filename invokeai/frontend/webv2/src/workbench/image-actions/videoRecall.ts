@@ -570,7 +570,7 @@ export const buildVideoRecallSettings = ({
       // The graph records the key only when the setting was non-null; absence
       // means "reuse the primary CFG", so restore that exact semantics.
       ...(policy.ui.cfgLowNoiseVisible
-        ? { cfgScaleLowNoise: cfgScaleLowNoise !== null && cfgScaleLowNoise >= 0 ? cfgScaleLowNoise : null }
+        ? { cfgScaleLowNoise: cfgScaleLowNoise !== null && cfgScaleLowNoise >= 1 ? cfgScaleLowNoise : null }
         : {}),
     };
     fields.push('cfg');

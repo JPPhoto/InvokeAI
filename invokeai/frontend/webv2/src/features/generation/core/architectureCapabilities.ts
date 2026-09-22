@@ -126,7 +126,7 @@ export const toBaseGenerationConfig = (row: ArchitectureCapabilitiesRow): BaseGe
     // `??` like every sibling here: a backend that predates these fields would otherwise put
     // `undefined` into a `number`, and `Math.max(undefined, value)` is NaN -- a broken thumb rather
     // than the unbounded control this had before the fields existed.
-    guidance: { min: features.guidance_min ?? 0, max: features.guidance_max ?? null },
+    guidance: { min: features.guidance_min ?? 1, max: features.guidance_max ?? null },
     negativePrompt: features.negative_prompt,
     ui: {
       sdVaeOverride: features.sd_vae_override,

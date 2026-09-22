@@ -362,7 +362,7 @@ describe('GenerateRenderSection guidance field', () => {
     // accessible name in the product, which is its own (pre-existing) problem — asserting both
     // ranges at once is what keeps this test honest about which is which.
     expect(ranges('Guidance')).toEqual([
-      ['0', '10'],
+      ['1', '10'],
       ['1', '20'],
     ]);
     expect(ranges('Steps')).toEqual([

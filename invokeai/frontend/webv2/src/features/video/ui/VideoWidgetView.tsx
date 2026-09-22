@@ -730,7 +730,7 @@ export const VideoWidgetView = () => {
               inputMax={100}
               label={t('widgets.video.cfgLowNoise')}
               max={15}
-              min={0}
+              min={1}
               step={0.1}
               value={values.cfgScaleLowNoise ?? values.cfgScale}
               onChange={set.cfgScaleLowNoise}

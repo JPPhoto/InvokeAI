@@ -241,7 +241,7 @@ export const UpscaleWidgetView = () => {
   );
   const errors = useMemo(
     () => ({
-      cfgScale: getRangeError(t('widgets.upscale.cfgScale'), values.cfgScale, 0, 100),
+      cfgScale: getRangeError(t('widgets.upscale.cfgScale'), values.cfgScale, 1, 100),
       creativity: getRangeError(
         t('widgets.upscale.creativity'),
         values.creativity,
@@ -558,7 +558,7 @@ export const UpscaleWidgetView = () => {
             inputMax={100}
             label={t('widgets.upscale.cfgScale')}
             max={CFG_SLIDER_MAX}
-            min={0}
+            min={1}
             step={0.5}
             value={values.cfgScale}
             onChange={set.cfgScale}

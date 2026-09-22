@@ -1057,6 +1057,15 @@ describe('getVideoValidationReasons', () => {
     ]);
   });
 
+  it('floors the low-noise CFG at 1 and accepts reuse-primary', () => {
+    const model = wanModel('t2v_a14b', 'diffusers');
+    const reason = 'CFG (Low Noise) must be at least 1.';
+
+    expect(getVideoValidationReasons(model, settingsFor(model, { cfgScaleLowNoise: 0.5 }))).toContainEqual(reason);
+    expect(getVideoValidationReasons(model, settingsFor(model, { cfgScaleLowNoise: 1 }))).not.toContainEqual(reason);
+    expect(getVideoValidationReasons(model, settingsFor(model, { cfgScaleLowNoise: null }))).not.toContainEqual(reason);
+  });
+
   it('rejects a destination image while extending on TI2V-5B', () => {
     const model = wanModel('ti2v_5b', 'diffusers');
     const settings = settingsFor(model, { lastFrameImage: LAST_FRAME, sourceVideo: SOURCE_VIDEO });

@@ -411,7 +411,11 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     aspectRatioId: isVideoAspectRatioId(values.aspectRatioId) ? values.aspectRatioId : SETTINGS_FALLBACKS.aspectRatioId,
     batchCount: sanitizeBatchCount(values.batchCount),
     cfgScale: hasFiniteNumber(values, 'cfgScale') ? (values.cfgScale as number) : SETTINGS_FALLBACKS.cfgScale,
-    cfgScaleLowNoise: hasFiniteNumber(values, 'cfgScaleLowNoise') ? (values.cfgScaleLowNoise as number) : null,
+    // Below 1 the node falls back to the primary CFG, which the widget spells `null`.
+    cfgScaleLowNoise:
+      hasFiniteNumber(values, 'cfgScaleLowNoise') && (values.cfgScaleLowNoise as number) >= 1
+        ? (values.cfgScaleLowNoise as number)
+        : null,
     firstFrameImage,
     fps: hasFiniteNumber(values, 'fps') ? (values.fps as number) : SETTINGS_FALLBACKS.fps,
     h3HybridBaseModel: isMainModelConfig(values.h3HybridBaseModel) ? values.h3HybridBaseModel : null,

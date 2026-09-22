@@ -222,7 +222,8 @@ const FALLBACK_GENERATION_CONFIG: BaseGenerationConfig = {
   // Deliberately the widest range, not the narrowest: without a table `getGenerationValidationReasons`
   // already blocks generation outright, so tightening the control here would only clamp a persisted
   // value the user legitimately had -- FLUX Fill's 30 -- away while the capabilities are still in flight.
-  guidance: { min: 0, max: null },
+  // 1 is "no guidance" on every sampler; nothing offers less.
+  guidance: { min: 1, max: null },
   negativePrompt: { visible: true, usage: 'never' },
   ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
 };

@@ -87,6 +87,11 @@ describe('normalizeVideoSettings', () => {
     expect(isVideoSettings(settings)).toBe(true);
   });
 
+  it('folds a low-noise CFG below 1 back into reuse-primary', () => {
+    expect(normalizeVideoSettings({ ...createSettings(), cfgScaleLowNoise: 0.5 })?.cfgScaleLowNoise).toBeNull();
+    expect(normalizeVideoSettings({ ...createSettings(), cfgScaleLowNoise: 1 })?.cfgScaleLowNoise).toBe(1);
+  });
+
   it('rejects non-records but heals partial records field-by-field, upscale-style', () => {
     expect(normalizeVideoSettings(null)).toBeNull();
     expect(normalizeVideoSettings(7)).toBeNull();

@@ -339,6 +339,16 @@ describe('buildVideoRecallSettings', () => {
     });
 
     expect(withKey?.values.cfgScaleLowNoise).toBe(3);
+
+    // Below 1 the node reused the primary CFG, so the recalled state does too.
+    const belowFloor = buildVideoRecallSettings({
+      currentValues: withLow,
+      kind: 'all',
+      metadata: wanMetadata({ guidance_scale_low_noise: 0.5 }),
+      models: catalog,
+    });
+
+    expect(belowFloor?.values.cfgScaleLowNoise).toBeNull();
   });
 
   it('clears held conditioning media when the recorded run had none — mode is part of the recall', () => {
