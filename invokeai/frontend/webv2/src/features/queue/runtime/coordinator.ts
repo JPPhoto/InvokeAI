@@ -60,7 +60,7 @@ export interface QueueNodeExecutionPort {
   completed(event: InvocationCompleteEvent): void;
   failed(event: InvocationErrorEvent): void;
   progress(nodeId: string, percentage: number | null, message: string): void;
-  settleRunning(nodeIds: Iterable<string>, outcome: 'completed' | 'failed' | 'canceled'): void;
+  settleRunning(nodeIds: Iterable<string>, outcome: 'completed' | 'failed' | 'canceled', error?: string): void;
   started(event: InvocationStartedEvent): void;
 }
 
@@ -254,9 +254,9 @@ export const createQueueCoordinator = (
   const pendingProgressEvents = new Map<number, InvocationProgressEvent>();
   /** Nodes each backend item has driven; settled with the item's terminal outcome. */
   const nodeIdsByBackendItem = new Map<number, Set<string>>();
-  /** The backend item whose node events the execution store currently reflects, and the receipt sequence it took over at. */
-  let nodeExecutionItemId: number | null = null;
-  let nodeExecutionItemSequence = 0;
+  /** The root backend item whose node events the execution store currently reflects. */
+  let nodeExecutionRootItemId: number | null = null;
+  let nodeExecutionRootItemSequence = 0;
   let nodeEventSequence = 0;
   /** Enqueue requests awaiting a response; early node events and previews are buffered while one is in flight. */
   let inFlightSubmissions = 0;
@@ -360,14 +360,18 @@ export const createQueueCoordinator = (
     return { itemIndex: itemIndex === -1 ? 1 : itemIndex + 1, queueItemId: localQueueItemId };
   };
 
-  const settleNodes = (backendItemId: number, outcome: TerminalOutcome['status']): void => {
+  const settleNodes = (backendItemId: number, outcome: TerminalOutcome): void => {
     const nodeIds = nodeIdsByBackendItem.get(backendItemId);
 
     nodeIdsByBackendItem.delete(backendItemId);
 
     // A late settle for an item the store no longer reflects must not touch the current run's nodes.
-    if (nodeIds && isActive() && nodeExecutionItemId === backendItemId) {
-      nodeExecution.settleRunning(nodeIds, outcome);
+    if (nodeIds && isActive() && nodeExecutionRootItemId === backendItemId) {
+      if (outcome.status === 'failed') {
+        nodeExecution.settleRunning(nodeIds, outcome.status, outcome.error);
+      } else {
+        nodeExecution.settleRunning(nodeIds, outcome.status);
+      }
     }
   };
 
@@ -376,14 +380,14 @@ export const createQueueCoordinator = (
    * in any order, so only a replayed event from before the current item's takeover is a straggler.
    */
   const isStaleNodeEvent = (nodeEvent: NodeEvent): boolean =>
-    nodeExecutionItemId !== null &&
-    getTrackedBackendItemId(nodeEvent.event) !== nodeExecutionItemId &&
-    nodeEvent.sequence < nodeExecutionItemSequence;
+    nodeExecutionRootItemId !== null &&
+    getTrackedBackendItemId(nodeEvent.event) !== nodeExecutionRootItemId &&
+    nodeEvent.sequence < nodeExecutionRootItemSequence;
 
   const trackNodeForItem = (backendItemId: number, nodeId: string, sequence: number): void => {
-    if (nodeExecutionItemId !== backendItemId) {
-      nodeExecutionItemId = backendItemId;
-      nodeExecutionItemSequence = sequence;
+    if (nodeExecutionRootItemId !== backendItemId) {
+      nodeExecutionRootItemId = backendItemId;
+      nodeExecutionRootItemSequence = sequence;
       nodeExecution.clearAll();
     }
 
@@ -523,7 +527,7 @@ export const createQueueCoordinator = (
 
     wait.frameGates.clear();
     waits.delete(backendItemId);
-    settleNodes(backendItemId, outcome.status);
+    settleNodes(backendItemId, outcome);
     const progressTarget = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     const releaseProgressSlot = (): void => {
       if (isActive()) {
@@ -603,7 +607,7 @@ export const createQueueCoordinator = (
       replayNodeEvents(backendItemId);
       recentTerminalOutcomes.delete(backendItemId);
       pendingProgressEvents.delete(backendItemId);
-      settleNodes(backendItemId, bufferedOutcome.status);
+      settleNodes(backendItemId, bufferedOutcome);
 
       return Promise.resolve(bufferedOutcome);
     }
@@ -880,8 +884,8 @@ export const createQueueCoordinator = (
 
     progress.clearAll?.();
     nodeExecution.clearAll();
-    nodeExecutionItemId = null;
-    nodeExecutionItemSequence = 0;
+    nodeExecutionRootItemId = null;
+    nodeExecutionRootItemSequence = 0;
     pendingNodeEvents.clear();
     // Keep previews received before enqueue adoption; the HTTP response may still be in flight.
     nodeIdsByBackendItem.clear();
@@ -1215,7 +1219,7 @@ export const createQueueCoordinator = (
       if (wait?.localQueueItemId === localQueueItemId) {
         waits.delete(backendItemId);
         wait.frameGates.clear();
-        settleNodes(backendItemId, 'canceled');
+        settleNodes(backendItemId, { status: 'canceled' });
         wait.settle({ status: 'canceled' });
       }
     }

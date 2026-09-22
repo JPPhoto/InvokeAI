@@ -89,7 +89,7 @@ export const nodeExecutionStore = {
    * The queue item running these nodes reached a terminal state: a node still marked running
    * finished with it, or never will (its failure/cancel event was lost or never sent).
    */
-  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void {
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome, error?: string): void {
     for (const nodeId of nodeIds) {
       const state = stateByNodeId.get(nodeId);
 
@@ -99,6 +99,14 @@ export const nodeExecutionStore = {
 
       if (outcome === 'completed') {
         stateByNodeId.set(nodeId, { ...state, progress: null, progressMessage: null, status: 'completed' });
+      } else if (outcome === 'failed') {
+        stateByNodeId.set(nodeId, {
+          ...state,
+          error: error ?? state.error,
+          progress: null,
+          progressMessage: null,
+          status: 'failed',
+        });
       } else {
         stateByNodeId.delete(nodeId);
       }
@@ -124,7 +132,7 @@ export interface NodeExecutionSink {
   failed(event: NodeInvocationErrorEvent): void;
   get(nodeId: string): NodeExecutionState | null;
   progress(nodeId: string, percentage: number | null, message: string): void;
-  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void;
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome, error?: string): void;
   started(event: NodeInvocationStartedEvent): void;
   subscribe(nodeId: string, listener: () => void): () => void;
 }

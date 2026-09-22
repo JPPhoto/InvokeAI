@@ -81,4 +81,15 @@ describe('node execution lifecycle', () => {
 
     expect(nodeExecutionStore.get('other-run')).toBeNull();
   });
+
+  it('preserves a failed outcome and error when queue status precedes invocation error', () => {
+    nodeExecutionStore.started({ invocation_source_id: 'node-1' });
+
+    nodeExecutionStore.settleRunning(['node-1'], 'failed', 'Workflow failed');
+
+    expect(nodeExecutionStore.get('node-1')).toMatchObject({
+      error: 'Workflow failed',
+      status: 'failed',
+    });
+  });
 });

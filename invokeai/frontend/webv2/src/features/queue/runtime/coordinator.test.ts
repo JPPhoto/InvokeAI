@@ -1244,13 +1244,61 @@ describe('queueCoordinator', () => {
       createStatusEvent({ error_message: 'boom', item_id: 1, status: 'failed' })
     );
 
-    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'failed');
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'failed', 'boom');
 
     harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 2 }), invocation_source_id: 'node-1' });
     expect(harness.nodeExecution.clearAll).toHaveBeenCalledTimes(2);
 
     harness.coordinator.detachRun('local-2');
     expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'canceled');
+  });
+
+  it('preserves a root failure when queue status precedes the root invocation error', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_started', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'call-node',
+    });
+    harness.socket.fire(
+      'queue_item_status_changed',
+      createStatusEvent({ error_message: 'Workflow failed', item_id: 1, status: 'failed' })
+    );
+
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(
+      new Set(['call-node']),
+      'failed',
+      'Workflow failed'
+    );
+  });
+
+  it('settles the root node after child activity when the root queue status arrives first', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_started', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'call-node',
+    });
+    harness.socket.fire('invocation_started', {
+      ...createStatusEvent({ item_id: 2 }),
+      invocation_source_id: 'child-node',
+      root_item_id: 1,
+      workflow_call_parent_source_id: 'call-node',
+    });
+    harness.socket.fire(
+      'queue_item_status_changed',
+      createStatusEvent({ error_message: 'Child workflow failed', item_id: 1, status: 'failed' })
+    );
+
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(
+      new Set(['call-node']),
+      'failed',
+      'Child workflow failed'
+    );
   });
 
   it('ignores untracked queue events before mutating local execution state', () => {
