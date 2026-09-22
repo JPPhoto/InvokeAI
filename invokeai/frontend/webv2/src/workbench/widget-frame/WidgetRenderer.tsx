@@ -16,7 +16,7 @@ import { Scrollable } from '@platform/ui/Scrollable';
 import { WidgetOverlayOwnerContext } from '@platform/ui/widgetOverlays';
 import { WidgetSettingsButton } from '@workbench/settings/WidgetSettingsButton';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
-import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
+import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
 import { memo, Suspense, use, useMemo } from 'react';
 
@@ -158,6 +158,7 @@ const WidgetChromeSlot = ({
 };
 
 export const WidgetRenderer = ({ instance, presentation, region, widget }: WidgetRendererProps) => {
+  const projectId = useActiveProjectId();
   const loadingFallback = useMemo(
     () => <WidgetLoadingFallback instance={instance} presentation={presentation} region={region} widget={widget} />,
     [instance, presentation, region, widget]
@@ -176,6 +177,7 @@ export const WidgetRenderer = ({ instance, presentation, region, widget }: Widge
     <WidgetFailureBoundary
       instance={instance}
       presentation={presentation}
+      projectId={projectId}
       region={region}
       resetKey={instance.id}
       widget={widget}

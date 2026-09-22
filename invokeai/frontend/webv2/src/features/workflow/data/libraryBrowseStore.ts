@@ -6,6 +6,7 @@ import type { AccountScope } from '@platform/state/accountLifecycle';
 import { parseWorkflowTags, sortTagCounts } from '@features/workflow/core/libraryTags';
 import { extractWorkflowModelRequirements } from '@features/workflow/core/modelRequirements';
 import { parseWorkflowJson } from '@features/workflow/core/workflowJson';
+import { createLogger } from '@platform/logging/logger';
 import {
   captureAccountScope,
   isAccountScopeCurrent,
@@ -21,6 +22,8 @@ import type { WorkflowLibraryCategory, WorkflowLibraryListItem, WorkflowLibraryP
 import { getAllWorkflowTags, getWorkflowTagCounts, listLibraryWorkflows } from './api';
 import { getLibraryWorkflowCached, onWorkflowLibraryCacheInvalidated } from './libraryCache';
 import { getInvocationTemplatesSnapshot, refreshInvocationTemplates } from './templates';
+
+const libraryLogger = createLogger({ area: 'library', namespace: 'workflows' });
 
 /**
  * Filter and paginate server-side; asynchronously enrich cached payloads per row so node/model details cannot
@@ -220,6 +223,12 @@ const enrichEntry = async (workflowId: string, owner: AccountScope): Promise<voi
     );
   } catch (error) {
     // One unreadable workflow marks its own card and never fails the pool.
+    libraryLogger.warn({
+      context: { workflowId },
+      error,
+      message: 'Failed to read a library workflow',
+      name: 'workflows.library-read-failed',
+    });
     applyEnrichment(
       workflowId,
       { message: getApiErrorMessage(error, 'Failed to read this workflow.'), status: 'error' },
@@ -286,6 +295,11 @@ const loadFirstPage = async (filter: WorkflowLibraryBrowseFilter, owner: Account
     }
   } catch (error) {
     if (isFilterCurrent(generation, owner)) {
+      libraryLogger.warn({
+        error,
+        message: 'Failed to load workflows',
+        name: 'workflows.library-load-failed',
+      });
       store.patchSnapshot({ error: getApiErrorMessage(error, 'Failed to load workflows.'), status: 'error' });
     }
   }
@@ -302,6 +316,11 @@ const loadMorePages = async (filter: WorkflowLibraryBrowseFilter, page: number, 
     }
   } catch (error) {
     if (isFilterCurrent(generation, owner)) {
+      libraryLogger.warn({
+        error,
+        message: 'Failed to load more workflows',
+        name: 'workflows.library-load-failed',
+      });
       store.patchSnapshot({ error: getApiErrorMessage(error, 'Failed to load more workflows.'), status: 'error' });
     }
   }
@@ -446,6 +465,11 @@ export const refreshWorkflowLibraryBrowse = (): Promise<void> =>
       }
     } catch (error) {
       if (isFilterCurrent(generation, owner)) {
+        libraryLogger.warn({
+          error,
+          message: 'Failed to refresh workflows',
+          name: 'workflows.library-load-failed',
+        });
         store.patchSnapshot({ error: getApiErrorMessage(error, 'Failed to refresh workflows.'), status: 'error' });
       }
     }

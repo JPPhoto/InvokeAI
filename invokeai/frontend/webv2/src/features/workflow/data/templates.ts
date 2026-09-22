@@ -7,6 +7,7 @@ import type {
   InvocationTemplatesSnapshot,
 } from '@features/workflow/core/types';
 
+import { createLogger } from '@platform/logging/logger';
 import {
   captureAccountScope,
   isAccountScopeCurrent,
@@ -426,6 +427,11 @@ export const refreshInvocationTemplates = async (): Promise<void> => {
       return;
     }
 
+    createLogger({ area: 'templates', namespace: 'workflows' }).error({
+      error,
+      message: 'Failed to load node definitions',
+      name: 'workflows.templates-load-failed',
+    });
     store.patchSnapshot({
       error: getApiErrorMessage(error, 'Failed to load node definitions from the backend.'),
       status: 'error',

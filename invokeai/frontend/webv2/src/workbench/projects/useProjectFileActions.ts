@@ -1,6 +1,7 @@
 import type { Project } from '@workbench/projectContracts';
 
 import { fontKeys } from '@features/fonts/contracts';
+import { createLogger } from '@platform/logging/logger';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -22,6 +23,8 @@ import { startProjectFileReport } from './projectFileToasts';
 
 /** Share the scoped transfer and reporting lifecycle across callers. */
 
+const projectFileLogger = createLogger({ area: 'project-file', namespace: 'persistence' });
+
 /** Runs the sequence, keeping the toast and the account scope in step. */
 const runReported = async <T>(
   t: (key: string, options?: Record<string, unknown>) => string,
@@ -33,6 +36,11 @@ const runReported = async <T>(
 
   try {
     await run(report, owner);
+    projectFileLogger.info({
+      context: { direction: titles.direction, operation: titles.running },
+      message: 'Project file operation completed',
+      name: 'persistence.project-file-completed',
+    });
   } catch (error) {
     // Account-cancellation errors stay silent because the operation no longer belongs to the active session.
     if (!isAccountScopeCurrent(owner)) {
@@ -41,6 +49,12 @@ const runReported = async <T>(
       return;
     }
 
+    projectFileLogger.error({
+      context: { direction: titles.direction },
+      error,
+      message: titles.failed,
+      name: 'persistence.project-file-failed',
+    });
     report.fail(titles.failed, error);
   }
 };

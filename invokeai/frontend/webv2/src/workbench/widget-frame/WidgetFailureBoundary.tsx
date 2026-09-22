@@ -6,6 +6,7 @@ import type {
 } from '@workbench/widgetContracts';
 
 import { Box, Code, Flex, HStack, ScrollArea, Stack, Text, useRecipe } from '@chakra-ui/react';
+import { createLogger } from '@platform/logging/logger';
 import { Button } from '@platform/ui/Button';
 import { toaster } from '@platform/ui/toaster';
 import { useScrollAreaPhantomHeal } from '@platform/ui/useScrollAreaPhantomHeal';
@@ -17,11 +18,15 @@ import { useTranslation } from 'react-i18next';
 
 import { WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
 
+const widgetFailureLogger = createLogger({ area: 'widget-render', namespace: 'system' });
+
 interface WidgetFailureBoundaryProps {
   children: ReactNode;
   /** Retain region framing, size, and resize handles on failure; headless hosts omit presentation context. */
   instance?: WidgetInstanceRuntimeMeta;
   presentation?: WidgetViewProps['presentation'];
+  /** Attributes the failure to the project hosting the widget. */
+  projectId?: string;
   region?: WidgetViewProps['region'];
   resetKey: string;
   widget?: RegisteredWidget;
@@ -234,6 +239,17 @@ export class WidgetFailureBoundary extends Component<WidgetFailureBoundaryProps,
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    widgetFailureLogger.child({ projectId: this.props.projectId }).error({
+      context: {
+        componentStack: errorInfo.componentStack,
+        instanceId: this.props.instance?.id,
+        region: this.props.region,
+        widgetId: this.props.widgetId,
+      },
+      error,
+      message: `Widget ${this.props.widgetId} failed to render`,
+      name: 'widget.render-failed',
+    });
     this.setState({ details: errorInfo.componentStack ?? error.stack ?? error.message });
   }
 

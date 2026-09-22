@@ -32,11 +32,15 @@ import {
 } from '@features/queue/data/progressImageStore';
 import { queueItemProgressStore, type QueueItemProgressSink } from '@features/queue/data/progressStore';
 import { mapWithConcurrency } from '@platform/core/concurrency';
+import { createLogger } from '@platform/logging/logger';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
 
 const GALLERY_REFRESH_COALESCE_MS = 400;
 const SAFETY_SWEEP_INTERVAL_MS = 30_000;
+/** Node-level detail supports the terminal queue-item failure the history owner records. */
+const coordinatorLogger = createLogger({ area: 'coordinator', namespace: 'queue' });
+
 const TERMINAL_EVENT_BUFFER_LIMIT = 256;
 const NODE_EVENT_BUFFER_ITEM_LIMIT = 64;
 const NODE_EVENT_BUFFER_EVENTS_PER_ITEM = 512;
@@ -379,6 +383,17 @@ export const createQueueCoordinator = (
         nodeExecution.completed(nodeEvent.event);
         return;
       case 'failed':
+        coordinatorLogger.debug({
+          context: {
+            errorMessage: nodeEvent.event.error_message,
+            errorType: nodeEvent.event.error_type,
+            itemId: nodeEvent.event.item_id,
+            nodeId: nodeEvent.event.invocation_source_id,
+            sessionId: nodeEvent.event.session_id,
+          },
+          message: `Invocation failed: ${nodeEvent.event.error_type}`,
+          name: 'queue.invocation-error',
+        });
         nodeExecution.failed(nodeEvent.event);
         return;
     }

@@ -1,3 +1,4 @@
+import { createLogger } from '@platform/logging/logger';
 import { io } from 'socket.io-client';
 
 import type { BackendConnectionStatus } from './types';
@@ -41,6 +42,8 @@ const createDefaultSocket = (): BackendSocket => {
   }) as unknown as BackendSocket;
 };
 
+const socketLogger = createLogger({ area: 'socket', namespace: 'transport' });
+
 export const createSocketHub = (options: { createSocket?: () => BackendSocket } = {}): SocketHub => {
   const createSocket = options.createSocket ?? createDefaultSocket;
 
@@ -58,8 +61,25 @@ export const createSocketHub = (options: { createSocket?: () => BackendSocket } 
   const connectionListeners = new Set<ConnectionListener>();
 
   const publishStatus = (next: BackendConnectionStatus, error?: string): void => {
+    const previous = status;
+    const previousError = lastError;
+
     status = next;
     lastError = error;
+    if (next === 'disconnected') {
+      // Reconnect attempts repeat the same failure; keep one warning per outage and the retries as breadcrumbs.
+      const isRepeat = previous === 'disconnected' && previousError === error;
+
+      socketLogger[isRepeat ? 'debug' : 'warn']({
+        context: { previous, reason: error },
+        message: `Backend socket ${isRepeat ? 'reconnect failed' : 'disconnected'}${error ? `: ${error}` : ''}`,
+        name: isRepeat ? 'socket.reconnect-failed' : 'socket.disconnected',
+      });
+    } else if (next === 'connected') {
+      socketLogger.info({ context: { previous }, message: 'Backend socket connected', name: 'socket.connected' });
+    } else {
+      socketLogger.debug({ context: { previous }, message: 'Backend socket connecting', name: 'socket.connecting' });
+    }
     setConnectionStatus(next, error);
 
     for (const listener of connectionListeners) {

@@ -1,5 +1,6 @@
 import type { ModelInstallJob, ModelInstallStatus } from '@features/models/core/types';
 
+import { createLogger } from '@platform/logging/logger';
 import {
   type AccountScope,
   captureAccountScope,
@@ -127,6 +128,11 @@ export const refreshInstalls = (owner: AccountScope = captureAccountScope()): Pr
           return;
         }
 
+        installLogger.warn({
+          error,
+          message: 'Failed to load the install queue',
+          name: 'models.install-queue-load-failed',
+        });
         store.patchSnapshot({
           error: getApiErrorMessage(error, 'Failed to load install queue.'),
           status: store.getSnapshot().jobs.length > 0 ? 'loaded' : 'error',
@@ -184,7 +190,28 @@ export const addInstallJob = (job: ModelInstallJob): void => {
   store.patchSnapshot({ jobs: [job, ...store.getSnapshot().jobs], status: 'loaded' });
 };
 
+const installLogger = createLogger({ area: 'install', namespace: 'models' });
+
 const recordOutcome = (outcome: Omit<InstallOutcome, 'id'>): void => {
+  const context = { jobId: outcome.jobId, modelName: outcome.modelName, source: outcome.source };
+
+  if (outcome.kind === 'error') {
+    installLogger.error({
+      context: { ...context, reason: outcome.error },
+      message: `Model install failed: ${outcome.source}`,
+      name: 'models.install-failed',
+    });
+  } else {
+    installLogger.info({
+      context,
+      message:
+        outcome.kind === 'completed'
+          ? `Model installed: ${outcome.source}`
+          : `Model install cancelled: ${outcome.source}`,
+      name: outcome.kind === 'completed' ? 'models.install-completed' : 'models.install-cancelled',
+    });
+  }
+
   outcomesStore.patchSnapshot({
     outcomes: [{ ...outcome, id: nextOutcomeId }, ...outcomesStore.getSnapshot().outcomes].slice(0, OUTCOME_LIMIT),
   });

@@ -1,5 +1,8 @@
 /** Read the Auth-owned bearer token per request so HTTP and WebSocket identity stay aligned without reloads. */
 
+import { recordLogEvent } from '@platform/logging/logger';
+import { captureAccountScope } from '@platform/state/accountLifecycle';
+
 import { getDeploymentBasePath, getDeploymentBaseUrl } from './deploymentBase';
 
 const API_BASE_URL = (import.meta.env.VITE_INVOKEAI_API_BASE_URL ?? '').trim().replace(/\/$/, '');
@@ -9,6 +12,9 @@ export interface HttpAuthAdapter {
   getToken(): string | null;
   onUnauthorized(rejectedToken: string, rejectedIdentity: unknown): void;
 }
+
+/** Transport failures are breadcrumbs; the caller that handles the outcome owns the terminal report. */
+const HTTP_LOG_SOURCE = { area: 'http', namespace: 'transport' } as const;
 
 let authAdapter: HttpAuthAdapter = {
   getIdentity: () => null,
@@ -134,8 +140,17 @@ export const assertOk = async (response: Response): Promise<Response> => {
   throw new ApiError(text || `${response.status} ${response.statusText}`, response.status, response.headers);
 };
 
-const fetchWithAuthToken = (path: string, init: RequestInit | undefined, token: string | null): Promise<Response> => {
+const fetchWithAuthToken = async (
+  path: string,
+  init: RequestInit | undefined,
+  token: string | null
+): Promise<Response> => {
   const headers = new Headers(init?.headers);
+  const method = (init?.method ?? 'GET').toUpperCase();
+  // Breadcrumbs carry the path only; query strings can hold tokens and user input. They are fenced to the account
+  // that started the request so late settlements never land in the next account's history.
+  const safePath = path.split(/[?#]/, 1)[0] ?? path;
+  const owner = captureAccountScope();
 
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -143,7 +158,42 @@ const fetchWithAuthToken = (path: string, init: RequestInit | undefined, token: 
 
   // Use same-origin credentials so login stores the media cookie. Cross-origin API callers must opt into include
   // and configure server credential support.
-  return fetch(buildApiUrl(path), { credentials: 'same-origin', ...init, headers });
+  let response: Response;
+
+  try {
+    response = await fetch(buildApiUrl(path), { credentials: 'same-origin', ...init, headers });
+  } catch (error) {
+    // Aborts are expected cancellations (account cleanup, superseded queries), not failures.
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      recordLogEvent(
+        'debug',
+        HTTP_LOG_SOURCE,
+        {
+          context: { method, path: safePath },
+          error,
+          message: `${method} ${safePath} failed`,
+          name: 'http.request-failed',
+        },
+        owner
+      );
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    recordLogEvent(
+      'debug',
+      HTTP_LOG_SOURCE,
+      {
+        context: { method, path: safePath, status: response.status },
+        message: `${method} ${safePath} responded ${response.status}`,
+        name: 'http.response-error',
+      },
+      owner
+    );
+  }
+
+  return response;
 };
 
 /** Authenticated fetch that leaves status handling to the caller. */
