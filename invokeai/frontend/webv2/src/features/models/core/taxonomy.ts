@@ -2,11 +2,7 @@ import type { ModelFileFormat, ModelTaxonomyType } from './types';
 
 import { toTitleCase } from './baseIdentity';
 
-/**
- * Display metadata for the model taxonomy. Open-union friendly: unknown bases,
- * types, and formats fall back to readable generic labels so a backend that
- * ships a new architecture never renders a blank or broken library.
- */
+/** Use readable fallback labels for unknown taxonomy values so new backend architectures remain usable. */
 
 interface CategoryDefinition {
   type: ModelTaxonomyType;
@@ -84,13 +80,7 @@ const FORMAT_LABELS: Record<string, string> = {
 
 export const getModelFormatLabel = (format: ModelFileFormat): string => FORMAT_LABELS[format] ?? toTitleCase(format);
 
-/**
- * Formats a user may assign in the edit form (repairing a mis-detected
- * model). `unknown` is not a repair target and `external_api` would misroute
- * a local model, mirroring the base select's `external` exclusion. The PATCH
- * re-validates through the config factory, so an invalid combination is
- * rejected server-side rather than silently accepted.
- */
+/** Exclude unknown/external_api as repair formats; the config factory validates remaining combinations server-side. */
 export const EDITABLE_MODEL_FORMATS: readonly string[] = Object.keys(FORMAT_LABELS).filter(
   (format) => format !== 'unknown' && format !== 'external_api'
 );
@@ -178,9 +168,7 @@ const VARIANTS_BY_TYPE: Record<string, readonly string[]> = {
   mistral_encoder: ['cow_mistral3_small', 'mistral3_24b', 'ministral3_3b'],
   pid_decoder: ['res2k_sr4x', 'res2kto4k_sr4x'],
   qwen3_encoder: ['qwen3_4b', 'qwen3_8b', 'qwen3_06b'],
-  // Required on the config, so the edit form must offer both: without an entry here it would show
-  // only "None" plus the current value, and saving "None" fails validation on the way into the
-  // database.
+  // Required variant configs need explicit choices; a fallback None would fail database validation.
   qwen3_vl_encoder: ['qwen3_vl_4b', 'qwen3_vl_8b'],
 };
 
@@ -198,9 +186,7 @@ export const getVariantOptionsFor = (base: string, type: string): readonly strin
   }
 
   if (type === 'qwen3_vl_encoder') {
-    // MiniMax H3's truncated Qwen3-VL-32B shares this model type under its own base and its config
-    // has no `variant` field at all, so offering the two sizes there would be offering a save that
-    // can only fail. The encoders that carry the field are base-agnostic components.
+    // Only base-agnostic encoders carry variant; MiniMax H3's same-type encoder does not support size selection.
     return base === 'any' ? (VARIANTS_BY_TYPE[type] ?? []) : [];
   }
 
