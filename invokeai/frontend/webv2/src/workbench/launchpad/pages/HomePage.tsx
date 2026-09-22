@@ -1,7 +1,8 @@
 /* eslint-disable react-perf/jsx-no-jsx-as-prop */
+import type { SystemStyleObject } from '@chakra-ui/react';
 import type { ProjectRecordDTO } from '@workbench/projects/api';
 
-import { Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Box, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { useAuthSession, useCapabilities } from '@features/identity';
 import { LAUNCHPAD_READY_MARK, markSemanticReady } from '@platform/performance/semanticReady';
 import { useMountEffect } from '@platform/react/useMountEffect';
@@ -26,6 +27,12 @@ import { useTranslation } from 'react-i18next';
 
 const RECENT_PROJECT_COUNT = 4;
 const BROWSER_ISSUES_BANNER = <KnownBrowserIssuesAlert />;
+// Each section sits in its own wrapper so the hairline never restyles a bordered card, and wrappers left empty by a
+// panel that rendered nothing neither show nor earn a divider.
+const SECTION_DIVIDERS_SX: SystemStyleObject = {
+  '& > :empty': { display: 'none' },
+  '& > :not(:empty) ~ :not(:empty)': { borderTopColor: 'border.subtle', borderTopWidth: '1px', pt: '5' },
+};
 
 export const HomePage = () => {
   const session = useAuthSession();
@@ -80,37 +87,51 @@ export const HomePage = () => {
       regionLabel={t('launchpad.sections.home')}
       title={greeting}
     >
-      {/*
-       * Order panels by urgency. Gate model-panel mounting by capability because its catalog/install endpoints are
-       * admin-only; empty panels render nothing.
-       */}
-      {canManageModels ? <LivePanel panel="models" /> : null}
-      <LivePanel panel="queue" />
+      <Stack css={SECTION_DIVIDERS_SX} gap="5">
+        {/*
+         * Order panels by urgency. Gate model-panel mounting by capability because its catalog/install endpoints are
+         * admin-only; empty panels render nothing.
+         */}
+        {canManageModels ? (
+          <Box>
+            <LivePanel panel="models" />
+          </Box>
+        ) : null}
+        <Box>
+          <LivePanel panel="queue" />
+        </Box>
 
-      {isFirstLoad ? (
-        <Skeleton minH="24" rounded="lg" />
-      ) : mostRecent ? (
-        <ResumeCard
-          isPinned={pinnedIds.includes(mostRecent.id)}
-          summary={mostRecent}
-          onTogglePin={toggleProjectPinPreference}
-        />
-      ) : null}
+        <Box>
+          {isFirstLoad ? (
+            <Skeleton minH="24" rounded="lg" />
+          ) : mostRecent ? (
+            <ResumeCard
+              isPinned={pinnedIds.includes(mostRecent.id)}
+              summary={mostRecent}
+              onTogglePin={toggleProjectPinPreference}
+            />
+          ) : null}
+        </Box>
 
-      <Stack gap="3">
-        <Text fontSize="xs" fontWeight="700">
-          {t('launchpad.home.intents.heading')}
-        </Text>
-        <IntentTiles />
+        <Stack gap="3">
+          <Text fontSize="xs" fontWeight="700">
+            {t('launchpad.home.intents.heading')}
+          </Text>
+          <IntentTiles />
+        </Stack>
+
+        <Box>
+          <RecentProjectsRow
+            pinnedIds={pinnedIds}
+            summaries={rest.slice(0, RECENT_PROJECT_COUNT)}
+            onTogglePin={toggleProjectPinPreference}
+          />
+        </Box>
+
+        <Box>
+          <LivePanel panel="outputs" />
+        </Box>
       </Stack>
-
-      <RecentProjectsRow
-        pinnedIds={pinnedIds}
-        summaries={rest.slice(0, RECENT_PROJECT_COUNT)}
-        onTogglePin={toggleProjectPinPreference}
-      />
-
-      <LivePanel panel="outputs" />
     </PageShell>
   );
 };
