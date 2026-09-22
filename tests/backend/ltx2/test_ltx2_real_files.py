@@ -6,12 +6,15 @@ built by ``Gemma4TextModel`` runs. Skipped unless the ``DeepBeepMeep/LTX-2`` sna
 Hugging Face cache (``INVOKEAI_LTX2_SNAPSHOT`` overrides the path).
 """
 
+import gc
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
+from PIL import Image
 
 from invokeai.backend.ltx2 import checkpoint_layout as layout
 from invokeai.backend.model_manager.configs.gemma4_encoder import Gemma4Encoder_Gemma4Encoder_LTX2_Config
@@ -55,11 +58,11 @@ requires_weights = pytest.mark.skipif(
 )
 
 
-def _loader(cls):
+def _loader(cls, device: torch.device | None = None):
     loader = object.__new__(cls)
     loader._ram_cache = SimpleNamespace(make_room=lambda _n: None)
     loader._logger = SimpleNamespace(info=lambda *_a, **_k: None, warning=lambda *_a, **_k: None)
-    loader._torch_device = torch.device("cpu")
+    loader._torch_device = device or torch.device("cpu")
     loader._apply_fp8_layerwise_casting = lambda model, _c, _s: model
     return loader
 
@@ -175,3 +178,183 @@ def test_the_mirror_s_nvfp4_transformer_is_refused_for_naming_no_layer() -> None
     )
     with pytest.raises(ValueError, match="nvfp4"):
         _loader(LTX2CheckpointModel)._load_model(config, SubModelType.Transformer)
+
+
+# --- Generation over the released weights ---------------------------------------------------------
+#
+# These run the real recipe end to end on an accelerator. They install the wide-head SDPA guard
+# themselves: it is normally installed by application startup, which a test process never runs, and
+# without it Gemma-4's 512-wide full-attention layers return wrong values on ROCm -- the tower's
+# hidden states go non-finite part-way through the stack, and every generation that follows is NaN.
+
+_PROMPT = "A ginger cat sits on a windowsill, purring, as rain patters on the glass."
+
+
+def _accelerator() -> torch.device:
+    device = TorchDevice.choose_torch_device()
+    if device.type == "cpu":
+        pytest.skip("needs an accelerator")
+    from invokeai.backend.util.attention import install_rocm_sdpa_head_dim_guard
+
+    install_rocm_sdpa_head_dim_guard()
+    return device
+
+
+def _folder_config() -> Main_Diffusers_LTX2_Config:
+    return Main_Diffusers_LTX2_Config.model_construct(
+        path=str(SNAPSHOT), components=dict(COMPONENTS), components_only=True, variant=LTX2VariantType.Dev
+    )
+
+
+def _encode_prompts(device: torch.device, prompts: list[str]):
+    """The full two-stage prompt encode, one model resident at a time."""
+    from invokeai.backend.ltx2.text_conditioning import apply_connectors, encode_hidden_states
+
+    weight = "gemma4-12b-ltx-v1_int8_convrot.safetensors"
+    root = SNAPSHOT / "gemma4-12b-ltx-v1"
+    if not (root / weight).exists():
+        pytest.skip("the int8 Gemma-4 encoder is not downloaded")
+
+    config = Gemma4Encoder_Gemma4Encoder_LTX2_Config.model_construct(
+        path=str(SNAPSHOT), subfolder="gemma4-12b-ltx-v1", weight_file=weight
+    )
+    loader = _loader(LTX2Gemma4EncoderModel, device)
+    tokenizer = loader._load_model(config, SubModelType.Tokenizer)
+    encoder = loader._load_model(config, SubModelType.TextEncoder).to(device).eval()
+    states = [
+        tuple(t.cpu() for t in encode_hidden_states(encoder, tokenizer, p, max_sequence_length=1024, device=device))
+        for p in prompts
+    ]
+    del encoder
+    gc.collect()
+    TorchDevice.empty_cache()
+
+    connectors = _loader(LTX2FolderModel, device)._load_model(_folder_config(), SubModelType.Connectors)
+    connectors = connectors.to(device).eval()
+    conditionings = [apply_connectors(connectors, *state) for state in states]
+    del connectors
+    gc.collect()
+    TorchDevice.empty_cache()
+    return states, conditionings
+
+
+@requires_weights
+def test_the_prompt_encode_stays_finite_at_the_padded_length_the_connectors_need() -> None:
+    """Every prompt is padded to 1024 tokens, which is the length the connectors' registers are
+    defined against. The tower's full-attention layers are 512 wide, and on a build whose fused
+    attention kernels are wrong at that width the states go non-finite around layer 30 -- finite at
+    a shorter padding, so only the real length catches it."""
+    device = _accelerator()
+    states, conditionings = _encode_prompts(device, [_PROMPT])
+
+    hidden, mask = states[0]
+    assert hidden.shape == (1, 1024, 3840 * 49)
+    assert torch.isfinite(hidden).all()
+    assert int(mask.sum()) < 1024
+
+    conditioning = conditionings[0]
+    assert conditioning.video_embeds.shape == (1, 1024, 4096)
+    assert conditioning.audio_embeds.shape == (1, 1024, 2048)
+    assert torch.isfinite(conditioning.video_embeds).all()
+    assert torch.isfinite(conditioning.audio_embeds).all()
+
+
+@requires_weights
+def test_the_distilled_checkpoint_generates_a_clip_with_a_soundtrack() -> None:
+    """The whole recipe: eight ancestral steps, then both decoders. A wrong sigma schedule, a
+    mis-packed sequence or a mis-ordered guidance combine all land here as noise or NaN."""
+    from invokeai.backend.ltx2.denoise import build_denoise_state, denoise
+    from invokeai.backend.ltx2.guidance import LTX2Guidance
+    from invokeai.backend.ltx2.packing import unpack_video_latents
+    from invokeai.backend.ltx2.video_decoding import decode_audio_latents, decode_video_latents
+
+    transformer_path = SNAPSHOT / "ltx-2.5-22b-distilled_diffusion_model_int8_convrot.safetensors"
+    if not transformer_path.exists():
+        pytest.skip("the int8 distilled transformer is not downloaded")
+
+    device = _accelerator()
+    _, conditionings = _encode_prompts(device, [_PROMPT])
+
+    width, height, num_frames = 512, 320, 9
+    state = build_denoise_state(
+        num_frames=num_frames, height=height, width=width, fps=24.0, seed=42, distilled=True, num_steps=8
+    )
+    assert state.eta == 1.0, "LTX-2.5 samples its distilled schedule ancestrally"
+
+    transformer = _loader(LTX2CheckpointModel, device)._load_model(
+        Main_Checkpoint_LTX2_Config.model_construct(
+            path=str(transformer_path), variant=LTX2VariantType.Distilled, generation="2.5", fp8_storage=None
+        ),
+        SubModelType.Transformer,
+    )
+    transformer = transformer.to(device).eval()
+    video, audio = denoise(
+        transformer=transformer,
+        state=state,
+        positive=conditionings[0],
+        negative=None,
+        guidance=LTX2Guidance(cfg_scale=1.0, audio_cfg_scale=1.0, stg_scale=0.0, modality_scale=1.0, rescale=0.0),
+        fps=24.0,
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    del transformer
+    gc.collect()
+    TorchDevice.empty_cache()
+
+    assert torch.isfinite(video).all() and torch.isfinite(audio).all()
+
+    vae = _loader(LTX2FolderModel, device)._load_model(_folder_config(), SubModelType.VAE).to(device).eval()
+    clip = decode_video_latents(
+        vae,
+        unpack_video_latents(video, state.latent_frames, state.latent_height, state.latent_width),
+        tile_size=512,
+        temporal_tile=16,
+    )
+    del vae
+    gc.collect()
+    TorchDevice.empty_cache()
+
+    assert clip.shape == (3, num_frames, height, width)
+    # A clip, not a flat field: the released model at this size returns a photographic image.
+    assert 0.1 < float(clip.mean()) < 0.9
+    assert float(clip.std()) > 0.1
+
+    audio_vae = _loader(LTX2FolderModel, device)._load_model(_folder_config(), SubModelType.AudioVAE)
+    vocoder = _loader(LTX2FolderModel, device)._load_model(_folder_config(), SubModelType.Vocoder)
+    waveform = decode_audio_latents(audio_vae.to(device).eval(), vocoder.to(device).eval(), audio)
+
+    assert waveform.shape[0] == 2
+    # The audio VAE's causal decoder drops its first few mel frames, so the soundtrack comes back
+    # a fraction of a second short of the clip and the latents-to-video node pads it out.
+    nominal = num_frames / 24.0 * vocoder.config.output_sampling_rate
+    assert 0.85 * nominal <= waveform.shape[1] <= nominal
+    assert float(waveform.abs().max()) <= 1.0
+    assert float(waveform.pow(2).mean().sqrt()) > 1e-3, "the soundtrack is silent"
+
+
+@requires_weights
+def test_an_image_conditioning_survives_the_round_trip_to_the_first_decoded_frame() -> None:
+    """The conditioning mask is what every later conditioning feature is built on, so the anchor
+    has to come back out of the decoder as the frame that went in."""
+    from invokeai.backend.ltx2.image_conditioning import encode_image_latents, fit_to_canvas, recompress_h264
+    from invokeai.backend.ltx2.video_decoding import decode_video_latents
+
+    device = _accelerator()
+    width, height = 512, 320
+    source = fit_to_canvas(
+        recompress_h264(Image.effect_mandelbrot((1024, 768), (-2.5, -1.5, 1.5, 1.5), 60).convert("RGB"), 18),
+        height,
+        width,
+    )
+
+    vae = _loader(LTX2FolderModel, device)._load_model(_folder_config(), SubModelType.VAE).to(device).eval()
+    latents = encode_image_latents(vae, source, device=device)
+    assert latents.shape == (1, 128, 1, height // 32, width // 32)
+
+    decoded = decode_video_latents(vae, latents, tile_size=512, temporal_tile=16)
+    assert decoded.shape == (3, 1, height, width)
+
+    original = torch.from_numpy(np.asarray(source, dtype=np.float32) / 255.0).permute(2, 0, 1)
+    psnr = 10 * torch.log10(1.0 / torch.mean((decoded[:, 0] - original) ** 2))
+    assert float(psnr) > 25.0, f"the VAE round trip lost the conditioning frame ({float(psnr):.1f} dB)"

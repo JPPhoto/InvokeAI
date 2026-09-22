@@ -17,6 +17,7 @@ import {
 import { getCompatibleDiffusersComponentSource } from '@features/generation/settings';
 
 import type { VideoGenerationMode, VideoReferenceItem, VideoSettings, VideoSourceClip } from './types';
+import type { SupportedVideoBase } from './videoPolicies';
 
 import { MINIMAX_H3_FPS } from './dimensions';
 import { MINIMAX_H3_HYBRID_BLOCK_RANGE, resolveVideoMode } from './settings';
@@ -43,6 +44,11 @@ const WAN_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
   'first-frame': 'wan_i2v',
   'first-last': 'wan_interpolate',
   txt2vid: 'wan_t2v',
+};
+
+const LTX2_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
+  'first-frame': 'ltx2_i2v',
+  txt2vid: 'ltx2_t2v',
 };
 
 const MINIMAX_H3_GENERATION_MODES: Record<VideoGenerationMode, string> = {
@@ -711,6 +717,162 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
   return graph;
 };
 
+/**
+ * LTX-2: one transformer generates video and its soundtrack together, so there
+ * is a single denoise and a single decode; what varies is how much guidance the
+ * checkpoint's schedule wants. The dev checkpoint runs up to four forwards per
+ * step (conditional, unconditional, spatio-temporal, modality-isolation); the
+ * distilled one runs a fixed eight steps with none, which is why the guidance
+ * literals below collapse to their inert values rather than being omitted — the
+ * graph should state what will actually run.
+ */
+const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): BackendGraphContract => {
+  const mode = resolveVideoMode(settings);
+  const policy = getVideoModelPolicy(model, settings);
+  const dimensions = getVideoDimensions(model, settings);
+
+  if (!dimensions) {
+    throw new Error('Video dimensions could not be derived from the current settings.');
+  }
+
+  // No LTX-2 main carries text-encoder weights, and a single-file transformer
+  // carries none of the VAEs, vocoder or connectors either. Validation requires
+  // both slots; these throws are backstops for direct callers.
+  const componentSource = model.format === 'diffusers' ? null : settings.componentSourceModel;
+
+  if (model.format !== 'diffusers' && !componentSource) {
+    throw new Error('A single-file LTX-2 transformer needs an LTX-2 components install under Model Components.');
+  }
+  if (!settings.ltx2TextEncoderModel) {
+    throw new Error('LTX-2 needs its Gemma-4 text encoder selected under Model Components.');
+  }
+
+  const graph: BackendGraphContract = { edges: [], id: createId('ltx2_video_graph'), nodes: {} };
+  const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
+  const modelLoader = addNode(graph, {
+    component_source: componentSource ?? undefined,
+    id: 'model_loader',
+    model,
+    text_encoder_model: settings.ltx2TextEncoderModel,
+    type: 'ltx2_model_loader',
+  });
+
+  // The negative prompt only reaches the model through classifier-free
+  // guidance, so a schedule that runs none skips a 12B encode entirely.
+  const negativeWired = policy.prompt.negativeUsedInGraph;
+  const textEncoder = addNode(graph, {
+    encode_negative: negativeWired,
+    id: 'pos_cond',
+    type: 'ltx2_text_encoder',
+  });
+
+  addEdge(graph, modelLoader, 'text_encoder', textEncoder, 'text_encoder');
+  addEdge(graph, positivePrompt, 'value', textEncoder, 'prompt');
+  if (negativeWired) {
+    addEdge(graph, negativePrompt, 'value', textEncoder, 'negative_prompt');
+  }
+
+  // Both classifier-free scales are held at 1 without a negative prompt: they are the only terms
+  // that consume one, and the node refuses a scale above 1 with nothing wired. The spatio-temporal
+  // and modality passes steer against the *positive* conditioning, so they keep running — turning
+  // the negative prompt off is not a request to stop guiding. Metadata records these rather than
+  // the panel's own numbers, so a recall reproduces the run instead of the settings.
+  const guidance = policy.ui.cfgVisible
+    ? {
+        audio_cfg_scale: negativeWired ? (settings.audioCfgScale ?? policy.defaults.audioCfgScale ?? 1) : 1,
+        cfg_scale: negativeWired ? settings.cfgScale : 1,
+        modality_scale: settings.modalityScale ?? policy.defaults.modalityScale ?? 1,
+        stg_scale: settings.stgScale ?? policy.defaults.stgScale ?? 0,
+      }
+    : { audio_cfg_scale: 1, cfg_scale: 1, modality_scale: 1, stg_scale: 0 };
+
+  const denoise = addNode(graph, {
+    fps: settings.fps,
+    height: dimensions.height,
+    id: 'denoise_latents',
+    num_frames: settings.numFrames,
+    // 'auto' rather than the panel's own reading of the variant: the loader
+    // stamps the schedule off the checkpoint itself, which is the authority
+    // when a release the panel does not recognise falls back to the dev policy.
+    schedule: 'auto',
+    steps: settings.steps,
+    type: 'ltx2_denoise',
+    width: dimensions.width,
+    ...guidance,
+  });
+
+  addEdge(graph, modelLoader, 'transformer', denoise, 'transformer');
+  addEdge(graph, textEncoder, 'conditioning', denoise, 'positive_conditioning');
+  if (negativeWired) {
+    addEdge(graph, textEncoder, 'negative_conditioning', denoise, 'negative_conditioning');
+  }
+  addEdge(graph, seed, 'value', denoise, 'seed');
+
+  if (mode === 'first-frame') {
+    if (!settings.firstFrameImage) {
+      throw new Error('A first frame is required for image-to-video generation.');
+    }
+
+    const imageConditioning = addNode(graph, {
+      height: dimensions.height,
+      id: 'image_conditioning',
+      image: toImageField(settings.firstFrameImage),
+      type: 'ltx2_image_conditioning',
+      width: dimensions.width,
+    });
+
+    addEdge(graph, modelLoader, 'vae', imageConditioning, 'vae');
+    addEdge(graph, imageConditioning, 'video_conditioning', denoise, 'video_conditioning');
+  }
+
+  const output = addNode(graph, {
+    fps: settings.fps,
+    id: 'video_output',
+    is_intermediate: false,
+    type: 'ltx2_latents_to_video',
+    use_cache: false,
+  });
+
+  addEdge(graph, denoise, 'video_latents', output, 'video_latents');
+  addEdge(graph, denoise, 'audio_latents', output, 'audio_latents');
+  addEdge(graph, modelLoader, 'vae', output, 'vae');
+  addEdge(graph, modelLoader, 'audio_vae', output, 'audio_vae');
+  addEdge(graph, modelLoader, 'vocoder', output, 'vocoder');
+
+  addVideoMetadata({
+    extras: {
+      cfg_scale: guidance.cfg_scale,
+      fps: settings.fps,
+      ltx2_text_encoder_model: settings.ltx2TextEncoderModel,
+      ...(componentSource ? { ltx2_component_source: componentSource } : {}),
+      ...(policy.ui.audioCfgVisible ? { ltx2_audio_cfg_scale: guidance.audio_cfg_scale } : {}),
+      ...(policy.ui.stgVisible ? { ltx2_stg_scale: guidance.stg_scale } : {}),
+      ...(policy.ui.modalityVisible ? { ltx2_modality_scale: guidance.modality_scale } : {}),
+    },
+    generationMode: LTX2_GENERATION_MODES[mode] ?? 'ltx2_t2v',
+    graph,
+    height: dimensions.height,
+    model,
+    negativeWired,
+    outputs: [output],
+    settings,
+    width: dimensions.width,
+  });
+
+  return graph;
+};
+
+/**
+ * One builder per supported family. A record rather than a conditional so a new
+ * family cannot compile without one — the failure would otherwise be a Wan
+ * graph built for someone else's model.
+ */
+const VIDEO_GRAPH_BUILDERS = {
+  'ltx-2': buildLtx2VideoGraph,
+  'minimax-h3': buildMiniMaxH3VideoGraph,
+  wan: buildWanVideoGraph,
+} satisfies Record<SupportedVideoBase, (settings: VideoSettings, model: MainModelConfig) => BackendGraphContract>;
+
 export const compileVideoGraph = (settings: VideoSettings, model: MainModelConfig): CompiledVideoGraph => {
   const validationReasons = getVideoValidationReasons(model, settings);
 
@@ -718,8 +880,13 @@ export const compileVideoGraph = (settings: VideoSettings, model: MainModelConfi
     throw new Error(validationReasons[0]);
   }
 
-  const backendGraph =
-    model.base === 'minimax-h3' ? buildMiniMaxH3VideoGraph(settings, model) : buildWanVideoGraph(settings, model);
+  const builder = VIDEO_GRAPH_BUILDERS[model.base as SupportedVideoBase];
+
+  if (!builder) {
+    throw new Error(`No video graph builder for ${model.base}.`);
+  }
+
+  const backendGraph = builder(settings, model);
 
   return {
     backendGraph,

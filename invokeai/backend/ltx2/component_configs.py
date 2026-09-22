@@ -63,8 +63,11 @@ LTX2_5_TRANSFORMER_CONFIG: Final[dict[str, Any]] = {
     "rope_type": "split",
     # 2.3+ project the caption in the connectors, not in the transformer.
     "use_prompt_embeddings": False,
-    # No weights are involved: the STG pass installs the perturbed processor at runtime.
-    "perturbed_attn": False,
+    # Selects the self-attention processor that can skip a block for spatio-temporal guidance.
+    # It carries no weights of its own and is arithmetically identical to the plain processor
+    # when no perturbation is asked for, so it is built in unconditionally rather than swapped
+    # onto a shared cached model for the one pass per step that uses it.
+    "perturbed_attn": True,
     # 2.5 dropped the video feed-forward biases but kept the audio ones.
     "ff_bias": False,
     "audio_ff_bias": True,

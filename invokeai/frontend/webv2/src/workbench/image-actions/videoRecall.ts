@@ -56,6 +56,8 @@ const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
   'minimax_h3_flf2v',
   'minimax_h3_extend_video',
   'minimax_h3_ref2v',
+  'ltx2_t2v',
+  'ltx2_i2v',
 ]);
 
 export type VideoRecallKind = 'all' | 'remix' | 'prompts' | 'seed';
@@ -297,6 +299,8 @@ const VIDEO_COMPONENT_METADATA_KEYS = [
   ['minimax_h3_component_source', 'componentSourceModel'],
   ['minimax_h3_text_encoder_model', 'h3TextEncoderModel'],
   ['minimax_h3_hybrid_base_model', 'h3HybridBaseModel'],
+  ['ltx2_component_source', 'componentSourceModel'],
+  ['ltx2_text_encoder_model', 'ltx2TextEncoderModel'],
 ] as const;
 
 /**
@@ -525,10 +529,17 @@ export const buildVideoRecallSettings = ({
 
   if (recalledModel && recalledModel.key !== values.model?.key) {
     // The canonical family transition first, so frames/fps/resolution snap to
-    // the recalled model before its recorded values land on top.
+    // the recalled model before its recorded values land on top. Its negative
+    // prompt is held back: what the clip recorded is authoritative, and an
+    // empty recording deliberately leaves the panel's own alone (below), which
+    // a family default seeded on the way in would silently overrule -- the
+    // recalled clip would then be re-run against a list it never used.
+    const carriedNegativePrompt = values.negativePrompt;
+
     values = {
       ...getVideoModelSelectionResult({ currentSettings: values, model: recalledModel, models }).settings,
       model: recalledModel,
+      negativePrompt: carriedNegativePrompt,
     };
     fields.push('model');
   } else if (recalledModel) {
@@ -552,16 +563,18 @@ export const buildVideoRecallSettings = ({
     fields.push('frames');
   }
 
+  const policy = getVideoModelPolicy(model, values);
   const steps = getInteger(metadata, 'steps');
 
-  if (steps !== null && steps >= 1) {
+  // A fixed-schedule checkpoint ignores whatever step count reaches it, so recalling one would
+  // leave a disabled control showing a number the run will not use — and re-record it next time.
+  if (policy.ui.stepsEditable && steps !== null && steps >= 1) {
     values = { ...values, steps };
     fields.push('steps');
   }
 
   const cfgScale = getNumber(metadata, 'cfg_scale');
   const cfgScaleLowNoise = getNumber(metadata, 'wan_guidance_scale_low_noise');
-  const policy = getVideoModelPolicy(model, values);
 
   if (policy.ui.cfgVisible && cfgScale !== null && cfgScale >= 1) {
     values = {
@@ -574,6 +587,26 @@ export const buildVideoRecallSettings = ({
         : {}),
     };
     fields.push('cfg');
+  }
+
+  // The per-modality scales ride with CFG: they are the same run's guidance,
+  // and a family that does not offer a control must not be handed a number.
+  const guidanceRecall = [
+    { floor: 1, key: 'audioCfgScale', metadataKey: 'ltx2_audio_cfg_scale', visible: policy.ui.audioCfgVisible },
+    { floor: 0, key: 'stgScale', metadataKey: 'ltx2_stg_scale', visible: policy.ui.stgVisible },
+    { floor: 1, key: 'modalityScale', metadataKey: 'ltx2_modality_scale', visible: policy.ui.modalityVisible },
+  ] as const;
+
+  for (const { floor, key, metadataKey, visible } of guidanceRecall) {
+    const recalled = getNumber(metadata, metadataKey);
+
+    if (visible && recalled !== null && recalled >= floor) {
+      values = { ...values, [key]: recalled };
+
+      if (!fields.includes('cfg')) {
+        fields.push('cfg');
+      }
+    }
   }
 
   const fps = getInteger(metadata, 'fps');

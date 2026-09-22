@@ -81,7 +81,9 @@ export type VideoReferenceItem =
 
 export type WanTargetResolution = '480p' | '720p' | '1080p';
 export type MiniMaxH3TargetResolution = '768 highres' | '768 lowres';
-export type VideoTargetResolution = WanTargetResolution | MiniMaxH3TargetResolution;
+/** LTX-2 presets pin the canvas's SHORT edge; the long edge follows the aspect ratio. */
+export type Ltx2TargetResolution = '512p' | '704p' | '768p';
+export type VideoTargetResolution = WanTargetResolution | MiniMaxH3TargetResolution | Ltx2TargetResolution;
 
 /**
  * The preset ratios the video panel offers. No `Free` and no width/height
@@ -131,6 +133,24 @@ export interface VideoSettings {
   /** Guidance for the low-noise half of a Wan A14B schedule; null reuses `cfgScale`. */
   cfgScaleLowNoise: number | null;
   /**
+   * LTX-2 guides its audio stream separately from its video, and far harder
+   * (the release uses 7 against video's 3). Null on a family with one guidance
+   * scale, the way `cfgScaleLowNoise` is null outside Wan A14B.
+   */
+  audioCfgScale: number | null;
+  /**
+   * LTX-2 spatio-temporal guidance: steers away from a pass whose self-attention
+   * is skipped in one transformer block, which sharpens motion. 0 turns it off
+   * and saves a forward per step. Null on families without it.
+   */
+  stgScale: number | null;
+  /**
+   * LTX-2 modality-isolation guidance: steers away from a pass with the
+   * audio/video cross-attention disabled, tightening the two streams'
+   * agreement. 1 turns it off. Null on families without it.
+   */
+  modalityScale: number | null;
+  /**
    * The family's distillation fast path: the Lightning LoRA pair at 4 steps /
    * CFG 1 for Wan A14B, the Turbo LoRA at 6 steps for MiniMax H3. Toggling it
    * patches steps/CFG and the `loras` list — see `getAcceleratorToggleResult`
@@ -169,6 +189,12 @@ export interface VideoSettings {
   h3TransformerModel: MainModelConfig | null;
   /** Optional single-file MiniMax H3 Qwen3-VL text-encoder override. */
   h3TextEncoderModel: ModelIdentifierConfig | null;
+  /**
+   * LTX-2's Lightricks-tuned Gemma-4 text encoder. Required, not an override:
+   * no LTX-2 main carries text-encoder weights, so a generation cannot run
+   * without one selected.
+   */
+  ltx2TextEncoderModel: ModelIdentifierConfig | null;
   /**
    * MiniMax H3 hybrid: with a Ref2VA transformer selected, an FL2VA checkpoint
    * that supplies every weight except the AdaLN modulation projections from

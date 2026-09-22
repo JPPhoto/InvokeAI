@@ -39937,6 +39937,24 @@
                   "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/LaMaInfillInvocation"
                 },
                 {
@@ -40661,6 +40679,18 @@
                 },
                 {
                   "$ref": "#/components/schemas/Krea2ModelLoaderOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2DenoiseOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LTX2TextEncoderOutput"
                 },
                 {
                   "$ref": "#/components/schemas/LatentsCollectionOutput"
@@ -49278,6 +49308,24 @@
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
               },
               {
+                "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
               },
               {
@@ -49959,6 +50007,18 @@
               },
               {
                 "$ref": "#/components/schemas/Krea2ModelLoaderOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2DenoiseOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2TextEncoderOutput"
               },
               {
                 "$ref": "#/components/schemas/LatentsCollectionOutput"
@@ -50741,6 +50801,24 @@
               },
               {
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
               },
               {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -51816,6 +51894,24 @@
           "lscale": {
             "$ref": "#/components/schemas/LatentsOutput"
           },
+          "ltx2_denoise": {
+            "$ref": "#/components/schemas/LTX2DenoiseOutput"
+          },
+          "ltx2_ideal_dimensions": {
+            "$ref": "#/components/schemas/IdealSizeOutput"
+          },
+          "ltx2_image_conditioning": {
+            "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
+          },
+          "ltx2_latents_to_video": {
+            "$ref": "#/components/schemas/VideoOutput"
+          },
+          "ltx2_model_loader": {
+            "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
+          },
+          "ltx2_text_encoder": {
+            "$ref": "#/components/schemas/LTX2TextEncoderOutput"
+          },
           "main_model_loader": {
             "$ref": "#/components/schemas/ModelLoaderOutput"
           },
@@ -52442,6 +52538,12 @@
           "lora_selector",
           "lresize",
           "lscale",
+          "ltx2_denoise",
+          "ltx2_ideal_dimensions",
+          "ltx2_image_conditioning",
+          "ltx2_latents_to_video",
+          "ltx2_model_loader",
+          "ltx2_text_encoder",
           "main_model_loader",
           "mask_combine",
           "mask_edge",
@@ -53163,6 +53265,24 @@
               },
               {
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
               },
               {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -54303,6 +54423,24 @@
               },
               {
                 "$ref": "#/components/schemas/Krea2TextEncoderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2DenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2IdealDimensionsInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ImageConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2LatentsToVideoInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2ModelLoaderInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2TextEncoderInvocation"
               },
               {
                 "$ref": "#/components/schemas/LaMaInfillInvocation"
@@ -57962,11 +58100,1173 @@
         "title": "LLMTaskProgressEvent",
         "type": "object"
       },
+      "LTX2ConditioningField": {
+        "description": "An LTX-2 conditioning primitive value.\n\nLTX-2 conditioning is a pair of prompt streams, one per modality, already projected by the\ntext connectors, plus the token mask the connectors emit alongside them.",
+        "properties": {
+          "conditioning_name": {
+            "description": "The name of conditioning tensor",
+            "title": "Conditioning Name",
+            "type": "string"
+          }
+        },
+        "required": ["conditioning_name"],
+        "title": "LTX2ConditioningField",
+        "type": "object"
+      },
+      "LTX2DenoiseInvocation": {
+        "category": "latents",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Generates LTX-2 video and audio latents together.\n\nOne transformer forward produces both modalities at every step, so the soundtrack is generated\nwith the picture rather than dubbed onto it. Wire an image conditioning to start the clip from\na frame.\n\nThe guidance-distilled checkpoint runs a fixed eight-step schedule with no guidance at all: its\nstep count and guidance scales below are ignored, and the negative prompt never reaches it.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "LTX-2 model (Transformer) to load",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Transformer"
+          },
+          "positive_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2ConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Positive conditioning tensor",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true
+          },
+          "negative_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2ConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Conditioning for the unconditional pass. Required whenever a guidance scale is above 1.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "video_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2VideoConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "First-frame (VAE-latent) conditioning for LTX-2",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Image Conditioning"
+          },
+          "width": {
+            "default": 1248,
+            "description": "Canvas width.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 1248,
+            "orig_required": false,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 704,
+            "description": "Canvas height.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 704,
+            "orig_required": false,
+            "title": "Height",
+            "type": "integer"
+          },
+          "num_frames": {
+            "default": 121,
+            "description": "Frames to generate. The causal VAE encodes the first frame alone and then groups of eight, so this must be 8n + 1.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 121,
+            "orig_required": false,
+            "title": "Num Frames",
+            "type": "integer"
+          },
+          "fps": {
+            "default": 24.0,
+            "description": "Frames per second. Sets the clip's duration, which is also what the audio stream is generated to fill, and the transformer's positional clock.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 120,
+            "minimum": 1,
+            "orig_default": 24.0,
+            "orig_required": false,
+            "title": "Fps",
+            "type": "number"
+          },
+          "steps": {
+            "default": 30,
+            "description": "Number of denoising steps.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 30,
+            "orig_required": false,
+            "title": "Steps",
+            "type": "integer"
+          },
+          "cfg_scale": {
+            "default": 3.0,
+            "description": "Classifier-free guidance scale for the video stream.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 1.0,
+            "orig_default": 3.0,
+            "orig_required": false,
+            "title": "Cfg Scale",
+            "type": "number"
+          },
+          "audio_cfg_scale": {
+            "default": 7.0,
+            "description": "Classifier-free guidance scale for the audio stream. The release guides audio much harder than video.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 1.0,
+            "orig_default": 7.0,
+            "orig_required": false,
+            "title": "Audio CFG Scale",
+            "type": "number"
+          },
+          "stg_scale": {
+            "default": 1.0,
+            "description": "Spatio-temporal guidance scale. Steers away from a pass whose self-attention is skipped in one block, which sharpens motion. 0 turns it off and saves a forward per step.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 0.0,
+            "orig_default": 1.0,
+            "orig_required": false,
+            "title": "STG Scale",
+            "type": "number"
+          },
+          "modality_scale": {
+            "default": 3.0,
+            "description": "Modality-isolation guidance scale. Steers away from a pass with the audio/video cross-attention disabled, which tightens the two streams' agreement. 1 turns it off.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 1.0,
+            "orig_default": 3.0,
+            "orig_required": false,
+            "title": "Modality Scale",
+            "type": "number"
+          },
+          "guidance_rescale": {
+            "default": 0.7,
+            "description": "How far to pull the guided prediction's contrast back toward the unguided one.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "orig_default": 0.7,
+            "orig_required": false,
+            "title": "Guidance Rescale",
+            "type": "number"
+          },
+          "schedule": {
+            "default": "auto",
+            "description": "Which noise schedule to sample. 'Auto' follows the loaded transformer's variant.",
+            "enum": ["auto", "dev", "distilled"],
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "auto",
+            "orig_required": false,
+            "title": "Schedule",
+            "type": "string",
+            "ui_choice_labels": {
+              "auto": "Auto (from the model's variant)",
+              "dev": "Dev (shifted, guided)",
+              "distilled": "Distilled (8 fixed steps, no guidance)"
+            }
+          },
+          "seed": {
+            "default": 0,
+            "description": "Randomness seed for reproducibility.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "orig_default": 0,
+            "orig_required": false,
+            "title": "Seed",
+            "type": "integer"
+          },
+          "type": {
+            "const": "ltx2_denoise",
+            "default": "ltx2_denoise",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["ltx", "ltx2", "video", "audio", "denoise"],
+        "title": "Denoise - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2DenoiseOutput"
+        }
+      },
+      "LTX2DenoiseOutput": {
+        "class": "output",
+        "description": "Joint video and audio latents from one LTX-2 denoise run.",
+        "properties": {
+          "video_latents": {
+            "$ref": "#/components/schemas/LatentsField",
+            "description": "Video latents [1, 128, T_lat, H/32, W/32].",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "audio_latents": {
+            "$ref": "#/components/schemas/LatentsField",
+            "description": "Packed audio latents [1, T_audio, 128].",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "width": {
+            "description": "Pixel width of the video latents.",
+            "field_kind": "output",
+            "title": "Width",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "height": {
+            "description": "Pixel height of the video latents.",
+            "field_kind": "output",
+            "title": "Height",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "num_frames": {
+            "description": "Pixel-frame count of the video latents.",
+            "field_kind": "output",
+            "title": "Num Frames",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_denoise_output",
+            "default": "ltx2_denoise_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "video_latents", "audio_latents", "width", "height", "num_frames", "type", "type"],
+        "title": "LTX2DenoiseOutput",
+        "type": "object"
+      },
+      "LTX2IdealDimensionsInvocation": {
+        "category": "video",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Ideal LTX-2 dimensions for a source image's aspect ratio.\n\nThe chosen preset pins the canvas's *short* edge and the long edge follows the source's aspect\nratio, each axis rounded to a multiple of 32 (the video VAE's spatial compression). Only the\nratio of the inputs matters. Wire the outputs into the width and height of both the image\nconditioning and the denoise node, which must share one canvas.\n\nCost grows with the token count, which is the canvas area over 1024: 768p is about 2.2x the\nwork of 512p at the same length.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "width": {
+            "default": 1024,
+            "description": "Source image width in pixels.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 1024,
+            "orig_required": false,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 1024,
+            "description": "Source image height in pixels.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 1024,
+            "orig_required": false,
+            "title": "Height",
+            "type": "integer"
+          },
+          "target_resolution": {
+            "default": "704p",
+            "description": "Which short edge to pin the canvas to.",
+            "enum": ["512p", "704p", "768p"],
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "704p",
+            "orig_required": false,
+            "title": "Target Resolution",
+            "type": "string",
+            "ui_choice_labels": {
+              "512p": "512p (short edge 512 - fastest)",
+              "704p": "704p (short edge 704)",
+              "768p": "768p (short edge 768 - sharpest, slowest)"
+            }
+          },
+          "type": {
+            "const": "ltx2_ideal_dimensions",
+            "default": "ltx2_ideal_dimensions",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["ltx", "ltx2", "video", "dimensions", "math"],
+        "title": "LTX-2 Ideal Dimensions",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/IdealSizeOutput"
+        }
+      },
+      "LTX2ImageConditioningInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Encodes an image as the first frame of an LTX-2 generation.\n\nThe image is re-compressed as a single H.264 frame before it is encoded. That is not an\noptimization: LTX-2 was trained on frames that had been through a video codec, and a pristine\nsource is far enough out of that distribution that the clip visibly drifts away from it over\nthe first second. 18 is the CRF LTX-2.5 was trained against.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The image the video starts from.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "VAE",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Video VAE"
+          },
+          "width": {
+            "default": 1248,
+            "description": "Canvas width (must match Denoise).",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 1248,
+            "orig_required": false,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 704,
+            "description": "Canvas height (must match Denoise).",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 32,
+            "orig_default": 704,
+            "orig_required": false,
+            "title": "Height",
+            "type": "integer"
+          },
+          "strength": {
+            "default": 1.0,
+            "description": "How strongly the generation is held to this frame. 1 keeps it exactly; lower values let the model redraw it, which can hide a source that does not match the prompt.",
+            "exclusiveMinimum": 0.0,
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 1.0,
+            "orig_default": 1.0,
+            "orig_required": false,
+            "title": "Strength",
+            "type": "number"
+          },
+          "crf": {
+            "default": 18,
+            "description": "H.264 quality factor the image is re-compressed at before encoding. Higher is more compressed; 0 skips re-compression, which is off-distribution for this model.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 51,
+            "minimum": 0,
+            "orig_default": 18,
+            "orig_required": false,
+            "title": "Crf",
+            "type": "integer"
+          },
+          "type": {
+            "const": "ltx2_image_conditioning",
+            "default": "ltx2_image_conditioning",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["conditioning", "image", "ltx", "ltx2", "video"],
+        "title": "Image Conditioning - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2ImageConditioningOutput"
+        }
+      },
+      "LTX2ImageConditioningOutput": {
+        "class": "output",
+        "description": "A VAE-encoded first frame for LTX-2 image-to-video.",
+        "properties": {
+          "video_conditioning": {
+            "$ref": "#/components/schemas/LTX2VideoConditioningField",
+            "description": "First-frame (VAE-latent) conditioning for LTX-2",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_image_conditioning_output",
+            "default": "ltx2_image_conditioning_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "video_conditioning", "type", "type"],
+        "title": "LTX2ImageConditioningOutput",
+        "type": "object"
+      },
+      "LTX2LatentsToVideoInvocation": {
+        "category": "latents",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Decodes LTX-2 video and audio latents into an MP4 with an AAC stereo track.",
+        "node_pack": "invokeai",
+        "properties": {
+          "board": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoardField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The board to save the image to",
+            "field_kind": "internal",
+            "input": "direct",
+            "orig_required": false,
+            "ui_hidden": false
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetadataField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional metadata to be saved with the image",
+            "field_kind": "internal",
+            "input": "connection",
+            "orig_required": false,
+            "ui_hidden": false
+          },
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "video_latents": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatentsField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Latents tensor",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true
+          },
+          "audio_latents": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatentsField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Packed audio latents from the denoise node. Omit for a silent video.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "VAE",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Video VAE"
+          },
+          "audio_vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Audio VAE (mel spectrogram) for LTX-2",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Audio VAE"
+          },
+          "vocoder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2VocoderField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Vocoder (48 kHz stereo) for LTX-2",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Vocoder"
+          },
+          "fps": {
+            "default": 24.0,
+            "description": "Frames per second of the output video.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 120,
+            "minimum": 1,
+            "orig_default": 24.0,
+            "orig_required": false,
+            "title": "Fps",
+            "type": "number"
+          },
+          "tile_size": {
+            "default": 512,
+            "description": "Spatial decode tile, in output pixels. Smaller tiles need less VRAM and take longer.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 64,
+            "orig_default": 512,
+            "orig_required": false,
+            "title": "Tile Size",
+            "type": "integer"
+          },
+          "temporal_tile": {
+            "default": 16,
+            "description": "Temporal decode tile, in output frames. Smaller tiles need less VRAM and take longer.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 8,
+            "orig_default": 16,
+            "orig_required": false,
+            "title": "Temporal Tile",
+            "type": "integer"
+          },
+          "type": {
+            "const": "ltx2_latents_to_video",
+            "default": "ltx2_latents_to_video",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["latents", "video", "audio", "vae", "l2v", "ltx", "ltx2"],
+        "title": "Latents to Video - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/VideoOutput"
+        }
+      },
+      "LTX2ModelLoaderInvocation": {
+        "category": "model",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Loads an LTX-2 model, outputting its submodels.\n\nLTX-2 is distributed as separate files, and this node assembles one generation from up to\nthree installed records: the 22B transformer (a single-file checkpoint, or a component folder\nthat happens to carry one), the component folder that supplies the video VAE, audio VAE,\nvocoder and text connectors, and the Lightricks-tuned Gemma-4 text encoder.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "LTX-2 model (Transformer) to load",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Model",
+            "ui_model_base": ["ltx-2"],
+            "ui_model_type": ["main"]
+          },
+          "component_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The LTX-2 component folder supplying the video VAE, audio VAE, vocoder and text connectors. Required unless the Model field is itself a folder that carries them.",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Components",
+            "ui_model_base": ["ltx-2"],
+            "ui_model_format": ["diffusers"],
+            "ui_model_type": ["main"]
+          },
+          "text_encoder_model": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Gemma-4 tokenizer and text encoder, and the LTX-2 text connectors",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Text Encoder",
+            "ui_model_base": ["ltx-2"],
+            "ui_model_type": ["gemma4_encoder"]
+          },
+          "type": {
+            "const": "ltx2_model_loader",
+            "default": "ltx2_model_loader",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["model", "text_encoder_model", "type", "id"],
+        "tags": ["model", "ltx", "ltx2", "video"],
+        "title": "Main Model - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2ModelLoaderOutput"
+        }
+      },
+      "LTX2ModelLoaderOutput": {
+        "class": "output",
+        "description": "LTX-2 model loader output.",
+        "properties": {
+          "transformer": {
+            "$ref": "#/components/schemas/LTX2TransformerField",
+            "description": "LTX-2 model (Transformer) to load",
+            "field_kind": "output",
+            "title": "Transformer",
+            "ui_hidden": false
+          },
+          "text_encoder": {
+            "$ref": "#/components/schemas/LTX2TextEncoderField",
+            "description": "Gemma-4 tokenizer and text encoder, and the LTX-2 text connectors",
+            "field_kind": "output",
+            "title": "Gemma-4 Encoder",
+            "ui_hidden": false
+          },
+          "vae": {
+            "$ref": "#/components/schemas/VAEField",
+            "description": "VAE",
+            "field_kind": "output",
+            "title": "Video VAE",
+            "ui_hidden": false
+          },
+          "audio_vae": {
+            "$ref": "#/components/schemas/VAEField",
+            "description": "Audio VAE (mel spectrogram) for LTX-2",
+            "field_kind": "output",
+            "title": "Audio VAE",
+            "ui_hidden": false
+          },
+          "vocoder": {
+            "$ref": "#/components/schemas/LTX2VocoderField",
+            "description": "Vocoder (48 kHz stereo) for LTX-2",
+            "field_kind": "output",
+            "title": "Vocoder",
+            "ui_hidden": false
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "The LTX-2 transformer that was loaded.",
+            "field_kind": "output",
+            "title": "Model",
+            "ui_hidden": false
+          },
+          "component_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelIdentifierField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The component folder the VAEs, vocoder and connectors came from.",
+            "field_kind": "output",
+            "title": "Components",
+            "ui_hidden": false
+          },
+          "text_encoder_model": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "The Gemma-4 encoder that was loaded.",
+            "field_kind": "output",
+            "title": "Text Encoder",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_model_loader_output",
+            "default": "ltx2_model_loader_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "output_meta",
+          "transformer",
+          "text_encoder",
+          "vae",
+          "audio_vae",
+          "vocoder",
+          "model",
+          "component_source",
+          "text_encoder_model",
+          "type",
+          "type"
+        ],
+        "title": "LTX2ModelLoaderOutput",
+        "type": "object"
+      },
+      "LTX2TextEncoderField": {
+        "description": "Field for the LTX-2 prompt conditioner: the Gemma-4 tower and the text connectors.\n\nThe connectors are a separate model, not a submodel of the encoder: they consume the stacked\nper-layer hidden states and produce the two per-modality streams the transformer reads.",
+        "properties": {
+          "tokenizer": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Info to load tokenizer submodel"
+          },
+          "text_encoder": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Info to load text_encoder submodel"
+          },
+          "connectors": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Info to load the text connectors submodel"
+          }
+        },
+        "required": ["tokenizer", "text_encoder", "connectors"],
+        "title": "LTX2TextEncoderField",
+        "type": "object"
+      },
+      "LTX2TextEncoderInvocation": {
+        "category": "conditioning",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Encodes a prompt, and optionally a negative prompt, for LTX-2.\n\nBoth prompts go through the same two stages: the Lightricks-tuned Gemma-4 tower, whose hidden\nstates are taken from every layer rather than just the last, and the text connectors, which\nproject them into the separate streams the video and audio halves of the transformer read.\n\nThe negative prompt only reaches the model through classifier-free guidance, so it is skipped\nentirely for a distilled checkpoint (which runs none) rather than paying a 12B encode for a\ntensor nothing will read.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Text prompt for LTX-2.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true,
+            "title": "Prompt",
+            "ui_component": "textarea"
+          },
+          "text_encoder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2TextEncoderField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Gemma-4 tokenizer and text encoder, and the LTX-2 text connectors",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Gemma-4 Encoder"
+          },
+          "negative_prompt": {
+            "default": "has_subtitles, has_blurbox, transition from black, transition to black, speech_ending_short, blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.",
+            "description": "What to steer away from. Reaches the model only through classifier-free guidance.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "has_subtitles, has_blurbox, transition from black, transition to black, speech_ending_short, blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.",
+            "orig_required": false,
+            "title": "Negative Prompt",
+            "type": "string",
+            "ui_component": "textarea"
+          },
+          "encode_negative": {
+            "default": true,
+            "description": "Whether to encode the negative prompt. Turn off for a distilled checkpoint, which runs no unconditional pass.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": true,
+            "orig_required": false,
+            "title": "Encode Negative",
+            "type": "boolean"
+          },
+          "max_sequence_length": {
+            "default": 1024,
+            "description": "Prompt tokens to keep. Every prompt is padded to this length, which is the length the connectors' learned registers are defined against.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 1024,
+            "orig_default": 1024,
+            "orig_required": false,
+            "title": "Max Sequence Length",
+            "type": "integer"
+          },
+          "type": {
+            "const": "ltx2_text_encoder",
+            "default": "ltx2_text_encoder",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["prompt", "conditioning", "ltx", "ltx2", "video"],
+        "title": "Prompt - LTX-2",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LTX2TextEncoderOutput"
+        }
+      },
+      "LTX2TextEncoderOutput": {
+        "class": "output",
+        "description": "The positive and (when classifier-free guidance will run) negative LTX-2 conditioning.",
+        "properties": {
+          "conditioning": {
+            "$ref": "#/components/schemas/LTX2ConditioningField",
+            "description": "Conditioning tensor",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "negative_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LTX2ConditioningField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Conditioning for the unconditional guidance pass, if one was encoded.",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "ltx2_text_encoder_output",
+            "default": "ltx2_text_encoder_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "conditioning", "negative_conditioning", "type", "type"],
+        "title": "LTX2TextEncoderOutput",
+        "type": "object"
+      },
+      "LTX2TransformerField": {
+        "description": "Transformer field for LTX-2 models.",
+        "properties": {
+          "transformer": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Info to load Transformer submodel"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loaded transformer's variant ('ltx2_dev' / 'ltx2_distilled'), stamped by the model loader so the denoise node can pick the schedule the checkpoint was trained for.",
+            "title": "Variant"
+          }
+        },
+        "required": ["transformer"],
+        "title": "LTX2TransformerField",
+        "type": "object"
+      },
       "LTX2VariantType": {
         "type": "string",
         "enum": ["ltx2_dev", "ltx2_distilled"],
         "title": "LTX2VariantType",
         "description": "LTX-2 transformer variants. Dev and Distilled are key-for-key identical checkpoints of the same\narchitecture; the variant decides the sampling recipe (guided ~40-step schedule vs the fixed\n8-sigma distilled schedule with CFG off), so it must travel with the model record.\n\nValues carry the family prefix because variant values are globally unique across enums\n(`FluxVariantType.Dev` already owns \"dev\")."
+      },
+      "LTX2VideoConditioningField": {
+        "description": "First-frame (VAE-latent) conditioning for LTX-2 image-to-video.\n\nThe canvas the frame was encoded at rides along so the denoise node can reject a mismatch\nwith a named error rather than a shape failure inside the transformer.",
+        "properties": {
+          "latents_name": {
+            "description": "Name of the saved [1, 128, 1, H/32, W/32] latent tensor.",
+            "title": "Latents Name",
+            "type": "string"
+          },
+          "width": {
+            "description": "Pixel width the frame was encoded at (matches denoise width).",
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "description": "Pixel height the frame was encoded at (matches denoise height).",
+            "title": "Height",
+            "type": "integer"
+          },
+          "strength": {
+            "default": 1.0,
+            "description": "How strongly the frame is held, 0 (ignored) to 1 (kept exactly).",
+            "title": "Strength",
+            "type": "number"
+          }
+        },
+        "required": ["latents_name", "width", "height"],
+        "title": "LTX2VideoConditioningField",
+        "type": "object"
+      },
+      "LTX2VocoderField": {
+        "description": "Vocoder field for LTX-2: mel spectrogram to 48 kHz stereo waveform.",
+        "properties": {
+          "vocoder": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Info to load vocoder submodel"
+          }
+        },
+        "required": ["vocoder"],
+        "title": "LTX2VocoderField",
+        "type": "object"
       },
       "LaMaInfillInvocation": {
         "category": "inpaint",

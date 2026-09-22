@@ -1,4 +1,5 @@
 import type {
+  Ltx2TargetResolution,
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
   VideoReferenceImageDetail,
@@ -13,6 +14,7 @@ import type {
  *   ("nearest" rounding — the node default; the other modes are workflow-only).
  * - MiniMax H3: `resolve_canvas_size` in `invokeai/backend/minimax_h3/packing.py`
  *   and `resolve_lowres_canvas_size` in `invokeai/backend/minimax_h3/presets.py`.
+ * - LTX-2: `resolve_canvas` in `invokeai/backend/ltx2/packing.py`.
  * - Ref2VA image references: `resolve_reference_image_short_edge` and
  *   `normalize_reference_image` in `invokeai/backend/minimax_h3/reference_conditioning.py`.
  *
@@ -211,6 +213,56 @@ export const resolveMiniMaxH3ReferenceImage = (
   return { dimensions, rows: (dimensions.width * dimensions.height) / MINIMAX_H3_ROW_PIXELS };
 };
 
+export const LTX2_CANVAS_MULTIPLE = 32;
+
+/** Short-side pixel count for each LTX-2 preset ("p" names the short dimension). */
+export const LTX2_TARGET_RESOLUTION_PX: Record<Ltx2TargetResolution, number> = {
+  '512p': 512,
+  '704p': 704,
+  '768p': 768,
+};
+
+/**
+ * The LTX-2 canvas for an aspect ratio: the preset pins the SHORT edge, the long
+ * edge follows the source's ratio, and both axes snap to the VAE's 32-pixel grid.
+ * LTX-2 declares no aspect-ratio limit and no area cap, so only degenerate inputs
+ * return null. Only the ratio of the inputs matters.
+ */
+export const resolveLtx2Canvas = (
+  width: number,
+  height: number,
+  targetResolution: Ltx2TargetResolution
+): VideoDimensions | null => {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  const shortEdge = LTX2_TARGET_RESOLUTION_PX[targetResolution];
+  const ratio = width / height;
+  const raw =
+    ratio >= 1 ? { height: shortEdge, width: shortEdge * ratio } : { height: shortEdge / ratio, width: shortEdge };
+
+  return {
+    height: snapToMultiple(raw.height, LTX2_CANVAS_MULTIPLE),
+    width: snapToMultiple(raw.width, LTX2_CANVAS_MULTIPLE),
+  };
+};
+
+// LTX-2's causal VAE encodes the first frame alone and then groups of 8, so
+// (n - 1) % 8 == 0. 121 frames is 5 s at the model's 24 fps default, the length
+// the released pipeline generates; the slider stops at 241 (10 s) because the
+// sequence length — and with it both time and VRAM — grows linearly past it,
+// while the field still accepts up to 481 for a deliberate long render.
+export const LTX2_NUM_FRAMES_MIN = 9;
+export const LTX2_NUM_FRAMES_MAX = 481;
+export const LTX2_NUM_FRAMES_SLIDER_MAX = 241;
+export const LTX2_NUM_FRAMES_STEP = 8;
+export const LTX2_NUM_FRAMES_DEFAULT = 121;
+
+export const LTX2_FPS_MIN = 1;
+export const LTX2_FPS_MAX = 60;
+export const LTX2_FPS_DEFAULT = 24;
+
 /** The width/height parts of a preset ratio, for feeding the canvas resolvers. */
 export const getVideoAspectRatioParts = (id: VideoAspectRatioId): VideoDimensions => {
   const [width = 1, height = 1] = id.split(':').map(Number);
@@ -241,14 +293,29 @@ export const WAN_FPS_DEFAULT = 16;
 export const isValidWanNumFrames = (numFrames: number): boolean =>
   Number.isInteger(numFrames) && numFrames >= WAN_NUM_FRAMES_MIN && (numFrames - 1) % WAN_NUM_FRAMES_STEP === 0;
 
-export const snapWanNumFrames = (numFrames: number): number => {
+/** A frame count's grid, as the variant policies declare it. */
+export interface VideoFramesGrid {
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+}
+
+/**
+ * The nearest frame count on a family's grid, clamped to its range. Ties round
+ * UP: a count halfway between two grid points is as close to either, and
+ * rounding a short request down toward the floor is the worse answer (it can
+ * collapse a clip to the minimum). Matches `snap_num_frames` in
+ * `invokeai/backend/ltx2/packing.py`.
+ */
+export const snapNumFramesToGrid = (grid: VideoFramesGrid, numFrames: number): number => {
   if (!Number.isFinite(numFrames)) {
-    return WAN_NUM_FRAMES_DEFAULT;
+    return grid.defaultValue;
   }
 
-  const clamped = Math.min(WAN_NUM_FRAMES_MAX, Math.max(WAN_NUM_FRAMES_MIN, numFrames));
+  const clamped = Math.min(grid.max, Math.max(grid.min, numFrames));
 
-  return Math.round((clamped - 1) / WAN_NUM_FRAMES_STEP) * WAN_NUM_FRAMES_STEP + 1;
+  return Math.floor((clamped - grid.min) / grid.step + 0.5) * grid.step + grid.min;
 };
 
 export const MINIMAX_H3_FPS = 24;
@@ -263,15 +330,22 @@ export const MINIMAX_H3_NUM_FRAMES_DEFAULT = 124;
 export const isValidMiniMaxH3NumFrames = (numFrames: number): boolean =>
   MINIMAX_H3_NUM_FRAMES_CHOICES.includes(numFrames);
 
-export const snapMiniMaxH3NumFrames = (numFrames: number): number => {
+/** A frame count's choice list, as the variant policies declare it. */
+export interface VideoFramesChoices {
+  choices: readonly number[];
+  defaultValue: number;
+}
+
+/** The nearest offered frame count; the first of two equally near ones wins. */
+export const snapNumFramesToChoices = (policy: VideoFramesChoices, numFrames: number): number => {
   if (!Number.isFinite(numFrames)) {
-    return MINIMAX_H3_NUM_FRAMES_DEFAULT;
+    return policy.defaultValue;
   }
 
-  let best = MINIMAX_H3_NUM_FRAMES_DEFAULT;
+  let best = policy.defaultValue;
   let bestDistance = Number.POSITIVE_INFINITY;
 
-  for (const choice of MINIMAX_H3_NUM_FRAMES_CHOICES) {
+  for (const choice of policy.choices) {
     const distance = Math.abs(choice - numFrames);
 
     if (distance < bestDistance) {
@@ -286,3 +360,23 @@ export const snapMiniMaxH3NumFrames = (numFrames: number): number => {
 /** Clip length in seconds; matches the backend's `n / fps` labeling. */
 export const getVideoDurationSeconds = (numFrames: number, fps: number): number | null =>
   Number.isFinite(numFrames) && Number.isFinite(fps) && fps > 0 && numFrames >= 0 ? numFrames / fps : null;
+
+/**
+ * The negative prompt LTX-2 was released with: a list of artifact and audio-defect tags its dev
+ * checkpoint guides against at CFG 3. Mirrors `LTX2_DEFAULT_NEGATIVE_PROMPT` in
+ * `invokeai/backend/ltx2/constants.py`, which is the text-encoder node's own default — the panel
+ * seeds it so a fresh LTX-2 panel runs the released recipe rather than steering against nothing.
+ */
+export const LTX2_DEFAULT_NEGATIVE_PROMPT =
+  'has_subtitles, has_blurbox, transition from black, transition to black, speech_ending_short, ' +
+  'blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, ' +
+  'grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, ' +
+  'deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, ' +
+  'wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of ' +
+  'field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent ' +
+  'lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny ' +
+  'valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, ' +
+  'mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, ' +
+  'off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward ' +
+  'pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, ' +
+  'inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.';
