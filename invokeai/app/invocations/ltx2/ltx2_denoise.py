@@ -1,5 +1,6 @@
 """LTX-2 denoise: joint video and audio sampling from one transformer."""
 
+from contextlib import nullcontext
 from typing import Literal
 
 import torch
@@ -48,7 +49,13 @@ from invokeai.backend.ltx2.packing import (
     validate_num_frames,
 )
 from invokeai.backend.model_manager.taxonomy import BaseModelType, LTX2VariantType
-from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
+from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
+from invokeai.backend.patches.lora_conversions.ltx2_lora_constants import LTX2_LORA_TRANSFORMER_PREFIX
+from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import (
+    peak_dequant_transient_bytes,
+    requires_sidecar_patching,
+)
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import LTX2ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
@@ -78,7 +85,7 @@ class LTX2DenoiseOutput(BaseInvocationOutput):
     title="Denoise - LTX-2",
     tags=["ltx", "ltx2", "video", "audio", "denoise"],
     category="latents",
-    version="1.4.0",
+    version="1.5.0",
     classification=Classification.Prototype,
 )
 class LTX2DenoiseInvocation(BaseInvocation):
@@ -210,8 +217,20 @@ class LTX2DenoiseInvocation(BaseInvocation):
         "without wired video latents.",
     )
 
+    def _materialize_lora_patches(self, context: InvocationContext) -> list[PatchSpec]:
+        """Load every LoRA on the transformer field into (patch, weight, cache-pin) specs."""
+        patch_specs: list[PatchSpec] = []
+        for lora in self.transformer.loras:
+            lora_info = context.models.load(lora.lora)
+            if not isinstance(lora_info.model, ModelPatchRaw):
+                raise TypeError(
+                    f"Expected ModelPatchRaw for LoRA '{lora.lora.key}', got {type(lora_info.model).__name__}."
+                )
+            patch_specs.append((lora_info.model, lora.weight, lora_info.model_in_ram()))
+        return patch_specs
+
     @staticmethod
-    def _estimate_working_memory(video_rows: int, audio_rows: int) -> int:
+    def _estimate_working_memory(video_rows: int, audio_rows: int, patch_bytes: int = 0) -> int:
         """Estimate peak transformer activation bytes so the model cache reserves enough headroom.
 
         The 22B transformer is partially loaded on any card this runs on, and without a hint the
@@ -239,11 +258,36 @@ class LTX2DenoiseInvocation(BaseInvocation):
         partial loading, which a fully resident measurement does not see.
         """
         MiB = 1024**2
-        return video_rows * int(MiB // 4.5) + audio_rows * (MiB // 10) + 1024**3
+        estimated = video_rows * int(MiB // 4.5) + audio_rows * (MiB // 10) + 1024**3
+        if patch_bytes > 0:
+            # `patch_bytes` is what the patches actually weigh, and is passed as zero unless they
+            # will be sidecar-patched: the direct path returns each patch to the CPU as it goes, so
+            # nothing of it stays resident. The extra gibibyte covers the transient a sidecar layer
+            # holds while it computes the low-rank residual -- a second copy of that layer's output,
+            # alongside the dequantized weight the term above already accounts for.
+            estimated += patch_bytes + 1024**3
+        return estimated
 
-    def _resolve_distilled(self) -> bool:
+    def _resolve_distilled(self, context: InvocationContext) -> bool:
         if self.schedule != "auto":
             return self.schedule == "distilled"
+        if self.transformer.loras and self.transformer.variant != LTX2VariantType.Distilled.value:
+            # `auto` follows the transformer's *variant*, which names the checkpoint -- and a LoRA
+            # does not change it. A step-distillation LoRA on a Dev checkpoint therefore resolves to
+            # the guided ~30-step schedule and samples the LoRA's 8 steps on it, which produces a
+            # broken clip and looks like a broken model rather than a wiring mistake. The panel sets
+            # `schedule` explicitly for this reason; a hand-built graph has to be told.
+            #
+            # Info rather than a warning, and silent on a distilled checkpoint: this cannot tell a
+            # step-distillation LoRA from an ordinary style one, so on Dev it is a note for the
+            # minority case rather than a claim about this run. On a distilled checkpoint `auto` has
+            # already resolved correctly and saying anything would be simply wrong.
+            context.logger.info(
+                "LTX-2 schedule is Auto with %d LoRA(s) applied. Auto follows the checkpoint, which a LoRA "
+                "does not change -- if one of these is a step-distillation LoRA, set Schedule to 'Distilled' "
+                "or the run will sample its step count on the guided schedule.",
+                len(self.transformer.loras),
+            )
         if self.transformer.variant is None:
             raise ValueError(
                 "The schedule is set to Auto but the transformer carries no variant, so there is nothing to "
@@ -416,7 +460,7 @@ class LTX2DenoiseInvocation(BaseInvocation):
                 {"fps": (self.full_video_conditioning.fps, self.fps)},
             )
 
-        distilled = self._resolve_distilled()
+        distilled = self._resolve_distilled(context)
         guidance = self._resolve_guidance(context, distilled)
         if distilled and self.steps != LTX2_DISTILLED_STEPS:
             context.logger.info(
@@ -492,21 +536,63 @@ class LTX2DenoiseInvocation(BaseInvocation):
 
         device = TorchDevice.choose_torch_device()
         inference_dtype = TorchDevice.choose_bfloat16_safe_dtype(device)
+        transformer_info = context.models.load(self.transformer.transformer)
+        transformer_config = context.models.get_config(self.transformer.transformer)
+
+        # Materialized before the model lock: loading a LoRA takes the cache's own lock, and doing
+        # that while holding this one is the deadlock `apply_smart_model_patches` documents. It also
+        # has to happen before the reservation below, which is sized from these patches.
+        lora_patch_specs = self._materialize_lora_patches(context)
+        # Resolved from the unlocked model, like the dequant transient below: only a build whose
+        # weights are buffers rather than parameters takes the sidecar path, and only that path
+        # leaves patch tensors on the device.
+        # Walks the whole 22B module tree, so it is only asked when there is something to patch.
+        force_sidecar = bool(lora_patch_specs) and requires_sidecar_patching(
+            transformer_info.model, transformer_config.format
+        )
+
         estimated_working_memory = self._estimate_working_memory(
             # The sequence as built, not the grid: a held keyframe rides on the end of it and is
             # attended over in every forward -- 858 rows on top of 13728 at 1248x704 x121 -- and the
             # fit is tightest exactly where running out is most expensive.
             state.video_latents.shape[1],
             state.audio_latents_count,
+            # The patches' own byte count, not a per-LoRA guess. This reservation is subtracted from
+            # VRAM *before* any weight streams in, so over-reserving is not free -- it directly buys
+            # fewer resident transformer weights, and a blind constant large enough for the rank-450
+            # distilled accelerator (8.3 GiB) would cost a rank-16 style LoRA the same.
+            sum(spec[0].calc_size() for spec in lora_patch_specs) if force_sidecar else 0,
         )
-
-        transformer_info = context.models.load(self.transformer.transformer)
         # An int8-convrot build materializes each linear's dequantized weight inside the forward,
         # which the model's resident size does not account for. Read from the unlocked model, before
         # the VRAM lock the reservation applies to; zero on a bf16 build.
         estimated_working_memory += peak_dequant_transient_bytes(transformer_info.model, inference_dtype)
 
-        with transformer_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, transformer):
+        with (
+            transformer_info.model_on_device(working_mem_bytes=estimated_working_memory) as (
+                cached_weights,
+                transformer,
+            ),
+            # Skipped entirely when there is nothing to patch: entering it takes the loader lock
+            # and copies the cached-weight mapping, neither of which an unaccelerated run should
+            # pay for. Same guard MiniMax H3 uses.
+            (
+                LayerPatcher.apply_smart_model_patches(
+                    model=transformer,
+                    patches=lora_patch_specs,
+                    prefix=LTX2_LORA_TRANSFORMER_PREFIX,
+                    dtype=inference_dtype,
+                    cached_weights=cached_weights,
+                    # An int8-convrot / nvfp4 build keeps its weights as buffers rather than
+                    # parameters, so the patcher's own fp8 and CPU fallbacks would answer "not
+                    # quantized" and merge the delta into a weight that is never read. This is the
+                    # only reliable signal.
+                    force_sidecar_patching=force_sidecar,
+                )
+                if lora_patch_specs
+                else nullcontext()
+            ),
+        ):
             require_patch_geometry(transformer.config)
             # Named per stage: a two-stage run drives this bar to 100%, then starts a second one
             # from 0 with the upscale in between, which reads as a restart unless it says otherwise.

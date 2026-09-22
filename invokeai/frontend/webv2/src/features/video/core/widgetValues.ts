@@ -148,9 +148,12 @@ export const syncVideoWidgetValuesWithModels = (
   const unchangedAccelerator = {
     acceleratorEnabled: base.acceleratorEnabled,
     acceleratorLoraKeys: base.acceleratorLoraKeys,
+    audioCfgScale: base.audioCfgScale,
     cfgScale: base.cfgScale,
     cfgScaleLowNoise: base.cfgScaleLowNoise,
+    modalityScale: base.modalityScale,
     steps: base.steps,
+    stgScale: base.stgScale,
   };
   const acceleratorSync = model ? getAcceleratorLoraChangeResult(base, model, models, loras) : null;
   let accelerator = unchangedAccelerator;
@@ -167,12 +170,19 @@ export const syncVideoWidgetValuesWithModels = (
       };
     }
   } else if (acceleratorSync && acceleratorSync.outcome !== 'unchanged') {
+    // Every field the change result rewrites, not a hand-picked five. An accelerator that removes
+    // guidance also restores it when it goes away, and naming fields here meant the Concepts-list
+    // route honoured that while this one -- the LoRA leaving the catalog entirely -- dropped it,
+    // leaving a guided run with its audio, STG and modality guidance silently pinned at identity.
     accelerator = {
       acceleratorEnabled: acceleratorSync.settings.acceleratorEnabled,
       acceleratorLoraKeys: acceleratorSync.settings.acceleratorLoraKeys,
+      audioCfgScale: acceleratorSync.settings.audioCfgScale,
       cfgScale: acceleratorSync.settings.cfgScale,
       cfgScaleLowNoise: acceleratorSync.settings.cfgScaleLowNoise,
+      modalityScale: acceleratorSync.settings.modalityScale,
       steps: acceleratorSync.settings.steps,
+      stgScale: acceleratorSync.settings.stgScale,
     };
   }
 

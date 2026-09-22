@@ -594,7 +594,13 @@ export const buildVideoRecallSettings = ({
     fields.push('frames');
   }
 
-  const policy = getVideoModelPolicy(model, values);
+  // Asked with the accelerator forced OFF, not as the panel currently stands. An accelerator that
+  // removes guidance hides Steps and every guidance scale, and this policy decides which of them
+  // recall is allowed to write -- so recalling an ordinary clip into a panel that happens to have
+  // the accelerator on would drop them all and silently leave the accelerator's values in place,
+  // showing numbers the recalled clip never used. The accelerator's own state is derived further
+  // down from the recalled LoRA set, which overwrites this anyway.
+  const policy = getVideoModelPolicy(model, { ...values, acceleratorEnabled: false });
   const steps = getInteger(metadata, 'steps');
 
   // A fixed-schedule checkpoint ignores whatever step count reaches it, so recalling one would

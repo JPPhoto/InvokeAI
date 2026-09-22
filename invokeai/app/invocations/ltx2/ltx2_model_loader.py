@@ -61,7 +61,7 @@ class LTX2ModelLoaderOutput(BaseInvocationOutput):
     title="Main Model - LTX-2",
     tags=["model", "ltx", "ltx2", "video"],
     category="model",
-    version="1.1.0",
+    version="1.2.0",
     classification=Classification.Prototype,
 )
 class LTX2ModelLoaderInvocation(BaseInvocation):
