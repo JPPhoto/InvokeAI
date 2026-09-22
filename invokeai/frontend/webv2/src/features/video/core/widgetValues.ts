@@ -23,13 +23,6 @@ import {
   type VideoComponentValueKey,
 } from './videoPolicies';
 
-/**
- * The panel-facing layer over the pure settings: default values seeded from
- * the installed catalog, catalog reconciliation (upscale-style: render-time,
- * mount write-back, and compile all reuse this one function), the aggregate
- * validation the invoke route consumes, and seed resolution at submit.
- */
-
 // Shared empty array, so clearing already-clear keys keeps its identity.
 const EMPTY_ACCELERATOR_LORA_KEYS: string[] = [];
 
@@ -40,25 +33,15 @@ export const createDefaultVideoWidgetValues = (models: readonly ModelConfig[] = 
 };
 
 /**
- * Re-resolves every model reference against the live catalog. MUST return the
- * same object when nothing changes — the mount-time reconciler and render
- * memoization rely on that identity guarantee to avoid write-back loops.
+ * Resolve catalog references while preserving object identity when unchanged to avoid reconciliation write-back
+ * loops.
  */
 export const syncVideoWidgetValuesWithModels = (
   values: VideoWidgetValues,
   models: readonly ModelConfig[]
 ): VideoWidgetValues => {
-  // Legacy stored shape (pre model-positions): an H3 Diffusers install at top
-  // with the single-file transformer in the override slot. The transformer is
-  // the model identity now — promote it to the top slot and keep the install
-  // as its component source. Runs before anything reads `values.model`, so
-  // the whole sync (and its write-back) sees the new shape.
-  //
-  // Only a transformer that resolves in the live catalog as an H3 checkpoint
-  // main is promoted: an uninstalled (or corrupt) override must not evict the
-  // still-installed Diffusers main from the top slot — leaving it in place
-  // keeps a runnable H3 panel, and the component pass below drops the dead
-  // override (no slot offers it any more).
+  // Promote only installed H3 checkpoint overrides before other reconciliation; retain the old Diffusers main as
+  // components and drop invalid overrides without evicting it.
   if (values.model?.base === 'minimax-h3' && values.model.format === 'diffusers' && values.h3TransformerModel) {
     const installedTransformer = models.find((candidate) => candidate.key === values.h3TransformerModel?.key);
 
@@ -80,21 +63,15 @@ export const syncVideoWidgetValuesWithModels = (
 
   const modelsByKey = new Map(models.map((model) => [model.key, model]));
   const storedMain = values.model ? modelsByKey.get(values.model.key) : undefined;
-  // The stored main survives on the looser `isSupportedVideoModel` check: a
-  // legacy non-selectable shape (components-only install at top with no
-  // transformer to promote) keeps its slot and shows validation guidance
-  // instead of being silently swapped for another model. Auto-picks use the
-  // stricter selectable filter.
+  // Preserve supported legacy nonselectable mains for repair guidance; automatic choices use the stricter
+  // selectable filter.
   const model: MainModelConfig | null =
     storedMain && isSupportedVideoModel(storedMain)
       ? storedMain
       : ((models.find((candidate) => isVideoModelSelectable(candidate)) as MainModelConfig | undefined) ?? null);
 
-  // The main changed identity under us (nothing stored, or the stored model was
-  // uninstalled and another family got auto-picked): run the canonical
-  // selection transition first, or the new family would inherit the old one's
-  // frames/fps/resolution — an H3 main stuck at Wan's fps 16 has no working
-  // FPS control to fix it with.
+  // Run canonical selection transitions after model replacement so family-specific fps, frames, and resolution
+  // cannot remain stale.
   const base: VideoWidgetValues =
     model && model.key !== values.model?.key
       ? { ...getVideoModelSelectionResult({ currentSettings: values, model, models }).settings, model }
@@ -133,18 +110,8 @@ export const syncVideoWidgetValuesWithModels = (
           : [];
       })
     : [];
-  // Losing an accelerator LoRA through the catalog (uninstalled, dropped as
-  // incompatible) goes through the same reconcile the Concepts setter uses:
-  // another complete accelerator set still enabled in the list takes over,
-  // otherwise the flag goes off AND the model's own sampling defaults come
-  // back. Clearing only the flag would leave steps 4 / CFG 1 with no
-  // distillation LoRA — a silent run that reads as a broken model.
-  //
-  // The reconcile only ever repairs a fast path that is already on, so a sync
-  // running on every render cannot arm one behind the user's back.
-  //
-  // Reuse the stored values whenever nothing changed — the identity guarantee
-  // below depends on `acceleratorLoraKeys` keeping its array.
+  // Repair active acceleration after catalog changes, restoring normal defaults if no complete set remains. Never
+  // enable it implicitly; preserve unchanged array identities.
   const unchangedAccelerator = {
     acceleratorEnabled: base.acceleratorEnabled,
     acceleratorLoraKeys: base.acceleratorLoraKeys,
@@ -159,9 +126,7 @@ export const syncVideoWidgetValuesWithModels = (
   let accelerator = unchangedAccelerator;
 
   if (!model) {
-    // No video main at all: `loras` above is empty, so a surviving flag would
-    // name keys that are not in the list — a record `isVideoSettings` rejects
-    // on reload. There is no model to take sampling defaults from.
+    // Without a main, clear acceleration keys alongside empty LoRAs to keep persisted settings valid.
     if (base.acceleratorEnabled || base.acceleratorLoraKeys.length > 0) {
       accelerator = {
         ...unchangedAccelerator,
@@ -202,9 +167,7 @@ export const syncVideoWidgetValuesWithModels = (
     wanT5EncoderModel: syncComponent('wanT5EncoderModel', base.wanT5EncoderModel),
   };
 
-  // The model decides the task: if the Ref2VA transformer was uninstalled and
-  // another model got auto-picked, the stored references are orphaned — the
-  // policy no longer has a reference mode — so drop them, identity-preserving.
+  // Drop orphaned references when the replacement model lacks reference mode, preserving identity otherwise.
   if (next.references.length > 0 && model && !getVideoModes(model).includes('reference')) {
     next.references = [];
   }
