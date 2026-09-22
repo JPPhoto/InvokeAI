@@ -6,18 +6,8 @@ import type {
 } from './types';
 
 /**
- * Client-side ports of the backend's video canvas math, so the panel can show
- * and validate the exact dimensions a graph will run at without extra nodes:
- *
- * - Wan: `_scale_and_snap` in `invokeai/app/invocations/wan/wan_ideal_dimensions.py`
- *   ("nearest" rounding — the node default; the other modes are workflow-only).
- * - MiniMax H3: `resolve_canvas_size` in `invokeai/backend/minimax_h3/packing.py`
- *   and `resolve_lowres_canvas_size` in `invokeai/backend/minimax_h3/presets.py`.
- * - Ref2VA image references: `resolve_reference_image_short_edge` and
- *   `normalize_reference_image` in `invokeai/backend/minimax_h3/reference_conditioning.py`.
- *
- * Where the backend raises, these return null: the panel falls back to defaults
- * and reports the problem through `getVideoValidationReasons` instead of throwing.
+ * Mirror Wan _scale_and_snap, H3 canvas presets, and reference-image normalization. Return null where backend math
+ * rejects input so panel validation can explain it.
  */
 
 export interface VideoDimensions {
@@ -25,9 +15,7 @@ export interface VideoDimensions {
   height: number;
 }
 
-// Python's round() (used by both backend implementations) is half-to-even;
-// Math.round is half-up. The ports must agree with the backend on exact .5
-// quotients (e.g. 720 / 32 = 22.5) or panel and workflow dims would differ.
+// Match Python half-to-even rounding; Math.round differs at exact .5 and would produce inconsistent canvas sizes.
 const roundHalfToEven = (value: number): number => {
   const floor = Math.floor(value);
   const diff = value - floor;
@@ -58,16 +46,8 @@ export const WAN_TARGET_RESOLUTION_PX: Record<WanTargetResolution, number> = {
 };
 
 /**
- * Scale a source W×H so its shorter side equals the preset's pixel count, then
- * snap each dimension to the Wan pixel grid (nearest). Only the ratio of the
- * inputs matters, so aspect-ratio parts (16, 9) work as well as real pixels.
- * Null when the inputs are non-positive or non-finite.
- *
- * Deliberate divergence from the backend node: `_scale_and_snap` rejects
- * sources whose RAW long side is under one grid cell, which would also reject
- * pure ratio parts like (16, 9) on the ×32 grid. Since only the ratio matters
- * and scaling happens before snapping, tiny-but-well-formed inputs are
- * accepted here — the scaled long side is always ≥ the target short side.
+ * Scale the ratio to the target short side and snap to Wan's grid. Unlike the backend raw-size guard, accept small
+ * positive ratio parts; reject nonfinite/nonpositive inputs.
  */
 export const scaleAndSnapWanDimensions = (
   width: number,
@@ -95,13 +75,8 @@ export const MINIMAX_H3_MIN_ASPECT_RATIO = 1 / 4;
 export const MINIMAX_H3_MAX_ASPECT_RATIO = 4;
 
 /**
- * The MiniMax H3 canvas for an aspect ratio. "768 highres" is the released
- * pipeline's policy: short edge 768, soft area cap of 768×1344, both axes then
- * rounded to the nearest multiple of 32 (so the final area may sit slightly
- * above the pre-rounding budget). "768 lowres" pins the LONG edge to 768
- * instead for cheaper preview renders. Only the ratio of the inputs matters.
- * Null when the inputs are degenerate or the ratio is outside H3's supported
- * 1:4 – 4:1 range.
+ * H3 highres uses a 768 short edge and soft 768x1344 area cap before 32-pixel rounding; lowres caps the long edge
+ * at 768. Reject ratios outside 1:4–4:1.
  */
 export const resolveMiniMaxH3Canvas = (
   width: number,
@@ -164,16 +139,8 @@ export const MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE = 2048;
 export const MINIMAX_H3_ROW_PIXELS = 32 * 32;
 
 /**
- * A reference image's normalized size and the rows it contributes.
- *
- * Those rows join the packed sequence and are re-attended at EVERY denoising step, with
- * attention quadratic in the sequence length — which is the whole difference between the
- * two detail settings. `'max'` pins the short edge to 2048 no matter how small the
- * generation is; `'match'` scales the reference to the generation's pixel area (never
- * above the 2048 rule), typically an order of magnitude fewer rows.
- *
- * Null when the inputs are degenerate, or when `'match'` has no target area to match —
- * the panel then shows nothing rather than a wrong number.
+ * Reference rows participate in every denoise step. max uses a 2048 short edge; match uses capped generation area.
+ * Return null without valid geometry/target area.
  */
 export const resolveMiniMaxH3ReferenceImage = (
   width: number,
@@ -191,8 +158,6 @@ export const resolveMiniMaxH3ReferenceImage = (
     if (targetArea === null || !Number.isFinite(targetArea) || targetArea <= 0) {
       return null;
     }
-    // The backend rounds with Python's banker's rounding here, so `roundHalfToEven` is
-    // what keeps this estimate equal to the size the graph actually encodes.
     const matched = Math.max(
       MINIMAX_H3_CANVAS_MULTIPLE,
       roundHalfToEven(Math.min(width, height) * Math.sqrt(targetArea / (width * height)))
@@ -225,10 +190,8 @@ export const invertVideoAspectRatioId = (id: VideoAspectRatioId): VideoAspectRat
   return `${height}:${width}` as VideoAspectRatioId;
 };
 
-// Wan's VAE compresses 4 pixel frames into 1 latent frame, so (n - 1) % 4 == 0.
-// 81 frames (5 s at 16 fps) is the training default; the slider allows up to
-// twice that, but coherence degrades past 81 as temporal RoPE leaves its
-// training distribution — the docs recommend chaining extends instead.
+// Wan requires 4n+1 frames. The 81-frame training default supports best coherence; longer clips extend beyond the
+// trained temporal range.
 export const WAN_NUM_FRAMES_MIN = 5;
 export const WAN_NUM_FRAMES_MAX = 161;
 export const WAN_NUM_FRAMES_STEP = 4;
@@ -253,10 +216,7 @@ export const snapWanNumFrames = (numFrames: number): number => {
 
 export const MINIMAX_H3_FPS = 24;
 
-// The 17n + 5 grid points the H3 video VAE can encode, from the accepted
-// 3.75 s floor to the 15 s ceiling. Mirrors MINIMAX_H3_VIDEO_FRAME_CHOICES in
-// invokeai/backend/minimax_h3/presets.py; the 5-frame still-image block is
-// deliberately absent — the panel generates video, not stills.
+// Mirror H3's 17n+5 video frame choices from presets.py; exclude the five-frame still-image block.
 export const MINIMAX_H3_NUM_FRAMES_CHOICES: readonly number[] = Array.from({ length: 16 }, (_, i) => 90 + i * 17);
 export const MINIMAX_H3_NUM_FRAMES_DEFAULT = 124;
 

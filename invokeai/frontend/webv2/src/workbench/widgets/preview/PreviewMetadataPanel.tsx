@@ -21,20 +21,15 @@ import { useTranslation } from 'react-i18next';
 import { parsePreviewMetadata, type PreviewMetadataEntry } from './previewMetadata';
 
 /**
- * The Details popover's body: how the image was made (prompt, seed, model,
- * sampler settings) as quiet label/value rows with per-row copy and the recall
- * verbs wired to the existing recall machinery. Video Details expose the
- * backend's raw metadata/workflow/graph payloads instead. The query child is
- * keyed by account + qualified item identity, so a closed popover (which
- * unmounts it) or a changed identity aborts supported transports.
+ * Show parsed image details with copy/recall, or raw video payloads. Key query children by account and qualified
+ * identity so closure/identity changes abort supported transports.
  */
 
 const GROUP_HOVER_VISIBLE = { opacity: 1 };
 
 /**
- * Rows whose value maps onto a single-field recall verb. Rows without a
- * dedicated verb (model, steps, scheduler — only recallable via All/Remix)
- * keep just the copy button.
+ * Offer field recall only where a dedicated verb exists; model/steps/scheduler retain copy and use All/Remix for
+ * recall.
  */
 const ENTRY_RECALL_KINDS: Partial<
   Record<string, { capability: keyof ImageRecallCapabilities; kind: ImageRecallKind }>
@@ -107,8 +102,7 @@ const PreviewDetailsQuery = ({
           return { graph: null, kind: 'image', metadata: null, workflow: null };
         }
 
-        // Metadata carries whatever a workflow's metadata nodes added, so the
-        // raw record is shown whole alongside the parsed rows, like legacy.
+        // Show complete raw metadata alongside parsed fields because workflows may add arbitrary entries.
         const [metadata, workflow] = await Promise.all([
           galleryImages.metadata(item.name, signal),
           galleryImages.workflow(item.name, signal),
@@ -232,12 +226,6 @@ const ImageDetails = ({
   );
 };
 
-/**
- * The legacy metadata viewer's tab set: parsed details (images only), then the
- * raw metadata record — where workflow metadata nodes land — and the source
- * workflow and graph. Each tab body fills the popover's remaining height and
- * scrolls inside it.
- */
 const DetailsTabs = ({
   children: details,
   graph,
@@ -307,12 +295,7 @@ const RawJsonPreview = ({ label, text }: { label: string; text: string | null })
     <JsonPreview label={label} maxH="100%" text={text} />
   );
 
-/**
- * A DataList item extended with hover-revealed value actions: recall (when
- * the row maps onto a single-field recall verb) and copy. The recall button
- * reuses the verb row's icon and label so both affordances read as the same
- * action.
- */
+/** Share recall labels/icons with the verb row; reveal row-level recall and copy actions on hover. */
 const MetadataRow = ({
   entry,
   onRecall,

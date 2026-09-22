@@ -1,8 +1,4 @@
-/**
- * Identifier for a workbench color theme. The matching palette lives in
- * `theme/themes.ts`; the active id is applied to `<html data-theme>` so the
- * semantic-token conditions in `theme/system.ts` resolve to the right colors.
- */
+/** Theme ids select palettes through html data-theme and the semantic-token conditions. */
 export type DeveloperLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
 export type DeveloperLogNamespace =

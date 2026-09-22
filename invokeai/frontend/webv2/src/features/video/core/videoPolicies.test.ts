@@ -92,9 +92,8 @@ describe('isSupportedVideoModel', () => {
   });
 
   it('offers only runnable identity-bearing H3 models in the top selector', () => {
-    // Checkpoints of either task variant and full FL2VA Diffusers installs are
-    // selectable; a components-only folder belongs in the Model Components
-    // slot, and a Ref2VA folder's transformer weights are not folder-loadable.
+    // Only loadable transformers are selectable; components-only folders belong in components and Ref2VA folder
+    // transformers are unsupported.
     expect(isVideoModelSelectable(h3Model('checkpoint'))).toBe(true);
     expect(isVideoModelSelectable({ ...h3Model('checkpoint'), variant: 'ref2va' })).toBe(true);
     expect(isVideoModelSelectable(h3Model('diffusers'))).toBe(true);
@@ -371,8 +370,7 @@ describe('Lightning', () => {
 
 describe('MiniMax H3 Turbo', () => {
   const TURBO = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
-  // The second installed Turbo LoRA: same family, a different step schedule,
-  // and nothing but the org name in it to say so.
+  // Identify the alternative Turbo schedule from its organization naming.
   const LIGHTX2V = {
     base: 'minimax-h3',
     key: 'lightx2v',
@@ -409,8 +407,7 @@ describe('MiniMax H3 Turbo', () => {
   });
 
   it('never auto-picks a Ref2VA-trained turbo LoRA for FL2VA generation', () => {
-    // The Ref2V Turbo repack is trained against the Ref2VA transformer only; despite sorting
-    // before "MiniMax H3 Turbo LoRA" and matching the family+turbo patterns, it must lose.
+    // Ref2V Turbo is incompatible with FL2VA despite matching broad H3/turbo name patterns.
     const ref2vTurbo = { base: 'minimax-h3', key: 'ref2v', name: 'MiniMax H3 Ref2V Turbo LoRA', type: 'lora' as const };
     const ref2vFile = {
       base: 'minimax-h3',
@@ -446,16 +443,13 @@ describe('MiniMax H3 Turbo', () => {
 
     expect(on).toMatchObject({ acceleratorEnabled: true, steps: 8 });
     expect(on.acceleratorLoraKeys).toEqual([LIGHTX2V.key]);
-    // The help text quotes the running LoRA's count; `ui.accelerator` stays the
-    // family config, so callers can still resolve other counts against it.
+    // Help text reflects active LoRA steps while family accelerator policy remains reusable.
     expect(getVideoModelPolicy(model, on).ui).toMatchObject({ acceleratorSteps: 8 });
     expect(getVideoModelPolicy(model, on).ui.accelerator).toMatchObject({ label: 'Turbo', steps: 6 });
   });
 
   it('re-anchors the fast path on the other Turbo LoRA instead of tearing it down', () => {
     const model = h3Model();
-    // Both are installed, so the toggle picks one; the user then swaps in the
-    // other by enabling it and switching the first off.
     const on = getAcceleratorToggleResult(settingsFor(model), model, H3_CATALOG, true).settings;
 
     expect(on.acceleratorLoraKeys).toEqual([LIGHTX2V.key]);
@@ -474,8 +468,7 @@ describe('MiniMax H3 Turbo', () => {
   it('never arms an off fast path from a list edit, whatever lands in the list', () => {
     const model = h3Model();
     const turboRider = { base: 'minimax-h3', key: 'rider', name: 'Turbo Rider', type: 'lora' as const };
-    // A user's own H3 LoRA satisfies the family-name test as readily as a real
-    // repack does, and a hand-tuned step count must survive an unrelated edit.
+    // Preserve hand-tuned steps for ordinary user LoRAs that merely match the family name.
     const own = { base: 'minimax-h3', key: 'mine', name: 'My H3 Turbo Sharpener', type: 'lora' as const };
     const off = settingsFor(model, { steps: 12 });
 
@@ -544,8 +537,7 @@ describe('MiniMax H3 Turbo', () => {
   it('stays intact through a duplicated LoRA entry, so an unchanged value reconciles to itself', () => {
     const model = h3Model();
     const on = getDefaultVideoSettings(model, [TURBO]);
-    // A hand-edited project file (or metadata whose graph listed one twice)
-    // can hold the same key twice; the flag must not read as broken.
+    // Duplicate persisted LoRA keys must not falsely break accelerator detection.
     const duplicated = [...on.loras, ...on.loras];
     const once = getAcceleratorLoraChangeResult(on, model, [TURBO], duplicated);
     const twice = getAcceleratorLoraChangeResult(once.settings, model, [TURBO], duplicated);
@@ -556,9 +548,7 @@ describe('MiniMax H3 Turbo', () => {
   });
 
   it('rejects a Lightning pair that does not name the family, even with no family token to check', () => {
-    // The fallback variant has no variant string, so there is no token to
-    // demand — the list-scoped lookup must fail closed rather than accept any
-    // Lightning-named pair the user happens to hold.
+    // Without a variant token, reject arbitrary named Lightning pairs rather than treating fallback as a wildcard.
     const fallbackMain = wanModel('', 'gguf_quantized', 'wan-unprobed');
     const mine = [
       lora('Personal Lightning High Detail', null, 'myh'),
@@ -647,10 +637,8 @@ describe('component section policy', () => {
   });
 
   it('requires a component source (and a conditional text encoder) for a single-file H3 main', () => {
-    // The single-file checkpoint carries only the transformer; the loader
-    // sources tokenizer/processor/VAEs from a Diffusers install in the Model
-    // Components slot. A components-only source has no text-encoder weights,
-    // so the single-file Qwen3-VL encoder becomes required with it.
+    // Standalone H3 needs Diffusers components; components-only sources additionally require a separate text
+    // encoder.
     const checkpoint = h3Model('checkpoint');
     const bare = settingsFor(checkpoint);
     const componentsOnly = { ...h3Model('diffusers', 'h3-components'), components_only: true };
@@ -719,8 +707,7 @@ describe('component section policy', () => {
       getVideoValidationReasons(ref2va, settingsFor(ref2va, { componentSourceModel: h3Model() }))
     ).not.toContainEqual(expect.stringContaining('Hybrid'));
 
-    // The overlay node refuses a pruned/full mismatch, so the slot lists only same-kind FL2VA
-    // checkpoints — and never the selected main, a Ref2VA file, or a Diffusers install.
+    // Hybrid choices must match pruned/full shape and exclude Ref2VA, Diffusers, and the selected main.
     expect(slot?.filter?.({ ...h3Model('checkpoint', 'fl2va-pruned'), pruned: true }, ctx)).toBe(true);
     expect(slot?.filter?.(h3Model('checkpoint', 'fl2va-kind-unknown'), ctx)).toBe(true);
     expect(slot?.filter?.({ ...h3Model('checkpoint', 'fl2va-full'), pruned: false }, ctx)).toBe(false);
@@ -817,9 +804,8 @@ describe('component section policy', () => {
   });
 
   it('agrees with the served Wan rows on which VAE width each variant takes', () => {
-    // The rule is written out rather than read from the table, because this surface syncs its stored
-    // VAE before the table arrives. This keeps the copy honest: a Wan variant or VAE width added to
-    // the backend changes the served rows, and fails here until the rule follows.
+    // Assert backend VAE rules independently because stored VAE synchronization runs before capability rows
+    // arrive.
     const wanRows = architectureCapabilitiesFixture.filter((row) => row.base === 'wan');
 
     expect(wanRows.map((row) => row.variant)).toContain('ti2v_5b');
@@ -880,8 +866,7 @@ describe('getWanExpertWiringWarning', () => {
   });
 
   it('keeps warning after a role exchange of a same-tag pair, so no swap is offered', () => {
-    // high+high and low+low pairs re-warn with roles exchanged — the UI uses
-    // this simulation to withhold the Swap button rather than loop.
+    // Offer Swap only if swapping resolves warnings rather than repeating identical expert-role mismatches.
     const highPair = [tagged('i2v_a14b', 'high', 'm'), tagged('i2v_a14b', 'high', 'l')] as const;
     const lowPair = [tagged('i2v_a14b', 'low', 'm'), tagged('i2v_a14b', 'low', 'l')] as const;
 
@@ -1085,9 +1070,7 @@ describe('getVideoValidationReasons', () => {
   it('rejects a Wan extension whose source clip frame rate falls outside 1-120 fps', () => {
     const model = wanModel('i2v_a14b', 'diffusers');
 
-    // wan_l2v/video_concat accept 1-120; an out-of-range clip would fail only
-    // AFTER the denoise. A slow-mo clip and an unprobeable sub-1 fps rate both
-    // block up front; an ordinary clip raises nothing.
+    // Validate inherited Wan fps before denoising so invalid rates cannot fail only at video output.
     expect(
       getVideoValidationReasons(model, settingsFor(model, { sourceVideo: { ...SOURCE_VIDEO, fps: 240 } }))
     ).toContainEqual(expect.stringContaining('1-120 fps'));
@@ -1166,9 +1149,6 @@ describe('getVideoModelAvailabilityReasons', () => {
     expect(installed).toEqual([]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Ref2VA: model-borne variant, reference mode, transitions
 
 const ref2vaTransformer = (key = 'h3-ref2va-ckpt'): MainModelConfig => ({
   ...h3Model('checkpoint', key),
@@ -1317,9 +1297,7 @@ describe('ref2va accelerator auto-pick', () => {
   };
 
   it('prefers the LightX2V ref2v release over the 4-step v0.1 repack whichever order they are listed in', () => {
-    // The v0.1 repack pans the camera rightward whenever a video reference is used; the
-    // LightX2V v1.0 release superseded it as the starter model and must win when both are
-    // installed — by generation, not by the accident of alphabetical order.
+    // Prefer the newer LightX2V release by version rather than alphabetical order.
     expect(findMiniMaxH3TurboLora([REF2V_TURBO, LIGHTX2V_REF2V_TURBO], { variant: 'ref2va' })).toMatchObject({
       key: 'lightx2v-ref2v-turbo',
     });
@@ -1333,9 +1311,8 @@ describe('ref2va accelerator auto-pick', () => {
   });
 
   it('a by-URL install of the LightX2V release, named by its file, still beats the old starter-named repack', () => {
-    // model_on_disk names a URL install after the file stem, which carries no "LightX2V"
-    // token — only the org's file-name form. It must not lose to the v0.1 repack on an
-    // alphabetical tie (a space collates before an underscore).
+    // Recognize URL-installed filename forms lacking the organization token so newer releases still outrank old
+    // repacks.
     const rawNew = {
       base: 'minimax-h3',
       key: 'raw-new',
@@ -1448,10 +1425,7 @@ describe('reference-extend policy', () => {
   });
 
   it('a Wan -> Ref2VA switch snaps the frame count BEFORE sizing the tail window', () => {
-    // Wan's grid starts at 5 frames. Deriving the window before the snap sized
-    // it for that count, and the repair only ever shrank — so the panel landed
-    // on a 90-frame H3 generation with a 5-frame anchor, below the 13 frames
-    // `sample_text_conditioning_frames` needs. Generate failed outright.
+    // Snap H3 generation frames before deriving its anchor; Wan's small count can produce unusably short context.
     for (const wanFrames of [5, 9, 21, 81]) {
       const wan = wanModel('i2v-14b');
       const toRef = getVideoModelSelectionResult({
@@ -1479,9 +1453,7 @@ describe('reference-extend policy', () => {
 
     expect(toRef.settings.sourceVideo).toEqual(initialVideo);
     expect(toRef.clearedLabels).not.toContain('Initial video');
-    // The window is budgeted against the frame count the switch lands on
-    // (H3's 124-frame default, snapped AFTER the derivation): a reference
-    // longer than the generation is truncated at its seam end.
+    // Budget against the final snapped frame count: backend truncation removes overrun from the seam end.
     expect(toRef.settings.numFrames).toBe(124);
     expect(toRef.settings.references[0]).toMatchObject({
       clip: { endFrame: 400, startFrame: 277, video_name: 'long.mp4' },
@@ -1506,8 +1478,6 @@ describe('reference-extend policy', () => {
 
     expect(reselected.settings.references[0]).toMatchObject({ clip: { startFrame: 300 } });
 
-    // And back: the references (linked one included) clear; the clip stays
-    // for FL2VA's own extend mode.
     const backToFl = getVideoModelSelectionResult({
       currentSettings: toRef.settings,
       model: fl2va,

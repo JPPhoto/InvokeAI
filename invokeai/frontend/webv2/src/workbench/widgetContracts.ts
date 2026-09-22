@@ -300,15 +300,7 @@ export interface WidgetManifest {
    * failure state, and retry; callers never invoke this directly.
    */
   load: () => Promise<WidgetImplementation>;
-  /**
-   * A singleton runtime the editor mounts once at boot, in its own chunk.
-   *
-   * Deliberately separate from `load`: hosts are data runtimes and dialog
-   * shells that must run whether or not the widget is on screen, so sharing a
-   * module with the view meant every boot paid for the view. Splitting the
-   * loader makes it impossible to declare an always-on part without giving it
-   * its own chunk.
-   */
+  /** Load always-on runtimes and dialog shells separately so boot does not download their widget views. */
   loadHost?: () => Promise<WidgetHost>;
   /** Shared definitions for the shell's quick controls and full settings dialog. */
   settings?: SettingsContribution;

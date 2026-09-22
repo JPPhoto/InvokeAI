@@ -12,10 +12,8 @@ const ZOOM_PRESETS = [100, 200, 400] as const;
 const MENU_POSITIONING = { placement: 'bottom-start' } as const;
 
 /**
- * The header's zoom readout: the fitted image's percent of its own pixels, or
- * the loupe's current zoom, with fit and the actual-pixel presets one click
- * away. The stage keeps the gestures (wheel, pinch, double-click); this is the
- * legible number and the keyboard route.
+ * Expose fitted/actual zoom and keyboard presets in the header; the stage owns wheel, pinch, and double-click
+ * gestures.
  */
 export const PreviewZoomMenu = ({ zoom }: { zoom: PreviewZoomControls }) => {
   const { t } = useTranslation();

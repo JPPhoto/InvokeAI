@@ -5,19 +5,14 @@ import type { ProjectGraphState, XYPosition } from '@features/workflow/core/type
 export type WorkflowRegion = 'left' | 'right' | 'bottom' | 'center' | 'dialog' | 'popover' | 'floating';
 
 /**
- * Panel regions workflow surfaces may open/select widgets in. Structural
- * mirror of workbench's `WidgetRegion` (`workbench/layoutContracts.ts`) —
- * the feature may not import workbench, so drift is caught as a tsc error at
- * the check site: the `widgets` wiring in `app/WorkflowUiAdapter.tsx`.
+ * Mirror Workbench regions structurally; app/WorkflowUiAdapter widgets wiring catches drift without a forbidden
+ * feature-to-workbench import.
  */
 export type WorkflowWidgetPanelRegion = 'left' | 'right' | 'bottom' | 'center';
 
 /**
- * Invocation sources the graph preview can route. Structural mirror of
- * workbench's `InvocationSourceId` (`workbench/invocationContracts.ts`) —
- * drift is caught as a tsc error at the check sites: the `graphPreview`
- * wiring in `app/WorkflowUiAdapter.tsx` and the `GraphPreviewDialog` mount in
- * `workbench/widget-frame/WidgetActionsMenu.tsx`.
+ * Mirror invocation source IDs structurally; adapter and WidgetActionsMenu wiring provide type checks across the
+ * ownership boundary.
  */
 export type WorkflowInvocationSourceId = 'generate' | 'workflow' | 'upscale' | 'video' | 'canvas';
 
@@ -101,12 +96,8 @@ export interface GraphPreviewProvenance {
 }
 
 /**
- * The preview dialog's data source, built fresh per render by
- * `workbench/widget-frame/graphPreviewSource.ts` from the active surface's
- * `sourceId`. `isLive` drives the dialog's "Updates as you change settings."
- * subtitle — true for sources that recompile from live project state
- * (`generate`, `workflow`), false for sources that only replay their last
- * compiled widget graph (`upscale`, `canvas`).
+ * isLive distinguishes recompilation from current project state from replaying a saved compiled graph and controls
+ * the dialog subtitle.
  */
 export interface GraphPreviewSourceState {
   graph: WorkflowPreviewGraph | null;

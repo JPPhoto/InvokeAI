@@ -18,14 +18,6 @@ import { PreviewZoomMenu } from './PreviewZoomMenu';
 
 const Divider = () => <Box bg="border.subtle" flexShrink={0} h="4" w="1px" />;
 
-/**
- * The preview widget's header actions, left to right: the zoom readout, the
- * image action strip for the current selection (both published by the view
- * via `previewHeaderStore`), then the in-progress diffusion and filmstrip
- * toggles and the Details toggle, at the far end so its popover hangs off the
- * header's right edge. Actions live here — in the frame's standard header
- * slot — like every other widget, not in the widget body.
- */
 export const PreviewHeaderActions = ({ region }: WidgetViewProps) => {
   const { t } = useTranslation();
   const livePreview = useLivePreviewFollow();
@@ -85,15 +77,12 @@ export const PreviewHeaderActions = ({ region }: WidgetViewProps) => {
           <Divider />
         </>
       ) : null}
-      {/* Both toggles go through `ToggleIconButton` so they read as one control
-          type: the filled variant carries "on", `aria-pressed` carries it for
-          assistive tech, and the label doubles as the tooltip. */}
+
       <ToggleIconButton
         checked={showProgressImagesInViewer}
         icon={HourglassIcon}
         label={label}
-        // Dimmed while there is nothing in flight to show. Spread after the
-        // primitive's own props, so it survives.
+        // Apply dimming after primitive props so idle-state styling survives.
         opacity={hasProgressImage || showProgressImagesInViewer ? 1 : 0.7}
         onCheckedChange={toggleProgressImages}
       />

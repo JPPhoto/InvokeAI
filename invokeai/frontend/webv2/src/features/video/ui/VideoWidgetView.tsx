@@ -44,12 +44,7 @@ import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoSourceClipField } from './VideoSourceClipField';
 import { useVideoUi, useVideoUiActions } from './VideoUiContext';
 
-/**
- * Every prop identity in this file is stable by construction — module-scope
- * constants for literals, `useCallback`/`useMemo` for anything closing over
- * state, and `memo` on each section — matching the Upscale widget's contract:
- * the widget re-renders on every keystroke that patches project state.
- */
+/** Keep section props stable: project patches rerender this widget on every keystroke. */
 
 const MAIN_MODEL_TYPES: readonly ModelTaxonomyType[] = ['main'];
 const SWITCH_CHECKED_PROPS = { bg: 'accent.solid' };
@@ -68,12 +63,7 @@ const DURATION_FORMATTER = new Intl.NumberFormat(undefined, {
   minimumFractionDigits: 1,
 });
 
-/**
- * A media value the current model cannot consume (persisted from another
- * model's session, or restored by an optimistic rollback) would otherwise
- * block invoke invisibly — its section is policy-hidden. This stub is the
- * visible affordance to clear it.
- */
+/** Expose clearing for unsupported media that would otherwise block invocation from a hidden section. */
 const StaleMediaStub = ({ label, onClear }: { label: string; onClear: () => void }) => {
   const { t } = useTranslation();
 
@@ -105,10 +95,7 @@ const VideoModelReconciler = ({
       return;
     }
 
-    // When the store fails normalization wholesale (first open: the topbar
-    // Iterations field may already have patched `batchCount` into an
-    // otherwise-empty widget store), seeding the defaults must not wipe that
-    // one pre-open edit.
+    // Preserve topbar batchCount edits when seeding an otherwise uninitialized widget.
     const batchCount = normalized ? values.batchCount : sanitizeBatchCount(rawValues.batchCount ?? values.batchCount);
 
     patchValues({ ...values, batchCount }, 'system');
@@ -123,9 +110,7 @@ export const VideoWidgetView = () => {
   const models = useModelsSelector((snapshot) => snapshot.models);
   const modelsStatus = useModelsSelector((snapshot) => snapshot.status);
   const { patchValues, projectId, rawValues } = selection;
-  // Normalizing and reconciling against the model list is the widget's most
-  // expensive derivation; it must not run on unrelated re-renders, and a fresh
-  // `values` identity would re-render every section below.
+  // Reconcile only when inputs change; it is expensive and fresh values rerender every section.
   const values = useMemo(() => {
     const normalized =
       normalizeVideoWidgetValues(rawValues) ?? createDefaultVideoWidgetValues(modelsStatus === 'loaded' ? models : []);
@@ -152,31 +137,10 @@ export const VideoWidgetView = () => {
 
   const patch = useCallback((next: Partial<VideoWidgetValues>) => patchValues(next), [patchValues]);
 
-  // Always the newest normalized list. The reference field's add handlers
-  // `await` a gallery resolve before writing, and the Initial Video field and
-  // the Frames slider write references too — so an updater that resolved
-  // against a captured array would clobber whichever of those landed during
-  // the await, silently deleting the anchor or restoring a window the frame
-  // count had already re-derived.
-  // Synced in an effect rather than during render: this file's react-compiler
-  // rule forbids touching a ref while rendering, and a gallery resolve lands
-  // whole frames later, long after the commit.
-  // Keyed by PROJECT, and carrying a LIVENESS bit. The widget is reconciled,
-  // never remounted, across a project switch (the <Activity> key is the panel
-  // instance), while `patch` stays bound to the project its render belonged
-  // to — so a bare latest-list ref tracks whichever project is ACTIVE, and a
-  // gallery resolve landing after a switch would write the new project's
-  // reference list into the old project, wholesale. And a hidden <Activity>
-  // destroys effects while promise continuations keep running: the ref then
-  // freezes with the projectId still matching, so a same-project guard would
-  // happily replay a list the store has since rewritten (a gallery deletion
-  // sweep, say) — resurrecting swept references. `live` is true exactly while
-  // the sync effect is mounted, which is the only time the ref's contents can
-  // be trusted; a write finding it false or mismatched is dropped.
-  //
-  // "Fresh" here means effect-fresh, not instantaneous: two resolves landing
-  // in the same microtask drain still read the same pre-commit list. That
-  // window is inherent to reading through React state at all.
+  // Async writes must use the latest committed list for this project while the sync effect is live. Hidden
+  // Activity panels stop syncing, and old callbacks still target their original project; drop writes in either
+  // case to avoid restoring stale references. Two resolves in one microtask drain may still see the same
+  // pre-commit list.
   const referencesRef = useRef({ live: true, projectId, references: values.references });
 
   useEffect(() => {
@@ -238,8 +202,7 @@ export const VideoWidgetView = () => {
     [models, patch, policy.ui.accelerator?.label, t, values]
   );
 
-  // One setter per field, created once per `patch` identity: inline
-  // `onChange={(x) => patch({ x })}` props would defeat every `memo` below.
+  // Stable per-field setters preserve child memo boundaries.
   const set = useMemo(
     () => ({
       aspectRatio: ({ value }: { value: string[] }) => {
@@ -269,13 +232,8 @@ export const VideoWidgetView = () => {
     [patch, values.aspectRatioId]
   );
 
-  // The mutual exclusion lives in the setters: a first frame and an initial
-  // video are different ways to claim the same conditioning slot, so setting
-  // one clears the other. A last frame combines with either — with a first
-  // frame it interpolates (FLF2V); with a source video it is the destination
-  // the extension should land on. On a reference-extend panel the initial
-  // video and the references coexist — the setter keeps the linked tail
-  // reference in step with the clip and its cutpoints.
+  // First frame and initial video share one conditioning slot; last frame can accompany either. Reference
+  // extension also keeps the linked tail reference synchronized.
   const referenceExtend = Boolean(policy.references?.extend);
   const maxVideoReferences = policy.references?.maxVideos ?? 3;
   const setFirstFrame = useCallback(
@@ -284,13 +242,8 @@ export const VideoWidgetView = () => {
     [patch]
   );
   const setLastFrame = useCallback((lastFrameImage: ImageWithDims | null) => patch({ lastFrameImage }), [patch]);
-  // Not part of `set`: that object is memoized on `patch` alone so the field
-  // setters keep the children's `memo` intact, and this one has to track the
-  // reference list. The linked tail reference's window is budgeted against the
-  // generated frame count — the backend discards an ill-fitting window at its
-  // SEAM end — so the count and the window move together. The re-derive is
-  // idempotent: this fires once per keystroke of the Frames input, unclamped,
-  // so typing "345" arrives as 3, then 34, then 345.
+  // This setter tracks references separately from patch-only field setters. Rebudget the linked tail with frame
+  // count so backend truncation cannot discard its seam end; derivation must tolerate intermediate input values.
   const setNumFrames = useCallback(
     (numFrames: number) =>
       patch(
@@ -298,36 +251,21 @@ export const VideoWidgetView = () => {
           ? { numFrames, references: applyReferenceExtendNumFrames(referencesRef.current.references, numFrames) }
           : { numFrames }
       ),
-    // Reads the list through the ref so the Frames control keeps a stable
-    // prop identity: depending on `values.references` re-created this on every
-    // panel patch, re-rendering the slider against the file's stable-identity
-    // contract. Safe because the re-derive is idempotent in `numFrames`. The
-    // project guard is unreachable for this synchronous caller; it keeps the
-    // ref's contract uniform.
+    // Read committed references through the guarded ref to keep the Frames callback stable; rebudgeting is
+    // idempotent.
     [patch, projectId, referenceExtend]
   );
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
       if (referenceExtend) {
-        // Same guard as `setReferences`: the clip field's adopt and upload
-        // paths call this after an await, and a captured list would clobber a
-        // reference added meanwhile. Dropped when the project moved on or the
-        // sync effect is unmounted — the ref is effect-fresh, not live, and
-        // only vouches for its contents while mounted.
         if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
           return;
         }
         const current = referencesRef.current.references;
         const references = applyReferenceExtendSourceVideo(current, sourceVideo, maxVideoReferences, values.numFrames);
 
-        // Unchanged identity with a clip set means the video cap is full and
-        // no same-clip entry could be adopted. REFUSE the whole drop: patching
-        // the clip anyway produced an extension with no continuity anchor at
-        // all, behind nothing but a toast -- and the cap gate then froze the
-        // clip's trim sliders. (The gate cannot pre-empt this case: it can
-        // only ask about the clip currently set, and this drop is a different
-        // one.) Clearing is never refused -- removing the linked entry cannot
-        // overflow anything.
+        // Unchanged identity means no tail-reference slot is available: refuse the whole drop so the clip cannot
+        // be set without its continuity anchor. Clearing cannot overflow.
         if (sourceVideo && references === current) {
           toaster.create({
             description: t('widgets.video.referenceExtendCapFullDescription'),
@@ -344,26 +282,15 @@ export const VideoWidgetView = () => {
     },
     [maxVideoReferences, patch, projectId, referenceExtend, t, values.numFrames]
   );
-  // The single choke point for every list edit the reference field makes — add,
-  // remove, retrim, reorder — so pinning the continuity anchor here covers all
-  // of them. Request order is rotary order and the generation continues from
-  // the LAST reference, so the anchor's position is derived, not user-set.
+  // Generation continues from the last reference; pin the continuity anchor after every list edit.
   const setReferences = useCallback(
     (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
-      // A pending edit is DROPPED when the ref cannot vouch for the list:
-      // the project moved on (this callback's `patch` still targets the one
-      // it rendered for), or the sync effect is unmounted (a hidden panel's
-      // continuations would replay a frozen list over whatever the store has
-      // done since). Losing one add beats overwriting a list the user can see.
       if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
         return;
       }
       const updated = update(referencesRef.current.references);
 
-      // Identity return means the updater declined (an apply-time cap check)
-      // or had nothing to do: patching anyway would still fire this spread's
-      // firstFrameImage/lastFrameImage clearing — a refused add erasing frame
-      // slots it never touched — and dirty the project with a no-op write.
+      // A declined/no-op updater must not reach the patch that clears frame slots and dirties the project.
       if (updated === referencesRef.current.references) {
         return;
       }
@@ -381,13 +308,8 @@ export const VideoWidgetView = () => {
   const clearReferences = useCallback(() => patch({ references: [] }), [patch]);
   const setLoras = useCallback(
     (loras: VideoWidgetValues['loras']) => {
-      // While the fast path is on it follows the list: a different complete
-      // accelerator set in it re-anchors the toggle onto that set at its own
-      // step count, and losing the last one turns the toggle off and restores
-      // the model's own sampling defaults (the accelerator wrote steps/CFG).
-      // Either way the user's list edit stands, and either way they are told —
-      // a silent 6-step run with no distillation LoRA behind it just looks
-      // like a broken model. An off accelerator is never armed from here.
+      // While enabled, follow a replacement accelerator set or restore model sampling defaults if none remains.
+      // Preserve the edit and notify; never enable acceleration from a list edit.
       if (!values.model) {
         patch({ loras });
         return;
@@ -446,26 +368,15 @@ export const VideoWidgetView = () => {
   const supportsExtend = policy.modes.includes('extend');
   const supportsReferences = policy.modes.includes('reference');
   const supportsInitialVideo = supportsExtend || referenceExtend;
-  // Setting an Initial Video on a reference-extend panel has to place a linked
-  // tail reference, which needs a free video slot -- unless an existing entry
-  // can be adopted, which consumes none. Deferring to the same predicate the
-  // setter's refusal uses keeps the two from drifting: gating on the flag alone
-  // disabled the field after a recall, which restores references UNFLAGGED
-  // beside the source video, and `disabled` reaches the clip's trim sliders too
-  // -- so the cutpoint could not be moved on a clip that was legitimately set.
+  // Use the setter's capacity predicate: recalled unflagged references can be adopted without consuming a slot,
+  // and must not disable clip trimming.
   const initialVideoCapBlocked =
     referenceExtend &&
     !canPlaceReferenceExtendAnchor(values.references, values.sourceVideo?.video_name, maxVideoReferences);
   const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
-  // Media pins the canvas to its own proportions, so the stored preset is not what the output will
-  // be: leaving it on the trigger of a disabled control states a ratio the render will not use. The
-  // preset itself is kept, not rewritten -- it is what the panel goes back to when the media is
-  // removed -- and the trigger names the source instead. Deliberately not the nearest standard
-  // preset: media rarely lands exactly on one, so that would swap one wrong ratio for another.
-  // Truncating, like the Generate panel's own aspect-ratio trigger: the slot clips its value text
-  // rather than wrapping it, so a phrase wider than the control ends mid-word in a docked panel
-  // instead of in an ellipsis.
+  // Media determines output proportions. Show its ratio source while disabled, preserving the saved preset for
+  // when media is removed.
   const dimensionSource = dimensions?.source;
   const derivedSourceValueText = useMemo(
     () =>
@@ -495,12 +406,6 @@ export const VideoWidgetView = () => {
         values={values}
       />
 
-      {/* Tier-1, like Generate's model card: which model you are running is the
-          choice every field below is conditioned on, so it sits above the
-          prompt rather than inside a collapsed section. */}
-      {/* `px` matches the inset the prompt block and every section body carry,
-          so the picker lines up with the fields below it — Generate's card can
-          skip it only because its neighbours sit flush too. */}
       <Stack gap="1" px="2" py="1">
         <Field
           error={values.model ? undefined : t('widgets.video.modelRequired')}

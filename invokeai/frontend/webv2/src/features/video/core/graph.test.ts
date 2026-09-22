@@ -211,8 +211,7 @@ describe('compileVideoGraph — Wan 2.2', () => {
       generation_mode: 'wan_extend_video',
       source_video: { video_name: 'clip.mp4' },
     });
-    // Metadata rides both the final concat and the intermediate clip, and the
-    // run-time conditioning frame is recorded via an edge (template behavior).
+    // Record metadata on both clips and wire runtime conditioning-frame identity through an edge.
     expect(hasEdge(backendGraph, 'core_metadata', 'metadata', 'video_output', 'metadata')).toBe(true);
     expect(hasEdge(backendGraph, 'core_metadata', 'metadata', 'extension_clip', 'metadata')).toBe(true);
     expect(hasEdge(backendGraph, 'source_last_frame', 'image', 'core_metadata', 'first_frame_image')).toBe(true);
@@ -244,8 +243,7 @@ describe('compileVideoGraph — Wan 2.2', () => {
 
   it('compiles ceiling-touching trim STARTS as negative indices too — a keep-the-tail trim survives estimate overshoot', () => {
     const model = wanModel('i2v_a14b');
-    // numFrames 81: startFrame 77 has tail offset 3 (→ -4), endFrame 79 has
-    // tail offset 1 (→ -2). Both inside the tail window, order preserved.
+    // Near-tail bounds convert together to negative offsets while preserving order.
     const tailTrim = compileVideoGraph(
       settingsFor(model, { sourceVideo: { ...SOURCE_VIDEO, endFrame: 79, startFrame: 77 } }),
       model
@@ -253,9 +251,7 @@ describe('compileVideoGraph — Wan 2.2', () => {
 
     expect(nodeOfType(tailTrim, 'extract_video_range')).toMatchObject({ end_frame: -2, start_frame: -4 });
 
-    // Tail offset 4 is the first index OUTSIDE the window: it stays a
-    // positive literal (converting it would drift mid-clip picks when the
-    // estimate overshoots), even when the end still converts.
+    // Bounds outside tail slop remain absolute to avoid drifting mid-clip picks.
     const boundary = compileVideoGraph(
       settingsFor(model, { sourceVideo: { ...SOURCE_VIDEO, endFrame: 78, startFrame: 76 } }),
       model
@@ -362,9 +358,7 @@ describe('compileVideoGraph — MiniMax H3', () => {
     const { backendGraph } = compileVideoGraph(settings, model);
     const denoise = nodeOfType(backendGraph, 'minimax_h3_denoise');
 
-    // The H3 canvas policy: 16:9 caps at 1344×768; frame counts are string literals.
-    // The H3 denoise node counts sigma grid points, so the graph passes
-    // panel steps (model evaluations) + 1.
+    // H3 canvas follows preset policy; node steps include one terminal sigma point beyond model evaluations.
     expect(denoise).toMatchObject({ height: 768, num_frames: '124', steps: settings.steps + 1, width: 1344 });
 
     const output = nodeOfType(backendGraph, 'minimax_h3_latents_to_video');
@@ -419,8 +413,7 @@ describe('compileVideoGraph — MiniMax H3', () => {
     const settings = settingsFor(model, { sourceVideo: { ...SOURCE_VIDEO, endFrame: 80 } });
     const { backendGraph } = compileVideoGraph(settings, model);
 
-    // H3 renders at a fixed 24 fps; the source is retimed up front so the
-    // concat (which inherits the first clip's rate) joins at one speed.
+    // Retime source to H3's fixed 24 fps before concatenation inherits its rate.
     expect(nodeOfType(backendGraph, 'extract_video_range')).toMatchObject({ fps: 24 });
     expect(hasEdge(backendGraph, 'source_last_frame', 'image', 'pos_cond', 'first_image')).toBe(true);
     expect(hasEdge(backendGraph, 'source_last_frame', 'image', 'frame_conditioning', 'first_image')).toBe(true);
@@ -497,9 +490,7 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     expect(video.id).toBe('reference_1');
     expect(video.conditioning).toBe('video_audio');
     expect(video.start_frame).toBe(2);
-    // The end bound sits in the estimate's tail window, so it compiles as a negative
-    // index the backend resolves against the clip's REAL frame count (the panel's count
-    // is an estimate that can overshoot on VFR uploads) - same rule as the extend path.
+    // Resolve tail-window bounds against actual backend frame counts to tolerate VFR estimate overshoot.
     expect(video.end_frame).toBe(-1);
     expect(image.id).toBe('reference_2');
     expect(image.detail).toBe('match');
@@ -639,19 +630,14 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
         'minimax_h3_video_reference'
       ).start_frame;
 
-    // Both bounds convert together, flagged or not. Mixing an absolute start
-    // with a tail-relative end splits the window across two index spaces: the
-    // backend then extracts `length + (real - estimate)` frames, or -- on a
-    // window short enough for the error to swallow -- resolves the end BEFORE
-    // the start and fails the generation.
+    // Convert both reference bounds together; mixed absolute/relative indices distort length or reverse short
+    // windows.
     expect(startOf(linked({ endFrame: 400, startFrame: 260 }, false))).toBe(-142);
     // The inversion that mixing produced: [398,399] of an estimated 402 emitted
     // `398 / -3`, which against a real 400 is start 398, end 397.
     expect(startOf(linked({ endFrame: 399, startFrame: 398 }, false))).toBe(-4);
-    // A start at or inside the estimate's slop stays ABSOLUTE: the relative
-    // form resolves to `startFrame + (real - estimate)`, and the backend
-    // rejects a negative index rather than clamping, so an estimate that
-    // overshoots by more than `startFrame` would fail the whole generation.
+    // Keep near-start bounds absolute because estimate overshoot could make a relative start negative and fail
+    // extraction.
     expect(startOf(linked({ endFrame: 400, startFrame: 0 }))).toBe(0);
     expect(startOf(linked({ endFrame: 400, startFrame: 1 }))).toBe(1);
     expect(startOf(linked({ endFrame: 400, startFrame: 3 }))).toBe(3);
@@ -696,8 +682,6 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     };
     const { backendGraph } = compileVideoGraph(settings, model);
 
-    // The new clip is intermediate; the crossfade concat is the output, fed
-    // [trimmed source, new clip]; the source is retimed to H3's fixed 24 fps.
     expect(nodeOfType(backendGraph, 'minimax_h3_latents_to_video')).toMatchObject({
       id: 'extension_clip',
       is_intermediate: true,
@@ -714,10 +698,7 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     // The linked reference is an ordinary first reference; the flag never reaches metadata.
     const videoReferences = nodesOfType(backendGraph, 'minimax_h3_video_reference');
 
-    // Both bounds ride the SAME negative anchor, so the extracted window keeps
-    // its exact length whatever the clip's real frame count turns out to be.
-    // A positive start would have made it `tail + (real - estimate)` frames,
-    // and the overrun is discarded at the seam.
+    // Use one tail-relative anchor for both bounds to preserve window length despite frame-count estimation error.
     expect(videoReferences[0]).toMatchObject({ end_frame: -2, id: 'reference_1', start_frame: -142 });
     expect((videoReferences[0].end_frame as number) - (videoReferences[0].start_frame as number)).toBe(140);
     const metadata = nodeOfType(backendGraph, 'core_metadata');

@@ -6,14 +6,7 @@ import { IconButton } from './Button';
 import { toaster } from './toaster';
 import { useScrollAreaPhantomHeal } from './useScrollAreaPhantomHeal';
 
-/**
- * The workbench's standard JSON preview: a monospace block with a copy button
- * that owns its scrolling in both axes — long strings scroll horizontally
- * instead of stretching the surrounding layout. Pass `value` to serialize, or
- * `text` when the JSON string already exists (an export payload that must be
- * copied byte-for-byte). Defaults to a bounded height; pass `maxH` (or wrap in
- * a flex parent and pass `maxH="100%"`) to control it.
- */
+/** Pass text for byte-preserving copy, or value to serialize. Owns both scroll axes; maxH controls the bound. */
 export const JsonPreview = ({
   h,
   label = 'JSON preview',

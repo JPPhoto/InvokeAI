@@ -24,15 +24,6 @@ import { FileUpIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * The Launchpad's landing section: resume what you were doing, or start
- * something new.
- *
- * Home deliberately shows only a handful of recent projects — the full library
- * is its own section. What it adds over a file list is the first move: intent
- * tiles that open a draft already arranged for the kind of work you named.
- */
-
 const RECENT_PROJECT_COUNT = 4;
 const BROWSER_ISSUES_BANNER = <KnownBrowserIssuesAlert />;
 
@@ -90,15 +81,10 @@ export const HomePage = () => {
       regionLabel={t('launchpad.sections.home')}
       title={greeting}
     >
-      {/* Ordered by how much it should interrupt: a missing model blocks
-          everything, a running job is worth knowing about, the rest is
-          browsing. Each renders nothing when it has nothing to say.
-
-          The models panel is capability-gated rather than merely hidden: every
-          endpoint it touches — catalog, starters, install — is admin-only, so
-          mounting it for a non-admin would mean a burst of unauthorized
-          requests on every visit to Home, and a call to action they could not
-          complete. */}
+      {/*
+       * Order panels by urgency. Gate model-panel mounting by capability because its catalog/install endpoints are
+       * admin-only; empty panels render nothing.
+       */}
       {canManageModels ? <LivePanel panel="models" /> : null}
       <LivePanel panel="queue" />
 

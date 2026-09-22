@@ -1,9 +1,6 @@
 /**
- * Contracts for the backend model manager (`/api/v2/models/*`). Shapes mirror
- * the pydantic models in `invokeai/backend/model_manager` and
- * `invokeai/app/services/model_install` (serialized as snake_case). Unions are
- * kept open (`| (string & {})`) so new backend architectures appear in the UI
- * without a frontend release — unknown values fall back to generic labels.
+ * Mirror snake_case backend model contracts with open unions so unknown architectures display generic labels
+ * without a frontend release.
  */
 
 /** Known model base architectures. Open union: new bases still render. */

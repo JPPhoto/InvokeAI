@@ -46,11 +46,7 @@ import {
   VIDEO_ASPECT_RATIO_IDS,
 } from './settings';
 
-// Video capabilities registry keyed by model base AND variant: unlike still-image
-// generation, Wan's variants differ structurally (which conditioning modes exist,
-// the pixel grid, whether a second expert/CFG applies), so base alone is not
-// enough. Display identity stays in @features/models; graph topology will stay
-// explicit in graph.ts.
+// Wan variants differ in conditioning, pixel grid, and experts; key capabilities by base and variant.
 
 export type SupportedVideoBase = 'wan' | 'minimax-h3';
 
@@ -86,13 +82,8 @@ export interface VideoFpsPolicy {
 }
 
 /**
- * The family's distillation fast path: which LoRA(s) it runs on and the
- * sampling parameters they were trained for. Wan A14B uses the Lightning
- * high/low pair; MiniMax H3 uses a single Turbo LoRA.
- *
- * `steps` is the count the family's reference LoRA was distilled for (the
- * bundled H3 templates assume the 6-step repack). Releases trained for a
- * different schedule are resolved per-LoRA by `getAcceleratorSteps`.
+ * Family accelerator LoRAs and sampling defaults. steps describes the reference release; getAcceleratorSteps
+ * resolves release-specific schedules.
  */
 export interface VideoAcceleratorConfig {
   label: 'Lightning' | 'Turbo';
@@ -134,9 +125,7 @@ export const WAN_LIGHTNING_ACCELERATOR: VideoAcceleratorConfig = {
   steps: 4,
 };
 
-// LightX2V's H3 release is distilled to 8 steps where the repack the templates
-// assume is 6, and only its *file* name says so — the starter installs it as
-// "MiniMax H3 LightX2V Turbo LoRA", so the org name is the signal that survives.
+// LightX2V H3 uses eight steps; starter display names omit that count but retain the organization token.
 const LIGHTX2V_PATTERN = /(?:^|[^a-z0-9])lightx2v(?:[^a-z0-9]|$)/i;
 
 export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
@@ -147,13 +136,7 @@ export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   stepOverrides: [{ pattern: LIGHTX2V_PATTERN, steps: 8 }],
 };
 
-/**
- * The Ref2VA-trained Turbo distillations. The reference count is the 4-step v0.1
- * repack's (Comfy-Org's ref2v turbo); the LightX2V 8-step v1.0 release that
- * superseded it — the starter model since 2026-09-07 — states its schedule via the
- * override, like its FL2VA sibling. v0.1 pans the camera rightward whenever a video
- * reference is conditioned on; v1.0 does not.
- */
+/** Ref2VA Turbo uses a four-step reference count; LightX2V releases override it to eight. */
 export const MINIMAX_H3_REF2V_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   cfgScale: 1,
   cfgScaleLowNoise: null,
@@ -200,13 +183,9 @@ const WAN_A14B_COMMON = {
 const WAN_VARIANTS: Record<string, VideoVariantConfig> = {
   // The T2V expert pair has no reference-image conditioning channels.
   t2v_a14b: { ...WAN_A14B_COMMON, modes: ['txt2vid'] },
-  // The I2V expert pair conditions on a reference frame (and optionally an end
-  // frame — FLF2V); it has no text-only mode. Extend is FLF2V machinery fed by
-  // the source video's last frame.
+  // I2V experts require a reference frame; extension uses the source's last frame through FLF2V conditioning.
   i2v_a14b: { ...WAN_A14B_COMMON, modes: ['first-frame', 'first-last', 'extend'] },
-  // TI2V-5B does both text and image conditioning, but its ref encoder has no
-  // end-frame channel, and it is a single expert (no low-noise pair, no
-  // Lightning LoRAs).
+  // TI2V-5B has text/image conditioning, no end-frame channel, and one expert.
   ti2v_5b: {
     ...WAN_A14B_COMMON,
     accelerator: null,
@@ -239,15 +218,12 @@ const MINIMAX_H3_FL2VA: VideoVariantConfig = {
   targetResolutions: MINIMAX_H3_TARGET_RESOLUTION_OPTIONS,
 };
 
-// The Ref2VA task transformer supports ONLY reference-conditioned generation (upstream
-// declares tasks: ["ref2va"]); everything else it inherits from the FL2VA panel policy.
+// Upstream Ref2VA declares only reference-conditioned generation.
 const MINIMAX_H3_REF2VA: VideoVariantConfig = {
   ...MINIMAX_H3_FL2VA,
   accelerator: MINIMAX_H3_REF2V_TURBO_ACCELERATOR,
   modes: ['reference'],
-  // `extend` = reference-extend: an Initial Video the new clip is appended to,
-  // with a linked tail reference for continuity (no frame conditioning — the
-  // panel derives a reference from the clip instead).
+  // Reference extension derives a linked tail reference from Initial Video; it does not frame-condition.
   references: { extend: true, maxImages: 9, maxVideos: 3 },
 };
 
@@ -255,8 +231,7 @@ export const VIDEO_GENERATION: Record<
   SupportedVideoBase,
   { variants: Record<string, VideoVariantConfig>; fallback: VideoVariantConfig }
 > = {
-  // ref2va is REGISTERED, never the fallback: an unknown future variant may fall back to
-  // fl2va's config, but a known ref2va transformer must not silently get fl2va's modes.
+  // Register Ref2VA explicitly so it never inherits FL2VA fallback modes.
   'minimax-h3': { fallback: MINIMAX_H3_FL2VA, variants: { fl2va: MINIMAX_H3_FL2VA, ref2va: MINIMAX_H3_REF2VA } },
   wan: { fallback: WAN_FALLBACK_VARIANT, variants: WAN_VARIANTS },
 };
@@ -264,12 +239,8 @@ export const VIDEO_GENERATION: Record<
 export const SUPPORTED_VIDEO_BASES = Object.keys(VIDEO_GENERATION) as SupportedVideoBase[];
 
 /**
- * A model the video panel can reason about at all: any Wan main, and MiniMax
- * H3 mains in both shapes — the Diffusers folder install and the single-file
- * transformer checkpoint. For H3 the checkpoint IS the model identity (its
- * task variant decides the panel's mode); the Diffusers install supplies the
- * five other submodels, either as the model itself (full install) or through
- * the component-source slot (checkpoint main).
+ * Supports Wan mains and H3 folder/checkpoint mains. H3 checkpoint variant owns task identity; a Diffusers source
+ * supplies its remaining components.
  */
 export const isSupportedVideoModel = <T extends { base: string; type: string; format?: string }>(
   model: T
@@ -279,30 +250,17 @@ export const isSupportedVideoModel = <T extends { base: string; type: string; fo
     (model.base === 'minimax-h3' && (model.format === 'diffusers' || model.format === 'checkpoint')));
 
 /**
- * What the top model selector offers — like the image Generate panel, the top
- * pick is what decides the panel's UI, so it lists the identity-bearing models:
- * H3 single-file transformers (either task variant) and full Diffusers
- * installs. Excluded, though still "supported" for stored/recalled state:
- * a components-only folder (no transformer weights — it belongs in the Model
- * Components slot) and a Ref2VA Diffusers folder (its `transformer_ref`
- * weights are not folder-loadable; the single-file checkpoint is the runnable
- * form, with the folder serving as the component source).
+ * Select runnable identity-bearing models. Components-only and Ref2VA Diffusers folders remain supported for
+ * stored state but serve only as component sources, not selectable mains.
  */
 export const isVideoModelSelectable = <T extends ModelConfig>(model: T): boolean =>
   isSupportedVideoModel(model) &&
   !isComponentsOnlyH3Main(model) &&
   !(model.base === 'minimax-h3' && model.format === 'diffusers' && model.variant === 'ref2va');
 
-/**
- * A slim MiniMax H3 folder install: tokenizer/processor/VAEs only, no
- * transformer or text-encoder weights. The backend probe records
- * `components_only` on the config precisely so the UI can require the
- * single-file overrides up front instead of failing mid-generation.
- */
+/** components_only folders contain tokenizer/processor/VAEs but require transformer and text-encoder overrides. */
 export const isComponentsOnlyH3Main = (model: MainModelConfig): boolean =>
-  // Demand the full config, not a Pick: a narrowed object would type-check
-  // here but silently read `components_only` as absent — a false negative
-  // that re-opens the fail-mid-generation hole this helper exists to close.
+  // Require full configs so narrowing cannot silently omit components_only.
   model.base === 'minimax-h3' && model.format === 'diffusers' && model.components_only === true;
 
 const getVideoVariantConfig = (
@@ -342,8 +300,6 @@ export const getVideoTargetResolutionOptions = (
 ): readonly VideoTargetResolutionOption[] => getVideoConfig(model).targetResolutions;
 
 export const getVideoAspectRatioOptions = (_model: MainModelConfig | undefined): readonly VideoAspectRatioId[] =>
-  // Both current families accept every offered ratio (H3's 1:4–4:1 bound is
-  // wider than the preset list); the hook stays per-model for the next family.
   VIDEO_ASPECT_RATIO_IDS;
 
 const coerceTargetResolution = (
@@ -382,12 +338,8 @@ export interface ResolvedVideoDimensions extends VideoDimensions {
 }
 
 /**
- * The exact pixel dimensions a graph will run at. Text-to-video derives them
- * from the aspect-ratio preset; once conditioning media is set, its own ratio
- * takes over (the panel's Dimensions section locks accordingly) and only the
- * target-resolution preset still applies. Null when the media's ratio is
- * outside the model's supported range or the inputs are degenerate — reported
- * via `getVideoValidationReasons`.
+ * Conditioning media overrides preset aspect ratio; target resolution still applies. Returns null for unsupported
+ * ratios or degenerate inputs.
  */
 export const getVideoDimensions = (
   model: MainModelConfig | undefined,
@@ -427,9 +379,7 @@ export const getVideoPromptPolicy = (
   settings: Pick<VideoSettings, 'cfgScale' | 'cfgScaleLowNoise' | 'negativePromptEnabled' | 'wanLowNoiseModel'>
 ) => {
   const config = getVideoConfig(model);
-  // Mirrors wan_video_denoise's do_cfg: negative conditioning is also consumed
-  // when the LOW-noise half runs CFG (> 1) — which needs a second expert, i.e.
-  // a Diffusers dual-expert main or a wired low-noise transformer.
+  // Match wan_video_denoise.do_cfg: a second expert using CFG > 1 also consumes negative conditioning.
   const lowNoiseCfgActive =
     config.cfg.lowNoiseVisible &&
     (model?.format === 'diffusers' || settings.wanLowNoiseModel !== null) &&
@@ -484,8 +434,6 @@ export interface VideoModelPolicy {
 }
 
 export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings: VideoSettings): VideoModelPolicy => {
-  // The H3 task (fl2va vs ref2va) lives on the selected model itself: a
-  // single-file transformer checkpoint carries its own variant.
   const config = getVideoConfig(model);
 
   return {
@@ -502,11 +450,7 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
-      // The step count the help text quotes is the one the *running*
-      // accelerator LoRA was distilled for — with the 8-step LightX2V Turbo
-      // LoRA on, "6 steps" would be a lie. It is deliberately NOT folded into
-      // `accelerator`: that stays the family config, so callers can keep using
-      // it as the reference other counts are resolved against.
+      // Show the active LoRA's schedule while retaining accelerator as the family reference config.
       acceleratorSteps: config.accelerator
         ? getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings))
         : null,
@@ -518,22 +462,13 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
   };
 };
 
-// ---------------------------------------------------------------------------
-// Distillation fast paths (Wan Lightning, MiniMax H3 Turbo)
-
 export interface WanLightningLoraPair {
   high: LoraModelConfig;
   low: LoraModelConfig;
 }
 
 export interface FindAcceleratorLoraOptions {
-  /**
-   * Accept only LoRAs that also name the model family. Used when the candidate
-   * list is the user's own Concepts list rather than the installed catalog:
-   * there is no better-named release for a look-alike to lose to, so a
-   * personal "Turbo …" LoRA — or a T2V Lightning pair sitting on an I2V main —
-   * would otherwise be mistaken for a distillation fast path.
-   */
+  /** Require the model-family token for user-list candidates to reject look-alike or wrong-family accelerators. */
   requireFamilyName?: boolean;
 }
 
@@ -543,23 +478,14 @@ export interface FindMiniMaxH3TurboLoraOptions extends FindAcceleratorLoraOption
   variant?: string | null;
 }
 
-// "high"/"low" as standalone words. \b is useless here because release files
-// use underscores ("high_noise_model") where \w breaks no boundary, while a
-// plain word-suffix match swallows "Slow"/"Thigh" — so the token must be
-// delimited by non-alphanumerics (or the string edge) on BOTH sides.
+// Delimit both sides with non-alphanumerics: word boundaries miss underscore-separated tokens, while suffix
+// matching accepts Slow/Thigh.
 const HIGH_NOISE_PATTERN = /(?:^|[^a-z0-9])high(?:[^a-z0-9]|$)/i;
 const LOW_NOISE_PATTERN = /(?:^|[^a-z0-9])low(?:[^a-z0-9]|$)/i;
 
 /**
- * The installed Lightning LoRA pair for a Wan A14B main, if any. When pairs for
- * more than one family are installed (e.g. T2V and I2V releases), the one
- * naming the main's family wins; noise assignment comes from the model names.
- *
- * `requireFamilyName` drops the fallback and demands the family token, so a
- * T2V pair is not read as a valid accelerator for an I2V main — the question
- * asked when the candidates are LoRAs already in the panel rather than the
- * catalog the toggle is free to pick from. With no family token to demand it
- * matches nothing, leaving the answer to the catalog.
+ * Prefer the main's family and assign experts from names. requireFamilyName rejects fallback matches, including
+ * models with no known family token.
  */
 export const findWanLightningLoraPair = (
   models: readonly ModelConfig[],
@@ -578,10 +504,6 @@ export const findWanLightningLoraPair = (
   const familyToken = typeof mainVariant === 'string' ? mainVariant.split('_')[0] : undefined;
   const familyPattern = familyToken ? new RegExp(`(?:^|[^a-z0-9])${familyToken}(?:[^a-z0-9]|$)`, 'i') : null;
   const score = (model: LoraModelConfig): number => (familyPattern?.test(model.name) ? 0 : 1);
-  // With `requireFamilyName` and no family token to check against (an unprobed
-  // Wan release on the fallback variant) there is nothing to verify, so this
-  // fails closed rather than accepting everything — the caller falls back to
-  // the catalog pick, which is a real answer.
   const pick = (pattern: RegExp): LoraModelConfig | null =>
     candidates
       .filter((model) => pattern.test(model.name) && (!requireFamilyName || score(model) === 0))
@@ -594,27 +516,16 @@ export const findWanLightningLoraPair = (
 };
 
 const TURBO_PATTERN = /(?:^|[^a-z0-9])turbo(?:[^a-z0-9]|$)/i;
-// A LightX2V distillation release: the token the starter names carry, or the org's own
-// file-name form (minimax_h3_<task>_turbo_<N>step_v<major>…), which is the name a by-URL
-// install keeps — such an install must not lose the pick to an older starter-named repack.
+// Recognize both starter names and raw LightX2V filenames retained by URL installs.
 const LIGHTX2V_RELEASE_PATTERN =
   /(?:^|[^a-z0-9])lightx2v(?:[^a-z0-9]|$)|minimax_h3_(?:fl2v|ref2v)_turbo_\d{1,2}step_v\d/i;
 const MINIMAX_H3_NAME_PATTERN = /(?:^|[^a-z0-9])(?:minimax|h3)(?:[^a-z0-9]|$)/i;
-// Ref2VA-trained distillation LoRAs (delimited "ref2v"/"ref2va" token). They must never
-// auto-apply to an FL2VA generation - the Ref2V Turbo repack is trained against the Ref2VA
-// transformer only.
+// Ref2V Turbo is Ref2VA-trained and must never auto-apply to FL2VA.
 const MINIMAX_H3_REF2V_PATTERN = /(?:^|[^a-z0-9])ref2va?(?:[^a-z0-9]|$)/i;
 
 /**
- * The installed MiniMax H3 Turbo distillation LoRA, if any. Distillation LoRAs
- * carry no dedicated taxonomy, so this is a name heuristic: a delimited
- * "turbo" token, preferring names that also name the model family, then the
- * LightX2V releases over the earlier repacks they superseded (the 4-step v0.1
- * Ref2V repack pans the camera whenever a video reference is used; the
- * LightX2V v1.0 files replaced both it and the larryvrh FL2VA v4 as starters),
- * with a deterministic tie-break — a user's own "Turbo …" style LoRA loses to
- * the real repack whenever one is installed. Ref2VA-trained turbo LoRAs are
- * excluded: the FL2VA accelerator must not pick them.
+ * Match delimited Turbo names, preferring family names then LightX2V releases with deterministic ties. Exclude
+ * Ref2VA-trained releases for FL2VA.
  */
 export const findMiniMaxH3TurboLora = (
   models: readonly ModelConfig[],
@@ -624,10 +535,8 @@ export const findMiniMaxH3TurboLora = (
   // older repack still beats a LightX2V-named look-alike that omits the family.
   const score = (model: LoraModelConfig): number =>
     (MINIMAX_H3_NAME_PATTERN.test(model.name) ? 0 : 2) + (LIGHTX2V_RELEASE_PATTERN.test(model.name) ? 0 : 1);
-  // Within a tier the release stating the higher schedule is the later one (the 4-step
-  // v0.1 Ref2V repack against the 8-step v1.0 that replaced it, both under raw file names).
-  // The task decides which distillation qualifies: ref2va REQUIRES the ref2v-token repack,
-  // every other variant excludes it — the two are trained against different transformers.
+  // Within a tier, higher stated schedules rank newer. Ref2VA requires Ref2V-trained releases; other tasks exclude
+  // them.
   const matchesTask = (name: string): boolean =>
     variant === 'ref2va' ? MINIMAX_H3_REF2V_PATTERN.test(name) : !MINIMAX_H3_REF2V_PATTERN.test(name);
 
@@ -649,11 +558,8 @@ export const findMiniMaxH3TurboLora = (
 };
 
 /**
- * The complete accelerator LoRA set contained in `candidates`, or null when it
- * is not all there. The candidates are the installed catalog when asking what
- * the toggle *would* run, and the user's own Concepts list when asking what is
- * actually running. `model` must be the EFFECTIVE model: for MiniMax H3 the
- * task variant (fl2va vs ref2va) decides which Turbo distillation qualifies.
+ * Return a complete candidate accelerator set or null. Pass the effective model: its H3 task variant determines
+ * compatible Turbo releases.
  */
 export const findAcceleratorLorasIn = (
   model: MainModelConfig,
@@ -674,19 +580,13 @@ export const findAcceleratorLorasIn = (
   return pair ? [pair.high, pair.low] : null;
 };
 
-// "4-step", "8 steps", "6step" — how a distillation release states the schedule
-// it was trained for. Two digits at most, so a checkpoint tag ("step600") or a
-// rank cannot be read as a step count.
+// Limit schedule tokens to two digits so checkpoint tags such as step600 cannot become step counts.
 const STEP_COUNT_PATTERN = /(?:^|[^a-z0-9])(\d{1,2})[ _-]?steps?(?:[^a-z0-9]|$)/i;
 
 /** The schedule a distillation LoRA's name states, or 0 when it states none. */
 const getStatedStepCount = (name: string): number => Number(STEP_COUNT_PATTERN.exec(name)?.[1] ?? 0);
 
-/**
- * The step count one distillation LoRA was trained for. Its name is the only
- * record of it: an explicit "N-step" token wins, then the family's per-release
- * overrides, and failing both the family's reference count.
- */
+/** Resolve steps from an explicit name token, then release overrides, then family defaults. */
 const getLoraAcceleratorSteps = (config: VideoAcceleratorConfig, lora: LoraModelConfig): number => {
   const stated = getStatedStepCount(lora.name);
 
@@ -697,12 +597,7 @@ const getLoraAcceleratorSteps = (config: VideoAcceleratorConfig, lora: LoraModel
   return config.stepOverrides?.find((override) => override.pattern.test(lora.name))?.steps ?? config.steps;
 };
 
-/**
- * The step count for a whole accelerator set. Both halves of a Wan Lightning
- * pair state the same schedule; if a mismatched pair is ever assembled, the
- * higher count is the safe pick — under-stepping is what reads as a broken
- * model.
- */
+/** Use the higher count for mismatched expert schedules to avoid under-stepping. */
 export const getAcceleratorSteps = (config: VideoAcceleratorConfig, loras: readonly LoraModelConfig[]): number =>
   loras.reduce((steps, lora) => Math.max(steps, getLoraAcceleratorSteps(config, lora)), 0) || config.steps;
 
@@ -722,13 +617,8 @@ const getRecordedAcceleratorLoras = (
 };
 
 /**
- * The complete accelerator set contained in `candidates`, judged the way the
- * panel has to judge LoRAs the user is holding: one that names the model's own
- * family, or failing that the very set the catalog would install. The
- * family-name requirement keeps a personal "Turbo …" LoRA — or a T2V Lightning
- * pair left over on an I2V main — from passing as a fast path; the catalog
- * pick is exempt from it because it is what the toggle itself installs, odd
- * name and all.
+ * Accept complete model-family matches or the exact catalog-selected set; the latter permits unusual names
+ * installed by the toggle itself.
  */
 const findAcceleratorAmong = (
   model: MainModelConfig,
@@ -747,11 +637,8 @@ const findAcceleratorAmong = (
 };
 
 /**
- * Whether the settings' recorded accelerator keys still name a complete set of
- * enabled LoRAs that is a valid fast path *for this model* — the question both
- * the model-switch reconcile and the Concepts-list reconcile turn on. Asked of
- * the recorded keys alone, so with two Turbo LoRAs enabled the one the user
- * anchored on keeps the fast path instead of losing it to a tie-break.
+ * Validate only recorded accelerator keys so another enabled candidate cannot displace the user's anchored set
+ * through tie-breaking.
  */
 const isRecordedAcceleratorIntact = (
   settings: Pick<VideoSettings, 'acceleratorLoraKeys' | 'loras'>,
@@ -765,10 +652,7 @@ const isRecordedAcceleratorIntact = (
     return false;
   }
 
-  // Deduplicated by key: a list holding the same LoRA twice (a hand-edited
-  // project file, metadata whose graph listed one twice) must not make this
-  // permanently false — the identity guarantee in `syncVideoWidgetValuesWithModels`
-  // depends on an unchanged value reaching the 'unchanged' outcome.
+  // Deduplicate keys so repeated persisted LoRAs can still reach the unchanged reconciliation outcome.
   const live = [
     ...new Map(
       getEnabledLoraModels(settings)
@@ -781,11 +665,8 @@ const isRecordedAcceleratorIntact = (
 };
 
 /**
- * The accelerator LoRA entries for a model, or null when they are not
- * installed. Deliberately catalog-only: the family name test is all that
- * separates a distillation LoRA from any other, and "MiniMax H3 …" is how a
- * user names their OWN H3 LoRA too, so letting the panel's list steer this
- * would let the toggle arm itself on a LoRA with no distillation in it.
+ * Choose only from the installed catalog; user-list names cannot reliably distinguish distillation from personal
+ * style LoRAs.
  */
 const findAcceleratorLoraEntries = (model: MainModelConfig, models: readonly ModelConfig[]): GenerateLora[] | null =>
   findAcceleratorLorasIn(model, models)?.map((lora) => ({ isEnabled: true, model: lora, weight: 1 })) ?? null;
@@ -797,9 +678,8 @@ export interface AcceleratorToggleResult {
 }
 
 /**
- * Applies the accelerator toggle as a plain settings transition: the LoRA(s)
- * appear in (or leave) the Concepts list and steps/CFG are patched, so the
- * graph builder needs no hidden behavior and the user sees exactly what runs.
+ * Encode acceleration through visible LoRAs and sampling settings so graph compilation needs no hidden toggle
+ * behavior.
  */
 export const getAcceleratorToggleResult = (
   settings: VideoSettings,
@@ -870,19 +750,9 @@ export interface AcceleratorLoraChangeResult {
 }
 
 /**
- * Re-reads the fast path from the Concepts list after it changes. The flag has
- * to describe what is actually enabled, so swapping one Turbo LoRA for another
- * keeps the fast path — re-anchored on the new LoRA, at the step count *it*
- * was distilled for — instead of tearing it down. Only a list with no complete
- * accelerator left in it turns the toggle off and restores the model's own
- * sampling defaults: a silent 6-step run with no distillation LoRA behind it
- * just reads as a broken model.
- *
- * Strictly a repair of a fast path that is already ON. An off accelerator is
- * never armed by a list edit, however accelerator-shaped the LoRA that lands
- * in it looks: the name heuristic cannot tell a distillation release from a
- * user's own "… Turbo …" LoRA, and arming on it would silently drop a
- * hand-tuned step count onto a LoRA that does not support it.
+ * Repair an enabled accelerator from the edited Concepts list: reanchor a complete replacement or disable and
+ * restore model defaults. Never enable from a list edit; name heuristics cannot establish that a user LoRA
+ * supports distillation.
  */
 export const getAcceleratorLoraChangeResult = (
   settings: VideoSettings,
@@ -890,8 +760,6 @@ export const getAcceleratorLoraChangeResult = (
   models: readonly ModelConfig[],
   loras: GenerateLora[]
 ): AcceleratorLoraChangeResult => {
-  // The two H3 tasks (fl2va vs ref2va) have different accelerators; the task
-  // lives on the selected model's own variant.
   const config = getVideoConfig(model);
   const next: VideoSettings = { ...settings, loras };
 
@@ -935,9 +803,6 @@ export const getAcceleratorLoraChangeResult = (
     },
   };
 };
-
-// ---------------------------------------------------------------------------
-// Component slots
 
 export type VideoComponentValueKey =
   | 'vae'
@@ -1029,9 +894,8 @@ const createComponentPolicy = (
 
 const EMPTY_VIDEO_COMPONENT_POLICY = createComponentPolicy(false, []);
 
-// wan_model_loader requires the low-noise expert to be a DIFFERENT single-file
-// model of the SAME variant as the main. Unknown variants stay allowed — the
-// backend probe is the authority.
+// Low-noise experts must be distinct single-file models of the same variant. Allow unknown variants for backend
+// probing.
 const isWanLowNoiseExpertCandidate = (candidate: ModelConfig, ctx: VideoComponentPolicyContext): boolean =>
   candidate.type === 'main' &&
   candidate.base === 'wan' &&
@@ -1041,13 +905,8 @@ const isWanLowNoiseExpertCandidate = (candidate: ModelConfig, ctx: VideoComponen
     typeof ctx.model.variant !== 'string' ||
     candidate.variant === ctx.model.variant);
 
-// wan_model_loader validates the standalone VAE's latent channels against the
-// main: TI2V-5B needs the 48-channel Wan 2.2 VAE, A14B the 16-channel Wan 2.1
-// VAE. A config without the field (open union) stays allowed.
-//
-// The served (wan, variant) rows say the same thing, but this surface does not
-// wait for the capability table: reading it here would drop a stored VAE during
-// the widget sync that runs before the table arrives, and persist the loss.
+// TI2V-5B requires 48 VAE channels; A14B requires 16. Allow unspecified channels. Do not await capabilities here:
+// early widget sync could otherwise delete and persist a valid stored VAE.
 const isWanVaeForMain = (candidate: ModelConfig, ctx: VideoComponentPolicyContext): boolean => {
   if (candidate.type !== 'vae' || candidate.base !== 'wan') {
     return false;
@@ -1079,9 +938,7 @@ export const getVideoComponentSectionPolicy = (
   if (model.base === 'wan') {
     const config = getVideoConfig(model);
     const slots: VideoComponentSlotPolicy[] = [
-      // A Diffusers main is its own component source; the loader ignores the
-      // input for it, so the slot is only offered for single-file mains — and
-      // never lists the selected main itself.
+      // Diffusers mains supply their own components and ignore this input; offer it only for single-file mains.
       ...(model.format === 'diffusers'
         ? []
         : [
@@ -1117,9 +974,7 @@ export const getVideoComponentSectionPolicy = (
       },
     ];
 
-    // TI2V-5B is a single expert, and a Diffusers A14B main bundles its own
-    // transformer_2 (the loader ignores this input for it) — so the slot is
-    // only offered for single-file A14B mains.
+    // TI2V-5B has one expert; Diffusers A14B bundles the second. Only single-file A14B needs this slot.
     if (config.cfg.lowNoiseVisible && model.format !== 'diffusers') {
       slots.push({
         filter: isWanLowNoiseExpertCandidate,
@@ -1134,20 +989,11 @@ export const getVideoComponentSectionPolicy = (
     return createComponentPolicy(model.format !== 'diffusers', slots);
   }
 
-  // MiniMax H3. The top model selection carries the task identity (its variant
-  // decides the panel's generation mode); this section supplies what that
-  // selection does not bundle:
-  // - a single-file transformer checkpoint at top REQUIRES a Diffusers H3
-  //   install in the Model Components slot (tokenizer/processor/VAEs come from
-  //   it — full and components-only installs both qualify), plus the
-  //   single-file Qwen3-VL encoder when that install is components-only;
-  // - a full Diffusers install at top bundles everything, so only the optional
-  //   text-encoder override is offered.
+  // H3 checkpoint mains require a Diffusers component source; components-only sources also require a Qwen3-VL
+  // override. Full Diffusers mains bundle both.
   if (model.format === 'diffusers') {
-    // A components-only install can still sit at top as legacy stored state
-    // (it is no longer selectable); validation steers the user to pick a
-    // single-file transformer as the model, and the encoder slot stays
-    // required so the panel keeps showing what the install cannot provide.
+    // Legacy components-only mains remain visible; require the missing encoder while validation requests a
+    // single-file transformer main.
     const componentsOnly = isComponentsOnlyH3Main(model);
 
     return createComponentPolicy(componentsOnly, [
@@ -1189,11 +1035,8 @@ export const getVideoComponentSectionPolicy = (
       required: (ctx) => !isH3TextEncoderSatisfied(ctx),
       valueKind: 'component',
     },
-    // The hybrid is a Ref2VA-only option: an FL2VA checkpoint stands in for
-    // every weight but the AdaLN projections, whose task-defining half stays
-    // the selected Ref2VA main's. Offered on the Ref2VA selection so the
-    // panel's reference mode (decided by the top model) is unaffected. Listed
-    // last: optional tuning sits below the slots the panel needs to run.
+    // The hybrid replaces non-AdaLN weights with an FL2VA base while retaining Ref2VA task identity and
+    // projections.
     ...(model.variant === 'ref2va'
       ? [
           {
@@ -1209,9 +1052,8 @@ export const getVideoComponentSectionPolicy = (
   ]);
 };
 
-// The overlay node refuses a pruned/full mismatch (the AdaLN projections have
-// different shapes), so the slot lists only same-kind FL2VA checkpoints; a
-// config without the flag (open union) stays allowed, the backend decides.
+// Pruned/full AdaLN shapes differ: require matching checkpoint kinds, leaving unspecified flags to backend
+// validation.
 const isH3HybridBaseCandidate = (candidate: ModelConfig, ctx: VideoComponentPolicyContext): boolean =>
   candidate.type === 'main' &&
   candidate.base === 'minimax-h3' &&
@@ -1254,9 +1096,6 @@ const getVideoComponentPolicyContext = (
   settings,
 });
 
-// ---------------------------------------------------------------------------
-// Wan A14B expert-wiring advisories
-
 export type WanExpertWiringWarning =
   | { kind: 'swapped' }
   | { kind: 'high-as-low' }
@@ -1271,10 +1110,8 @@ const getWanExpertTag = (model: MainModelConfig | null): 'high' | 'low' | 'none'
 };
 
 /**
- * Advisory only — mirrors wan_model_loader's stance that explicit wiring is
- * authoritative and the expert tag is a filename heuristic ('none' is common
- * on community finetunes, and deliberate cross-wiring must stay expressible).
- * The panel surfaces this as a badge with a one-click swap; nothing blocks.
+ * Expert tags are advisory filename heuristics; explicit wiring remains authoritative and mismatches do not block
+ * generation.
  */
 export const getWanExpertWiringWarning = (
   model: MainModelConfig | null,
@@ -1313,15 +1150,9 @@ export const getWanExpertWiringWarning = (
   return mainTag === 'low' ? { kind: 'single-low' } : null;
 };
 
-// ---------------------------------------------------------------------------
-// Defaults & model-selection transitions
-
 /**
- * The H3 Diffusers install a single-file transformer main should draw its
- * components from. A full install is preferred (it also covers the text
- * encoder); a components-only folder qualifies otherwise. Used to seed
- * defaults/reset and to fill an empty slot on model selection — a checkpoint
- * main is un-invokable without one.
+ * Prefer full H3 Diffusers installs for checkpoint components; components-only sources also qualify when no full
+ * install exists.
  */
 const findH3ComponentSource = (models: readonly ModelConfig[]): MainModelConfig | null => {
   const candidates = models.filter(
@@ -1345,9 +1176,6 @@ export const getDefaultVideoSettings = (
     batchCount: 1,
     cfgScale: config.defaults.cfgScale,
     cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
-    // A single-file H3 main cannot run without a Diffusers install in the
-    // Model Components slot, so defaults (and reset, which reuses them) seed
-    // one from the catalog instead of starting un-invokable.
     componentSourceModel:
       model && model.base === 'minimax-h3' && model.format === 'checkpoint' ? findH3ComponentSource(models) : null,
     firstFrameImage: null,
@@ -1376,9 +1204,7 @@ export const getDefaultVideoSettings = (
     wanT5EncoderModel: null,
   };
 
-  // The accelerator defaults ON when its LoRA(s) are installed: the plain
-  // 40/50-step paths are prohibitively slow as out-of-the-box defaults, and
-  // the bundled video templates make the same choice.
+  // Enable installed accelerators by default, matching bundled templates' practical sampling schedules.
   if (model && config.accelerator) {
     const result = getAcceleratorToggleResult(base, model, models, true);
 
@@ -1403,8 +1229,6 @@ export const getVideoSettingsWithModelDefaults = (
     ...settings,
     acceleratorEnabled: modelDefaults.acceleratorEnabled,
     acceleratorLoraKeys: modelDefaults.acceleratorLoraKeys,
-    // The default-bearing layout/component choices reset too: a mispicked
-    // VAE or expert is exactly what a user reaches for reset to undo.
     aspectRatioId: modelDefaults.aspectRatioId,
     cfgScale: modelDefaults.cfgScale,
     cfgScaleLowNoise: modelDefaults.cfgScaleLowNoise,
@@ -1422,10 +1246,7 @@ export const getVideoSettingsWithModelDefaults = (
     ].map((lora) => (isLoraCompatibleWithModel(lora.model, model) ? lora : { ...lora, isEnabled: false })),
     modelKey: model.key,
     numFrames: modelDefaults.numFrames,
-    // A reset clears the references list along with the components: on an
-    // FL2VA model the orphaned list would otherwise linger for the widget
-    // sync to sweep away silently. (Frame/source conditioning media stay
-    // untouched: they remain valid under the FL2VA policy.)
+    // Reset references with components while preserving valid frame/source conditioning.
     references: modelDefaults.references,
     steps: modelDefaults.steps,
     targetResolution: modelDefaults.targetResolution,
@@ -1447,10 +1268,8 @@ const addClearedLabel = (labels: string[], label: string) => {
 };
 
 /**
- * Canonical transition for every Video model-selection entry point: reconciles
- * conditioning media against the new model's modes, snaps frames/fps/presets
- * onto its constraints, and drops incompatible LoRAs and components — reporting
- * what was cleared so the UI can say so.
+ * Use one model-selection transition to reconcile media, sampling constraints, LoRAs, and components and report
+ * cleared inputs.
  */
 export const getVideoModelSelectionResult = ({
   currentSettings,
@@ -1462,12 +1281,8 @@ export const getVideoModelSelectionResult = ({
   models: readonly ModelConfig[];
 }): VideoModelSelectionResult => {
   const config = getVideoConfig(model);
-  // A record without a modelKey was healed from a store the panel never
-  // seeded (a fresh project, or a pre-open "Send to Video" payload): its
-  // sampling values are the model-agnostic healing fallbacks, not user
-  // choices. Bootstrap the picked model's own defaults — accelerator
-  // included — instead of preserving fallbacks, then reconcile any seeded
-  // media below exactly like a normal selection.
+  // Missing modelKey means healing defaults, not user choices; bootstrap selected-model defaults before
+  // reconciling seeded media.
   const start = currentSettings.modelKey
     ? currentSettings
     : getVideoSettingsWithModelDefaults(currentSettings, model, models);
@@ -1485,10 +1300,8 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'Initial video');
   }
 
-  // The frame count is snapped BEFORE the tail reference is derived: the window
-  // is budgeted against it, and deriving first left a Wan panel's count (as low
-  // as 5) sizing a window for a 90-frame H3 generation — under the 13 frames
-  // text conditioning needs, so Generate failed outright.
+  // Snap frame count before deriving reference context so cross-family switches cannot retain an undersized Wan
+  // budget.
   const snappedFrames = snapVideoNumFrames(model, next.numFrames);
   const framesChanged = snappedFrames !== next.numFrames;
 
@@ -1497,12 +1310,7 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'Frames');
   }
 
-  // Reference-extend: a surviving Initial Video (e.g. carried over from an
-  // FL2VA extend setup) gets its linked tail reference derived, so the switch
-  // lands on a generatable panel. Only when none exists yet: the transition
-  // also runs on task-neutral edits (a same-model re-selection, a component
-  // change), and re-deriving there would reset a hand-tuned trim the help
-  // text only promises to reset on cutpoint changes.
+  // Derive a missing source anchor on model switch; avoid resetting hand-tuned trims on task-neutral transitions.
   if (
     config.references?.extend &&
     next.sourceVideo &&
@@ -1516,9 +1324,7 @@ export const getVideoModelSelectionResult = ({
     );
   }
 
-  // A tail reference carried in from another model keeps a window budgeted for
-  // that model's frame count. Only when the count actually moved: otherwise a
-  // task-neutral re-selection would reset a hand-tuned trim.
+  // Rebudget inherited tails only when frame count changes, preserving trims on neutral reselection.
   if (config.references?.extend && framesChanged) {
     next.references = applyReferenceExtendNumFrames(next.references, next.numFrames);
   }
@@ -1556,13 +1362,8 @@ export const getVideoModelSelectionResult = ({
   }
 
   if (next.acceleratorEnabled) {
-    // Carry the "fast path" intent across model switches: when the LoRAs the
-    // user is actually running are still a valid accelerator for the new model,
-    // everything they may have tuned (steps, CFG, LoRA weights) is left alone.
-    // Only when that set no longer applies (Lightning ↔ Turbo, or a Wan pair
-    // aimed at the other expert family) is the toggle re-applied — and when the
-    // new model has no accelerator, or its LoRAs are not installed, the fast
-    // path turns off, restoring the model's own steps/CFG.
+    // Preserve tuned acceleration when its LoRAs remain compatible. Otherwise reapply the new family's accelerator
+    // or restore normal sampling if unavailable.
     if (!isRecordedAcceleratorIntact(next, model, models, config)) {
       const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
       const result = getAcceleratorToggleResult(next, model, models, targetEntries !== null);
@@ -1605,19 +1406,13 @@ export const getVideoModelSelectionResult = ({
     }
   }
 
-  // A single-file H3 main is un-invokable without a component source; fill an
-  // empty slot from the catalog — including one the loop above just cleared
-  // (and reported) as incompatible. An explicit compatible pick is never
-  // overwritten.
+  // Autofill required H3 components only when empty; preserve explicit compatible choices.
   if (model.base === 'minimax-h3' && model.format === 'checkpoint' && !next.componentSourceModel) {
     next.componentSourceModel = findH3ComponentSource(models);
   }
 
   return { clearedLabels, settings: next };
 };
-
-// ---------------------------------------------------------------------------
-// Validation
 
 const VIDEO_MODE_DESCRIPTIONS: Record<VideoGenerationMode, string> = {
   extend: 'extending a video',
@@ -1664,8 +1459,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     return ['Video needs a supported video model before it can be invoked.'];
   }
 
-  // Supported-but-not-selectable H3 shapes can reach the model slot as stored
-  // or recalled state; name the actual fix instead of failing downstream.
+  // Give repair guidance for stored supported-but-unselectable H3 configurations.
   if (isComponentsOnlyH3Main(model)) {
     return [
       `${model.name} is a components-only install. Select a single-file MiniMax H3 transformer as the model; this install then provides its components.`,
@@ -1696,8 +1490,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
 
   if (!config.modes.includes(mode)) {
     if (referenceOnly && settings.references.length === 0) {
-      // The generic message would say "does not support text-to-video", which reads as a
-      // model defect; the actual fix is to add a reference.
+      // Explain the missing reference rather than implying a defective text-to-video model.
       reasons.push('Reference-to-video needs at least one image or video reference.');
     } else {
       reasons.push(`${model.name} does not support ${VIDEO_MODE_DESCRIPTIONS[mode]}.`);
@@ -1788,8 +1581,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
   } else if (settings.sourceVideo) {
     const { endFrame, numFrames, startFrame } = settings.sourceVideo;
 
-    // The crossfade join consumes a 2-frame tail from the trimmed source, so a
-    // 1-frame trim fails mid-encode; catch it (and out-of-range bounds) here.
+    // Require valid source bounds and at least two frames for crossfade before encoding.
     if (startFrame < 0 || endFrame > numFrames - 1 || endFrame - startFrame + 1 < MIN_VIDEO_TRIM_FRAMES) {
       reasons.push('The initial video trim must keep at least two frames within the clip.');
     }
@@ -1798,10 +1590,7 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
       reasons.push('The initial video is too short to extend.');
     }
 
-    // A Wan extension inherits the source clip's frame rate, and the backend's
-    // wan_l2v/video_concat nodes accept 1-120 fps. An out-of-range clip (a
-    // 240 fps slow-mo, an unprobeable sub-1 fps rate) would enqueue, run the
-    // whole denoise, then die assigning the fps — so block it here instead.
+    // Wan extension inherits source fps; validate the backend's 1–120 range before expensive denoising.
     if (model.base === 'wan') {
       const inheritedFps = Math.round(settings.sourceVideo.fps);
 
@@ -1822,8 +1611,8 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
   }
 
   if (model.base === 'wan') {
-    // A14B and 5B Wan LoRAs are not interchangeable — the layer patcher fails
-    // on a tensor-shape mismatch — so say so instead of silently dropping them.
+    // Report incompatible Wan expert-family LoRAs rather than silently dropping weights that would mismatch tensor
+    // shapes.
     for (const lora of settings.loras) {
       if (lora.isEnabled && !isWanLoraTargetingMain(lora.model.variant, model.variant)) {
         reasons.push(`${lora.model.name} targets a different Wan model family than ${model.name}.`);

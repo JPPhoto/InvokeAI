@@ -24,13 +24,10 @@ const HydratedSessionController = ({ search }: { search: WorkbenchSearch }) => {
 
   useMountEffect(() => {
     if (search.new === true) {
-      // Arrange the fresh draft before the search is stripped, so the intent
-      // applies exactly once and never survives into a later navigation.
+      // Apply the draft intent before stripping it from search so it runs exactly once.
       const intent = resolveLaunchpadIntent(search.intent);
 
-      // A named preset wins: the user picked the arrangement itself, so it
-      // outranks whatever arrangement an intent merely implies. The intent
-      // still gets to name the invocation source, which a preset cannot.
+      // A named preset chooses the arrangement; intent may still choose the invocation source.
       if (search.preset) {
         commands.layout.applyPreset(search.preset);
       } else if (intent) {
@@ -88,10 +85,7 @@ const HydratedSessionController = ({ search }: { search: WorkbenchSearch }) => {
   return null;
 };
 
-/**
- * Search changes remount the lifecycle adapter, eliminating effect-based prop
- * synchronization while preserving cancellation for asynchronous hydration.
- */
+/** Key search-dependent hydration lifecycles to cancel stale asynchronous loads. */
 export const WorkbenchSessionController = ({ search }: { search: WorkbenchSearch }) => {
   const hasHydrated = useWorkbenchHasHydrated();
 

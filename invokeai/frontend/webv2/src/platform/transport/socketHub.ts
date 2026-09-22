@@ -5,9 +5,6 @@ import type { BackendConnectionStatus } from './types';
 import { setConnectionStatus } from './connectionStore';
 import { getBackendSocketPath, getBackendSocketUrl, getHttpAuthToken } from './http';
 
-/**
- * The minimal Socket.IO surface the hub uses; tests substitute a fake.
- */
 export interface BackendSocket {
   on(event: string, handler: (payload: never) => void): unknown;
   off(event: string, handler: (payload: never) => void): unknown;
@@ -18,11 +15,7 @@ export interface BackendSocket {
 
 export type ConnectionListener = (status: BackendConnectionStatus, error?: string) => void;
 
-/**
- * Owns the single backend socket for the whole authenticated app. It is only a
- * transport/status hub; feature runtimes attach their own listeners so admin
- * model code and editor queue code do not leak into the base Launchpad bundle.
- */
+/** Own one authenticated socket; feature listeners stay outside the hub to preserve Launchpad bundle boundaries. */
 export interface SocketHub {
   /** Idempotent: connects the single socket if one is not already live. */
   connect(): void;
@@ -38,8 +31,7 @@ export interface SocketHub {
 const createDefaultSocket = (): BackendSocket => {
   const token = getHttpAuthToken();
 
-  // Socket.IO's generic `off` overload does not structurally match our minimal
-  // facade; the socket satisfies the surface we actually use, so narrow it here.
+  // Narrow Socket.IO's generic off overload to the facade's supported calls.
   return io(getBackendSocketUrl(), {
     auth: token ? { token } : undefined,
     autoConnect: false,

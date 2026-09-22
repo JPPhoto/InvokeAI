@@ -244,10 +244,7 @@ describe('PreviewFilmstrip mixed media', () => {
     const viewportCenterY = viewportRect.top + viewportRect.height / 2;
     const thumbCenterY = thumbRect.top + thumbRect.height / 2;
 
-    // Without the Scrollable `contentProps={{ h: 'full' }}` fix, the content
-    // wrapper shrinks to the thumb row's own height and the row sticks to
-    // the viewport's top edge instead of centering in it — a multi-pixel
-    // offset for the "full" density's 60px strip / 48px thumb combination.
+    // Fill the ScrollArea content height so thumbnails center vertically within the strip.
     expect(Math.abs(thumbCenterY - viewportCenterY)).toBeLessThan(1);
   });
 
@@ -442,8 +439,6 @@ describe('Preview mixed media actions', () => {
     expect(actions.sendToCanvas).toHaveBeenCalledWith([expect.objectContaining({ imageName: 'shared' })], 'control');
   });
 
-  // Both remain one click away in the dropdown's quick row, which is why they
-  // left the strip.
   it('leaves copy and download to the image-actions dropdown', async () => {
     const actions = {
       copyImage: vi.fn(() => Promise.resolve()),

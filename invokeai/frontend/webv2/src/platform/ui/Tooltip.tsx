@@ -78,28 +78,13 @@ export interface TooltipProps extends ChakraTooltip.RootProps {
   content: ReactNode;
   contentRef?: Ref<HTMLDivElement>;
   contentProps?: ChakraTooltip.ContentProps;
-  /**
-   * Which trigger edge the tooltip sits on, centered against it — `top`/
-   * `bottom` center horizontally, `left`/`right` center vertically; `-start`/
-   * `-end` suffixes align to an edge instead. Shorthand for
-   * `positioning.placement` (an explicit `positioning.placement` wins).
-   */
+  /** Shorthand for positioning.placement; an explicit positioning.placement wins. */
   placement?: TooltipPlacement;
   ref?: Ref<HTMLButtonElement>;
   triggerProps?: TooltipTriggerProps;
 }
 
-/**
- * Workbench tooltip. Chrome comes from the `tooltip` slot-recipe override in
- * `theme/recipes.ts`, so this wrapper only provides the trigger/portal
- * structure and the `content` convenience API.
- */
-/**
- * One trigger id for a menu or popover whose trigger a `Tooltip` wraps. Both
- * machines render onto the same element and each wants to own its id; without
- * sharing, the menu has no anchor and opens at the viewport origin. Pass the
- * result as `ids` to the Menu/Popover root and to the Tooltip.
- */
+/** Pass the same ids to Menu/Popover and Tooltip; competing trigger IDs leave the popup without an anchor. */
 export const useTooltipTriggerIds = (): { trigger: string } => {
   const trigger = useId();
 

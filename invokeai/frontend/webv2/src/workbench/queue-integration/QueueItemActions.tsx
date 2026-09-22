@@ -8,11 +8,6 @@ import { FileTextIcon, WandSparklesIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Per-item actions for the RECENT details panel. Recall lives in the image
- * context menu and the Details rows, not in a button row here. "View JSON"
- * opens the raw queue item in a dialog.
- */
 export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
   const { t } = useTranslation();
   const notify = useNotify();

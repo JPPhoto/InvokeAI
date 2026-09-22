@@ -6,9 +6,8 @@ import type { ProjectSettings } from './contracts';
 import type * as storeModule from './store';
 
 /**
- * The settings store's load/patch contract: backend-first with legacy
- * migration, resolved once per account scope, and offline edits replay
- * instead of being reverted by a stale server copy.
+ * Verify backend-first loading, legacy migration, per-account resolution, and offline-edit replay over stale
+ * server state.
  */
 
 const api = vi.hoisted(() => {
@@ -348,10 +347,8 @@ describe('normalizeProjectSettings', () => {
   });
 
   /**
-   * Prompt highlighting and attention style used to be project settings. They
-   * are per-user preferences now, and a document written by an older build
-   * still carries them — normalizing must not let them back in, or importing
-   * someone else's project would rewrite the reader's editor.
+   * Discard legacy project highlighting/attention settings so imports cannot overwrite personal editor
+   * preferences.
    */
   it('drops prompt preferences that older documents still carry in project settings', () => {
     const normalized = store.normalizeProjectSettings({

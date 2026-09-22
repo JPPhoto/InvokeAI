@@ -31,12 +31,8 @@ export interface PreviewItemPosition {
 }
 
 /**
- * Header context published by the preview view so the widget frame's chrome
- * (label + header actions) can render the current selection without refetching
- * boards or re-instantiating image actions. The preview is a singleton widget
- * (`allowMultiple: false`), so one module-level store is safe. Cleared when
- * the view unmounts or nothing is selected; the chrome falls back to the
- * static title and hides the action strip.
+ * Publish singleton Preview selection/actions for external chrome without refetching. Clear on unmount or empty
+ * selection so static chrome returns.
  */
 export interface PreviewHeaderContext {
   /** The selected item with board/star context, ready for common actions. */
@@ -47,11 +43,7 @@ export interface PreviewHeaderContext {
   copyCurrentVideoFrame: (() => void) | null;
   isVideoFrameCopyAvailable: boolean;
   itemName: string | null;
-  /**
-   * Opens the view's full image context menu anchored at viewport coordinates.
-   * The header's "image actions" dropdown reuses the exact right-click menu —
-   * one source of truth for every image verb.
-   */
+  /** Open the view's shared image context menu from header actions at viewport coordinates. */
   openItemMenu: ((x: number, y: number) => void) | null;
   position: PreviewItemPosition | null;
   /** Null unless the selection is an image the loupe can zoom. */
@@ -88,11 +80,7 @@ registerAccountOwnedResource({
 
 export const usePreviewHeaderContext = (): PreviewHeaderContext => store.useSelector((snapshot) => snapshot);
 
-/**
- * The view's hot-path readouts, written straight from ref callbacks and the
- * loupe so a wheel tick re-renders the header's zoom menu and nothing else —
- * never the view, its filmstrip, or the context menu.
- */
+/** Publish hot-path zoom readouts directly so wheel ticks update only the zoom menu. */
 export interface PreviewStageContext {
   /** The media stage; the Details popover keeps within it, off the filmstrip. */
   stageElement: HTMLElement | null;

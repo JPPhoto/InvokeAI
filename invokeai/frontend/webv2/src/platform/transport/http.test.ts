@@ -177,8 +177,7 @@ describe('request identity ownership', () => {
 
 describe('media cookie credentials', () => {
   beforeEach(() => {
-    // One stable identity for the whole request: a fresh object per call would read as a
-    // mid-request account rotation and reject before the assertion.
+    // Keep the identity object stable; a fresh object would simulate rotation before the assertion.
     const identity = {};
     configureHttpAuth({ getIdentity: () => identity, getToken: () => null, onUnauthorized: vi.fn() });
   });

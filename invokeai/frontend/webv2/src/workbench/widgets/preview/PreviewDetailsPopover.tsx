@@ -18,12 +18,8 @@ import { PreviewDetails } from './PreviewMetadataPanel';
 type InteractOutsideHandler = NonNullable<ComponentProps<typeof Popover.Root>['onInteractOutside']>;
 
 /**
- * The header's Details toggle and its popover: board position and dimensions
- * on the first line, then the legacy tab set (parsed details for images, the
- * raw metadata record, workflow, graph). Anchored bottom-end under its trigger
- * at the header's far end and bounded by the media stage rather than the
- * viewport, so however long the metadata runs it scrolls inside the image area
- * and never lies over the filmstrip.
+ * Bound Details to the media stage so long metadata scrolls without covering the filmstrip; images offer parsed
+ * details alongside raw payload tabs.
  */
 export const PreviewDetailsPopover = ({
   actions,
@@ -55,9 +51,7 @@ export const PreviewDetailsPopover = ({
     [stageElement]
   );
   const handleOpenChange = useCallback(({ open }: { open: boolean }) => onOpenChange(open), [onOpenChange]);
-  // Reading Details while browsing the board is the point: a click on the
-  // filmstrip or the stage keeps the popover up (the query re-keys to the new
-  // item), and focus stays on the preview so the arrow keys keep walking.
+  // Keep Details open while stage/filmstrip selection changes and preserve Preview keyboard navigation.
   const handleInteractOutside = useCallback<InteractOutsideHandler>(
     (event) => {
       const widget = stageElement?.closest('[role="region"]');
@@ -100,8 +94,6 @@ export const PreviewDetailsPopover = ({
       onInteractOutside={handleInteractOutside}
       onOpenChange={handleOpenChange}
     >
-      {/* Reads like the toggles beside it: the filled variant and `aria-pressed`
-          carry "open" the way they carry "on" for the filmstrip. */}
       <Tooltip content={t('widgets.preview.details')} ids={ids}>
         <Popover.Trigger asChild>
           <IconButton

@@ -148,9 +148,8 @@ describe('executeVideoRecall', () => {
   it('writes only the prompt keys for a prompts-only recall', async () => {
     galleryApi.galleryVideos.metadata.mockResolvedValue(metadata);
     const { commands, patchValues } = createCommands();
-    // A panel whose recorded main is NOT installed: `getCurrentVideoValues`
-    // re-snaps it onto another family, so a whole-values write here would push
-    // that transition into the store behind a "prompts" toast.
+    // A prompts-only recall must not persist the model-family transition produced by resnapshotting an uninstalled
+    // main.
     const videoValues = { ...createDefaultVideoWidgetValues([wanModel]), numFrames: 41, steps: 4 };
 
     const didRecall = await executeVideoRecall({
@@ -201,10 +200,7 @@ describe('ref2va reference conditioning on recall', () => {
     galleryApi.galleryItems.resolve.mockReset();
   });
 
-  // Recall must reproduce the run. The panel offers all three conditionings, so a recorded
-  // 'video_audio' on a wrapped audio clip is a deliberate user choice -- and it is the one
-  // value an enumerate-the-literals check is most likely to omit, because it used to be the
-  // fall-through default and so cost nothing to forget.
+  // Preserve all recorded conditioning modes, including video_audio on wrapped audio clips.
   it('keeps a recorded video_audio, even on a clip marked as a wrapped audio upload', async () => {
     expect(await recallReferences('video_audio')).toMatchObject([{ conditioning: 'video_audio' }]);
   });

@@ -7,10 +7,7 @@ import type {
 } from '@features/generation/contracts';
 import type { SeedMode } from '@platform/core/seed';
 
-/**
- * How a video generation is conditioned. There is no explicit mode selector:
- * the mode is inferred from which inputs are filled — see `resolveVideoMode`.
- */
+/** Infer conditioning mode from populated inputs through resolveVideoMode. */
 export type VideoGenerationMode = 'txt2vid' | 'first-frame' | 'last-frame' | 'first-last' | 'extend' | 'reference';
 
 /** A gallery video selected as the clip to extend, with the trim range to keep. */
@@ -25,55 +22,31 @@ export interface VideoSourceClip {
   endFrame: number;
 }
 
-/**
- * Which streams a Ref2VA video reference conditions. The graph-literal values of the
- * `minimax_h3_video_reference` node: 'audio' maps to upstream's standalone audio-reference
- * kind, sourced from the video's soundtrack.
- */
+/** Reference conditioning maps directly to graph literals; audio uses the clip's soundtrack without visual rows. */
 export type VideoReferenceConditioning = 'video_audio' | 'video' | 'audio';
 
 /** Ref2VA image-reference sizing: 'max' = 2048px short edge, 'match' = generation's pixel area. */
 export type VideoReferenceImageDetail = 'max' | 'match';
 
-/**
- * One ordered Ref2VA reference. Order is part of the request contract — a different order
- * is a different generation — so references live in a single ordered array whatever their
- * kind. A video reference reuses `VideoSourceClip` for its trim bounds.
- */
+/** Reference order affects generation; retain one ordered mixed-kind array with video trim bounds. */
 export type VideoReferenceItem =
   | {
       kind: 'video';
       clip: VideoSourceClip;
       conditioning: VideoReferenceConditioning;
       /**
-       * True on the reference the panel derives from the Initial Video in
-       * Ref2VA extend mode: it tracks that clip's identity, and its trim
-       * defaults re-derive from the cutpoint (up to ~5s of lead-in at 24 fps,
-       * capped at the generated frame count so the backend keeps the whole
-       * window) whenever the Initial Video trim or the frame count changes.
-       * It is an ordinary reference otherwise — reorderable, trimmable,
-       * removable — and the flag is panel state only, never in metadata.
+       * Panel-only marker for the Initial Video continuity anchor, pinned last. Its default trim follows source
+       * cutpoints and generated frame count unless trimOverridden is set.
        */
       fromSourceVideo?: boolean;
       /**
-       * True once the user has moved the anchor's OWN trim controls. The
-       * derived window is a default, not a constraint: Ref2VA conditions on
-       * reference content with no frame-exact seam to protect, so where the
-       * sample ends is an editorial choice (a clip that fades to black wants
-       * the fade concatenated but not conditioned on). From then on the panel
-       * stops re-deriving the window from the cutpoint and the frame count,
-       * and the entry is trimmed like any other reference. Clearing and
-       * re-setting the Initial Video drops the override. Panel state only,
-       * never in metadata; meaningless without `fromSourceVideo`.
+       * Panel-only anchor override disables cutpoint/frame-count re-derivation after manual trim edits.
+       * Clear/reset source removes it; meaningful only with fromSourceVideo.
        */
       trimOverridden?: boolean;
       /**
-       * The sample length the user last asked for, in frames. The window stored in
-       * `clip` is this clamped to the frames the clip has left from its start frame —
-       * keeping the request separate is what lets a start-frame drag run into the end
-       * of the clip and come back with the length intact. Absent until a control is
-       * touched, where the window's own length is the request. Panel state only, never
-       * in metadata; read it through `referenceSampleFrames`.
+       * Panel-only requested length stays separate from clamped clip bounds so drags can restore it; read through
+       * referenceSampleFrames.
        */
       sampleFrames?: number;
     }
@@ -83,12 +56,7 @@ export type WanTargetResolution = '480p' | '720p' | '1080p';
 export type MiniMaxH3TargetResolution = '768 highres' | '768 lowres';
 export type VideoTargetResolution = WanTargetResolution | MiniMaxH3TargetResolution;
 
-/**
- * The preset ratios the video panel offers. No `Free` and no width/height
- * fields: pixel dimensions are always derived — from this ratio plus the
- * target-resolution preset in text-to-video, or from the conditioning media's
- * own ratio once a frame or source video is set.
- */
+/** Derive dimensions from preset ratio/resolution or conditioning media; no free-size fields are offered. */
 export type VideoAspectRatioId = '21:9' | '16:9' | '3:2' | '4:3' | '1:1' | '3:4' | '2:3' | '9:16' | '9:21';
 
 /** Project-persisted settings owned by the Video widget. */
@@ -103,24 +71,13 @@ export interface VideoSettings {
   /** Image-to-video conditioning. Mutually exclusive with `sourceVideo`. */
   firstFrameImage: ImageWithDims | null;
   /**
-   * The frame the clip should end on: FLF2V interpolation with a first frame,
-   * or the destination image when extending a source video. Combines with
-   * either `firstFrameImage` or `sourceVideo`.
+   * Last frame supplies interpolation's endpoint or an extension destination, paired with first frame or source
+   * video.
    */
   lastFrameImage: ImageWithDims | null;
-  /**
-   * The clip to extend. Mutually exclusive with `firstFrameImage`. On an
-   * FL2VA model this drives extend mode; on a Ref2VA model it coexists with
-   * `references` (reference-extend: the new clip is appended to it, and a
-   * linked tail reference provides continuity).
-   */
+  /** Source excludes first frame; FL2VA uses extend mode while Ref2VA appends using a linked tail reference. */
   sourceVideo: VideoSourceClip | null;
-  /**
-   * Ref2VA references, in conditioning order (up to 3 videos and 9 images).
-   * Mutually exclusive with `firstFrameImage`/`lastFrameImage`; `sourceVideo`
-   * may coexist on a Ref2VA model (reference-extend). Only a Ref2VA
-   * transformer consumes them — see `resolveVideoMode` and the `reference` mode.
-   */
+  /** Ordered Ref2VA references exclude frame slots but may coexist with source video for reference extension. */
   references: VideoReferenceItem[];
   aspectRatioId: VideoAspectRatioId;
   targetResolution: VideoTargetResolution;
@@ -131,17 +88,13 @@ export interface VideoSettings {
   /** Guidance for the low-noise half of a Wan A14B schedule; null reuses `cfgScale`. */
   cfgScaleLowNoise: number | null;
   /**
-   * The family's distillation fast path: the Lightning LoRA pair at 4 steps /
-   * CFG 1 for Wan A14B, the Turbo LoRA at 6 steps for MiniMax H3. Toggling it
-   * patches steps/CFG and the `loras` list — see `getAcceleratorToggleResult`
-   * — so the flag records intent, not hidden state.
+   * Acceleration patches visible sampling settings and LoRAs; this flag records intent rather than hidden graph
+   * state.
    */
   acceleratorEnabled: boolean;
   /**
-   * The keys of the LoRA entries the accelerator toggle added. Turning the
-   * fast path off (or switching families) removes exactly these — never a
-   * user's own LoRA that happens to be named like one — and the enabled flag
-   * cannot outlive them.
+   * Track exactly the toggle-added LoRA keys for removal; never remove matching user-owned entries, and clear
+   * enabled intent if they disappear.
    */
   acceleratorLoraKeys: string[];
   seed: number;
@@ -153,28 +106,18 @@ export interface VideoSettings {
   wanT5EncoderModel: ModelIdentifierConfig | null;
   /** The low-noise expert of a Wan 2.2 A14B mixture-of-experts pair. */
   wanLowNoiseModel: MainModelConfig | null;
-  /**
-   * Diffusers main model used as a component source for single-file mains:
-   * split/quantized Wan models, and single-file MiniMax H3 transformers
-   * (which take tokenizer/processor/VAEs from it).
-   */
+  /** Diffusers component source supplies missing non-transformer components for standalone Wan/H3 mains. */
   componentSourceModel: MainModelConfig | null;
   /**
-   * LEGACY — pre model-positions persisted shape only. The single-file H3
-   * transformer used to be an override slot; it is the top model selection
-   * now. `syncVideoWidgetValuesWithModels` promotes a stored value onto
-   * `model` (keeping the old main as `componentSourceModel`); nothing writes
-   * this field any more.
+   * Legacy-only transformer override: reconciliation promotes it to model and retains the old main as
+   * componentSourceModel; new writes omit it.
    */
   h3TransformerModel: MainModelConfig | null;
   /** Optional single-file MiniMax H3 Qwen3-VL text-encoder override. */
   h3TextEncoderModel: ModelIdentifierConfig | null;
   /**
-   * MiniMax H3 hybrid: with a Ref2VA transformer selected, an FL2VA checkpoint
-   * that supplies every weight except the AdaLN modulation projections from
-   * `h3HybridStartBlock` onward, which stay Ref2VA's — FL2VA's output quality
-   * with the references still routed. The loader loads this base; the
-   * selected Ref2VA main rides the overlay node.
+   * Hybrid loads FL2VA base weights and overlays selected Ref2VA AdaLN from h3HybridStartBlock onward while
+   * retaining reference conditioning.
    */
   h3HybridBaseModel: MainModelConfig | null;
   /** First transformer block (0-49) whose AdaLN projection stays Ref2VA's under the hybrid. */

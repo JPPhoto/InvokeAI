@@ -27,11 +27,7 @@ import {
   type __WorkbenchReducerActionInternal,
 } from './workbenchState';
 
-/**
- * Which widgets the shell shows: the active project, each region's active
- * instance, and the floating windows. A change hides or replaces widgets, and
- * an overlay open inside one would otherwise outlive it in its portal.
- */
+/** Visible-widget changes dismiss overlays that would otherwise outlive their widgets in portals. */
 const visibleWidgetsKey = (state: WorkbenchState): string => {
   const project = state.projects.find((candidate) => candidate.id === state.activeProjectId);
   if (!project) {
@@ -51,11 +47,7 @@ type MechanicalCommand<Type extends WorkbenchAction['type']> = keyof ActionPaylo
   ? () => void
   : (payload: ActionPayload<Type>) => void;
 
-/**
- * Mechanical commands forward one action to the reducer; their public types derive
- * from the reducer's action union so the two cannot drift. The action union itself
- * stays private — callers only ever see the named command.
- */
+/** Derive named command types from the private reducer action union to prevent drift. */
 const createCommandFactory = (dispatch: WorkbenchDispatch) => {
   function command<Type extends WorkbenchAction['type']>(type: Type): MechanicalCommand<Type>;
   function command<Type extends WorkbenchAction['type'], Args extends unknown[]>(
@@ -172,10 +164,6 @@ const createCommands = (
           projectId,
         })
       ),
-      /**
-       * TODO(Task 6/8): Remove after Gallery Grid, Preview, and the image
-       * command palette dispatch canonical items.
-       */
       selectImage: (
         image: GeneratedImageContract & Partial<GalleryImage>,
         projectId?: string,
@@ -508,15 +496,8 @@ const createPersistenceAdapter = (dispatch: WorkbenchDispatch, getState: () => W
 
   return {
     /**
-     * A project created by persistence learns its board from the create response.
-     *
-     * Recording the id is the whole write. It does *not* also select the board: the create response
-     * arrives a round trip after the draft appears, and forcing a selection then would overwrite
-     * whatever the person picked in the meantime. Nothing is lost by leaving it —
-     * `getGallerySelectedBoardId` already falls back to the project's board when the saved
-     * selection does not resolve, which is exactly this case. It matches hydration, which passes
-     * `selectBoard: false` for the same reason, and makes this idempotent, which matters because
-     * an assignment can be applied from a save whose snapshot has already moved on.
+     * Record the server-assigned board without selecting it: the user may have changed selection during creation,
+     * and unresolved selections already fall back to the project board.
      */
     assignProjectBoard: ({ boardId, projectId }: { boardId: string; projectId: string }) => {
       dispatch({ boardId, projectId, type: 'setGalleryProjectBoardId' });

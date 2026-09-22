@@ -15,12 +15,8 @@ import { refreshModels } from './modelsStore';
 import { refreshStartersIfLoaded } from './startersStore';
 
 /**
- * Live store for model install jobs. The job list itself is REST-owned
- * (`/api/v2/models/install`) and refreshed on lifecycle socket events;
- * download progress is high-frequency transient data that bypasses the list
- * (and the workbench reducer) entirely — each queue row subscribes to its own
- * job id and only re-renders when that job's bytes move. This mirrors the
- * generation `progressStore` pattern.
+ * REST owns install jobs; lifecycle events refresh them. High-frequency progress bypasses the list and subscribes
+ * per job to limit renders.
  */
 
 export interface InstallsSnapshot {
@@ -45,11 +41,8 @@ export interface InstallOutcome {
 }
 
 /**
- * Human-readable source for an install job or install socket payload. Accepts
- * `unknown` so untyped socket payloads and typed job sources produce the SAME
- * string — active-install matching compares these labels. Lives here rather
- * than in `core/taxonomy` so the eagerly-loaded data layer does not pull the
- * taxonomy module out of the lazy UI chunks (the initial-graph byte budget).
+ * Normalize typed and socket source labels identically for matching; colocate here to keep taxonomy out of eager
+ * chunks.
  */
 export const getInstallSourceLabel = (source: unknown): string => {
   if (typeof source === 'string') {
@@ -72,8 +65,7 @@ export const getInstallSourceLabel = (source: unknown): string => {
 };
 
 const REFRESH_COALESCE_MS = 250;
-// Display cap and eviction margin in one: comfortably above any completion
-// burst that could land between two toast-effect flushes.
+// Bound display history with room for completion bursts between toast flushes.
 const OUTCOME_LIMIT = 64;
 
 const EMPTY_INSTALLS_SNAPSHOT: InstallsSnapshot = { error: null, jobs: [], status: 'idle' };
@@ -162,11 +154,7 @@ const scheduleRefresh = (): void => {
   }, REFRESH_COALESCE_MS);
 };
 
-/**
- * Revalidate the library + starter flags after installs land. Coalesced like
- * `scheduleRefresh`: a bundle whose jobs complete in a burst triggers one
- * full-library refetch, not one per completion event.
- */
+/** Coalesce install-completion bursts into one library/starter revalidation. */
 const scheduleCatalogRefresh = (): void => {
   if (catalogRefreshTimer !== null) {
     return;
@@ -260,8 +248,7 @@ export const handleModelInstallSocketEvent = (
   }
 
   if (event === 'model_install_complete' || event === 'model_install_error' || event === 'model_install_cancelled') {
-    // The settled job stays listed until "Clear finished", but its byte
-    // progress is dead weight the moment it stops downloading.
+    // Retain settled jobs until cleared, but release their inactive byte-progress state.
     progressByJobId.delete(data.id);
   }
 
@@ -303,10 +290,7 @@ export const useInstallsSelector = store.useSelector;
 
 export const getInstallsSnapshot = (): InstallsSnapshot => store.getSnapshot();
 
-/**
- * Source strings (URL, repo id, or path) of jobs currently in flight, cached
- * per jobs-array so list rows can show an "installing" state by source.
- */
+/** Cache active source strings by jobs-array identity for installing affordances. */
 const areSetsEqual = <Value>(left: ReadonlySet<Value>, right: ReadonlySet<Value>): boolean =>
   left.size === right.size && Array.from(left).every((value) => right.has(value));
 

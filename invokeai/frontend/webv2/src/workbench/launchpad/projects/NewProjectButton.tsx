@@ -2,8 +2,6 @@ import type { BuiltInLayoutPresetId } from '@workbench/layoutContracts';
 import type { LucideIcon } from 'lucide-react';
 
 import { Icon, Menu, Portal } from '@chakra-ui/react';
-// Concrete modules, not the barrel: `@platform/ui` sits at its direct-importer
-// budget, and this component needs four of its exports.
 import { Button, IconButton } from '@platform/ui/Button';
 import { Group } from '@platform/ui/Group';
 import { MenuContent } from '@platform/ui/Menu';
@@ -13,20 +11,8 @@ import { ChevronDownIcon, ClapperboardIcon, LayersIcon, PlusIcon, TypeIcon, Work
 import { useTranslation } from 'react-i18next';
 
 /**
- * New project, plus the arrangement to open it in.
- *
- * The plain click keeps the old behaviour — a draft in whatever preset the
- * account last used — because most of the time the arrangement is not the
- * decision being made. The caret is for when it is: it names the shipped
- * layouts so starting from "Edit" does not mean opening a draft and then
- * rearranging it.
- *
- * Labels come from the shared id/label map that `layoutPresets` also builds
- * from, so the menu and the editor's preset strip cannot disagree about what a
- * layout is called — without the Launchpad having to load the preset table's
- * full widget-region snapshots. Icons are mapped locally for the same
- * reason: `resolveLayoutPresetIcon` exists for the custom-preset picker and
- * carries its whole curated catalogue.
+ * Plain clicks use the last preset; the caret chooses a built-in arrangement. Shared labels avoid drift without
+ * importing preset snapshots or the custom icon catalog.
  */
 
 const NEW_PROJECT_SEARCH = { new: true } as const;

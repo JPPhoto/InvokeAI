@@ -130,8 +130,6 @@ describe('usePreviewLoupe', () => {
     const { content, stage } = await mountHarness();
 
     await interact(() => startPinch(stage));
-    // Both fingers move outward by 50px: a 100px start becomes 200px, so the
-    // image doubles around the midpoint they started from.
     await interact(() => {
       touch(stage, 'pointermove', 1, 100, 150);
       touch(stage, 'pointermove', 2, 300, 150);
@@ -150,8 +148,6 @@ describe('usePreviewLoupe', () => {
     });
     expect(content.style.transform).toBe('translate(-200px, -150px) scale(3)');
 
-    // Sliding both fingers 40px right at the same spread pans by 40 without
-    // changing the zoom — one gesture, both transforms.
     await interact(() => {
       touch(stage, 'pointermove', 1, 90, 150);
       touch(stage, 'pointermove', 2, 390, 150);
@@ -170,8 +166,7 @@ describe('usePreviewLoupe', () => {
     });
     await interact(() => touch(stage, 'pointerup', 2, 350, 150));
 
-    // The remaining finger keeps moving from where it is — no jump back to
-    // where it first went down, and no release-and-retouch to start panning.
+    // Continue panning from the remaining finger's current position after pinch.
     await interact(() => touch(stage, 'pointermove', 1, 70, 160));
 
     expect(content.style.transform).toBe('translate(-180px, -140px) scale(3)');
@@ -180,9 +175,7 @@ describe('usePreviewLoupe', () => {
   it('does not pair a finger whose release was never seen with the next touch', async () => {
     const { content, stage } = await mountHarness();
 
-    // Belt and braces for a pointer whose end went missing entirely — the first
-    // finger of the next touch clears it, so it cannot pinch against a later
-    // one. (An ordinary release anywhere on the page is seen; see below.)
+    // Clear missed pointer endings on the next first touch to prevent phantom pinches.
     await interact(() => touch(stage, 'pointerdown', 1, 150, 150, { isPrimary: true }));
     await interact(() => touch(stage, 'pointerdown', 2, 250, 150, { isPrimary: true }));
     await interact(() => touch(stage, 'pointermove', 2, 350, 150));
@@ -194,10 +187,7 @@ describe('usePreviewLoupe', () => {
     const { content, stage } = await mountHarness();
 
     await interact(() => touch(stage, 'pointerdown', 1, 150, 150, { isPrimary: true }));
-    // The finger slides off the stage — over a neighbouring panel, which is
-    // where it now reports. Its tracked position has to follow it there, or the
-    // pinch below arms on a 100px separation instead of the real 200px and
-    // doubles every subsequent zoom.
+    // Track off-stage positions so pinch separation reflects actual finger distance.
     await interact(() => touch(stage, 'pointermove', 1, 50, 150, { target: document.body }));
     await interact(() => touch(stage, 'pointerdown', 2, 250, 150));
     await interact(() => {
@@ -217,9 +207,7 @@ describe('usePreviewLoupe', () => {
       touch(stage, 'pointermove', 2, 350, 150);
     });
     await interact(() => touch(stage, 'pointerup', 2, 350, 150));
-    // The remaining finger pans, then lifts over another panel: the stage never
-    // sees that release, so nothing there can end the pan — and a pan left
-    // armed would keep dragging the image on the next unrelated pointer move.
+    // End panning on releases outside the stage to prevent unrelated later movement from dragging media.
     await interact(() => touch(stage, 'pointerup', 1, 50, 150, { target: document.body }));
     const transformAtRelease = content.style.transform;
 

@@ -8,17 +8,8 @@ import { BlocksIcon, BrushIcon, ClapperboardIcon, ScalingIcon, TypeIcon } from '
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * "What do you want to make?", asked before "which file do you want to open?".
- *
- * Each tile opens a fresh draft already arranged for that kind of work. The
- * old frontend put this inside the editor as a per-tab panel; at the home
- * level it is the first move rather than a thing you find after arriving.
- */
-
 const TILE_COLUMNS = { base: 1, lg: 5, sm: 2 } as const;
-// Pro-app convention (see the theme's cursor tokens): tiles act like
-// controls, so they keep the arrow instead of the anchor's pointer.
+// Tiles follow the theme's control cursor convention.
 const TILE_LINK_STYLE = { cursor: 'default' } as const;
 const TILE_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
 const TILE_TRANSITION =

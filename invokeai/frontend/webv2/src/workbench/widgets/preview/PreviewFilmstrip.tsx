@@ -18,16 +18,8 @@ import { useTranslation } from 'react-i18next';
 import type { PreviewDensity } from './previewDensity';
 
 /**
- * The current board's thumbnails as a row docked under the stage — the same
- * `boardImages` the Details position counter is derived from, made spatial.
- * Live sessions lead the row in the gallery's in-progress order, one thumb
- * per GPU slot, so however many run the stage keeps one of them large and
- * the rest stay a glance (and a click) away; a session that finishes becomes
- * its image's thumb in place. It takes its own height rather than floating
- * over the media, so the fitted frame is never covered and Details has a
- * clean edge to stop above. Item thumbs are standard all-image gallery-item
- * drag sources, so they work with every existing drop target (canvas zones,
- * boards, drop-to-compare).
+ * Render board thumbnails below the stage with live GPU slots leading in gallery order and settling into result
+ * thumbnails in place. Reserve height outside media; item drag payloads work with existing gallery targets.
  */
 
 export const PreviewFilmstrip = ({
@@ -65,19 +57,14 @@ export const PreviewFilmstrip = ({
 }) => {
   const thumbSize = density === 'full' ? '12' : '8';
 
-  // A lone item has nothing to step to; a live session always earns the row,
-  // or a single running slot on an empty board would have no thumb at all.
+  // Show the strip for any live session, even on an otherwise empty board.
   if (items.length < 2 && sessions.length === 0) {
     return null;
   }
 
   return (
-    // Two containment rules keep the strip honest: the ScrollArea root's
-    // recipe defaults to `height: 100%`, so it MUST get an explicit height or
-    // it swallows the widget; and `contain: inline-size` zeroes the strip's
-    // intrinsic width so a long board can never stretch the widget wider than
-    // its panel (side panels host widgets in a grid ScrollArea.Content that
-    // otherwise grows to max-content).
+    // Set explicit ScrollArea height and inline-size containment so the strip neither consumes widget height nor
+    // expands its width.
     <Scrollable
       bg="bg.subtle"
       borderColor="border.subtle"
@@ -126,11 +113,8 @@ export const PreviewFilmstrip = ({
 };
 
 /**
- * One running, settling, or queued slot. Mirrors the gallery's in-progress
- * tile: the latest denoise frame under a progress ring, a device chip in the
- * name, `aria-current` while it is the session on the stage, and a pin in
- * place of the ring while it is pinned there — so the next click visibly
- * unpins. Only a running slot can be followed.
+ * Show live/settling/queued slots with progress, device, and selected/pinned state; only running slots can be
+ * followed.
  */
 const FilmstripLiveThumb = ({
   isFollowed,
@@ -186,9 +170,7 @@ const FilmstripLiveThumb = ({
       onFollow?.(session.id);
     }
   }, [isPinned, isRunning, onFollow, onUnpin, session.id]);
-  // Keeps the followed slot in view like the selected item thumb does, and
-  // hands focus back to the preview when the slot finishes under the
-  // keyboard — its element goes with it, and nothing else would take over.
+  // Keep the followed slot visible and restore preview focus when its thumb disappears.
   const thumbRef = useCallback(
     (node: HTMLElement | null) => {
       if (!node) {
@@ -313,8 +295,6 @@ const FilmstripThumb = ({
     },
     [item, onContextMenu]
   );
-  // Ref callbacks re-run when `isSelected` changes, keeping the selected thumb
-  // in view without an effect.
   const scrollIntoView = useCallback(
     (node: HTMLElement | null) => {
       setNodeRef(node);
@@ -342,9 +322,7 @@ const FilmstripThumb = ({
       overflow="hidden"
       position="relative"
       rounded="sm"
-      // Pan, don't drag: the strip scrolls horizontally, so a moving finger
-      // must scroll it (the hold-to-drag sensor releases the gesture when the
-      // browser claims it); dragging still works after a sustained hold.
+      // Allow horizontal touch pan; sustained holds still activate dragging.
       touchAction="pan-x"
       onClick={handleClick}
       onContextMenu={onContextMenu ? handleContextMenu : undefined}
@@ -365,11 +343,7 @@ const FILMSTRIP_CONTAIN_CSS = { contain: 'inline-size' } as const;
 /** Same touch drag cue as the gallery grid: the source thumb desaturates while dragged. */
 const FILMSTRIP_THUMB_DRAG_CSS = { filter: 'saturate(0)' } as const;
 
-/**
- * Same armed cue as the gallery grid: desaturation while a sustained touch
- * hold has armed the drag gate (before movement starts the drag). Set as
- * `data-drag-armed` by the hold-to-drag sensor.
- */
+/** Match Gallery's desaturated data-drag-armed cue before held-touch movement starts dragging. */
 const FILMSTRIP_THUMB_ARMED_CSS = { '&[data-drag-armed=true]': { filter: 'saturate(0)' } } as const;
 
 // The thumb row centers itself with `h="full"`, which needs the content

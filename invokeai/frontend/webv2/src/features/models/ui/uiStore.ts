@@ -5,19 +5,10 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
 /**
- * Session-lived UI state for the model manager. Views unmount whenever the user
- * switches launchpad tabs or detail tabs; keeping selection,
- * filters, and in-progress source forms here means nothing is forgotten when
- * they come back. Deliberately not persisted to localStorage — it resets with
- * the page, like a scroll position.
+ * Preserve manager selection, filters, and forms across view unmounts for the session; intentionally reset on page
+ * reload.
  */
 
-/**
- * The detail-pane tabs. The library list is now a persistent left column, so it
- * is no longer a tab; the install queue is a persistent detail-pane footer. What
- * remains is the selected model's detail, the unified Add Models search, and API
- * keys.
- */
 export type ModelManagerTab = 'details' | 'add' | 'keys';
 
 /** A resolved HuggingFace checkpoint-repo lookup, kept across tab switches. */
@@ -28,29 +19,13 @@ export interface HFLookupState {
 
 export interface ModelsUiSnapshot {
   activeTab: ModelManagerTab;
-  /**
-   * A pending Add Models search, handed over by a surface outside the manager
-   * (see {@link requestAddModelsSearch}). Strictly one-shot: the view takes it
-   * at mount and {@link clearAddModelsSeeds} empties it, so the box keeps its
-   * own local state and still resets when the view unmounts. `null` = nothing
-   * pending, which is not the same as a seeded empty string.
-   */
+  /** Consume Add Models search once on mount; null means no seed, distinct from a seeded empty string. */
   addModelsSeed: string | null;
-  /**
-   * A pending starter-catalog type filter, one-shot exactly like
-   * {@link ModelsUiSnapshot.addModelsSeed} — for links that know what *kind* of
-   * model is missing rather than which one.
-   */
+  /** One-shot starter type filter for links identifying a missing model kind rather than a name. */
   addModelsTypeSeed: ModelTaxonomyType | null;
   /** Model focused in the manager library's detail pane. */
   activeModelKey: string | null;
-  /**
-   * Provider whose key card should be revealed on the next render of the Keys
-   * tab, set when the user asked to configure one specific provider. One-shot
-   * like {@link ModelsUiSnapshot.addModelsSeed}: the card consumes it, so
-   * returning to the tab later lands on a quiet grid rather than replaying a
-   * highlight the user did not ask for.
-   */
+  /** Consume provider reveal once so returning to Keys does not replay an old highlight. */
   highlightProviderId: string | null;
   selectedKeys: ReadonlySet<string>;
   filters: ModelLibraryFilters;
@@ -131,13 +106,7 @@ export const openModelDetail = (modelKey: string): void => {
   updateModelsUi({ activeModelKey: modelKey, activeTab: 'details' });
 };
 
-/**
- * Open the Keys tab pointed at one provider's card.
- *
- * The tab alone is not the answer to "configure this provider" — it is a grid
- * of cards, and the one the user came for may be off-screen. Naming the
- * provider lets the card reveal itself.
- */
+/** Name the requested provider so its possibly offscreen key card can reveal itself. */
 export const openExternalProviderKeys = (providerId: string): void => {
   updateModelsUi({ activeTab: 'keys', highlightProviderId: providerId });
 };
@@ -147,26 +116,14 @@ export const clearHighlightedProvider = (): void => {
   updateModelsUi({ highlightProviderId: null });
 };
 
-/**
- * Jump to Add Models with a starter bundle preselected (e.g. from the
- * Launchpad notice). Scan and HF lookup results are cleared because Add
- * Models hides the bundle strip whenever either has results — the user asked
- * to look at the bundle.
- */
+/** Clear scan/repo results when opening a bundle because those panels otherwise hide it. */
 export const openAddModelsWithBundle = (bundleName: string): void => {
   updateModelsUi({ activeTab: 'add', hfLookup: null, scan: null, selectedBundleName: bundleName });
 };
 
 /**
- * Open Add Models searching for one model. Called just before navigating to the
- * manager from elsewhere in the app (e.g. a model a workflow needs but the
- * account does not have), so the page the user lands on is already offering the
- * thing they clicked — the installed-models list would only confirm its absence.
- *
- * Scan and HuggingFace results are cleared for the same reason
- * {@link openAddModelsWithBundle} clears them: Add Models hides the starter
- * catalog whenever either has results, and the catalog is what this search is
- * for.
+ * Seed Add Models search for external requirement links and clear scan/repo results that would hide the starter
+ * catalog.
  */
 export const requestAddModelsSearch = (query: string): void => {
   updateModelsUi({
@@ -179,12 +136,7 @@ export const requestAddModelsSearch = (query: string): void => {
   });
 };
 
-/**
- * Open Add Models with the starter catalog filtered to one model type. The same
- * navigate-from-elsewhere contract as {@link requestAddModelsSearch}, for links
- * that know what kind of model is missing (prompt expansion needs a `text_llm`)
- * rather than which one.
- */
+/** Seed the starter catalog's type filter for external links identifying a missing model kind. */
 export const requestAddModelsTypeFilter = (typeFilter: ModelTaxonomyType): void => {
   updateModelsUi({
     activeTab: 'add',
@@ -202,11 +154,7 @@ export const getAddModelsSeed = (): string => store.getSnapshot().addModelsSeed 
 /** Pure read, like {@link getAddModelsSeed}. */
 export const getAddModelsTypeSeed = (): ModelTaxonomyType | null => store.getSnapshot().addModelsTypeSeed;
 
-/**
- * Consumes the pending seeds. Silent because the only reader took them in the
- * same commit and nothing subscribes to them: a notify here would be a store
- * write whose only effect is re-rendering the view that just read it.
- */
+/** Consume seeds silently; subscribers do not read them and the mounting reader already captured them. */
 export const clearAddModelsSeeds = (): void => {
   const snapshot = store.getSnapshot();
 

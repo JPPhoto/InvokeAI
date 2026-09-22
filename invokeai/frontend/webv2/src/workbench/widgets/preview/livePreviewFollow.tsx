@@ -16,10 +16,8 @@ interface LivePreviewFollow {
   gallerySessions: QueueProgressSession[];
   pinnedSessionId: string | null;
   /**
-   * The session on screen while live-follow is on — pinned, else the running
-   * session that started last, else the first settling, in the gallery's tile
-   * order — or null. Gallery and Preview both step from it, so it is decided
-   * once, here.
+   * Shared live target: pinned, then newest-started running session, then first settling session in gallery order,
+   * else null.
    */
   followedSessionId: string | null;
   /** Turns live-follow on and pins `sessionId`: a tile click, or an arrow step onto a tile. */
@@ -60,11 +58,7 @@ export const LivePreviewFollowProvider = ({ children }: { children: ReactNode })
     setSelection({ projectId, sessionId: null });
   }
   const pinnedSessionId = isStale ? null : selection.sessionId;
-  // With several GPUs the stage follows the newest running session (highest
-  // backend item id — start order for the FIFO queue), so a busy box keeps the
-  // newest work in view without anyone choosing, and only moves at session
-  // boundaries. Following whichever slot stepped last would flip the stage
-  // several times a second (see activeProgressTargetStore). A pin wins.
+  // Follow the highest-id running session (FIFO start order), not the latest progress frame; pins take precedence.
   const newestRunningSessionId = sessions.filter((session) => session.state === 'running').at(-1)?.id ?? null;
   const preferredSessionId = pinnedSessionId ?? newestRunningSessionId;
   const followedSessionId = enabled

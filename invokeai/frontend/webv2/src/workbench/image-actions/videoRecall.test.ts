@@ -494,9 +494,7 @@ describe('model-position recall shapes', () => {
   const currentValues = { ...createDefaultVideoWidgetValues([install]) };
 
   it('promotes a legacy transformer-override recording onto the model slot before deriving the accelerator', () => {
-    // Pre model-positions metadata: the Diffusers install as `model`, the
-    // checkpoint as an override extra. The 4-step Ref2V Turbo derivation only
-    // succeeds if the promote lands first — it needs the ref2va variant.
+    // Promote the legacy transformer override before deriving Ref2V Turbo's four-step accelerator set.
     const result = buildVideoRecallSettings({
       currentValues,
       kind: 'all',
@@ -551,9 +549,7 @@ describe('model-position recall shapes', () => {
     expect(gone?.values.h3HybridBaseModel).toBeNull();
     expect(gone?.values.h3HybridStartBlock).toBe(currentValues.h3HybridStartBlock);
 
-    // A base the panel already holds does not stand in for the uninstalled recorded one: the
-    // recall reproduces the run, which cannot run that hybrid any more. Base Y's block 30 must
-    // not land on base X either.
+    // An uninstalled recorded hybrid base must not reuse the panel's base or receive its recorded blocks.
     const otherBase: MainModelConfig = { ...fl2vaBase, key: 'h3-fl2va-other', name: 'Another FL2VA' };
     const holding = { ...currentValues, h3HybridBaseModel: otherBase, h3HybridStartBlock: 12 };
     const onto = buildVideoRecallSettings({
@@ -606,8 +602,7 @@ describe('model-position recall shapes', () => {
       expect(bare?.values.h3HybridBaseModel).toBeNull();
       expect(bare?.fields).not.toContain('components');
 
-      // A recall that moves the panel to a main without the hybrid slot drops the base in the
-      // model transition; that is still this recall clearing it, so the toast says so.
+      // Report a hybrid base cleared by the model transition as cleared by recall.
       const toFl2va = buildVideoRecallSettings({
         currentValues: holding,
         kind,
@@ -656,9 +651,7 @@ describe('model-position recall shapes', () => {
     expect(result?.values.componentSourceModel?.key).toBe(install.key);
   });
   it('promotes the recorded transformer even when the recorded install itself is gone', () => {
-    // The transformer defines the run; the panel's current model (a
-    // checkpoint) stands in for the missing install and must not suppress the
-    // promote — pre-fix the references were dropped as unsupported.
+    // Promote the recorded transformer even when the missing install falls back to the panel's checkpoint.
     const panelCheckpoint: MainModelConfig = {
       base: 'minimax-h3',
       format: 'checkpoint',

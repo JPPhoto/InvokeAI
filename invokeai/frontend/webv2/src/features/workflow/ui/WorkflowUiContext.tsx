@@ -51,10 +51,7 @@ export interface WorkflowGraphPreviewPort {
   openDocumentInNewProject(document: ProjectGraphState, label: string): void; // fork a preview into a fresh project
 }
 
-/**
- * Workflow's UI port. The context is a dependency-direction port (the feature
- * may not import workbench), not a test seam; no second adapter is expected.
- */
+/** This UI port preserves dependency direction: Workflow cannot import Workbench. */
 export interface WorkflowUiAdapter {
   capabilities: WorkflowReadPort<WorkflowCapabilities>;
   preferences: WorkflowReadPort<WorkflowPreferences>;

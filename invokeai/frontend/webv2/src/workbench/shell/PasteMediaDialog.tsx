@@ -93,9 +93,8 @@ const CanvasDestinationButton = ({
 };
 
 /**
- * Destination picker for a media paste. Every choice uploads the files to the
- * gallery's current board first (the asset stays findable), then hands the
- * uploaded images on to the existing canvas-import or reference-image actions.
+ * Upload pasted media to the current board before forwarding it to canvas/reference actions so assets remain
+ * findable.
  */
 export const PasteMediaDialog = ({ request }: { request: PasteMediaRequest }) => {
   const { t } = useTranslation();

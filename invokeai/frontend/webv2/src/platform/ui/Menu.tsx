@@ -8,12 +8,7 @@ import { useRegisterWidgetOverlay } from './widgetOverlays';
 
 type MenuContentProps = ComponentProps<typeof Menu.Content>;
 
-/**
- * Menu.Content that closes with the tree that opened it. The workbench popover
- * chrome (surface, stroke, radius, shadow) is applied globally by the `menu`
- * slot-recipe override in `theme/recipes.ts`; this wrapper is the single
- * import point for menu-wide behavior.
- */
+/** Menu content closes with its owning widget; the theme recipe owns chrome. */
 export const MenuContent = (props: MenuContentProps) => {
   const menu = useMenuContext();
   const stale = useRegisterWidgetOverlay(menu.open, menu.setOpen);
@@ -86,11 +81,7 @@ export interface MenuIconItemProps {
   onSelect: () => void;
 }
 
-/**
- * An icon-only item for a menu's quick row. The tooltip wraps the icon, never
- * the item: a tooltip trigger merged onto the item replaces the id zag selects
- * by, so clicks and Enter would close the menu without firing `onSelect`.
- */
+/** Wrap the icon, not Menu.Item: tooltip IDs would replace Zag's selection ID and prevent onSelect. */
 export const MenuIconItem = ({ disabled, icon, iconFill, label, onSelect, tone, value }: MenuIconItemProps) => (
   <Menu.Item
     aria-label={label}

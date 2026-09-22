@@ -130,9 +130,8 @@ export const createDefaultUpscaleWidgetValues = (models: readonly ModelConfig[] 
 };
 
 /**
- * Heals older/partial persisted values without silently clamping invalid user
- * input. Range checks remain invocation validation so actionable errors can be
- * shown instead of changing a saved project behind the user's back.
+ * Heal partial persisted values without clamping invalid user input; invocation validation supplies actionable
+ * range errors.
  */
 export const normalizeUpscaleWidgetValues = (value: unknown): UpscaleWidgetValues | null => {
   if (!isRecord(value)) {

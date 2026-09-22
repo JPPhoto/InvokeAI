@@ -19,11 +19,7 @@ import { WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
 
 interface WidgetFailureBoundaryProps {
   children: ReactNode;
-  /**
-   * Presentation context, mirroring what `WidgetLoadingFallback` receives. When
-   * supplied, the fallback keeps the widget's own frame — panel width, overflow
-   * clamp and resize handle survive the crash. Headless hosts omit it.
-   */
+  /** Retain region framing, size, and resize handles on failure; headless hosts omit presentation context. */
   instance?: WidgetInstanceRuntimeMeta;
   presentation?: WidgetViewProps['presentation'];
   region?: WidgetViewProps['region'];
@@ -140,12 +136,7 @@ const WidgetFailureHeader = ({ label, region }: { label: string; region: WidgetV
   </Box>
 );
 
-/**
- * Presentation- and region-aware failure UI, the twin of `WidgetLoadingFallback`.
- * Rendering the bare card everywhere used to blow a crashed widget out of its
- * region: in the status bar it overflowed a 24px strip, and in a side panel it
- * destroyed the frame that carries the panel width and the resize handle.
- */
+/** Match loading-frame geometry on failure so status cards do not overflow and panels retain resizing. */
 const WidgetFailureFallback = ({
   details,
   instance,
@@ -191,8 +182,6 @@ const WidgetFailureFallback = ({
     </>
   );
 
-  // Keeping the widget's own frame is the whole point: the panel frame carries
-  // the region width, the overflow clamp and the resize handle.
   return isPanel ? (
     <WidgetPanelFrame instanceId={instance?.id} region={region} typeId={instance?.typeId}>
       {framed}

@@ -147,12 +147,7 @@ const normalizeDeveloperLogNamespaces = (values: unknown): DeveloperLogNamespace
   return DEVELOPER_LOG_NAMESPACES.filter((namespace) => enabled.has(namespace));
 };
 
-/**
- * Guards for the Launchpad library's view state. Deliberately local rather
- * than imported from the Launchpad: these settings load on every route, and a
- * value import would put launchpad view code in the editor's bundle too. The
- * types come from `contracts`, which is type-only and therefore free.
- */
+/** Keep view guards local so shared settings do not pull Launchpad code into the editor bundle. */
 const isProjectsViewId = (value: unknown): value is ProjectsViewId => value === 'grid' || value === 'list';
 
 const isProjectSortId = (value: unknown): value is ProjectSortId =>
@@ -191,10 +186,8 @@ const normalizeGenerateSectionsOpen = (values: unknown): Record<string, boolean>
 };
 
 /**
- * Shape-only: settings keeps the saved records intact and readable, and the generation
- * feature re-validates `weights` against the backend's grammar when it reads them
- * (`normalizeRebalancePresets`). Parsing here would mean importing that feature into the
- * launchpad bundle for no gain.
+ * Validate record shape here; generation validates weight grammar when reading, preserving Launchpad's bundle
+ * boundary.
  */
 const normalizeRebalancePresets = (values: unknown): StoredRebalancePreset[] => {
   if (!Array.isArray(values)) {
@@ -533,8 +526,6 @@ const resolveSettings = async (
     return backendPreferences;
   }
 
-  // First contact for this account: adopt whatever the legacy locations
-  // hold and write the new backend key once.
   const preferences =
     (await loadLegacySessionPreferences(owner)) ??
     local?.preferences ??

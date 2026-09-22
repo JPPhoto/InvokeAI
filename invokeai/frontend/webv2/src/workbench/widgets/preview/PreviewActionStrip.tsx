@@ -27,14 +27,6 @@ const STAR_LABEL_KEYS = {
   video: { off: 'widgets.preview.starVideo', on: 'widgets.preview.unstarVideo' },
 } as const;
 
-/**
- * The header's always-visible action row: Edit leads (the one verb that moves
- * the image into actual work — a menu of canvas layer destinations), then
- * compare, star, and an "image actions" dropdown that opens the full
- * right-click context menu — one source of truth for every image verb,
- * mirroring the legacy viewer's menu button. Compact densities collapse to
- * star + the dropdown. Details lives beside the toggles, not here.
- */
 export const PreviewActionStrip = ({
   actions,
   density,
@@ -94,10 +86,7 @@ export const PreviewActionStrip = ({
 
   return (
     <HStack flexShrink={0} gap="0.5">
-      {/* First and worded, not another glyph in the row: it is the strip's one
-          verb that moves the image into actual work, so it opens straight onto
-          the layer destinations. Videos have no canvas destination, so it is
-          not offered for them — the same guard the context menu uses. */}
+      {/* Lead with the labeled canvas-destination action; omit it for videos, matching context-menu eligibility. */}
       {image ? (
         <>
           <EditOnCanvasMenu onSend={sendToCanvas} />

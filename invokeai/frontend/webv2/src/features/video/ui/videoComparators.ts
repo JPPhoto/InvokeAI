@@ -1,10 +1,6 @@
 import type { VideoWidgetValues } from '@features/video/core/types';
 
-/**
- * Content comparators for the widget's memo boundaries and the mount-time
- * reconciler. The widget re-derives `values` on every patch, so equality by
- * content — not identity — decides whether a write-back or re-render is due.
- */
+/** Patches recreate values, so memo and reconciliation boundaries compare content. */
 
 const stableStringify = (value: unknown): string => JSON.stringify(value ?? null);
 

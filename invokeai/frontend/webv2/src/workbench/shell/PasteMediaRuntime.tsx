@@ -21,11 +21,8 @@ const PasteMediaDialog = lazy(() =>
 );
 
 /**
- * Turns a media paste anywhere in the workbench into a destination choice.
- * The canvas keeps its own `mod+v` (a layer from the clipboard pixels): its
- * hotkey cancels the keydown, so no paste event reaches here while the canvas
- * owns focus. Text pasted into a field and pastes inside open dialogs are never
- * intercepted.
+ * Offer destinations for workbench media paste. Canvas handles its own chord; text fields and open dialogs retain
+ * normal paste behavior.
  */
 export const PasteMediaRuntime = () => {
   const [request, setRequest] = useState<PasteMediaRequest | null>(null);

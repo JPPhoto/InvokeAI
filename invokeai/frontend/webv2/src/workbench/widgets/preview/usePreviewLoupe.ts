@@ -20,16 +20,8 @@ import {
 import { capturePointer, releasePointer, trackPointerDown } from './loupeGestures';
 
 /**
- * Lightweight zoom/pan for the preview: wheel zooms around the cursor,
- * left-drag pans, double-click toggles fit ⇄ 100%, and on a touch screen two
- * fingers pinch (zooming and panning in one gesture) while one finger pans an
- * already-zoomed image. The *stage* (the dot-grid area) is the viewport — the
- * fitted, framed image scales and pans across the whole stage and clips at its
- * edges, instead of being inspected through its own small wrapper. Implemented
- * as a CSS transform applied imperatively (rAF-batched) to the fitted content
- * box; high-frequency pointer data never passes through React state — only the
- * rounded zoom percent does, for the corner chip. `scale === 1` is "fit"; the
- * chip reports percent of the image's actual pixels.
+ * Use the whole stage for wheel zoom, drag pan, fit/100% toggle, and touch pinch. Apply rAF-batched CSS transforms
+ * outside React; publish only rounded actual-pixel zoom, with scale 1 meaning fit.
  */
 
 /** Max zoom, as a fraction of the image's actual pixel size. */
@@ -58,12 +50,7 @@ interface LoupeTransform {
   ty: number;
 }
 
-/**
- * A live two-finger pinch. Everything the gesture needs is captured when it
- * starts — the transform it grew from, the pointers' separation and midpoint,
- * and the client-space origin of the content box — so each move resolves to a
- * single transition from that origin instead of compounding deltas.
- */
+/** Capture transform, separation, midpoint, and content origin once so pinch moves resolve from a fixed baseline. */
 interface PinchGesture {
   /** Client-space position of the content box's untransformed origin. */
   originLeft: number;
@@ -109,10 +96,8 @@ export const usePreviewLoupe = ({
   const lastSourceTokenRef = useRef<string | null | undefined>(undefined);
   const [zoomState, setZoomState] = useState<PreviewZoomState>(FIT_UNMEASURED);
   const publishedRef = useRef<PreviewZoomState>(FIT_UNMEASURED);
-  // Live read ports, so the gesture math keeps one identity across images. A
-  // dependency instead would re-create the stage ref callback on every source
-  // swap, and its cleanup cancels the frame that clears the old transform —
-  // leaving the new image drawn zoomed while the readout said fit.
+  // Keep gesture/ref identity stable across images; callback cleanup must not cancel the frame clearing an old
+  // transform.
   const naturalWidthRef = useRef(naturalWidth);
   // eslint-disable-next-line react/refs
   naturalWidthRef.current = naturalWidth;
@@ -193,10 +178,8 @@ export const usePreviewLoupe = ({
   }, [getActualZoom, publish]);
 
   /**
-   * Called during render with a token identifying the displayed image (or null
-   * while the loupe is inapplicable, e.g. live frames). A token change resets
-   * the transform in place — no remount, so the img element (and its decoded
-   * pixels) survive selection changes without a flash.
+   * Reset transforms when the displayed-image token changes without remounting decoded media; null disables the
+   * loupe.
    */
   const syncDisplayedSource = (token: string | null): void => {
     if (lastSourceTokenRef.current === token) {
@@ -204,16 +187,11 @@ export const usePreviewLoupe = ({
     }
 
     lastSourceTokenRef.current = token;
-    // A gesture in flight is measured against the old image's transform and
-    // layout, so it goes even when the transform itself is already fit —
-    // otherwise it would keep zooming the new image around the old one's
-    // centre. Dropping it leaves the fresh fit alone until the fingers lift.
+    // Discard old-image gestures even at fit so remaining touches cannot transform the new image.
     panPointerRef.current = null;
     pinchRef.current = null;
     transformRef.current = { scale: 1, tx: 0, ty: 0 };
-    // Through `apply`, not a bespoke frame: the frame re-derives the style from
-    // the transform ref when it runs, so a wheel tick that lands before it
-    // still wins — and the new image's fit percent is measured once laid out.
+    // Schedule reset through apply so intervening wheel updates win and fitted percent uses current layout.
     apply();
   };
 
@@ -305,10 +283,7 @@ export const usePreviewLoupe = ({
 
   useImperativeHandle(controlsRef, () => ({ reset, zoomTo, zoomToActual }), [reset, zoomTo, zoomToActual]);
 
-  // The fitted size follows the stage, so the readout has to be re-measured
-  // whenever the content box is laid out at a new size. `apply` rather than
-  // `publish`: it re-derives the DOM transform from the transform ref too, so
-  // a re-attach can never leave the style and the readout disagreeing.
+  // Reapply transform and remeasure zoom when fitted content resizes or reattaches so DOM and readout agree.
   const contentRefCallback = useCallback(
     (node: HTMLDivElement | null) => {
       contentRef.current = node;
@@ -339,12 +314,7 @@ export const usePreviewLoupe = ({
     };
   }, []);
 
-  /**
-   * Arms a pinch on two down pointers and returns it, or null — leaving no
-   * gesture — if the stage cannot be measured or the fingers landed on the same
-   * spot. Both fingers are captured for the whole gesture, so one that strays
-   * off the stage keeps driving it instead of silently sticking.
-   */
+  /** Capture both pinch pointers; reject unavailable stage geometry or coincident fingers. */
   const beginPinch = useCallback((pointerIds: [number, number]): PinchGesture | null => {
     const stage = stageRef.current;
     const content = contentRef.current;
@@ -428,9 +398,7 @@ export const usePreviewLoupe = ({
     [beginPan, beginPinch]
   );
 
-  // The wheel listener must be attached manually with `passive: false` —
-  // React's synthetic wheel events cannot preventDefault. Ref callback with
-  // cleanup, so there is no effect to keep in sync.
+  // Attach non-passive wheel handling with ref cleanup because React synthetic wheel cannot prevent defaults.
   const stageRefCallback = useCallback(
     (node: HTMLDivElement | null) => {
       stageRef.current = node;
@@ -453,12 +421,8 @@ export const usePreviewLoupe = ({
         );
       };
 
-      // A finger only reports to the stage while it is over it (or captured by
-      // it), so a pointer that wanders onto another panel would otherwise leave
-      // the position last seen — and, if it lifts out there, the pointer itself
-      // — in the tracked set, ready to arm the next pinch from a phantom start.
-      // The document sees every pointer wherever it goes, so it is what keeps
-      // the set honest; the stage's own handlers still drive the gesture.
+      // Track pointer positions/releases document-wide so off-stage movement cannot leave phantom pinch origins;
+      // stage handlers still drive gestures.
       const handleDocumentPointerMove = (event: PointerEvent): void => {
         const pointers = pointersRef.current;
 
@@ -490,14 +454,8 @@ export const usePreviewLoupe = ({
   );
 
   /**
-   * A pinch can begin with one finger already down on the image, which dnd-kit's
-   * pointer sensor has taken as the start of dragging it out of the preview. The
-   * sensor listens for `pointercancel` on the document, so dispatching one there
-   * aborts that drag — pending or already started — without disturbing the
-   * stage's own handlers, which never see a document-targeted, non-bubbling
-   * event. Only a finger that landed on the image itself can have armed the
-   * sensor, so only then is there a drag to abandon — the event reaches every
-   * sensor on the page, and nothing else here should have to pay for it.
+   * Cancel dnd's pending/active image drag when pinch takes over using a document-targeted non-bubbling
+   * pointercancel. Only do so when a finger began on the image, leaving stage handlers untouched.
    */
   const cancelPointerDrag = (): void => {
     const stage = stageRef.current;

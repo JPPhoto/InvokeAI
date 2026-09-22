@@ -169,11 +169,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const displayBoardId = selectedItem?.boardId ?? 'none';
   const hasSelectedItem = selectedItem !== null;
   const selectedImageQuery = getGallerySelectedImageQuery(galleryValues);
-  // The gallery's live similarity search: when one is active the grid shows a
-  // ranked result set, and navigation has to walk that same list. Memoized on
-  // the raw value because parsing mints a fresh object each call, which would
-  // otherwise re-derive the whole navigation list on every unrelated gallery
-  // change (every recentImages tick during a generation, for one).
+  // Memoize parsed ranking by raw value so unrelated Gallery updates do not rebuild navigation.
   const gallerySemanticQuery = useMemo(
     () => getGallerySemanticImageQuery({ semanticImageQuery: galleryValues.semanticImageQuery }),
     [galleryValues.semanticImageQuery]
@@ -277,18 +273,8 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     return boardItems.find((item) => toGalleryItemKey(item) === selectedItemKey) ?? selectedItem;
   }, [boardItems, selectedItem, selectedItemKey]);
   const exitCompare = useCallback(() => gallery.setCompareItem(null), [gallery]);
-  // The page the item now in the compare slot was selected at, when Preview
-  // put it there by swapping. The window may not hold that item any more —
-  // swapping a top-of-board image in moves the window to the top — so a swap
-  // back could only guess at its page. This is not a guess: it is the window
-  // the item was navigated in, and restoring it puts the arrows back where
-  // they were before the first swap. A page names a window of ONE query,
-  // though: restored into a different board, view, order, mode or search it
-  // would anchor that listing 1800 rows down around an image from another,
-  // so the memo is only honoured in the query it was recorded in — and only
-  // while the item is still in that query's board. Moving the compare image
-  // to another board re-boards it in place without touching the selection's
-  // query, so the key alone would still match.
+  // Remember the comparison item's original page for swap-back, but only within its original query and board. Item
+  // moves can invalidate the page without changing query identity.
   const swappedOutRef = useRef<{ boardId: string; key: GalleryItemKey; page: number; queryKey: string } | null>(null);
   const swapCompareImages = useCallback(() => {
     if (selectedItem?.kind === 'image' && compareImage) {
@@ -379,17 +365,13 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   );
   const isFilmstripVisible = getPreviewFilmstripVisible(previewValues);
 
-  // Drop-to-compare: any all-image gallery-item drag dropped on the frame's drop zone
-  // arms that image for comparison. The drag payload only carries names, so
-  // the full contract is fetched before dispatching.
+  // Hydrate dropped image names before arming comparison with a complete item contract.
   const handleCompareDrop = useCallback(
     (event: DragEndEvent) => {
       if (selectedItem?.kind !== 'image') {
         return;
       }
 
-      // The image on screen is refused, so this can never resolve to the
-      // selection itself.
       const resolution = resolvePreviewCompareDrop(
         event.active.data.current,
         event.over?.data.current ?? null,
@@ -452,10 +434,8 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
   const headerItemName = shouldFollowLive ? null : (selectedItem?.name ?? null);
 
-  // Publish the header chrome context (the "[board] / [image]" label and the
-  // action strip's image + actions) for the widget frame; the chrome renders
-  // outside this view, so an external store is the sync channel. Cleared on
-  // unmount so stale chrome never outlives us.
+  // Publish selection/actions to hoisted chrome through an external store; clear on unmount to prevent stale
+  // headers.
   const filmstrip = useMemo<PreviewFilmstripProps | null>(
     () =>
       isFilmstripVisible && density !== 'minimal'
@@ -578,16 +558,12 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   }, [runtime.commands, runtime.hotkeys, selectedItem?.kind, t]);
 
   return (
-    // No padding and no inner card: the dot-grid surface is the widget floor
-    // and runs to every edge. `containerType` anchors the details panel's
-    // `cqh` cap to the widget rather than the viewport.
+    // Let the dot grid fill the widget; containerType bounds Details cqh sizing to this surface.
     <Box ref={rootRef} containerType="size" h="full" position="relative" w="full">
-      {/* Floated, the window is usually parked over a maximized work surface
-          or on another display, where the top bar's rail is out of view — so
-          the window that shows the result also shows that it is coming. It
-          overlays the body's top edge, directly under the title bar's divider,
-          so appearing costs no reflow. Docked, the top bar's rail is in view
-          and a second one would only be noise. */}
+      {/*
+       * Show progress beneath floating Preview's title bar when the main topbar may be out of view; overlay it
+       * without reflow.
+       */}
       {region === 'floating' ? <QueueProgressRail css={FLOATING_RAIL_SX} /> : null}
       {/* Single always-mounted keyboard boundary: DOM focus survives swaps
           between the live, selected, and compare branches, so arrow
@@ -679,9 +655,7 @@ const SelectedImagePreview = ({
     () => (previewImage ? { itemKey: toGalleryItemKey(item), kind: 'image', source: previewImage } : null),
     [item, previewImage]
   );
-  // The last denoise frame of the run that produced this image, when it finished
-  // moments ago: painted over the finished image until that has decoded, so the
-  // denoise→done boundary changes only the pixels inside the frame.
+  // Bridge finished-image decoding with its run's final denoise frame so only pixels change at completion.
   const swapProgressImage = useQueueItemSwapProgressImage(item.sourceQueueItemId, item.name);
   const holdSource = useMemo(
     () => progressImageToStreamingSource(swapProgressImage, item.name),
@@ -752,14 +726,8 @@ interface SelectedMediaPreviewProps {
 }
 
 /**
- * The one media arrangement, shared by selected items and the live preview:
- * the stage fills, and the filmstrip docks under it as a row of its own, so
- * toggling the strip refits the media rather than covering it. Live and
- * finished renders MUST pass through the same scaffold — the denoise→done
- * boundary may change only the pixels inside the frame, never the geometry
- * around it. Several live sessions are the filmstrip's leading thumbs, never
- * a grid: the stage shows one of them large and the strip keeps the rest in
- * reach.
+ * Use the same stage/filmstrip scaffold for live and finished media so completion changes pixels, not geometry;
+ * multiple sessions remain filmstrip choices.
  */
 const PreviewMediaScaffold = ({ children }: { children: ReactNode }) => (
   <Flex direction="column" h="full" minH="0" position="relative" w="full">
@@ -822,12 +790,7 @@ const SelectedMediaPreview = ({
   </PreviewMediaScaffold>
 );
 
-/**
- * The single-session live preview: the denoise stream rendered exactly like a
- * finished item — same scaffold, same frame chrome, no badge — so the moment
- * generation completes, only the pixels change. Saved-image navigation
- * remains in the filmstrip.
- */
+/** Match finished-frame geometry for live previews; saved-image navigation stays in the filmstrip. */
 const LivePreview = ({
   density,
   filmstrip,
@@ -839,9 +802,7 @@ const LivePreview = ({
   placeholder: QueueActiveSession;
   shouldAntialiasProgressImage: boolean;
 }) => {
-  // The followed slot's own frame, not the store-wide latest: with two slots
-  // live (a long video next to a quick image batch) the latest belongs to
-  // whichever stepped last, and releasing that slot must not blank this one.
+  // Use the followed slot's own frame so another slot's progress or release cannot replace it.
   const progressImage = useQueueItemProgressImage(placeholder.queueItemId, placeholder.itemIndex);
   // The previous slot's last frame stands in until this slot produces one of
   // its own (model load, text encoding) — otherwise a sequential batch drops
