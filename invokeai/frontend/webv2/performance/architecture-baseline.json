@@ -930,6 +930,7 @@
           "source:src/workbench/shell/CenterArea.tsx",
           "source:src/workbench/shell/DocumentTitleProgress.tsx",
           "source:src/workbench/shell/Panels.tsx",
+          "source:src/workbench/shell/PasteMediaRuntime.tsx",
           "source:src/workbench/shell/ProjectConflictBanner.tsx",
           "source:src/workbench/shell/QueueRecoveryBanner.tsx",
           "source:src/workbench/shell/StatusBar.tsx",

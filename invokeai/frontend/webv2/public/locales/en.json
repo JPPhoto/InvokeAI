@@ -1862,7 +1862,20 @@
     "deleteLayoutPresetBody": "Delete \"{{name}}\"? This only removes the saved preset.",
     "deleteLayoutPresetQuestion": "Delete layout preset?",
     "layoutPresetName": "Preset name",
-    "renameLayoutPreset": "Rename layout preset"
+    "renameLayoutPreset": "Rename layout preset",
+    "pasteMedia": {
+      "title_one": "Pasted file",
+      "title_other": "Pasted files",
+      "description_one": "Choose where the pasted file should go.",
+      "description_other": "Choose where the {{count}} pasted files should go.",
+      "gallery": "Upload to Gallery",
+      "canvasHeading": "Add to Canvas as",
+      "reference": "Use as Reference Image",
+      "videosGalleryOnly": "Videos are uploaded to the gallery only.",
+      "imagePreview": "Pasted image {{index}}",
+      "videoPreview": "Pasted video {{index}}",
+      "morePreviews": "+{{count}} more"
+    }
   },
   "widgets": {
     "actionsLabel": "{{label}} actions",

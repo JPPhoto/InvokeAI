@@ -53,6 +53,7 @@ import {
 } from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
+import { PasteMediaRuntime } from './PasteMediaRuntime';
 import { ProjectConflictBanner } from './ProjectConflictBanner';
 import { QueueRecoveryBanner } from './QueueRecoveryBanner';
 import { StatusBar } from './StatusBar';
@@ -348,6 +349,7 @@ export const WorkbenchShell = () => {
         </Flex>
         <FloatingWidgetLayer />
         <GalleryDragCursor />
+        <PasteMediaRuntime />
         {/* The overlay renders whenever anything is being dragged, even with no
             preview to show — and it is a fixed, full-size div over the dragged
             element. Without this it swallows every pointer event aimed at what
