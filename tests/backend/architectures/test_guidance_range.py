@@ -61,6 +61,9 @@ NO_GUIDANCE_SLIDER = frozenset(
         BaseModelType.MiniMaxH3,
         # A second pass over someone else's latents rather than a model you generate with.
         BaseModelType.StableDiffusionXLRefiner,
+        # Its denoise node (and the guidance field the slider would reach) lands with the LTX-2
+        # generation nodes; the model-manager foundation declares no range until then.
+        BaseModelType.LTX2,
     }
 )
 

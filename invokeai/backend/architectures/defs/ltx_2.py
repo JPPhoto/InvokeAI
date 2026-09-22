@@ -1,0 +1,41 @@
+"""What the ltx-2 architecture declares."""
+
+from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
+from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
+from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
+from invokeai.backend.architectures.facets.latent_space import LTX2_128, LatentSpaceFacet
+from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
+from invokeai.backend.architectures.registry import register
+from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
+from invokeai.backend.model_manager.taxonomy import BaseModelType, LTX2VariantType, ModelType
+from invokeai.backend.stable_diffusion.diffusion.conditioning_data import LTX2ConditioningInfo
+
+register(
+    BaseModelType.LTX2,
+    LatentSpaceFacet(LTX2_128),
+    ConditioningFacet(LTX2ConditioningInfo),
+    # Dev samples a guided ~40-step flow schedule (video CFG 3.0); Distilled runs a fixed 8-sigma
+    # schedule with guidance off, so cfg_scale 1.0 means "none". 1280x704 is a 32-multiple 16:9
+    # canvas that a 121-frame clip fits on one 48 GB card at.
+    DefaultSettingsFacet(
+        {
+            LTX2VariantType.Distilled: MainModelDefaultSettings(steps=8, cfg_scale=1.0, width=1280, height=704),
+            None: MainModelDefaultSettings(steps=40, cfg_scale=3.0, width=1280, height=704),
+        }
+    ),
+    # Video only in this version: text-to-video and first-frame image-to-video, with synchronized
+    # audio generated alongside. Keyframes, extension and the audio/video-conditioned modes follow.
+    ModalityFacet(frozenset({"t2v", "i2v"}), metadata_slug="ltx2"),
+    FeaturesFacet(
+        # The negative prompt only reaches the model through classifier-free guidance, which the
+        # distilled variant runs without.
+        negative_prompt=NegativePrompt(visible=True, usage="cfg-gated"),
+        # The VAE's 32x spatial compression at patch size 1.
+        dimension_grid=32,
+        guidance_label="CFG",
+        # No guidance range yet: `ltx2_denoise` (and the slider that reaches it) lands with the
+        # generation nodes, which is where the range is declared and checked.
+    ),
+    VariantFacet({ModelType.Main: LTX2VariantType}),
+)

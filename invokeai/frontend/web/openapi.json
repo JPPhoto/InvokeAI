@@ -1396,6 +1396,9 @@
                       "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                     },
                     {
@@ -1436,6 +1439,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -1652,6 +1658,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -1836,6 +1845,9 @@
                       "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                     },
                     {
@@ -1876,6 +1888,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -2092,6 +2107,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -2276,6 +2294,9 @@
                       "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                     },
                     {
@@ -2316,6 +2337,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -2532,6 +2556,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -2761,6 +2788,9 @@
                       "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                     },
                     {
@@ -2801,6 +2831,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -3017,6 +3050,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -3273,6 +3309,9 @@
                       "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                     },
                     {
@@ -3313,6 +3352,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -3529,6 +3571,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -4639,6 +4684,9 @@
                       "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                     },
                     {
@@ -4679,6 +4727,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -4895,6 +4946,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -17225,6 +17279,9 @@
             "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
           },
           {
+            "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+          },
+          {
             "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
           },
           {
@@ -17265,6 +17322,9 @@
           },
           {
             "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+          },
+          {
+            "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
           },
           {
             "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -17481,6 +17541,9 @@
           },
           {
             "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+          },
+          {
+            "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
           },
           {
             "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -18056,6 +18119,7 @@
           "krea-2",
           "wan",
           "minimax-h3",
+          "ltx-2",
           "unknown"
         ],
         "title": "BaseModelType",
@@ -25830,6 +25894,8 @@
                   "wan_extend_video",
                   "minimax_h3_t2v",
                   "minimax_h3_i2v",
+                  "ltx2_t2v",
+                  "ltx2_i2v",
                   "minimax_h3_lf2v",
                   "minimax_h3_flf2v",
                   "minimax_h3_extend_video",
@@ -39034,6 +39100,155 @@
         ],
         "title": "Gemma2Encoder_Gemma2Encoder_Config",
         "description": "Standalone Gemma-2 causal LM directory used as a text encoder by PiD.\n\nExpected directory layout (HuggingFace `from_pretrained`-compatible)::\n\n    <model_root>/\n        config.json             # architectures: [\"Gemma2ForCausalLM\"]\n        tokenizer.json\n        tokenizer_config.json\n        model-*.safetensors     # or model.safetensors / *.bin"
+      },
+      "Gemma4Encoder_Gemma4Encoder_LTX2_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "base": {
+            "type": "string",
+            "const": "ltx-2",
+            "title": "Base",
+            "default": "ltx-2"
+          },
+          "type": {
+            "type": "string",
+            "const": "gemma4_encoder",
+            "title": "Type",
+            "default": "gemma4_encoder"
+          },
+          "format": {
+            "type": "string",
+            "const": "gemma4_encoder",
+            "title": "Format",
+            "default": "gemma4_encoder"
+          },
+          "subfolder": {
+            "type": "string",
+            "title": "Subfolder",
+            "description": "Directory inside the model folder that holds config, tokenizer and weights ('' = the root).",
+            "default": ""
+          },
+          "weight_file": {
+            "type": "string",
+            "title": "Weight File",
+            "description": "The weight file inside `subfolder` the encoder loads from."
+          },
+          "cpu_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Only",
+            "description": "Whether this model should run on CPU only"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "base",
+          "type",
+          "format",
+          "subfolder",
+          "weight_file",
+          "cpu_only"
+        ],
+        "title": "Gemma4Encoder_Gemma4Encoder_LTX2_Config",
+        "description": "The LTX-2.5 Gemma-4-12B text encoder as a folder (config, tokenizer, one weight file)."
       },
       "GeneratePasswordResponse": {
         "properties": {
@@ -57747,6 +57962,12 @@
         "title": "LLMTaskProgressEvent",
         "type": "object"
       },
+      "LTX2VariantType": {
+        "type": "string",
+        "enum": ["ltx2_dev", "ltx2_distilled"],
+        "title": "LTX2VariantType",
+        "description": "LTX-2 transformer variants. Dev and Distilled are key-for-key identical checkpoints of the same\narchitecture; the variant decides the sampling recipe (guided ~40-step schedule vs the fixed\n8-sigma distilled schedule with CFG off), so it must travel with the model record.\n\nValues carry the family prefix because variant values are globally unique across enums\n(`FluxVariantType.Dev` already owns \"dev\")."
+      },
       "LaMaInfillInvocation": {
         "category": "inpaint",
         "class": "invocation",
@@ -63910,6 +64131,181 @@
         "title": "Main_Checkpoint_Krea2_Config",
         "description": "Model config for Krea-2 single-file checkpoint models (safetensors, etc)."
       },
+      "Main_Checkpoint_LTX2_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "type": {
+            "type": "string",
+            "const": "main",
+            "title": "Type",
+            "default": "main"
+          },
+          "trigger_phrases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Phrases",
+            "description": "Set of trigger phrases for this model"
+          },
+          "default_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainModelDefaultSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default settings for this model"
+          },
+          "config_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Path",
+            "description": "Path to the config for this model, if any."
+          },
+          "base": {
+            "type": "string",
+            "const": "ltx-2",
+            "title": "Base",
+            "default": "ltx-2"
+          },
+          "format": {
+            "type": "string",
+            "const": "checkpoint",
+            "title": "Format",
+            "default": "checkpoint"
+          },
+          "variant": {
+            "$ref": "#/components/schemas/LTX2VariantType"
+          },
+          "generation": {
+            "type": "string",
+            "title": "Generation",
+            "description": "The LTX-2 generation the transformer belongs to, e.g. '2.5'."
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "type",
+          "trigger_phrases",
+          "default_settings",
+          "config_path",
+          "base",
+          "format",
+          "variant",
+          "generation"
+        ],
+        "title": "Main_Checkpoint_LTX2_Config",
+        "description": "An LTX-2 single-file transformer (safetensors) in the official key layout.\n\nCovers the bf16, Comfy ``int8_tensorwise``(+convrot) and ``nvfp4`` releases; the quantization\nscheme is read from the file's own markers by the loader, not recorded here. The file may hold\nonly the transformer (the 2.5 releases) or bundle other components beside it (earlier\ngenerations) -- either way everything else comes from an installed LTX-2 component folder.\n\nDev and Distilled transformers are key-for-key identical, so the FILENAME is the variant\nclassifier and ``variant`` is the user-correctable override for renamed files. A misclassified\nvariant runs but samples with the wrong recipe (guided schedule vs fixed distilled sigmas)."
+      },
       "Main_Checkpoint_MiniMaxH3_Config": {
         "properties": {
           "key": {
@@ -66247,6 +66643,189 @@
         ],
         "title": "Main_Diffusers_Krea2_Config",
         "description": "Model config for Krea-2 diffusers models (Krea-2-Turbo)."
+      },
+      "Main_Diffusers_LTX2_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "type": {
+            "type": "string",
+            "const": "main",
+            "title": "Type",
+            "default": "main"
+          },
+          "trigger_phrases": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "uniqueItems": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Phrases",
+            "description": "Set of trigger phrases for this model"
+          },
+          "default_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainModelDefaultSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default settings for this model"
+          },
+          "format": {
+            "type": "string",
+            "const": "diffusers",
+            "title": "Format",
+            "default": "diffusers"
+          },
+          "repo_variant": {
+            "$ref": "#/components/schemas/ModelRepoVariant",
+            "default": ""
+          },
+          "base": {
+            "type": "string",
+            "const": "ltx-2",
+            "title": "Base",
+            "default": "ltx-2"
+          },
+          "variant": {
+            "$ref": "#/components/schemas/LTX2VariantType"
+          },
+          "generation": {
+            "type": "string",
+            "title": "Generation",
+            "description": "The LTX-2 generation the folder's files belong to, e.g. '2.5'."
+          },
+          "components": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Components",
+            "description": "Component role -> weight file name inside the folder."
+          },
+          "components_only": {
+            "type": "boolean",
+            "title": "Components Only",
+            "description": "Whether the folder holds only the shared components (VAEs, vocoder, connectors, upsamplers) without a transformer - the transformer must then be supplied as a single-file selection at generation time.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "type",
+          "trigger_phrases",
+          "default_settings",
+          "format",
+          "repo_variant",
+          "base",
+          "variant",
+          "generation",
+          "components",
+          "components_only"
+        ],
+        "title": "Main_Diffusers_LTX2_Config",
+        "description": "An LTX-2 folder of per-component single files in the official key layout.\n\nThis is how the ``DeepBeepMeep/LTX-2`` mirror distributes LTX-2.5: one safetensors per component\nrather than a diffusers ``model_index.json`` tree. (The official ``Lightricks/LTX-2.5`` files use\nthe same layout for the VAEs, upsamplers and transformer, but keep the connectors inside the\ntransformer file and the text projection inside the text-encoder file; a folder of official files\ntherefore lacks a text-projection component in this version.) The folder is\nthe *component source* of a generation -- video VAE, audio VAE, vocoder, text projection, the two\ntext connectors and the latent upsamplers -- while the 22B transformer normally comes from a\nsingle-file record selected in the model loader (bf16, int8-convrot or nvfp4). A folder that\nalso holds a transformer file is a full install.\n\n``components`` maps each role (see ``invokeai.backend.ltx2.checkpoint_layout``) to the file in the\nfolder that carries it, so the loader never re-classifies at generation time."
       },
       "Main_Diffusers_MiniMaxH3_Config": {
         "properties": {
@@ -76167,6 +76746,7 @@
           "mistral_encoder",
           "wan_t5_encoder",
           "gemma2_encoder",
+          "gemma4_encoder",
           "bnb_quantized_int8b",
           "bnb_quantized_nf4b",
           "gguf_quantized",
@@ -76457,6 +77037,9 @@
                 "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
               },
               {
+                "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
               },
               {
@@ -76497,6 +77080,9 @@
               },
               {
                 "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
               },
               {
                 "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -76713,6 +77299,9 @@
               },
               {
                 "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
               },
               {
                 "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -77143,6 +77732,9 @@
                     "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                   },
                   {
+                    "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                  },
+                  {
                     "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                   },
                   {
@@ -77183,6 +77775,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                   },
                   {
                     "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -77399,6 +77994,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                   },
                   {
                     "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -77714,6 +78312,9 @@
                 "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
               },
               {
+                "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
               },
               {
@@ -77754,6 +78355,9 @@
               },
               {
                 "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
               },
               {
                 "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -77970,6 +78574,9 @@
               },
               {
                 "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
               },
               {
                 "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -78141,6 +78748,9 @@
                 "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
               },
               {
+                "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
               },
               {
@@ -78181,6 +78791,9 @@
               },
               {
                 "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
               },
               {
                 "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -78397,6 +79010,9 @@
               },
               {
                 "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
               },
               {
                 "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -78826,6 +79442,9 @@
                 "$ref": "#/components/schemas/MiniMaxH3VariantType"
               },
               {
+                "$ref": "#/components/schemas/LTX2VariantType"
+              },
+              {
                 "$ref": "#/components/schemas/MistralVariantType"
               },
               {
@@ -78974,6 +79593,7 @@
           "mistral_encoder",
           "wan_t5_encoder",
           "gemma2_encoder",
+          "gemma4_encoder",
           "spandrel_image_to_image",
           "siglip",
           "flux_redux",
@@ -79044,6 +79664,9 @@
                   "$ref": "#/components/schemas/Main_Diffusers_MiniMaxH3_Config"
                 },
                 {
+                  "$ref": "#/components/schemas/Main_Diffusers_LTX2_Config"
+                },
+                {
                   "$ref": "#/components/schemas/Main_Checkpoint_SD1_Config"
                 },
                 {
@@ -79084,6 +79707,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/Main_Checkpoint_MiniMaxH3_Config"
+                },
+                {
+                  "$ref": "#/components/schemas/Main_Checkpoint_LTX2_Config"
                 },
                 {
                   "$ref": "#/components/schemas/Main_BnBNF4_FLUX_Config"
@@ -79300,6 +79926,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/Gemma2Encoder_Gemma2Encoder_Config"
+                },
+                {
+                  "$ref": "#/components/schemas/Gemma4Encoder_Gemma4Encoder_LTX2_Config"
                 },
                 {
                   "$ref": "#/components/schemas/Gemma2Encoder_GGUF_Config"
@@ -91649,6 +92278,9 @@
                 "$ref": "#/components/schemas/MiniMaxH3VariantType"
               },
               {
+                "$ref": "#/components/schemas/LTX2VariantType"
+              },
+              {
                 "$ref": "#/components/schemas/MistralVariantType"
               },
               {
@@ -91828,6 +92460,9 @@
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3VariantType"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2VariantType"
               },
               {
                 "$ref": "#/components/schemas/MistralVariantType"
@@ -93037,6 +93672,10 @@
           "vae_decoder",
           "vae_encoder",
           "audio_vae",
+          "vocoder",
+          "connectors",
+          "latent_upsampler",
+          "temporal_latent_upsampler",
           "scheduler",
           "safety_checker"
         ],
@@ -93089,6 +93728,9 @@
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3VariantType"
+              },
+              {
+                "$ref": "#/components/schemas/LTX2VariantType"
               },
               {
                 "$ref": "#/components/schemas/MistralVariantType"
