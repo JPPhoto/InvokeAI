@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import legacyBaseline from './__fixtures__/legacyTokenBaseline.json';
-import { CONSUMER_TOKENS, resolveToken, THEMES, type TokenSystem } from './__tokenResolve';
+import { CONSUMER_TOKENS, resolveToken, THEME_SELECTORS, THEMES, type TokenSystem } from './__tokenResolve';
 import { progressCircleSlotRecipe } from './recipes';
 import { system } from './system';
+import { THEMES as THEME_DEFINITIONS } from './themes';
 
 const sys = system as unknown as TokenSystem;
 const STEPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950] as const;
@@ -31,6 +32,10 @@ describe('color token contract — legacy-value gate', () => {
 });
 
 describe('ramp + mapping structure', () => {
+  it('resolves every registered theme (a theme missing from THEME_SELECTORS would skip the gate)', () => {
+    expect(Object.keys(THEME_SELECTORS)).toEqual(THEME_DEFINITIONS.map((theme) => theme.id));
+  });
+
   it('emits every neutral ramp step for every theme', () => {
     for (const theme of THEMES) {
       for (const step of STEPS) {
@@ -57,7 +62,7 @@ describe('ramp + mapping structure', () => {
 
   it('uses pure black/white low-opacity image outlines by color mode', () => {
     expect(resolveToken(sys, 'light', 'border.image')).toBe('oklch(0 0 0 / 0.1)');
-    for (const theme of ['classic', 'osakaJade', 'mono', 'ultradark']) {
+    for (const theme of ['classic', 'osakaJade', 'mono', 'ultradark', 'catppuccinMocha']) {
       expect(resolveToken(sys, theme, 'border.image')).toBe('oklch(1 0 0 / 0.1)');
     }
   });

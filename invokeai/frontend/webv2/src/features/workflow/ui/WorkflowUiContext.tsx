@@ -1,5 +1,6 @@
 import type { ForLoopValidationReason } from '@features/workflow/core/forLoops';
 import type { ProjectGraphState } from '@features/workflow/core/types';
+import type { WorkbenchThemeId } from '@theme/themes';
 import type { ReactNode } from 'react';
 
 import { useExternalStoreSelector, type EqualityFn } from '@platform/state/selectors';
@@ -15,7 +16,7 @@ import type {
 
 export interface WorkflowPreferences {
   reduceMotion: boolean;
-  themeId: 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
+  themeId: WorkbenchThemeId;
   workflowEdgeStyle: 'curved' | 'square';
   workflowEdgesBehindNodes: boolean;
   workflowShowMinimap: boolean;

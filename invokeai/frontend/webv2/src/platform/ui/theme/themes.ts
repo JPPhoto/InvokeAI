@@ -1,4 +1,4 @@
-export type WorkbenchThemeId = 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
+export type WorkbenchThemeId = 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark' | 'catppuccinMocha';
 
 /**
  * Steps of the neutral ramp. `50` is the lightest, `950` the darkest — the same
@@ -195,6 +195,38 @@ const ultradark: ThemeColors = {
   control: 'oklch(19% 0.004 250)',
 };
 
+// Catppuccin Mocha (https://catppuccin.com), converted from the published sRGB
+// hex values. The ramp is the palette's own neutral ladder — Crust/Mantle/Base as
+// the app, subtle and panel surfaces, Surface0–2 for controls and borders,
+// Overlay/Subtext/Text for foregrounds — so every step is a palette color.
+// Mauve carries the brand, Blue the accent.
+const catppuccinMocha: ThemeColors = {
+  neutral: {
+    50: 'oklch(87.87% 0.0426 272.28)', // Text
+    100: 'oklch(81.68% 0.0403 272.86)', // Subtext1
+    200: 'oklch(75.1% 0.0396 273.93)', // Subtext0
+    300: 'oklch(68.65% 0.0374 274.73)', // Overlay2
+    400: 'oklch(61.76% 0.0367 276)', // Overlay1
+    500: 'oklch(47.65% 0.034 278.64)', // Surface2
+    600: 'oklch(40.37% 0.032 280.15)', // Surface1
+    700: 'oklch(32.4% 0.0319 281.98)', // Surface0
+    800: 'oklch(24.29% 0.0304 283.91)', // Base
+    900: 'oklch(21.55% 0.0254 284.06)', // Mantle
+    950: 'oklch(18.28% 0.0204 284.2)', // Crust
+  },
+  brand: { solid: 'oklch(78.71% 0.1187 304.77)', contrast: 'oklch(18.28% 0.0204 284.2)' }, // Mauve on Crust
+  accent: { solid: 'oklch(76.64% 0.1113 259.88)', contrast: 'oklch(18.28% 0.0204 284.2)' }, // Blue on Crust
+  danger: 'oklch(75.56% 0.1297 2.76)', // Red
+  success: 'oklch(85.77% 0.1092 142.72)', // Green
+  warning: 'oklch(82.37% 0.1015 52.63)', // Peach
+  inset: 'oklch(18.28% 0.0204 284.2)', // Crust
+  // The palette has no step between Surface0 and Surface1; the fill sits at
+  // their midpoint so ghost hovers and subtle badges stay visible on controls.
+  fill: 'oklch(36.4% 0.0319 281.06)',
+  grid: 'oklch(40.37% 0.032 280.15)', // Surface1
+  control: 'oklch(32.4% 0.0319 281.98)', // Surface0
+};
+
 /**
  * Theme registry. Order here is the display order in the Settings picker.
  * `THEMES` is the single source of truth consumed by both the token builder
@@ -216,11 +248,11 @@ export const THEMES: ThemeDefinition[] = [
     colors: light,
   },
   {
-    id: 'osakaJade',
-    label: 'Osaka Jade',
-    description: 'Deep jade stone with a cool green accent.',
+    id: 'ultradark',
+    label: 'Ultra Dark',
+    description: 'Pure-black OLED surfaces for low-light rooms.',
     colorScheme: 'dark',
-    colors: osakaJade,
+    colors: ultradark,
   },
   {
     id: 'mono',
@@ -230,11 +262,18 @@ export const THEMES: ThemeDefinition[] = [
     colors: mono,
   },
   {
-    id: 'ultradark',
-    label: 'Ultra Dark',
-    description: 'Pure-black OLED surfaces for low-light rooms.',
+    id: 'osakaJade',
+    label: 'Osaka Jade',
+    description: 'Deep jade stone with a cool green accent.',
     colorScheme: 'dark',
-    colors: ultradark,
+    colors: osakaJade,
+  },
+  {
+    id: 'catppuccinMocha',
+    label: 'Catppuccin Mocha',
+    description: 'Soothing pastel accents on deep violet-gray surfaces.',
+    colorScheme: 'dark',
+    colors: catppuccinMocha,
   },
 ];
 
