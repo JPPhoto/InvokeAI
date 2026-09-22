@@ -3,7 +3,7 @@ import type { GalleryImageItem, GalleryVideoItem } from '@features/gallery';
 import type * as queueDevicesModule from '@features/queue/devices';
 import type { ImageActions } from '@workbench/image-actions';
 
-import { Box, ChakraProvider, Text } from '@chakra-ui/react';
+import { Box, ChakraProvider } from '@chakra-ui/react';
 import { DndContext, PointerSensor, useDndMonitor, useSensor, useSensors, type DragStartEvent } from '@dnd-kit/core';
 import { system } from '@theme/system';
 import { createInstance } from 'i18next';
@@ -11,10 +11,10 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 
 import { PreviewActionStrip } from './PreviewActionStrip';
 import { PreviewFilmstrip } from './PreviewFilmstrip';
-import { PreviewFooter } from './PreviewFooter';
 import { LivePreviewTile } from './PreviewWidgetView';
 
 const sharedImage: GalleryImageItem = {
@@ -95,15 +95,21 @@ void i18n.use(initReactI18next).init({
       translation: {
         common: { countOfTotal: '{{count}} of {{total}}', edit: 'Edit', generating: 'Generating' },
         widgets: {
+          canvas: { import: { control: 'Control Layer', raster: 'Raster Layer' } },
           preview: {
             copyCurrentFrame: 'Copy Current Frame',
+            details: 'Details',
             editOnCanvas: 'Edit on Canvas',
             framesPerSecond: '{{count}} fps',
+            imageActions: 'Image actions',
             itemCount_one: '{{count}} item',
             itemCount_other: '{{count}} items',
-            nextItemInBoard: 'Next item in board',
-            previousItemInBoard: 'Previous item in board',
-            videoDetails: 'Video Details',
+            selectForCompare: 'Select for Compare',
+            sendToCanvas: 'Send to Canvas',
+            starImage: 'Star image',
+            starVideo: 'Star video',
+            unstarImage: 'Unstar image',
+            unstarVideo: 'Unstar video',
             videoDuration: 'Duration {{duration}}',
           },
           queue: {
@@ -268,6 +274,38 @@ describe('PreviewFilmstrip mixed media', () => {
     expect(onSelect).toHaveBeenCalledWith(sharedVideo);
   });
 
+  it('opens the image context menu for a thumb and arms a comparison on alt-click', async () => {
+    const onSelect = vi.fn();
+    const onCompare = vi.fn();
+    const onContextMenu = vi.fn();
+
+    await render(
+      <DndContext>
+        <PreviewFilmstrip
+          density="full"
+          items={[sharedImage, sharedVideo]}
+          selectedItemKey="video:shared"
+          onCompare={onCompare}
+          onContextMenu={onContextMenu}
+          onSelect={onSelect}
+        />
+      </DndContext>
+    );
+    const imageButton = host!.querySelector<HTMLButtonElement>('[aria-label="shared"]')!;
+
+    const contextEvent = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+    await interact(() => imageButton.dispatchEvent(contextEvent));
+    expect(contextEvent.defaultPrevented).toBe(true);
+    expect(onContextMenu).toHaveBeenCalledExactlyOnceWith(sharedImage, 40, 50);
+
+    await interact(() => imageButton.dispatchEvent(new MouseEvent('click', { altKey: true, bubbles: true })));
+    expect(onCompare).toHaveBeenCalledExactlyOnceWith(sharedImage);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    await interact(() => imageButton.click());
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(sharedImage);
+  });
+
   it('drags a video poster with a qualified filmstrip id and video ref payload', async () => {
     await render(<FilmstripDragHarness />);
 
@@ -318,80 +356,13 @@ describe('PreviewFilmstrip mixed media', () => {
   });
 });
 
-describe('Preview mixed media footer and actions', () => {
-  it('uses the readable muted foreground for compact image and video footer text', async () => {
-    for (const item of [sharedImage, sharedVideo]) {
-      await render(
-        <>
-          <Text color="fg.muted" data-testid="expected-muted">
-            Expected muted
-          </Text>
-          <PreviewFooter
-            boardItemCount={3}
-            isLoadingBoard={false}
-            isMetadataOpen={false}
-            media={{ actionImage: null, actions: {} as ImageActions, item, kind: 'item' }}
-            selectedIndex={1}
-            onNext={() => undefined}
-            onPrevious={() => undefined}
-            onToggleMetadata={() => undefined}
-          />
-        </>
-      );
-
-      const position = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-        element.textContent?.includes('2 of 3')
-      );
-      const dimensions = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-        element.textContent?.includes(`${item.width} × ${item.height}`)
-      );
-      const details = host!.querySelector<HTMLElement>('button[aria-expanded="false"]');
-      const mutedColor = getComputedStyle(host!.querySelector<HTMLElement>('[data-testid="expected-muted"]')!).color;
-
-      expect(getComputedStyle(position!).color).toBe(mutedColor);
-      expect(getComputedStyle(dimensions!).color).toBe(mutedColor);
-      expect(getComputedStyle(details!).color).toBe(mutedColor);
-    }
-  });
-
-  it('shows mixed position, dimensions, duration, and localized fps with tabular numerals', async () => {
-    await render(
-      <PreviewFooter
-        boardItemCount={3}
-        isLoadingBoard={false}
-        isMetadataOpen={false}
-        media={{ actionImage: null, actions: {} as ImageActions, item: sharedVideo, kind: 'item' }}
-        selectedIndex={1}
-        onNext={() => undefined}
-        onPrevious={() => undefined}
-        onToggleMetadata={() => undefined}
-      />
-    );
-
-    expect(host?.textContent).toContain('2 of 3');
-    expect(host?.textContent).toContain('1920 × 1080');
-    expect(host?.textContent).toContain('Duration 1:06');
-    expect(host?.textContent).toContain('23.976 fps');
-
-    const status = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-      element.textContent?.includes('1920 × 1080')
-    );
-    const position = Array.from(host!.querySelectorAll<HTMLElement>('p')).find((element) =>
-      element.textContent?.includes('2 of 3')
-    );
-    expect(status ? getComputedStyle(status).fontVariantNumeric : '').toContain('tabular-nums');
-    expect(position ? getComputedStyle(position).fontVariantNumeric : '').toContain('tabular-nums');
-    expect(host?.querySelector('[aria-label="Previous item in board"]')).not.toBeNull();
-    expect(host?.querySelector('[aria-label="Next item in board"]')).not.toBeNull();
-  });
-
-  it('keeps common video actions, adds Preview-only frame/details actions, and hides image-only actions', async () => {
+describe('Preview mixed media actions', () => {
+  it('keeps common video actions, adds the Preview-only frame copy, and hides image-only actions', async () => {
     const actions = {
       downloadItem: vi.fn(() => Promise.resolve()),
       setItemsStarred: vi.fn(() => Promise.resolve()),
     } as unknown as ImageActions;
     const onCopyCurrentFrame = vi.fn();
-    const onOpenDetails = vi.fn();
 
     await render(
       <PreviewActionStrip
@@ -400,7 +371,6 @@ describe('Preview mixed media footer and actions', () => {
         isVideoFrameCopyAvailable={false}
         item={sharedVideo}
         onCopyCurrentFrame={onCopyCurrentFrame}
-        onOpenDetails={onOpenDetails}
         onOpenMenu={() => undefined}
       />
     );
@@ -411,17 +381,15 @@ describe('Preview mixed media footer and actions', () => {
     expect(host?.querySelector('[aria-label="Edit on Canvas"]')).toBeNull();
 
     const copyFrame = host?.querySelector<HTMLButtonElement>('[aria-label="Copy Current Frame"]');
-    const details = host?.querySelector<HTMLButtonElement>('[aria-label="Video Details"]');
     const star = host?.querySelector<HTMLButtonElement>('[aria-label="Unstar video"]');
     expect(copyFrame).not.toBeNull();
     expect(copyFrame?.disabled).toBe(true);
-    expect(details).not.toBeNull();
+    // Details lives beside the header toggles now, not in the strip.
+    expect(host?.querySelector('[aria-label="Details"]')).toBeNull();
     expect(star).not.toBeNull();
 
-    await interact(() => details?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
     await interact(() => star?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
 
-    expect(onOpenDetails).toHaveBeenCalledOnce();
     expect(onCopyCurrentFrame).not.toHaveBeenCalled();
     expect(actions.setItemsStarred).toHaveBeenCalledWith([{ kind: 'video', name: 'shared' }], false);
 
@@ -432,7 +400,6 @@ describe('Preview mixed media footer and actions', () => {
         isVideoFrameCopyAvailable
         item={sharedVideo}
         onCopyCurrentFrame={onCopyCurrentFrame}
-        onOpenDetails={onOpenDetails}
         onOpenMenu={() => undefined}
       />
     );
@@ -443,7 +410,7 @@ describe('Preview mixed media footer and actions', () => {
     expect(onCopyCurrentFrame).toHaveBeenCalledOnce();
   });
 
-  it('sends an image to the canvas as a raster layer', async () => {
+  it('opens Edit onto the canvas layer destinations and sends the image to the chosen one', async () => {
     const actions = {
       copyImage: vi.fn(() => Promise.resolve()),
       downloadItem: vi.fn(() => Promise.resolve()),
@@ -462,8 +429,11 @@ describe('Preview mixed media footer and actions', () => {
     expect(host?.querySelector('button')).toBe(editOnCanvas);
     expect(editOnCanvas?.textContent).toContain('Edit');
     expect(host?.querySelector('[aria-label="Copy Current Frame"]')).toBeNull();
-    await interact(() => editOnCanvas?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
-    expect(actions.sendToCanvas).toHaveBeenCalledWith([expect.objectContaining({ imageName: 'shared' })], 'raster');
+
+    await page.getByRole('button', { name: 'Edit on Canvas' }).click();
+    await expect.element(page.getByRole('menuitem', { name: 'Raster Layer' })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Control Layer' }).click();
+    expect(actions.sendToCanvas).toHaveBeenCalledWith([expect.objectContaining({ imageName: 'shared' })], 'control');
   });
 
   // Both remain one click away in the dropdown's quick row, which is why they

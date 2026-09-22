@@ -39,7 +39,16 @@ const PIXELATED_ACTUAL_ZOOM = 2;
 
 export interface PreviewLoupeControls {
   reset(): void;
+  /** Zoom to a fraction of the image's own pixels (1 = 100%) about the stage centre, never below fit. */
+  zoomTo(actualZoom: number): void;
   zoomToActual(): void;
+}
+
+/** What the loupe shows, for a readout outside the stage: percents of the image's own pixels. */
+export interface PreviewZoomState {
+  fitPercent: number | null;
+  isZoomed: boolean;
+  percent: number | null;
 }
 
 interface LoupeTransform {
@@ -78,10 +87,12 @@ export const usePreviewLoupe = ({
   controlsRef,
   enabled,
   naturalWidth,
+  onZoomChange,
 }: {
   controlsRef?: Ref<PreviewLoupeControls>;
   enabled: boolean;
   naturalWidth: number;
+  onZoomChange?: (state: PreviewZoomState) => void;
 }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -96,16 +107,59 @@ export const usePreviewLoupe = ({
   /** Whether the touch session's first pointer landed on the draggable image. */
   const dragCandidateRef = useRef(false);
   const lastSourceTokenRef = useRef<string | null | undefined>(undefined);
-  const [zoomPercent, setZoomPercent] = useState<number | null>(null);
+  const [zoomState, setZoomState] = useState<PreviewZoomState>(FIT_UNMEASURED);
+  const publishedRef = useRef<PreviewZoomState>(FIT_UNMEASURED);
+  // Live read ports, so the gesture math keeps one identity across images. A
+  // dependency instead would re-create the stage ref callback on every source
+  // swap, and its cleanup cancels the frame that clears the old transform —
+  // leaving the new image drawn zoomed while the readout said fit.
+  const naturalWidthRef = useRef(naturalWidth);
+  // eslint-disable-next-line react/refs
+  naturalWidthRef.current = naturalWidth;
+  const onZoomChangeRef = useRef(onZoomChange);
+  // eslint-disable-next-line react/refs
+  onZoomChangeRef.current = onZoomChange;
 
-  const getActualZoom = useCallback(
-    (scale: number): number => {
-      const renderedWidth = contentRef.current?.clientWidth ?? 0;
+  /** The fitted (untransformed) content's width as a fraction of the image's own pixels. */
+  const measureFitRatio = useCallback((): number | null => {
+    const renderedWidth = contentRef.current?.clientWidth ?? 0;
+    const width = naturalWidthRef.current;
 
-      return renderedWidth > 0 && naturalWidth > 0 ? (scale * renderedWidth) / naturalWidth : scale;
+    return renderedWidth > 0 && width > 0 ? renderedWidth / width : null;
+  }, []);
+
+  /** One place turns a transform into the readout, so the header and `isZoomed` never disagree. */
+  const publish = useCallback(
+    (scale: number) => {
+      const fitRatio = measureFitRatio();
+      const next: PreviewZoomState = {
+        fitPercent: fitRatio === null ? null : Math.round(fitRatio * 100),
+        isZoomed: scale !== 1,
+        percent: fitRatio === null ? null : Math.round(fitRatio * scale * 100),
+      };
+      const previous = publishedRef.current;
+
+      if (
+        previous.fitPercent === next.fitPercent &&
+        previous.isZoomed === next.isZoomed &&
+        previous.percent === next.percent
+      ) {
+        return;
+      }
+
+      publishedRef.current = next;
+      setZoomState(next);
+      onZoomChangeRef.current?.(next);
     },
-    [naturalWidth]
+    [measureFitRatio]
   );
+
+  const getActualZoom = useCallback((scale: number): number => {
+    const renderedWidth = contentRef.current?.clientWidth ?? 0;
+    const width = naturalWidthRef.current;
+
+    return renderedWidth > 0 && width > 0 ? (scale * renderedWidth) / width : scale;
+  }, []);
 
   const apply = useCallback(() => {
     if (rafRef.current !== null) {
@@ -134,9 +188,9 @@ export const usePreviewLoupe = ({
       // reaches the img (whose own style leaves it unset while the loupe is
       // enabled).
       content.style.imageRendering = !isFit && actualZoom >= PIXELATED_ACTUAL_ZOOM ? 'pixelated' : '';
-      setZoomPercent(isFit ? null : Math.round(actualZoom * 100));
+      publish(transform.scale);
     });
-  }, [getActualZoom]);
+  }, [getActualZoom, publish]);
 
   /**
    * Called during render with a token identifying the displayed image (or null
@@ -156,26 +210,11 @@ export const usePreviewLoupe = ({
     // centre. Dropping it leaves the fresh fit alone until the fingers lift.
     panPointerRef.current = null;
     pinchRef.current = null;
-
-    if (transformRef.current.scale === 1) {
-      return;
-    }
-
     transformRef.current = { scale: 1, tx: 0, ty: 0 };
-
-    if (rafRef.current === null) {
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        const content = contentRef.current;
-
-        if (content) {
-          content.style.transform = '';
-          content.style.imageRendering = '';
-        }
-
-        setZoomPercent(null);
-      });
-    }
+    // Through `apply`, not a bespoke frame: the frame re-derives the style from
+    // the transform ref when it runs, so a wheel tick that lands before it
+    // still wins — and the new image's fit percent is measured once laid out.
+    apply();
   };
 
   const setTransform = useCallback(
@@ -203,15 +242,12 @@ export const usePreviewLoupe = ({
   );
 
   /** Never below fit, never past `MAX_ACTUAL_ZOOM` of the image's own pixels. */
-  const constrainScale = useCallback(
-    (scale: number): number => {
-      const renderedWidth = contentRef.current?.clientWidth ?? 0;
-      const maxScale = renderedWidth > 0 ? Math.max(1, (MAX_ACTUAL_ZOOM * naturalWidth) / renderedWidth) : 1;
+  const constrainScale = useCallback((scale: number): number => {
+    const renderedWidth = contentRef.current?.clientWidth ?? 0;
+    const maxScale = renderedWidth > 0 ? Math.max(1, (MAX_ACTUAL_ZOOM * naturalWidthRef.current) / renderedWidth) : 1;
 
-      return Math.max(1, Math.min(scale, maxScale));
-    },
-    [naturalWidth]
-  );
+    return Math.max(1, Math.min(scale, maxScale));
+  }, []);
 
   /** Zoom keeping the content point under the given stage-space coordinates fixed. */
   const zoomAroundPoint = useCallback(
@@ -246,19 +282,51 @@ export const usePreviewLoupe = ({
     setTransform({ scale: 1, tx: 0, ty: 0 });
   }, [setTransform]);
 
-  const zoomToActual = useCallback(() => {
-    const stage = stageRef.current;
-    const content = contentRef.current;
+  const zoomTo = useCallback(
+    (actualZoom: number) => {
+      const stage = stageRef.current;
+      const content = contentRef.current;
 
-    if (!stage || !content || content.clientWidth === 0) {
-      return;
-    }
+      if (!stage || !content || content.clientWidth === 0) {
+        return;
+      }
 
-    pinchRef.current = null;
-    zoomAroundPoint(stage.clientWidth / 2, stage.clientHeight / 2, Math.max(1, naturalWidth / content.clientWidth));
-  }, [naturalWidth, zoomAroundPoint]);
+      pinchRef.current = null;
+      zoomAroundPoint(
+        stage.clientWidth / 2,
+        stage.clientHeight / 2,
+        Math.max(1, (actualZoom * naturalWidthRef.current) / content.clientWidth)
+      );
+    },
+    [zoomAroundPoint]
+  );
 
-  useImperativeHandle(controlsRef, () => ({ reset, zoomToActual }), [reset, zoomToActual]);
+  const zoomToActual = useCallback(() => zoomTo(1), [zoomTo]);
+
+  useImperativeHandle(controlsRef, () => ({ reset, zoomTo, zoomToActual }), [reset, zoomTo, zoomToActual]);
+
+  // The fitted size follows the stage, so the readout has to be re-measured
+  // whenever the content box is laid out at a new size. `apply` rather than
+  // `publish`: it re-derives the DOM transform from the transform ref too, so
+  // a re-attach can never leave the style and the readout disagreeing.
+  const contentRefCallback = useCallback(
+    (node: HTMLDivElement | null) => {
+      contentRef.current = node;
+
+      if (!node || typeof ResizeObserver === 'undefined') {
+        return;
+      }
+
+      const observer = new ResizeObserver(() => apply());
+
+      observer.observe(node);
+
+      return () => {
+        observer.disconnect();
+      };
+    },
+    [apply]
+  );
 
   /** Starts a pan from the given pointer's current position, at the current transform. */
   const beginPan = useCallback((pointerId: number, from: PanZoomPoint): void => {
@@ -549,19 +617,18 @@ export const usePreviewLoupe = ({
 
   if (!enabled) {
     return {
-      contentRef: null,
+      contentRefCallback: null,
       isZoomed: false,
       reset,
       stageProps: null,
       stageRefCallback: null,
       syncDisplayedSource,
-      zoomPercent: null,
     };
   }
 
   return {
-    contentRef,
-    isZoomed: zoomPercent !== null,
+    contentRefCallback,
+    isZoomed: zoomState.isZoomed,
     reset,
     stageProps: {
       onDoubleClick: handleDoubleClick,
@@ -570,6 +637,7 @@ export const usePreviewLoupe = ({
     },
     stageRefCallback,
     syncDisplayedSource,
-    zoomPercent,
   };
 };
+
+const FIT_UNMEASURED: PreviewZoomState = { fitPercent: null, isZoomed: false, percent: null };

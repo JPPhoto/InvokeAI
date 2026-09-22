@@ -2,6 +2,8 @@ import { Tooltip as ChakraTooltip, Portal } from '@chakra-ui/react';
 import {
   cloneElement,
   isValidElement,
+  useId,
+  useMemo,
   type ComponentProps,
   type ReactElement,
   type ReactNode,
@@ -92,6 +94,18 @@ export interface TooltipProps extends ChakraTooltip.RootProps {
  * `theme/recipes.ts`, so this wrapper only provides the trigger/portal
  * structure and the `content` convenience API.
  */
+/**
+ * One trigger id for a menu or popover whose trigger a `Tooltip` wraps. Both
+ * machines render onto the same element and each wants to own its id; without
+ * sharing, the menu has no anchor and opens at the viewport origin. Pass the
+ * result as `ids` to the Menu/Popover root and to the Tooltip.
+ */
+export const useTooltipTriggerIds = (): { trigger: string } => {
+  const trigger = useId();
+
+  return useMemo(() => ({ trigger }), [trigger]);
+};
+
 export const Tooltip = (props: TooltipProps) => {
   const {
     showArrow = true,

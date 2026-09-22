@@ -5,29 +5,34 @@ import { useDraggable } from '@dnd-kit/core';
 import { toGalleryItemKey, toGalleryItemRef } from '@features/gallery/contracts';
 import { getGalleryItemDragData, getGalleryItemDragId } from '@features/gallery/utility';
 import { Scrollable } from '@platform/ui/Scrollable';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, type MouseEvent } from 'react';
 
 import type { PreviewDensity } from './previewDensity';
 
 /**
- * A floating strip of the current board's thumbnails above the footer — the
- * same `boardImages` the "N of M" counter is derived from, made spatial. It
- * overlays the fitted media rather than reserving height from it, so it
- * carries the same opaque island fill as the footer to stay legible over any
- * image. Thumbs are standard all-image gallery-item drag sources, so they
- * work with every existing drop target (canvas zones, boards,
- * drop-to-compare).
+ * The current board's thumbnails as a row docked under the stage — the same
+ * `boardImages` the Details position counter is derived from, made spatial.
+ * It takes its own height rather than floating over the media, so the fitted
+ * frame is never covered and Details has a clean edge to stop above. Thumbs
+ * are standard all-image gallery-item drag sources, so they work with every
+ * existing drop target (canvas zones, boards, drop-to-compare).
  */
 
 export const PreviewFilmstrip = ({
   density,
   items,
   selectedItemKey,
+  onCompare,
+  onContextMenu,
   onSelect,
 }: {
   density: PreviewDensity;
   items: GalleryItem[];
   selectedItemKey: GalleryItemKey | null;
+  /** Alt-click: arm this thumb for comparison against the selection. */
+  onCompare?: (item: GalleryItem) => void;
+  /** Right-click: the image context menu for this thumb, at viewport coordinates. */
+  onContextMenu?: (item: GalleryItem, x: number, y: number) => void;
   onSelect: (item: GalleryItem) => void;
 }) => {
   const thumbSize = density === 'full' ? '12' : '8';
@@ -46,16 +51,15 @@ export const PreviewFilmstrip = ({
     <Scrollable
       bg="bg.subtle"
       borderColor="border.subtle"
-      borderWidth="1px"
+      borderTopWidth="1px"
       contentProps={FILMSTRIP_CONTENT_PROPS}
       css={FILMSTRIP_CONTAIN_CSS}
+      data-preview-filmstrip
       flexShrink={0}
       h={density === 'full' ? '3.75rem' : '2.75rem'}
       minW="0"
       orientation="horizontal"
-      px="1.5"
-      rounded="md"
-      shadow="sm"
+      px="2"
       w="full"
     >
       <HStack align="center" gap="1" h="full">
@@ -68,6 +72,8 @@ export const PreviewFilmstrip = ({
               item={item}
               isSelected={itemKey === selectedItemKey}
               size={thumbSize}
+              onCompare={onCompare}
+              onContextMenu={onContextMenu}
               onSelect={onSelect}
             />
           );
@@ -81,11 +87,15 @@ const FilmstripThumb = ({
   item,
   isSelected,
   size,
+  onCompare,
+  onContextMenu,
   onSelect,
 }: {
   item: GalleryItem;
   isSelected: boolean;
   size: string;
+  onCompare?: (item: GalleryItem) => void;
+  onContextMenu?: (item: GalleryItem, x: number, y: number) => void;
   onSelect: (item: GalleryItem) => void;
 }) => {
   const itemRef = useMemo(() => toGalleryItemRef(item), [item]);
@@ -95,7 +105,26 @@ const FilmstripThumb = ({
     data: dragData,
     id: getGalleryItemDragId(itemRef, 'preview-filmstrip'),
   });
-  const handleClick = useCallback(() => onSelect(item), [item, onSelect]);
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      if (event.altKey && onCompare) {
+        onCompare(item);
+        return;
+      }
+
+      onSelect(item);
+    },
+    [item, onCompare, onSelect]
+  );
+  const handleContextMenu = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      if (onContextMenu) {
+        event.preventDefault();
+        onContextMenu(item, event.clientX, event.clientY);
+      }
+    },
+    [item, onContextMenu]
+  );
   // Ref callbacks re-run when `isSelected` changes, keeping the selected thumb
   // in view without an effect.
   const scrollIntoView = useCallback(
@@ -130,6 +159,7 @@ const FilmstripThumb = ({
       // browser claims it); dragging still works after a sustained hold.
       touchAction="pan-x"
       onClick={handleClick}
+      onContextMenu={onContextMenu ? handleContextMenu : undefined}
     >
       {thumbnailSrc ? (
         <img alt={item.name} loading="lazy" src={thumbnailSrc} style={FILMSTRIP_IMG_STYLE} />

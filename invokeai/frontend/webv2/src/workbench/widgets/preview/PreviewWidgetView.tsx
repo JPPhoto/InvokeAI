@@ -7,7 +7,6 @@ import { useDndMonitor, type DragEndEvent } from '@dnd-kit/core';
 import {
   galleryImages,
   type GalleryBoard,
-  type GalleryImage,
   type GalleryImageItem,
   type GalleryItem,
   type GalleryItemKey,
@@ -52,7 +51,6 @@ import {
   ImageContextMenu,
   useDeletionConfirmation,
   useImageActions,
-  type ImageActions,
   type ImageContextMenuTarget,
 } from '@workbench/image-actions';
 import { QueueProgressRail } from '@workbench/queue-integration/QueueProgressRail';
@@ -74,25 +72,18 @@ import { PreviewCompare } from './PreviewCompare';
 import { resolvePreviewCompareDrop } from './previewCompareDnd';
 import { usePreviewDensity, type PreviewDensity } from './previewDensity';
 import { PreviewFilmstrip } from './PreviewFilmstrip';
-import { PreviewFooter, type PreviewFooterMedia, PreviewTileFooter } from './PreviewFooter';
+import { PreviewTileFooter } from './PreviewFooter';
 import {
   PreviewFrame,
   type PreviewMediaSource,
   type PreviewVideoFrameController,
   type PreviewVideoFrameCopyResult,
 } from './PreviewFrame';
-import { previewHeaderStore } from './previewHeaderStore';
-import {
-  getPreviewComparisonMode,
-  getPreviewFilmstripVisible,
-  getPreviewMetadataOpen,
-  type PreviewComparisonMode,
-} from './previewSettings';
+import { previewHeaderStore, previewStageStore, type PreviewZoomCommands } from './previewHeaderStore';
+import { getPreviewComparisonMode, getPreviewFilmstripVisible, type PreviewComparisonMode } from './previewSettings';
 import { usePreviewNavigation } from './usePreviewNavigation';
 
 /** For the live footer's Details slot, which renders disabled and never fires. */
-const noop = (): void => {};
-
 const VIDEO_FRAME_COPY_FAILURE_KEYS = {
   'clipboard-failed': 'widgets.preview.copyCurrentFrameWriteFailed',
   'draw-failed': 'widgets.preview.copyCurrentFrameDrawFailed',
@@ -154,19 +145,10 @@ const getBoardName = (
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
 /**
- * Bottom padding the grid surface reserves for the overlaid details island —
- * its collapsed height plus the 2-unit inset and gap. The filmstrip
- * deliberately reserves nothing: it is a floating overlay above the media's
- * lower edge, so toggling it never reflows the fitted image. An expanded
- * Details panel grows over the grid on purpose; it is self-capped at `40cqh`
- * and closes back down.
- */
-const PREVIEW_OVERLAY_RESERVE = '5.5rem';
-
-/**
- * A tile carries a footer but never a filmstrip, so it reserves the one island
- * instead of the pair. Its stage padding stays compact for the same reason the
- * grid exists at all: at four sessions each cell is a quarter of the widget.
+ * A multi-session tile floats its status island over its stage and reserves
+ * that much bottom padding for it. Its stage padding stays compact for the
+ * same reason the grid exists at all: at four sessions each cell is a quarter
+ * of the widget.
  */
 const PREVIEW_TILE_OVERLAY_RESERVE = '3.25rem';
 const PREVIEW_TILE_STAGE_PADDING = '3';
@@ -237,7 +219,16 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     };
   }, []);
   const loupeControlsRef = useRef<PreviewLoupeControls | null>(null);
+  // The header's zoom commands close over the controls ref, so they are stable
+  // per mount; the readout itself streams through `previewStageStore`.
   const videoControllerRef = useRef<PreviewVideoFrameController | null>(null);
+  const zoomCommands = useMemo<PreviewZoomCommands>(
+    () => ({
+      reset: () => loupeControlsRef.current?.reset(),
+      zoomTo: (actualZoom: number) => loupeControlsRef.current?.zoomTo(actualZoom),
+    }),
+    []
+  );
   const [copyAvailableItemKey, setCopyAvailableItemKey] = useState<GalleryItemKey | null>(null);
 
   const boardsQuery = useQuery({
@@ -265,7 +256,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     getSelectionPage,
     handleNavigationKeyDown,
     isLoadingBoard,
-    navigate,
     navigationCursor,
     navigationQueryKey,
     selectPreviewItem,
@@ -315,11 +305,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
 
     return boardItems.find((item) => toGalleryItemKey(item) === selectedItemKey) ?? selectedItem;
   }, [boardItems, selectedItem, selectedItemKey]);
-  const actionImage = useMemo<GalleryImage | null>(
-    () =>
-      contextMenuItem && isGalleryImageItem(contextMenuItem) ? galleryImageItemToGalleryImage(contextMenuItem) : null,
-    [contextMenuItem]
-  );
   const exitCompare = useCallback(() => gallery.setCompareItem(null), [gallery]);
   // The page the item now in the compare slot was selected at, when Preview
   // put it there by swapping. The window may not hold that item any more —
@@ -378,11 +363,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const setComparisonMode = useCallback(
     (comparisonMode: PreviewComparisonMode) => widgets.patchValues('preview', { comparisonMode }),
     [widgets]
-  );
-  const isMetadataOpen = getPreviewMetadataOpen(previewValues);
-  const toggleMetadata = useCallback(
-    () => widgets.patchValues('preview', { metadataOpen: !isMetadataOpen }),
-    [isMetadataOpen, widgets]
   );
   const openVideoDetails = useCallback(() => widgets.patchValues('preview', { metadataOpen: true }), [widgets]);
   const handleVideoCopyAvailabilityChange = useCallback((itemKey: GalleryItemKey, isAvailable: boolean) => {
@@ -472,6 +452,19 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [boardItems, gallery, notifications, selectedItem]
   );
   useDndMonitor({ onDragEnd: handleCompareDrop });
+  const openFilmstripItemContextMenu = useCallback(
+    (item: GalleryItem, x: number, y: number) =>
+      setContextMenuTarget({ itemRefs: [toGalleryItemRef(item)], items: [item], x, y }),
+    []
+  );
+  const compareFilmstripItem = useCallback(
+    (item: GalleryItem) => {
+      if (isGalleryImageItem(item)) {
+        imageActions.selectForCompare(galleryImageItemToGalleryImage(item));
+      }
+    },
+    [imageActions]
+  );
   const openItemContextMenu = useCallback(
     (x: number, y: number) => {
       if (contextMenuItem) {
@@ -485,8 +478,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     },
     [contextMenuItem]
   );
-  const selectNextItem = useCallback(() => navigate(1), [navigate]);
-  const selectPreviousItem = useCallback(() => navigate(-1), [navigate]);
   const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
   const headerItemName = shouldFollowLive ? null : (selectedItem?.name ?? null);
 
@@ -494,6 +485,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   // action strip's image + actions) for the widget frame; the chrome renders
   // outside this view, so an external store is the sync channel. Cleared on
   // unmount so stale chrome never outlives us.
+  const hasHeaderItem = !shouldFollowLive && contextMenuItem !== null;
   useEffect(() => {
     previewHeaderStore.set({
       actionItem: shouldFollowLive ? null : contextMenuItem,
@@ -503,21 +495,37 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       isVideoFrameCopyAvailable: !shouldFollowLive && isVideoFrameCopyAvailable,
       itemName: headerItemName,
       openItemMenu: shouldFollowLive ? null : openItemContextMenu,
-      openVideoDetails: !shouldFollowLive && contextMenuItem?.kind === 'video' ? openVideoDetails : null,
+      position: hasHeaderItem
+        ? { boardItemCount: boardItems.length, isLoadingBoard, selectedIndex: navigationCursor }
+        : null,
+      // Only the single image frame carries a loupe: videos have none and
+      // compare has its own synced pair.
+      zoom: hasHeaderItem && !isComparing && contextMenuItem.kind === 'image' ? zoomCommands : null,
     });
   }, [
+    boardItems.length,
     boardName,
     contextMenuItem,
     copyCurrentVideoFrame,
+    hasHeaderItem,
     headerItemName,
     imageActions,
+    isComparing,
+    isLoadingBoard,
     isVideoFrameCopyAvailable,
+    navigationCursor,
     openItemContextMenu,
-    openVideoDetails,
     shouldFollowLive,
+    zoomCommands,
   ]);
 
-  useEffect(() => () => previewHeaderStore.clear(), []);
+  useEffect(
+    () => () => {
+      previewHeaderStore.clear();
+      previewStageStore.clear();
+    },
+    []
+  );
 
   const executeViewerHotkey = useEffectEvent((commandId: string) => {
     if (commandId === 'viewer.swapImages' && selectedItem?.kind === 'image' && compareImage) {
@@ -617,15 +625,10 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
           />
         ) : shouldFollowLive && activeGalleryPlaceholder ? (
           <LivePreview
-            boardItemCount={0}
             density={density}
             filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
-            isLoadingBoard={isLoadingBoard}
             placeholder={activeGalleryPlaceholder}
-            selectedIndex={-1}
             shouldAntialiasProgressImage={antialiasProgressImages}
-            onNext={selectNextItem}
-            onPrevious={selectPreviousItem}
             onSelectItem={selectPreviewItem}
           />
         ) : selectedItem ? (
@@ -642,43 +645,29 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
               />
             ) : selectedItem.kind === 'image' ? (
               <SelectedImagePreview
-                actionImage={actionImage}
-                actions={imageActions}
-                boardItemCount={boardItems.length}
                 density={density}
                 filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
                 isItemCurrent={isItemCurrent}
-                isLoadingBoard={isLoadingBoard}
-                isMetadataOpen={isMetadataOpen}
                 item={selectedItem}
                 loupeControlsRef={loupeControlsRef}
-                selectedIndex={navigationCursor}
                 shouldAntialiasProgressImage={antialiasProgressImages}
+                onCompareItem={compareFilmstripItem}
                 onContextMenu={openItemContextMenu}
-                onNext={selectNextItem}
-                onPrevious={selectPreviousItem}
+                onItemContextMenu={openFilmstripItemContextMenu}
                 onSelectItem={selectPreviewItem}
-                onToggleMetadata={toggleMetadata}
               />
             ) : (
               <SelectedVideoPreview
-                actionImage={null}
-                actions={imageActions}
-                boardItemCount={boardItems.length}
                 density={density}
                 filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
                 isItemCurrent={isItemCurrent}
-                isLoadingBoard={isLoadingBoard}
-                isMetadataOpen={isMetadataOpen}
                 item={selectedItem}
                 videoControllerRef={videoControllerRef}
-                selectedIndex={navigationCursor}
                 onContextMenu={openItemContextMenu}
                 onCopyAvailabilityChange={handleVideoCopyAvailabilityChange}
-                onNext={selectNextItem}
-                onPrevious={selectPreviousItem}
+                onCompareItem={compareFilmstripItem}
+                onItemContextMenu={openFilmstripItemContextMenu}
                 onSelectItem={selectPreviewItem}
-                onToggleMetadata={toggleMetadata}
               />
             )}
             <ImageContextMenu
@@ -775,35 +764,27 @@ const SelectedVideoPreview = ({
 };
 
 interface SelectedMediaPreviewProps {
-  actionImage: GalleryImage | null;
-  actions: ImageActions;
-  boardItemCount: number;
   density: PreviewDensity;
   /** Board thumbnails for the filmstrip, or null when the strip is hidden. */
   filmstripItems: GalleryItem[] | null;
   isItemCurrent: (itemKey: GalleryItemKey) => boolean;
-  isLoadingBoard: boolean;
-  isMetadataOpen: boolean;
   item: GalleryItem;
   loupeControlsRef?: Ref<PreviewLoupeControls>;
   onCopyAvailabilityChange?: (itemKey: GalleryItemKey, isAvailable: boolean) => void;
-  selectedIndex: number;
+  onCompareItem: (item: GalleryItem) => void;
   onContextMenu: (x: number, y: number) => void;
-  onNext: () => void;
-  onPrevious: () => void;
+  onItemContextMenu: (item: GalleryItem, x: number, y: number) => void;
   onSelectItem: (item: GalleryItem) => void;
-  onToggleMetadata: () => void;
   videoControllerRef?: Ref<PreviewVideoFrameController>;
 }
 
 /**
  * The one media arrangement, shared by selected items and the live preview:
- * the stage fills, and the filmstrip + footer float above its lower edge in a
- * single island stack. The stage reserves bottom padding for the footer island
- * only, so the fitted media is never tucked under it; the filmstrip floats
- * over the media itself and steals no height. Live and finished renders MUST
- * pass through the same scaffold — the denoise→done boundary may change only
- * the pixels inside the frame, never the geometry around it.
+ * the stage fills, and the filmstrip docks under it as a row of its own, so
+ * toggling the strip refits the media rather than covering it. Live and
+ * finished renders MUST pass through the same scaffold — the denoise→done
+ * boundary may change only the pixels inside the frame, never the geometry
+ * around it.
  */
 const PreviewMediaScaffold = ({ children }: { children: ReactNode }) => (
   <Flex direction="column" h="full" minH="0" position="relative" w="full">
@@ -811,7 +792,7 @@ const PreviewMediaScaffold = ({ children }: { children: ReactNode }) => (
   </Flex>
 );
 
-/** The floating island column the filmstrip and footer share. */
+/** The floating island a multi-session tile's status footer sits in. */
 const PreviewOverlayStack = ({ children }: { children: ReactNode }) => (
   <Stack bottom="2" gap="2" insetX="2" position="absolute" zIndex="1">
     {children}
@@ -819,11 +800,9 @@ const PreviewOverlayStack = ({ children }: { children: ReactNode }) => (
 );
 
 const getMediaStagePadding = (density: PreviewDensity): string => (density === 'full' ? '6' : '3');
+const { setStageElement, setZoom: setZoomReadout } = previewStageStore;
 
 const SelectedMediaPreview = ({
-  actionImage,
-  actions,
-  boardItemCount,
   density,
   dragItem,
   filmstripItems,
@@ -831,20 +810,16 @@ const SelectedMediaPreview = ({
   frameWidth,
   holdSource,
   isItemCurrent,
-  isLoadingBoard,
-  isMetadataOpen,
   item,
   loupeControlsRef,
   onCopyAvailabilityChange,
   onSourceLoaded,
-  selectedIndex,
   shouldAntialiasHoldImage,
   source,
+  onCompareItem,
   onContextMenu,
-  onNext,
-  onPrevious,
+  onItemContextMenu,
   onSelectItem,
-  onToggleMetadata,
   videoControllerRef,
 }: SelectedMediaPreviewProps & {
   dragItem?: GalleryItemRef;
@@ -854,14 +829,11 @@ const SelectedMediaPreview = ({
   onSourceLoaded?: (src: string) => void;
   shouldAntialiasHoldImage?: boolean;
   source: Parameters<typeof PreviewFrame>[0]['source'];
-}) => {
-  const media = useMemo<PreviewFooterMedia>(
-    () => ({ actionImage, actions, item, kind: 'item' }),
-    [actionImage, actions, item]
-  );
-
-  return (
-    <PreviewMediaScaffold>
+}) => (
+  <PreviewMediaScaffold>
+    {/* The stage wrapper is the Details popover's boundary for images and
+        videos alike; the frame inside fills it, so their rects coincide. */}
+    <Flex ref={setStageElement} direction="column" flex="1" minH="0">
       <PreviewFrame
         dragItem={dragItem}
         frameHeight={frameHeight}
@@ -872,66 +844,45 @@ const SelectedMediaPreview = ({
         loupeControlsRef={loupeControlsRef}
         onSourceLoaded={onSourceLoaded}
         onVideoCopyAvailabilityChange={onCopyAvailabilityChange}
+        onZoomChange={setZoomReadout}
         padding={getMediaStagePadding(density)}
-        paddingBottom={PREVIEW_OVERLAY_RESERVE}
         shouldAntialiasLiveImage={shouldAntialiasHoldImage ?? true}
         source={source}
         variant="framed"
         videoControllerRef={videoControllerRef}
         onContextMenu={onContextMenu}
       />
-      <PreviewOverlayStack>
-        {filmstripItems ? (
-          <PreviewFilmstrip
-            density={density}
-            items={filmstripItems}
-            selectedItemKey={toGalleryItemKey(item)}
-            onSelect={onSelectItem}
-          />
-        ) : null}
-        <PreviewFooter
-          boardItemCount={boardItemCount}
-          isLoadingBoard={isLoadingBoard}
-          isMetadataOpen={isMetadataOpen}
-          media={media}
-          selectedIndex={selectedIndex}
-          onNext={onNext}
-          onPrevious={onPrevious}
-          onToggleMetadata={onToggleMetadata}
-        />
-      </PreviewOverlayStack>
-    </PreviewMediaScaffold>
-  );
-};
+    </Flex>
+    {filmstripItems ? (
+      <PreviewFilmstrip
+        density={density}
+        items={filmstripItems}
+        selectedItemKey={toGalleryItemKey(item)}
+        onCompare={onCompareItem}
+        onContextMenu={onItemContextMenu}
+        onSelect={onSelectItem}
+      />
+    ) : null}
+  </PreviewMediaScaffold>
+);
 
 /**
  * The single-session live preview: the denoise stream rendered exactly like a
  * finished item — same scaffold, same frame chrome, no badge — so the moment
- * generation completes, only the pixels change. The footer stays up
- * throughout, showing generation status and requested output dimensions.
- * Saved-image navigation remains in the filmstrip.
+ * generation completes, only the pixels change. Saved-image navigation
+ * remains in the filmstrip.
  */
 const LivePreview = ({
-  boardItemCount,
   density,
   filmstripItems,
-  isLoadingBoard,
   placeholder,
-  selectedIndex,
   shouldAntialiasProgressImage,
-  onNext,
-  onPrevious,
   onSelectItem,
 }: {
-  boardItemCount: number;
   density: PreviewDensity;
   filmstripItems: GalleryItem[] | null;
-  isLoadingBoard: boolean;
   placeholder: QueueActiveSession;
-  selectedIndex: number;
   shouldAntialiasProgressImage: boolean;
-  onNext: () => void;
-  onPrevious: () => void;
   onSelectItem: (item: GalleryItem) => void;
 }) => {
   // The followed slot's own frame, not the store-wide latest: with two slots
@@ -958,11 +909,6 @@ const LivePreview = ({
     [placeholder.id, previewImage]
   );
 
-  const media = useMemo<PreviewFooterMedia>(
-    () => ({ height: placeholder.height, kind: 'live', width: placeholder.width }),
-    [placeholder.height, placeholder.width]
-  );
-
   return (
     <PreviewMediaScaffold>
       <PreviewFrame
@@ -970,26 +916,13 @@ const LivePreview = ({
         frameWidth={previewImage?.width ?? placeholder.width}
         isLive
         padding={getMediaStagePadding(density)}
-        paddingBottom={PREVIEW_OVERLAY_RESERVE}
         shouldAntialiasLiveImage={shouldAntialiasProgressImage}
         source={source}
         variant="framed"
       />
-      <PreviewOverlayStack>
-        {filmstripItems ? (
-          <PreviewFilmstrip density={density} items={filmstripItems} selectedItemKey={null} onSelect={onSelectItem} />
-        ) : null}
-        <PreviewFooter
-          boardItemCount={boardItemCount}
-          isLoadingBoard={isLoadingBoard}
-          isMetadataOpen={false}
-          media={media}
-          selectedIndex={selectedIndex}
-          onNext={onNext}
-          onPrevious={onPrevious}
-          onToggleMetadata={noop}
-        />
-      </PreviewOverlayStack>
+      {filmstripItems ? (
+        <PreviewFilmstrip density={density} items={filmstripItems} selectedItemKey={null} onSelect={onSelectItem} />
+      ) : null}
     </PreviewMediaScaffold>
   );
 };

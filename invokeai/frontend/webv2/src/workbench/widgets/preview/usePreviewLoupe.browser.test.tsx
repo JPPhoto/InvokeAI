@@ -18,8 +18,9 @@ const interact = (action: () => void): Promise<void> =>
     });
   });
 
-const Harness = () => {
-  const loupe = usePreviewLoupe({ enabled: true, naturalWidth: 200 });
+const Harness = ({ naturalWidth = 200, token = 'a' }: { naturalWidth?: number; token?: string }) => {
+  const loupe = usePreviewLoupe({ enabled: true, naturalWidth });
+  loupe.syncDisplayedSource(token);
 
   return (
     <div
@@ -36,7 +37,7 @@ const Harness = () => {
       }}
       {...loupe.stageProps}
     >
-      <div ref={loupe.contentRef} data-testid="content" style={{ height: 150, width: 200 }} />
+      <div ref={loupe.contentRefCallback} data-testid="content" style={{ height: 150, width: 200 }} />
     </div>
   );
 };
@@ -226,5 +227,33 @@ describe('usePreviewLoupe', () => {
 
     expect(transformAtRelease).toBe('translate(-200px, -150px) scale(3)');
     expect(content.style.transform).toBe(transformAtRelease);
+  });
+});
+
+describe('usePreviewLoupe across image swaps', () => {
+  it('clears the old zoom when the displayed image changes, even though the image size changed with it', async () => {
+    const { content, stage } = await mountHarness();
+    const rect = stage.getBoundingClientRect();
+
+    await interact(() =>
+      stage.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + 200,
+          clientY: rect.top + 150,
+          deltaY: -600,
+        })
+      )
+    );
+    expect(content.style.transform).not.toBe('');
+
+    // A new source with a different natural width: the reset scheduled for it
+    // must survive the gesture math changing identity.
+    await interact(() => root?.render(<Harness naturalWidth={400} token="b" />));
+    await interact(() => undefined);
+
+    expect(content.style.transform).toBe('');
+    expect(content.style.imageRendering).toBe('');
   });
 });

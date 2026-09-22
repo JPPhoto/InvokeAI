@@ -35,7 +35,7 @@ import {
   publishVideoSpanPlaybackState,
   subscribeVideoSpanPlaybackRequests,
 } from './spanPlaybackRequest';
-import { usePreviewLoupe, type PreviewLoupeControls } from './usePreviewLoupe';
+import { usePreviewLoupe, type PreviewLoupeControls, type PreviewZoomState } from './usePreviewLoupe';
 
 export type PreviewMediaSource =
   | { itemKey: GalleryItemKey; kind: 'image'; source: StreamingImageSource }
@@ -63,6 +63,7 @@ interface PreviewFrameProps {
   isLive: boolean;
   loupeControlsRef?: Ref<PreviewLoupeControls>;
   onContextMenu?: (x: number, y: number) => void;
+  onZoomChange?: (state: PreviewZoomState) => void;
   onVideoCopyAvailabilityChange?: (itemKey: GalleryItemKey, isAvailable: boolean) => void;
   padding?: string;
   paddingBottom?: string;
@@ -104,6 +105,7 @@ const PreviewImageFrame = ({
   loupeControlsRef,
   onContextMenu,
   onSourceLoaded,
+  onZoomChange,
   padding,
   paddingBottom,
   shouldAntialiasLiveImage,
@@ -112,12 +114,13 @@ const PreviewImageFrame = ({
 }: Omit<PreviewFrameProps, 'isItemCurrent' | 'onVideoCopyAvailabilityChange' | 'source' | 'videoControllerRef'> & {
   source: StreamingImageSource | null;
 }) => {
-  const { t } = useTranslation();
   const loupe = usePreviewLoupe({
     controlsRef: loupeControlsRef,
     enabled: variant === 'framed' && !isLive,
     naturalWidth: frameWidth,
+    onZoomChange,
   });
+  const { contentRefCallback, stageRefCallback } = loupe;
   const dragData = useMemo(() => (dragItem ? getGalleryItemDragData([dragItem]) : undefined), [dragItem]);
   const isDragDisabled = !dragItem || isLive || loupe.isZoomed;
   const disabledDragId = useId();
@@ -134,13 +137,10 @@ const PreviewImageFrame = ({
     (element: HTMLDivElement | null) => {
       setDragNodeRef(element);
 
-      if (loupe.contentRef) {
-        loupe.contentRef.current = element;
-      }
+      return contentRefCallback?.(element);
     },
-    [loupe.contentRef, setDragNodeRef]
+    [contentRefCallback, setDragNodeRef]
   );
-
   // Reset zoom in place when the displayed image changes (or goes live) — a
   // remount would flash the frame on every selection.
   loupe.syncDisplayedSource(variant === 'framed' && !isLive && source ? source.src : null);
@@ -254,7 +254,7 @@ const PreviewImageFrame = ({
 
   return (
     <PreviewStage
-      ref={loupe.stageRefCallback}
+      ref={stageRefCallback}
       cursor={loupe.isZoomed ? 'grab' : undefined}
       fill="flex"
       padding={padding}
@@ -284,22 +284,6 @@ const PreviewImageFrame = ({
       >
         {media}
       </FittedFrame>
-      {loupe.zoomPercent !== null ? (
-        <Badge
-          aria-label={t('widgets.preview.resetZoom')}
-          as="button"
-          bottom="2"
-          position="absolute"
-          right="2"
-          size="xs"
-          title={t('widgets.preview.resetZoom')}
-          variant="solid"
-          zIndex="1"
-          onClick={loupe.reset}
-        >
-          {loupe.zoomPercent}%
-        </Badge>
-      ) : null}
     </PreviewStage>
   );
 };
