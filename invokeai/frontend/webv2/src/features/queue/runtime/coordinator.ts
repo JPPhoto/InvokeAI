@@ -42,7 +42,7 @@ const NODE_EVENT_BUFFER_ITEM_LIMIT = 64;
 const NODE_EVENT_BUFFER_EVENTS_PER_ITEM = 512;
 const PROGRESS_EVENT_BUFFER_ITEM_LIMIT = 64;
 const BACKEND_READ_CONCURRENCY = 16;
-const FRAME_GATE_LIMIT = 1024;
+const FRAME_GATES_PER_WAIT_LIMIT = 64;
 
 /**
  * Queue's view of model-load activity derived from socket events. The
@@ -183,6 +183,7 @@ interface RunProgressState {
 }
 
 interface WaitState {
+  frameGates: Map<number, { revision: number | null; sessionId: string }>;
   localQueueItemId: string;
   settle: (outcome: TerminalOutcome) => void;
 }
@@ -230,6 +231,13 @@ export const createQueueCoordinator = (
   const runs = new Map<string, RunState>();
   const runProgress = new Map<string, RunProgressState>();
   const waits = new Map<number, WaitState>();
+  const clearFrameGate = (itemId: number): void => {
+    for (const wait of waits.values()) {
+      if (wait.frameGates.delete(itemId)) {
+        return;
+      }
+    }
+  };
   /**
    * Terminal events that arrived for items nobody tracks yet. Closes the race
    * where a very fast generation finishes between `enqueue_batch` resolving
@@ -253,35 +261,6 @@ export const createQueueCoordinator = (
   /** Enqueue requests awaiting a response; early node events and previews are buffered while one is in flight. */
   let inFlightSubmissions = 0;
   const latestStatusSequences = new Map<number, number>();
-  /**
-   * Per backend item, the session and revision of the last accepted preview
-   * frame. Socket delivery is ordered, so this only bites when a second source
-   * — the reconnect snapshot the backend is to grow — races the live stream.
-   */
-  const latestFrameGates = new Map<number, { revision: number | null; sessionId: string }>();
-
-  const rememberFrameGate = (itemId: number, gate: { revision: number | null; sessionId: string }): void => {
-    latestFrameGates.delete(itemId);
-    latestFrameGates.set(itemId, gate);
-
-    while (latestFrameGates.size > FRAME_GATE_LIMIT) {
-      let oldestId: number | undefined;
-
-      for (const candidate of latestFrameGates.keys()) {
-        if (!waits.has(candidate)) {
-          oldestId = candidate;
-          break;
-        }
-      }
-
-      if (oldestId === undefined) {
-        return;
-      }
-
-      latestFrameGates.delete(oldestId);
-    }
-  };
-
   const getTrackedBackendItemId = (event: { item_id: number; root_item_id?: number | null }): number =>
     event.root_item_id ?? event.item_id;
 
@@ -441,12 +420,14 @@ export const createQueueCoordinator = (
         // A called workflow's child lifecycle is represented by the visible
         // Call Saved Workflow node. Only the root invocation may settle that
         // node or replace its latest output.
+        waits.get(backendItemId)?.frameGates.delete(nodeEvent.event.item_id);
         if (backendItemId !== nodeEvent.event.item_id) {
           return;
         }
         nodeExecution.completed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
       case 'failed':
+        waits.get(backendItemId)?.frameGates.delete(nodeEvent.event.item_id);
         if (backendItemId !== nodeEvent.event.item_id) {
           return;
         }
@@ -540,8 +521,8 @@ export const createQueueCoordinator = (
       return;
     }
 
+    wait.frameGates.clear();
     waits.delete(backendItemId);
-    latestFrameGates.delete(backendItemId);
     settleNodes(backendItemId, outcome.status);
     const progressTarget = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     const releaseProgressSlot = (): void => {
@@ -628,7 +609,7 @@ export const createQueueCoordinator = (
     }
 
     return new Promise<TerminalOutcome>((settle) => {
-      waits.set(backendItemId, { localQueueItemId, settle });
+      waits.set(backendItemId, { frameGates: new Map(), localQueueItemId, settle });
       replayNodeEvents(backendItemId);
       replayProgressEvent(backendItemId);
     });
@@ -760,16 +741,13 @@ export const createQueueCoordinator = (
         if (wait) {
           activeProgressTarget.clear(getProgressImageTarget(wait.localQueueItemId, event.item_id));
         }
-        latestFrameGates.delete(event.item_id);
+        wait?.frameGates.clear();
       }
 
       return;
     }
 
-    // Child status events are not tracked waits, but their preview gate is
-    // still per-child. Release it when the child ends so repeated calls do not
-    // retain one entry forever. The size cap below covers missed terminal events.
-    latestFrameGates.delete(event.item_id);
+    clearFrameGate(event.item_id);
 
     if (!isTrackedEvent(event)) {
       bufferTerminalOutcome(event.item_id, toTerminalOutcome(event.status, event.error_message, event.error_type));
@@ -801,8 +779,13 @@ export const createQueueCoordinator = (
    * starts over.
    */
   const isStaleFrame = (event: InvocationProgressEvent): boolean => {
+    const wait = waits.get(getTrackedBackendItemId(event));
+    if (!wait) {
+      return false;
+    }
+
     const revision = event.revision ?? null;
-    const gate = latestFrameGates.get(event.item_id);
+    const gate = wait.frameGates.get(event.item_id);
 
     if (
       gate &&
@@ -814,7 +797,15 @@ export const createQueueCoordinator = (
       return true;
     }
 
-    rememberFrameGate(event.item_id, { revision, sessionId: event.session_id });
+    wait.frameGates.delete(event.item_id);
+    wait.frameGates.set(event.item_id, { revision, sessionId: event.session_id });
+    while (wait.frameGates.size > FRAME_GATES_PER_WAIT_LIMIT) {
+      const oldestItemId = wait.frameGates.keys().next().value;
+      if (oldestItemId === undefined) {
+        break;
+      }
+      wait.frameGates.delete(oldestItemId);
+    }
 
     return false;
   };
@@ -1000,7 +991,6 @@ export const createQueueCoordinator = (
     recentTerminalOutcomes.clear();
     pendingProgressEvents.clear();
     latestStatusSequences.clear();
-    latestFrameGates.clear();
   };
 
   const reconcile = async (items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>> => {
@@ -1224,7 +1214,7 @@ export const createQueueCoordinator = (
       const wait = waits.get(backendItemId);
       if (wait?.localQueueItemId === localQueueItemId) {
         waits.delete(backendItemId);
-        latestFrameGates.delete(backendItemId);
+        wait.frameGates.clear();
         settleNodes(backendItemId, 'canceled');
         wait.settle({ status: 'canceled' });
       }

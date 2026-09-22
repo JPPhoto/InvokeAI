@@ -89,11 +89,18 @@ const settle = async (ms: number) => {
 /** Waits until the request count stops changing, so an early window cannot read as a pass. */
 const settleUntilRequestsStop = async (getCount: () => number, sample = 25, maxSamples = 80) => {
   let previous = -1;
+  let unchangedSamples = 0;
 
   for (let index = 0; index < maxSamples; index += 1) {
     const current = getCount();
 
     if (current === previous) {
+      unchangedSamples += 1;
+    } else {
+      unchangedSamples = 0;
+    }
+
+    if (unchangedSamples >= 3) {
       return;
     }
 

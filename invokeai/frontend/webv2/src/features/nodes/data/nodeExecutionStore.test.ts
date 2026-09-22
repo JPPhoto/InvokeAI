@@ -15,6 +15,16 @@ beforeEach(() => {
 });
 
 describe('node execution lifecycle', () => {
+  it('clears a previous thumbnail when the current result has no image', () => {
+    nodeExecutionStore.completed({ invocation_source_id: 'node-1', result: { image: { image_name: 'old.png' } } });
+    nodeExecutionStore.completed({ invocation_source_id: 'node-1', result: { type: 'integer_output', value: 1 } });
+
+    expect(nodeExecutionStore.get('node-1')).toMatchObject({
+      latestOutput: { type: 'integer_output', value: 1 },
+      outputImageUrl: null,
+      status: 'completed',
+    });
+  });
   it('preserves the latest image across progress and failure transitions', () => {
     nodeExecutionStore.completed({
       invocation_source_id: 'node-1',

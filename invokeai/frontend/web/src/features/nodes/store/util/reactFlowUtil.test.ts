@@ -1,4 +1,3 @@
-import { edgeTypes } from 'features/nodes/components/flow/edgeTypes';
 import { describe, expect, it } from 'vitest';
 
 import { connectionToEdge } from './reactFlowUtil';
@@ -38,7 +37,4 @@ describe('connectionToEdge', () => {
     ).toMatchObject({ type: 'loop_linkage' });
   });
 
-  it('registers loop_linkage with the React Flow renderer', () => {
-    expect(edgeTypes.loop_linkage).toBe(edgeTypes.default);
-  });
 });

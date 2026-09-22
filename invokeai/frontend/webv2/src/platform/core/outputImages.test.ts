@@ -7,14 +7,29 @@ describe('getOutputImageNames', () => {
     expect(
       getOutputImageNames({
         collection: [{ image_name: 'a.png' }, { image_name: 'b.png' }],
-        image: { image_name: 'a.png' },
+      }),
+    ).toEqual(['a.png', 'b.png']);
+
+    expect(
+      getOutputImageNames({
+        type: 'workflow_return_output',
         values: {
-          collection: { collection: [{ image_name: 'c.png' }] },
-          image: { image: { image_name: 'd.png' } },
+          collection: {
+            collection: [{ image_name: 'c.png' }],
+            type: 'image_collection_output',
+          },
+          image: { image: { image_name: 'd.png' }, type: 'image_output' },
           values: { image_name: 'e.png' },
         },
+      }),
+    ).toEqual(['c.png', 'd.png', 'e.png']);
+
+    expect(
+      getOutputImageNames({
+        type: 'workflow_return_output',
+        values: { Images: { collection: [{ image_name: 'legacy.png' }] } },
       })
-    ).toEqual(['a.png', 'b.png', 'c.png', 'd.png', 'e.png']);
+    ).toEqual(['legacy.png']);
   });
 
   it('does not inspect metadata, controls, or nested input objects', () => {
@@ -23,7 +38,7 @@ describe('getOutputImageNames', () => {
         input: { image: { image_name: 'input.png' } },
         metadata: { image: { image_name: 'metadata.png' } },
         output_meta: { image: { image_name: 'meta-output.png' } },
-        values: { result: { image: { image_name: 'result.png' } } },
+        values: { result: { image_name: 'result.png' } },
       })
     ).toEqual(['result.png']);
   });

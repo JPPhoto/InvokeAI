@@ -49,13 +49,12 @@ export const nodeExecutionStore = {
   },
   completed(event: NodeInvocationCompleteEvent): void {
     const imageName = getOutputImageNames(event.result)[0];
-    const previous = stateByNodeId.get(event.invocation_source_id);
 
     stateByNodeId.set(event.invocation_source_id, {
       error: null,
       outputImageUrl: imageName
         ? browserNodesDataPort.buildUrl(`/api/v1/images/i/${encodeURIComponent(imageName)}/thumbnail`)
-        : (previous?.outputImageUrl ?? null),
+        : null,
       latestOutput: event.result,
       progress: null,
       progressMessage: null,
