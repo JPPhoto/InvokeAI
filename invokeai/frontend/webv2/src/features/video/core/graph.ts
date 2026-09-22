@@ -16,11 +16,24 @@ import {
 } from '@features/generation/graph';
 import { getCompatibleDiffusersComponentSource } from '@features/generation/settings';
 
-import type { VideoGenerationMode, VideoReferenceItem, VideoSettings, VideoSourceClip } from './types';
+import type {
+  Ltx2TargetResolution,
+  VideoGenerationMode,
+  VideoReferenceItem,
+  VideoSettings,
+  VideoSourceClip,
+} from './types';
+import type { SupportedVideoBase } from './videoPolicies';
 
-import { MINIMAX_H3_FPS } from './dimensions';
+import { getLtx2StageCanvases, isLtx2TwoStage, MINIMAX_H3_FPS } from './dimensions';
 import { MINIMAX_H3_HYBRID_BLOCK_RANGE, resolveVideoMode } from './settings';
-import { getVideoDimensions, getVideoModelPolicy, getVideoValidationReasons } from './videoPolicies';
+import {
+  getEffectiveVideoTiming,
+  getVideoDimensions,
+  getVideoModelPolicy,
+  getVideoTargetResolution,
+  getVideoValidationReasons,
+} from './videoPolicies';
 
 /**
  * Video graph compilation: one builder per model family, mirroring the shape
@@ -45,7 +58,14 @@ const WAN_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
   txt2vid: 'wan_t2v',
 };
 
-const MINIMAX_H3_GENERATION_MODES: Record<VideoGenerationMode, string> = {
+const LTX2_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
+  'audio-to-video': 'ltx2_a2v',
+  'first-frame': 'ltx2_i2v',
+  txt2vid: 'ltx2_t2v',
+  'video-to-audio': 'ltx2_v2a',
+};
+
+const MINIMAX_H3_GENERATION_MODES: Partial<Record<VideoGenerationMode, string>> = {
   extend: 'minimax_h3_extend_video',
   'first-frame': 'minimax_h3_i2v',
   'first-last': 'minimax_h3_flf2v',
@@ -688,7 +708,7 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
           }
         : {}),
     },
-    generationMode: MINIMAX_H3_GENERATION_MODES[mode],
+    generationMode: MINIMAX_H3_GENERATION_MODES[mode] ?? 'minimax_h3_t2v',
     graph,
     height: dimensions.height,
     model,
@@ -711,6 +731,308 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
   return graph;
 };
 
+/**
+ * LTX-2: one transformer generates video and its soundtrack together, so there
+ * is a single denoise and a single decode; what varies is how much guidance the
+ * checkpoint's schedule wants. The dev checkpoint runs up to four forwards per
+ * step (conditional, unconditional, spatio-temporal, modality-isolation); the
+ * distilled one runs a fixed eight steps with none, which is why the guidance
+ * literals below collapse to their inert values rather than being omitted — the
+ * graph should state what will actually run.
+ */
+const buildLtx2VideoGraph = (settings: VideoSettings, model: MainModelConfig): BackendGraphContract => {
+  const mode = resolveVideoMode(settings);
+  const policy = getVideoModelPolicy(model, settings);
+  const dimensions = getVideoDimensions(model, settings);
+  // A conditioning clip owns the length, and in the video role the frame rate too; everywhere else
+  // these are the panel's own numbers. Used for every literal below, and for the metadata, so all
+  // three describe the same run.
+  const timing = getEffectiveVideoTiming(model, settings);
+
+  if (!dimensions) {
+    throw new Error('Video dimensions could not be derived from the current settings.');
+  }
+
+  // No LTX-2 main carries text-encoder weights, and a single-file transformer
+  // carries none of the VAEs, vocoder or connectors either. Validation requires
+  // both slots; these throws are backstops for direct callers.
+  const componentSource = model.format === 'diffusers' ? null : settings.componentSourceModel;
+
+  if (model.format !== 'diffusers' && !componentSource) {
+    throw new Error('A single-file LTX-2 transformer needs an LTX-2 components install under Model Components.');
+  }
+  if (!settings.ltx2TextEncoderModel) {
+    throw new Error('LTX-2 needs its Gemma-4 text encoder selected under Model Components.');
+  }
+
+  // A two-stage preset generates at half the canvas and refines an upscaled latent, so the base
+  // pass runs at `stages.base` and everything downstream of the upscaler at `stages.final`. Single
+  // stage returns the same canvas twice, which is what lets one code path build both.
+  // The same coercion `getVideoDimensions` applied: a settings record can hold a preset this model
+  // does not offer, and reading the raw value here would describe a different run than the canvas
+  // above was resolved from -- an unknown preset has no short edge, which makes every dimension NaN.
+  const targetResolution = getVideoTargetResolution(model, settings.targetResolution) as Ltx2TargetResolution;
+  const stages = getLtx2StageCanvases(dimensions.width, dimensions.height, targetResolution);
+
+  if (!stages) {
+    throw new Error('Video dimensions could not be derived from the current settings.');
+  }
+
+  // Asked of the preset rather than recovered by comparing the two canvases: equal widths would say
+  // "one stage" for a preset that is two, and NaN widths compare unequal, so a degenerate canvas
+  // would claim to be two.
+  const twoStage = isLtx2TwoStage(targetResolution);
+  const graph: BackendGraphContract = { edges: [], id: createId('ltx2_video_graph'), nodes: {} };
+  const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
+  const modelLoader = addNode(graph, {
+    component_source: componentSource ?? undefined,
+    id: 'model_loader',
+    model,
+    text_encoder_model: settings.ltx2TextEncoderModel,
+    type: 'ltx2_model_loader',
+  });
+
+  // The negative prompt only reaches the model through classifier-free
+  // guidance, so a schedule that runs none skips a 12B encode entirely.
+  const negativeWired = policy.prompt.negativeUsedInGraph;
+  const textEncoder = addNode(graph, {
+    encode_negative: negativeWired,
+    id: 'pos_cond',
+    type: 'ltx2_text_encoder',
+  });
+
+  addEdge(graph, modelLoader, 'text_encoder', textEncoder, 'text_encoder');
+  addEdge(graph, positivePrompt, 'value', textEncoder, 'prompt');
+  if (negativeWired) {
+    addEdge(graph, negativePrompt, 'value', textEncoder, 'negative_prompt');
+  }
+
+  // Both classifier-free scales are held at 1 without a negative prompt: they are the only terms
+  // that consume one, and the node refuses a scale above 1 with nothing wired. The spatio-temporal
+  // and modality passes steer against the *positive* conditioning, so they keep running — turning
+  // the negative prompt off is not a request to stop guiding. Metadata records these rather than
+  // the panel's own numbers, so a recall reproduces the run instead of the settings.
+  const guidance = policy.ui.cfgVisible
+    ? {
+        audio_cfg_scale: negativeWired ? (settings.audioCfgScale ?? policy.defaults.audioCfgScale ?? 1) : 1,
+        cfg_scale: negativeWired ? settings.cfgScale : 1,
+        modality_scale: settings.modalityScale ?? policy.defaults.modalityScale ?? 1,
+        stg_scale: settings.stgScale ?? policy.defaults.stgScale ?? 0,
+      }
+    : { audio_cfg_scale: 1, cfg_scale: 1, modality_scale: 1, stg_scale: 0 };
+
+  const denoise = addNode(graph, {
+    fps: timing.fps,
+    height: stages.base.height,
+    id: 'denoise_latents',
+    num_frames: timing.numFrames,
+    // 'auto' rather than the panel's own reading of the variant: the loader
+    // stamps the schedule off the checkpoint itself, which is the authority
+    // when a release the panel does not recognise falls back to the dev policy.
+    schedule: 'auto',
+    steps: settings.steps,
+    type: 'ltx2_denoise',
+    width: stages.base.width,
+    ...guidance,
+  });
+
+  addEdge(graph, modelLoader, 'transformer', denoise, 'transformer');
+  addEdge(graph, textEncoder, 'conditioning', denoise, 'positive_conditioning');
+  if (negativeWired) {
+    addEdge(graph, textEncoder, 'negative_conditioning', denoise, 'negative_conditioning');
+  }
+  addEdge(graph, seed, 'value', denoise, 'seed');
+
+  if (mode === 'first-frame') {
+    if (!settings.firstFrameImage) {
+      throw new Error('A first frame is required for image-to-video generation.');
+    }
+
+    // The base pass's canvas: the refine pass inherits the anchored first frame through the
+    // latents it is handed, and an encode made here could not be re-applied at twice the size.
+    const imageConditioning = addNode(graph, {
+      height: stages.base.height,
+      id: 'image_conditioning',
+      image: toImageField(settings.firstFrameImage),
+      type: 'ltx2_image_conditioning',
+      width: stages.base.width,
+    });
+
+    addEdge(graph, modelLoader, 'vae', imageConditioning, 'vae');
+    addEdge(graph, imageConditioning, 'video_conditioning', denoise, 'video_conditioning');
+  }
+
+  // The conditioning clip, in whichever role it was given. Both nodes report the frame count they
+  // actually encoded, and that count is wired into the denoise rather than the panel's prediction
+  // of it: an audio track need not be exactly as long as the picture it shipped with, and the
+  // gallery's own frame count is duration x fps rounded.
+  const conditioningClip = settings.conditioningClip;
+  let audioConditioning: BackendInvocationContract | null = null;
+
+  if (mode === 'audio-to-video' || mode === 'video-to-audio') {
+    if (!conditioningClip) {
+      throw new Error('A conditioning clip is required for audio-to-video and video-to-audio generation.');
+    }
+
+    const video = { video_name: conditioningClip.clip.video_name };
+
+    if (conditioningClip.role === 'audio') {
+      audioConditioning = addNode(graph, {
+        fps: timing.fps,
+        id: 'audio_conditioning',
+        type: 'ltx2_audio_conditioning',
+        video,
+      });
+
+      addEdge(graph, modelLoader, 'audio_vae', audioConditioning, 'audio_vae');
+      addEdge(graph, modelLoader, 'vocoder', audioConditioning, 'vocoder');
+      addEdge(graph, audioConditioning, 'audio_conditioning', denoise, 'audio_conditioning');
+      addEdge(graph, audioConditioning, 'num_frames', denoise, 'num_frames');
+    } else {
+      // The base canvas, which is the only canvas: a conditioned run has no refine pass, so the
+      // two stages are the same and this matches the denoise's own width and height.
+      const videoConditioning = addNode(graph, {
+        fps: timing.fps,
+        height: stages.base.height,
+        id: 'video_conditioning',
+        type: 'ltx2_video_conditioning',
+        video,
+        width: stages.base.width,
+      });
+
+      addEdge(graph, modelLoader, 'vae', videoConditioning, 'vae');
+      addEdge(graph, videoConditioning, 'video_conditioning', denoise, 'full_video_conditioning');
+      addEdge(graph, videoConditioning, 'num_frames', denoise, 'num_frames');
+    }
+  }
+
+  // The pass whose latents are decoded: the refine pass when there is one. Audio bypasses the
+  // upscaler -- it has no spatial extent -- but still goes through the refine denoise, which
+  // re-noises both modalities to one level so the transformer reads a single pair of timesteps.
+  let finalDenoise = denoise;
+
+  if (twoStage) {
+    const upsample = addNode(graph, { id: 'latent_upsample', type: 'ltx2_latent_upsample' });
+
+    addEdge(graph, denoise, 'video_latents', upsample, 'video_latents');
+    addEdge(graph, modelLoader, 'latent_upsampler', upsample, 'latent_upsampler');
+    addEdge(graph, modelLoader, 'vae', upsample, 'vae');
+
+    const refine = addNode(graph, {
+      fps: timing.fps,
+      height: stages.final.height,
+      id: 'refine_latents',
+      num_frames: timing.numFrames,
+      schedule: 'auto',
+      // The refine pass enters the schedule partway down and samples its tail, so a variant that
+      // pays four forwards a step gets a budget of its own rather than the base pass's. Never more
+      // than the base pass, though: shortening Steps for a quick probe must not leave the expensive
+      // half of the run longer than the half the user just cut.
+      steps: Math.min(policy.refineSteps ?? settings.steps, settings.steps),
+      type: 'ltx2_denoise',
+      width: stages.final.width,
+      ...guidance,
+    });
+
+    addEdge(graph, modelLoader, 'transformer', refine, 'transformer');
+    addEdge(graph, textEncoder, 'conditioning', refine, 'positive_conditioning');
+    if (negativeWired) {
+      addEdge(graph, textEncoder, 'negative_conditioning', refine, 'negative_conditioning');
+    }
+    addEdge(graph, seed, 'value', refine, 'seed');
+    addEdge(graph, upsample, 'latents', refine, 'latents');
+    addEdge(graph, denoise, 'audio_latents', refine, 'audio_latents');
+
+    if (mode === 'first-frame' && settings.firstFrameImage) {
+      // A second encode, at the refine canvas. The refine pass re-noises every token including
+      // frame 0, so the base pass's anchor does not survive into it -- and the base pass's encode
+      // is half this size, so it cannot be re-used. Without this, two-stage image-to-video would
+      // regenerate the first frame from the prompt alone.
+      const refineConditioning = addNode(graph, {
+        height: stages.final.height,
+        id: 'refine_image_conditioning',
+        image: toImageField(settings.firstFrameImage),
+        type: 'ltx2_image_conditioning',
+        width: stages.final.width,
+      });
+
+      addEdge(graph, modelLoader, 'vae', refineConditioning, 'vae');
+      addEdge(graph, refineConditioning, 'video_conditioning', refine, 'video_conditioning');
+    }
+
+    finalDenoise = refine;
+  }
+
+  const output = addNode(graph, {
+    fps: timing.fps,
+    id: 'video_output',
+    is_intermediate: false,
+    type: 'ltx2_latents_to_video',
+    use_cache: false,
+  });
+
+  addEdge(graph, finalDenoise, 'video_latents', output, 'video_latents');
+  addEdge(graph, finalDenoise, 'audio_latents', output, 'audio_latents');
+  if (audioConditioning) {
+    // The soundtrack the clip was generated for is muxed in as supplied. The model still denoises
+    // its own audio latents -- they are the stream it holds clean -- but decoding those would
+    // replace the user's recording with a vocoder's copy of itself.
+    addEdge(graph, audioConditioning, 'audio_conditioning', output, 'source_audio');
+  }
+  addEdge(graph, modelLoader, 'vae', output, 'vae');
+  addEdge(graph, modelLoader, 'audio_vae', output, 'audio_vae');
+  addEdge(graph, modelLoader, 'vocoder', output, 'vocoder');
+
+  addVideoMetadata({
+    extras: {
+      cfg_scale: guidance.cfg_scale,
+      fps: timing.fps,
+      ltx2_text_encoder_model: settings.ltx2TextEncoderModel,
+      ...(componentSource ? { ltx2_component_source: componentSource } : {}),
+      ...(policy.ui.audioCfgVisible ? { ltx2_audio_cfg_scale: guidance.audio_cfg_scale } : {}),
+      ...(policy.ui.stgVisible ? { ltx2_stg_scale: guidance.stg_scale } : {}),
+      ...(policy.ui.modalityVisible ? { ltx2_modality_scale: guidance.modality_scale } : {}),
+      // Informational, not load-bearing: recall recovers the preset by matching the recorded
+      // width/height against each one, and a two-stage preset's canvas is unique among them. These
+      // are here for someone reading a clip's metadata, to whom "1792x1024" alone does not say that
+      // it was reached by refining an 896x512 pass rather than generated at size.
+      ...(twoStage
+        ? { ltx2_base_height: stages.base.height, ltx2_base_width: stages.base.width, ltx2_two_stage: true }
+        : {}),
+      // The clip is the run's length and, in the video role, its frame rate -- so record the count
+      // that ran rather than the panel's stored one, which these modes do not use.
+      ...(conditioningClip
+        ? {
+            ltx2_conditioning_role: conditioningClip.role,
+            ltx2_conditioning_video: { video_name: conditioningClip.clip.video_name },
+            num_frames: timing.numFrames,
+          }
+        : {}),
+    },
+    generationMode: LTX2_GENERATION_MODES[mode] ?? 'ltx2_t2v',
+    graph,
+    height: dimensions.height,
+    model,
+    negativeWired,
+    outputs: [output],
+    settings,
+    width: dimensions.width,
+  });
+
+  return graph;
+};
+
+/**
+ * One builder per supported family. A record rather than a conditional so a new
+ * family cannot compile without one — the failure would otherwise be a Wan
+ * graph built for someone else's model.
+ */
+const VIDEO_GRAPH_BUILDERS = {
+  'ltx-2': buildLtx2VideoGraph,
+  'minimax-h3': buildMiniMaxH3VideoGraph,
+  wan: buildWanVideoGraph,
+} satisfies Record<SupportedVideoBase, (settings: VideoSettings, model: MainModelConfig) => BackendGraphContract>;
+
 export const compileVideoGraph = (settings: VideoSettings, model: MainModelConfig): CompiledVideoGraph => {
   const validationReasons = getVideoValidationReasons(model, settings);
 
@@ -718,8 +1040,13 @@ export const compileVideoGraph = (settings: VideoSettings, model: MainModelConfi
     throw new Error(validationReasons[0]);
   }
 
-  const backendGraph =
-    model.base === 'minimax-h3' ? buildMiniMaxH3VideoGraph(settings, model) : buildWanVideoGraph(settings, model);
+  const builder = VIDEO_GRAPH_BUILDERS[model.base as SupportedVideoBase];
+
+  if (!builder) {
+    throw new Error(`No video graph builder for ${model.base}.`);
+  }
+
+  const backendGraph = builder(settings, model);
 
   return {
     backendGraph,

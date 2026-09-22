@@ -1,6 +1,7 @@
 import type { GenerationModelCatalogItem, MainModelConfig } from '@features/generation/contracts';
 
 import { createDefaultVideoWidgetValues } from '@features/video';
+import { getVideoPromptPolicy } from '@features/video/core/videoPolicies';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -281,6 +282,7 @@ describe('buildVideoRecallSettings', () => {
 
     expect(result?.fields).toContain('media');
     expect(result?.mediaNames).toEqual({
+      conditioningClip: null,
       firstFrameName: 'first.png',
       lastFrameName: null,
       references: [],
@@ -820,5 +822,172 @@ describe('portable records (metadata_version 1.0.0)', () => {
       EMPTY_VIDEO_RECALL_CAPABILITIES
     );
     expect(getVideoRecallCapabilities({ generation_mode: 'wan_t2v', model: { hash: 'blake3:x' } }).remix).toBe(true);
+  });
+});
+
+const ltx2Model = (variant: string, format = 'checkpoint', key = `ltx2-${variant}`): MainModelConfig => ({
+  base: 'ltx-2',
+  format,
+  key,
+  name: `LTX-2 ${variant}`,
+  type: 'main',
+  variant,
+});
+
+const LTX2_DEV = ltx2Model('ltx2_dev');
+const LTX2_DISTILLED = ltx2Model('ltx2_distilled');
+const LTX2_COMPONENTS = ltx2Model('ltx2_dev', 'diffusers', 'ltx2-components');
+const LTX2_ENCODER: GenerationModelCatalogItem = {
+  base: 'ltx-2',
+  key: 'gemma4',
+  name: 'LTX-2.5 Text Encoder',
+  type: 'gemma4_encoder',
+};
+
+const ltx2Metadata = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  cfg_scale: 3,
+  fps: 24,
+  generation_mode: 'ltx2_t2v',
+  height: 704,
+  ltx2_audio_cfg_scale: 7,
+  ltx2_component_source: LTX2_COMPONENTS,
+  ltx2_modality_scale: 3,
+  ltx2_stg_scale: 1,
+  ltx2_text_encoder_model: LTX2_ENCODER,
+  model: LTX2_DEV,
+  negative_prompt: 'blurry',
+  num_frames: 121,
+  positive_prompt: 'a ginger cat',
+  seed: 99,
+  steps: 30,
+  width: 1248,
+  ...extra,
+});
+
+describe('LTX-2 recall', () => {
+  const catalog = [LTX2_DEV, LTX2_DISTILLED, LTX2_COMPONENTS, LTX2_ENCODER, WAN_T2V];
+  const currentValues = createDefaultVideoWidgetValues([WAN_T2V]);
+
+  it('treats both LTX-2 modes as recallable video metadata', () => {
+    // The mode id is the gate for every Recall button; a string the set does not know silently
+    // hides them all, with nothing failing.
+    for (const mode of ['ltx2_t2v', 'ltx2_i2v']) {
+      expect(isVideoGenerationMetadata({ generation_mode: mode, seed: 1 })).toBe(true);
+      expect(getVideoRecallCapabilities(ltx2Metadata({ generation_mode: mode }))).toEqual({
+        all: true,
+        prompts: true,
+        remix: true,
+        seed: true,
+      });
+    }
+  });
+
+  it('recalls a two-stage run as the preset that produces its canvas', () => {
+    // A two-stage run records its final canvas, and no single-stage preset resolves to it -- so the
+    // preset comes back from the size alone, without the metadata having to name the stage count.
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: ltx2Metadata({
+        height: 1024,
+        ltx2_base_height: 512,
+        ltx2_base_width: 896,
+        ltx2_two_stage: true,
+        width: 1792,
+      }),
+      models: catalog,
+    });
+
+    expect(result?.values.targetResolution).toBe('1024p');
+    expect(result?.values.aspectRatioId).toBe('16:9');
+  });
+
+  it('reproduces a dev clip that ran without a negative prompt, from a distilled panel', () => {
+    // Switching to dev seeds the release's list into a panel that carries none -- which is right
+    // when the user picks the model, and wrong here: the clip recorded an empty negative prompt and
+    // a recall has to re-run what was generated, not what the panel would default to.
+    const onDistilled = createDefaultVideoWidgetValues([LTX2_DISTILLED]);
+
+    const result = buildVideoRecallSettings({
+      currentValues: onDistilled,
+      kind: 'all',
+      metadata: ltx2Metadata({ negative_prompt: '' }),
+      models: catalog,
+    });
+
+    expect(result?.values.model).toMatchObject({ key: LTX2_DEV.key });
+    expect(result?.values.cfgScale).toBe(3);
+    expect(result?.values.negativePrompt).toBe('');
+  });
+
+  it('restores the model, both component slots and every guidance scale', () => {
+    const result = buildVideoRecallSettings({ currentValues, kind: 'all', metadata: ltx2Metadata(), models: catalog });
+
+    expect(result?.values.model).toMatchObject({ key: LTX2_DEV.key });
+    expect(result?.values.componentSourceModel).toMatchObject({ key: LTX2_COMPONENTS.key });
+    expect(result?.values.ltx2TextEncoderModel).toMatchObject({ key: LTX2_ENCODER.key });
+    expect(result?.values).toMatchObject({
+      audioCfgScale: 7,
+      cfgScale: 3,
+      fps: 24,
+      modalityScale: 3,
+      numFrames: 121,
+      seed: 99,
+      steps: 30,
+      stgScale: 1,
+    });
+    expect(result?.fields).toEqual(expect.arrayContaining(['model', 'components', 'cfg', 'frames', 'steps']));
+  });
+
+  it('recalls the size back onto the preset that produced it', () => {
+    const result = buildVideoRecallSettings({ currentValues, kind: 'all', metadata: ltx2Metadata(), models: catalog });
+
+    expect(result?.values.targetResolution).toBe('704p');
+    expect(result?.values.aspectRatioId).toBe('16:9');
+  });
+
+  it('does not put a step count on a checkpoint whose schedule is fixed', () => {
+    // The distilled schedule ignores whatever reaches it, so a recalled 30 would leave a disabled
+    // control showing a number the run will not use — and re-record it on the next generation.
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: ltx2Metadata({ model: LTX2_DISTILLED, steps: 30 }),
+      models: catalog,
+    });
+
+    expect(result?.values.model).toMatchObject({ key: LTX2_DISTILLED.key });
+    expect(result?.values.steps).toBe(8);
+    expect(result?.fields).not.toContain('steps');
+  });
+
+  it('reproduces a run made with the negative prompt switched off', () => {
+    // Whether the negative prompt is on changes the LTX-2 graph — it decides whether an
+    // unconditional pass runs at all — and nothing records that bit directly. What is recorded is
+    // the guidance the run actually used, which is the same thing: both scales at 1 mean no
+    // unconditional pass, so recalling them rebuilds the same graph even with the prompt back on.
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: ltx2Metadata({ cfg_scale: 1, ltx2_audio_cfg_scale: 1 }),
+      models: catalog,
+    });
+
+    expect(result?.values.cfgScale).toBe(1);
+    expect(result?.values.audioCfgScale).toBe(1);
+    expect(getVideoPromptPolicy(result!.values.model!, result!.values).negativeUsedInGraph).toBe(false);
+  });
+
+  it('drops the per-modality scales when recalled onto a family without them', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: { ...ltx2Metadata(), model: WAN_T2V, generation_mode: 'wan_t2v' },
+      models: catalog,
+    });
+
+    expect(result?.values.audioCfgScale).toBeNull();
+    expect(result?.values.stgScale).toBeNull();
+    expect(result?.values.modalityScale).toBeNull();
   });
 });
