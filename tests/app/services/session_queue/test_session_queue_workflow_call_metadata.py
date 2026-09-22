@@ -14,8 +14,8 @@ from invokeai.app.services.events.events_common import (
     QueueItemStatusChangedEvent,
 )
 from invokeai.app.services.image_files.image_files_disk import DiskImageFileStorage
-from invokeai.app.services.names.names_default import SimpleNameService
 from invokeai.app.services.invoker import Invoker
+from invokeai.app.services.names.names_default import SimpleNameService
 from invokeai.app.services.session_queue.session_queue_common import (
     NodeFieldValue,
     SessionQueueItemNotFoundError,
