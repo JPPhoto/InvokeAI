@@ -37,11 +37,11 @@ class LTX2ImageConditioningOutput(BaseInvocationOutput):
     title="Image Conditioning - LTX-2",
     tags=["conditioning", "image", "ltx", "ltx2", "video"],
     category="conditioning",
-    version="1.0.0",
+    version="1.1.0",
     classification=Classification.Prototype,
 )
 class LTX2ImageConditioningInvocation(BaseInvocation):
-    """Encodes an image as the first frame of an LTX-2 generation.
+    """Encodes an image as a held frame of an LTX-2 generation.
 
     The image is re-compressed as a single H.264 frame before it is encoded. That is not an
     optimization: LTX-2 was trained on frames that had been through a video codec, and a pristine
@@ -63,6 +63,12 @@ class LTX2ImageConditioningInvocation(BaseInvocation):
         le=1.0,
         description="How strongly the generation is held to this frame. 1 keeps it exactly; lower values "
         "let the model redraw it, which can hide a source that does not match the prompt.",
+    )
+    frame_index: int = InputField(
+        default=0,
+        description="Latent frame to hold this image at. 0 is the first frame; negative counts from the end, "
+        "so -1 makes it the last. A frame held anywhere but 0 is appended to the model's sequence rather "
+        "than overwriting the grid, which is what lets it coexist with a first frame.",
     )
     crf: int = InputField(
         default=LTX2_IMAGE_CRF,
@@ -99,5 +105,6 @@ class LTX2ImageConditioningInvocation(BaseInvocation):
                 width=self.width,
                 height=self.height,
                 strength=self.strength,
+                frame_index=self.frame_index,
             )
         )

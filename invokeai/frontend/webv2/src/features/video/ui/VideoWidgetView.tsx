@@ -12,7 +12,13 @@ import { GenerationSettingsSection, SeedField } from '@features/generation/compo
 import { isMainModelConfig, sanitizeBatchCount } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
-import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
+import {
+  getVideoDurationSeconds,
+  invertVideoAspectRatioId,
+  LTX2_EXTEND_CONTEXT_FRAMES,
+  LTX2_NUM_FRAMES_STEP,
+  snapLtx2FramesDown,
+} from '@features/video/core/dimensions';
 import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
@@ -228,6 +234,11 @@ export const VideoWidgetView = () => {
       stgScale: (stgScale: number) => patch({ stgScale }),
       fps: (fps: number) => patch({ fps }),
       steps: (steps: number) => patch({ steps }),
+      // Snapped on the way out: the VAE encodes 8k + 1 frames and the node snaps a ragged request
+      // down silently, so an unsnapped value would leave the panel showing a number the run did
+      // not use. The scrubber's own step keeps dragging on-grid; this covers typed input.
+      ltx2ExtendContextFrames: (frames: number) =>
+        patch({ ltx2ExtendContextFrames: Math.max(1 + LTX2_NUM_FRAMES_STEP, snapLtx2FramesDown(frames)) }),
       targetResolution: ({ value }: { value: string[] }) => {
         const targetResolution = toTargetResolution(value[0]);
 
@@ -604,6 +615,24 @@ export const VideoWidgetView = () => {
               sourceVideo={values.sourceVideo}
               onChange={setSourceVideo}
             />
+            {policy.ui.extendContext ? (
+              <ScrubberField
+                defaultValue={LTX2_EXTEND_CONTEXT_FRAMES}
+                // The trade this control makes, which Frames alone does not show: the join consumes
+                // the context from both halves, so every frame held is a frame of new video given up.
+                helpText={t('widgets.video.extendContextHelp', {
+                  frames: policy.ui.extendContext.newFrames,
+                  seconds: (policy.ui.extendContext.newFrames / Math.max(1, values.fps)).toFixed(1),
+                })}
+                inputMax={policy.ui.extendContext.max}
+                label={t('widgets.video.extendContext')}
+                max={policy.ui.extendContext.max}
+                min={policy.ui.extendContext.min}
+                step={policy.ui.extendContext.step}
+                value={policy.ui.extendContext.value}
+                onChange={set.ltx2ExtendContextFrames}
+              />
+            ) : null}
           </Stack>
         </GenerationSettingsSection>
       ) : null}

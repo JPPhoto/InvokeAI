@@ -14,7 +14,13 @@ from invokeai.backend.ltx2.constants import (
     LTX2_REFINE_NOISE_SEED_OFFSET,
     LTX2_STAGE_2_NOISE_SCALE,
 )
-from invokeai.backend.ltx2.denoise import build_denoise_state, build_refine_state, denoise, preview_latent_frame
+from invokeai.backend.ltx2.denoise import (
+    _step_noise,
+    build_denoise_state,
+    build_refine_state,
+    denoise,
+    preview_latent_frame,
+)
 from invokeai.backend.ltx2.guidance import LTX2Guidance
 from invokeai.backend.ltx2.packing import (
     audio_latent_count,
@@ -63,7 +69,14 @@ class TransformerStub(torch.nn.Module):
         video, audio = kwargs["hidden_states"].float(), kwargs["audio_hidden_states"].float()
         # x0 = x - sigma * v, so this velocity predicts the target at any sigma.
         sigma = float(kwargs["sigma"][0]) / 1000.0
-        video_velocity = torch.zeros_like(video) if self.target is None else (video - self.target) / max(sigma, 1e-6)
+        target = self.target
+        if target is not None and target.shape[1] < video.shape[1]:
+            # Keyframe tokens ride on the end of the sequence. The target is extended with a value
+            # they are NOT already at, so they drift unless something holds them -- extending with
+            # their own value would give them zero velocity and quietly excuse the mask from
+            # working at all.
+            target = torch.cat([target, torch.full_like(video[:, target.shape[1] :], -3.0)], dim=1)
+        video_velocity = torch.zeros_like(video) if target is None else (video - target) / max(sigma, 1e-6)
         audio_velocity = (
             torch.zeros_like(audio) if self.audio_target is None else (audio - self.audio_target) / max(sigma, 1e-6)
         )
@@ -324,6 +337,295 @@ def test_a_soundtrack_of_the_wrong_length_names_the_frame_count_it_implies() -> 
 def test_a_conditioning_clip_encoded_for_another_canvas_is_refused() -> None:
     with pytest.raises(ValueError, match="conditioning clip is"):
         _state(frozen_video_latents=torch.randn(1, LTX2_LATENT_CHANNELS, LATENT[0], LATENT[1] + 1, LATENT[2]))
+
+
+def _keyframe(seed: int = 8) -> torch.Tensor:
+    return torch.randn(1, LTX2_LATENT_CHANNELS, 1, LATENT[1], LATENT[2], generator=torch.Generator().manual_seed(seed))
+
+
+def test_a_keyframe_rides_on_the_end_of_the_sequence_and_is_trimmed_off_the_result() -> None:
+    """A last frame cannot overwrite grid tokens the way the first frame does -- the generation
+    needs that position too -- so it is appended, and the model sees a longer sequence than the clip
+    it returns. If the extra rows survived into the output, unpacking would reshape garbage."""
+    keyframe = _keyframe()
+    state = _state(keyframe_latents=keyframe, keyframe_latent_index=LATENT[0] - 1)
+    transformer = TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS))
+    extra = LATENT[1] * LATENT[2]
+
+    assert state.keyframe_tokens == extra
+    assert state.video_latents.shape[1] == ROWS + extra
+
+    video, _ = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    # What the model was handed, versus what came back.
+    for call in transformer.calls:
+        assert call["hidden_states"].shape[1] == ROWS + extra
+        assert call["video_coords"].shape[2] == ROWS + extra
+    assert video.shape[1] == ROWS
+    unpack_video_latents(video, *LATENT)  # would raise if the trim were wrong
+
+
+def test_a_keyframe_is_presented_clean_at_every_forward_and_keeps_its_value() -> None:
+    keyframe = _keyframe()
+    state = _state(keyframe_latents=keyframe, keyframe_latent_index=LATENT[0] - 1)
+    transformer = TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS))
+    packed = pack_video_latents(keyframe)
+
+    _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    for call in transformer.calls:
+        held = call["hidden_states"].float()[:, ROWS:]
+        assert torch.allclose(held, packed, atol=1e-5)
+        assert torch.equal(call["timestep"][0, ROWS:], torch.zeros(state.keyframe_tokens))
+        assert (call["timestep"][0, :ROWS] > 0).all()
+
+
+def test_a_keyframes_coordinates_place_it_at_its_own_instant_not_at_frame_zero() -> None:
+    """The coordinates are the only thing saying *when* the held frame is; without them the model
+    reads it as more of frame 0 and interpolates toward it from the start."""
+    index = LATENT[0] - 1
+    state = _state(keyframe_latents=_keyframe(), keyframe_latent_index=index)
+    transformer = TransformerStub()
+
+    _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    coords = transformer.calls[0]["video_coords"]
+    keyframe_start = coords[0, 0, ROWS:, 0]
+    # (index - 1) * 8 + 1 pixel frames in, expressed in seconds at the run's own frame rate.
+    assert torch.allclose(keyframe_start, torch.full_like(keyframe_start, ((index - 1) * 8 + 1) / 24.0))
+
+
+def test_a_first_frame_and_a_keyframe_compose_into_first_to_last_interpolation() -> None:
+    """The two use the same mask at different ends of it: one overwrites grid tokens, one appends.
+    Both have to survive the run, or interpolation silently becomes plain image-to-video."""
+    image_latents = torch.randn(1, LTX2_LATENT_CHANNELS, 1, LATENT[1], LATENT[2])
+    keyframe = _keyframe()
+    state = _state(image_latents=image_latents, keyframe_latents=keyframe, keyframe_latent_index=LATENT[0] - 1)
+    transformer = TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS))
+
+    video, _ = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    anchor_rows = LATENT[1] * LATENT[2]
+    for call in transformer.calls:
+        assert torch.equal(call["timestep"][0, :anchor_rows], torch.zeros(anchor_rows))
+        assert torch.equal(call["timestep"][0, ROWS:], torch.zeros(state.keyframe_tokens))
+        assert (call["timestep"][0, anchor_rows:ROWS] > 0).all()
+    assert torch.allclose(unpack_video_latents(video, *LATENT)[:, :, :1], image_latents, atol=1e-5)
+
+
+def test_a_partially_held_keyframe_is_noised_to_its_share_of_the_step() -> None:
+    state = _state(keyframe_latents=_keyframe(), keyframe_latent_index=LATENT[0] - 1, keyframe_strength=0.5)
+    transformer = TransformerStub()
+
+    _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    half = float(state.sigmas[0]) * 1000 * 0.5
+    held = transformer.calls[0]["timestep"][0, ROWS:]
+    assert held.tolist() == pytest.approx([half] * state.keyframe_tokens)
+
+
+@pytest.mark.parametrize("index", [0, -1, LATENT[0], LATENT[0] + 5])
+def test_a_keyframe_outside_the_clip_or_at_frame_zero_is_refused(index: int) -> None:
+    """Index 0 is the first frame's job, and an index past the end names a moment the clip does
+    not contain -- both are graph mistakes that would otherwise be a shape failure much later."""
+    with pytest.raises(ValueError, match="keyframe"):
+        _state(keyframe_latents=_keyframe(), keyframe_latent_index=index)
+
+
+def test_a_keyframe_encoded_for_another_canvas_is_refused() -> None:
+    with pytest.raises(ValueError, match="keyframe was encoded"):
+        _state(
+            keyframe_latents=torch.randn(1, LTX2_LATENT_CHANNELS, 1, LATENT[1] + 1, LATENT[2]),
+            keyframe_latent_index=LATENT[0] - 1,
+        )
+
+
+@pytest.mark.parametrize("distilled", [False, True])
+def test_adding_a_keyframe_does_not_reshuffle_the_generation(distilled: bool) -> None:
+    """The ancestral branch draws fresh noise every step from one shared stream, sized from the
+    sequence -- which the keyframe rows are part of. Drawing for them would shift the audio noise
+    and, from the next step on, the picture too, so adding a last frame would not change how a clip
+    ends, it would change the clip. The distilled checkpoint is the only schedule that takes that
+    branch, which is why it needs its own case here."""
+    keyframe = _keyframe()
+    common = {
+        "num_frames": FRAMES,
+        "height": HEIGHT,
+        "width": WIDTH,
+        "fps": 24.0,
+        "seed": 7,
+        "distilled": distilled,
+        "num_steps": 3,
+    }
+    plain = build_denoise_state(**common)
+    with_keyframe = build_denoise_state(**common, keyframe_latents=keyframe, keyframe_latent_index=LATENT[0] - 1)
+
+    assert with_keyframe.eta == (1.0 if distilled else 0.0)
+
+    generators = [torch.Generator(device="cpu").manual_seed(state.noise_seed) for state in (plain, with_keyframe)]
+    for _step in range(3):
+        plain_noise = _step_noise(plain, plain.video_latents, plain.audio_latents, generators[0], torch.device("cpu"))
+        keyed_noise = _step_noise(
+            with_keyframe, with_keyframe.video_latents, with_keyframe.audio_latents, generators[1], torch.device("cpu")
+        )
+        if not distilled:
+            assert plain_noise == (None, None)
+            continue
+        assert torch.equal(keyed_noise[0][:, :ROWS], plain_noise[0])
+        assert torch.equal(keyed_noise[1], plain_noise[1])
+
+
+def test_a_keyframe_beside_a_whole_clip_conditioning_is_refused() -> None:
+    """The frozen branch replaces the entire sequence, taking the appended rows with it and leaving
+    the keyframe's coordinates and token count pointing at tokens that are gone."""
+    with pytest.raises(ValueError, match="keyframe cannot be combined"):
+        _state(
+            keyframe_latents=_keyframe(),
+            keyframe_latent_index=LATENT[0] - 1,
+            frozen_video_latents=torch.randn(1, LTX2_LATENT_CHANNELS, *LATENT),
+        )
+
+
+def test_adding_a_keyframe_does_not_reshuffle_the_noise_the_rest_of_the_clip_would_have_had() -> None:
+    """Its noise is drawn last, so the same seed keeps the same generation and a user adding a last
+    frame sees their clip end differently rather than change entirely."""
+    plain = _state()
+    with_keyframe = _state(keyframe_latents=_keyframe(), keyframe_latent_index=LATENT[0] - 1)
+
+    assert torch.equal(with_keyframe.video_latents[:, :ROWS], plain.video_latents)
+    assert torch.equal(with_keyframe.audio_latents, plain.audio_latents)
+
+
+def test_the_refine_pass_is_given_the_keyframe_again_or_it_would_end_somewhere_else() -> None:
+    """Appended tokens do not go through the upsampler, and the refine pass re-noises every token
+    it does have -- so a last frame held only in stage one is gone by stage two, and a two-stage
+    run would quietly mean something different by "last frame" than a single-stage one."""
+    keyframe = _keyframe()
+    state = build_refine_state(
+        video_latents=torch.randn(1, LTX2_LATENT_CHANNELS, *LATENT),
+        audio_latents=torch.randn(1, audio_latent_count(FRAMES, 24.0), 128),
+        num_frames=FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        fps=24.0,
+        seed=7,
+        distilled=False,
+        num_steps=2,
+        noise_scale=LTX2_STAGE_2_NOISE_SCALE,
+        keyframe_latents=keyframe,
+        keyframe_latent_index=LATENT[0] - 1,
+    )
+    transformer = TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS))
+
+    assert state.keyframe_tokens == LATENT[1] * LATENT[2]
+
+    video, _ = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    packed = pack_video_latents(keyframe)
+    for call in transformer.calls:
+        assert torch.allclose(call["hidden_states"].float()[:, ROWS:], packed, atol=1e-5)
+    assert video.shape[1] == ROWS
+
+
+@pytest.mark.parametrize("held", [1, 2])
+def test_a_leading_anchor_may_span_several_latent_frames_for_an_extension(held: int) -> None:
+    """A still frame says where a clip starts but nothing about how it was moving, so an extension
+    seeded from one stalls or lurches at the join. Several latent frames of the source carry its
+    motion in, held by the same mask over more of the front of the grid."""
+    anchor = torch.randn(1, LTX2_LATENT_CHANNELS, held, LATENT[1], LATENT[2])
+    state = _state(image_latents=anchor)
+    transformer = TransformerStub(target=torch.randn(1, ROWS, LTX2_LATENT_CHANNELS))
+
+    held_rows = held * LATENT[1] * LATENT[2]
+
+    assert state.conditioning_mask is not None
+    assert torch.equal(state.conditioning_mask[0, :held_rows], torch.ones(held_rows))
+    assert torch.equal(state.conditioning_mask[0, held_rows:], torch.zeros(ROWS - held_rows))
+
+    video, _ = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    for call in transformer.calls:
+        assert torch.equal(call["timestep"][0, :held_rows], torch.zeros(held_rows))
+        assert (call["timestep"][0, held_rows:] > 0).all()
+    assert torch.allclose(unpack_video_latents(video, *LATENT)[:, :, :held], anchor, atol=1e-5)
+
+
+def test_an_anchor_longer_than_the_clip_is_refused() -> None:
+    with pytest.raises(ValueError, match="image conditioning was encoded"):
+        _state(image_latents=torch.randn(1, LTX2_LATENT_CHANNELS, LATENT[0] + 1, LATENT[1], LATENT[2]))
+
+
+def _audio_prefix(rows: int, seed: int = 11) -> torch.Tensor:
+    return torch.randn(1, rows, AUDIO_WIDTH, generator=torch.Generator().manual_seed(seed))
+
+
+def test_holding_the_soundtracks_opening_leaves_the_rest_to_be_generated() -> None:
+    """A continuation replays the source's last moments and the join crossfades exactly those out of
+    both halves. The picture survives that because it is held; the soundtrack has to be held over
+    the same span or the blend fades invented audio in against the source's real audio, and the new
+    soundtrack audibly starts one overlap early."""
+    held = 4
+    prefix = _audio_prefix(held)
+    state = _state(audio_prefix_latents=prefix)
+    transformer = TransformerStub(audio_target=torch.full((1, AUDIO_ROWS, AUDIO_WIDTH), 5.0))
+
+    _, audio = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    for call in transformer.calls:
+        # The opening is clean at every forward; everything after it is noised as usual.
+        assert torch.equal(call["audio_timestep"][0, :held], torch.zeros(held))
+        assert (call["audio_timestep"][0, held:] > 0).all()
+        assert torch.allclose(call["audio_hidden_states"].float()[:, :held], prefix, atol=1e-5)
+
+    assert torch.allclose(audio[:, :held], prefix, atol=1e-5)
+    # And the rest was genuinely generated, not held.
+    assert torch.allclose(audio[:, held:], torch.full((1, AUDIO_ROWS - held, AUDIO_WIDTH), 5.0), atol=1e-4)
+
+
+def test_the_refine_pass_holds_the_soundtracks_opening_again() -> None:
+    """Stage two re-noises every row, so an opening held only in stage one is gone by the join."""
+    held = 4
+    prefix = _audio_prefix(held)
+    state = build_refine_state(
+        video_latents=torch.randn(1, LTX2_LATENT_CHANNELS, *LATENT),
+        audio_latents=torch.randn(1, audio_latent_count(FRAMES, 24.0), AUDIO_WIDTH),
+        num_frames=FRAMES,
+        height=HEIGHT,
+        width=WIDTH,
+        fps=24.0,
+        seed=7,
+        distilled=False,
+        num_steps=2,
+        noise_scale=LTX2_STAGE_2_NOISE_SCALE,
+        audio_prefix_latents=prefix,
+    )
+    transformer = TransformerStub(audio_target=torch.full((1, AUDIO_ROWS, AUDIO_WIDTH), 5.0))
+
+    _, audio = _denoise(transformer, state, LTX2Guidance(**OFF))
+
+    assert torch.allclose(audio[:, :held], prefix, atol=1e-5)
+
+
+def test_holding_the_whole_soundtrack_and_its_opening_at_once_is_refused() -> None:
+    with pytest.raises(ValueError, match="held whole and held at its opening"):
+        _state(frozen_audio_latents=_soundtrack(), audio_prefix_latents=_audio_prefix(4))
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 0, AUDIO_WIDTH),
+        (1, AUDIO_ROWS + 1, AUDIO_WIDTH),
+        (1, 4, AUDIO_WIDTH + 1),
+        # Saved tensors are whatever the workflow pointed at. A prefix of the wrong rank must be
+        # named like the others rather than raising a bare IndexError on its missing dimension.
+        (AUDIO_ROWS,),
+        (1, AUDIO_ROWS),
+    ],
+)
+def test_a_held_opening_that_does_not_fit_the_soundtrack_is_refused(shape: tuple[int, ...]) -> None:
+    with pytest.raises(ValueError, match="held opening of the soundtrack"):
+        _state(audio_prefix_latents=torch.zeros(shape))
 
 
 def test_a_cancel_stops_the_run_inside_a_forward() -> None:

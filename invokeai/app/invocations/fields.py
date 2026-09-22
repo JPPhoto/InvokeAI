@@ -481,7 +481,7 @@ class LTX2ConditioningField(BaseModel):
 
 
 class LTX2VideoConditioningField(BaseModel):
-    """First-frame (VAE-latent) conditioning for LTX-2 image-to-video.
+    """A frame (VAE-latent) held at one point in an LTX-2 generation.
 
     The canvas the frame was encoded at rides along so the denoise node can reject a mismatch
     with a named error rather than a shape failure inside the transformer.
@@ -491,6 +491,12 @@ class LTX2VideoConditioningField(BaseModel):
     width: int = Field(description="Pixel width the frame was encoded at (matches denoise width).")
     height: int = Field(description="Pixel height the frame was encoded at (matches denoise height).")
     strength: float = Field(default=1.0, description="How strongly the frame is held, 0 (ignored) to 1 (kept exactly).")
+    frame_index: int = Field(
+        default=0,
+        description="Latent frame the image is held at. 0 is the first frame; negative counts from the end, "
+        "so -1 is the last. Resolved against the clip's own length by the denoise node, which is why an "
+        "encode stays valid when the frame count changes.",
+    )
 
 
 class LTX2AudioConditioningField(BaseModel):
@@ -523,6 +529,10 @@ class LTX2FullVideoConditioningField(BaseModel):
     height: int = Field(description="Pixel height the clip was encoded at.")
     num_frames: int = Field(description="Pixel frames the clip covers.")
     fps: float = Field(description="The clip's own frame rate, which the generation adopts.")
+    source_video_name: str = Field(
+        description="The clip these latents were encoded from. The decode muxes its own frames back in rather "
+        "than rendering the held latents, which would hand the user a VAE round trip of footage they already have."
+    )
 
 
 class MiniMaxH3FrameConditioningField(BaseModel):

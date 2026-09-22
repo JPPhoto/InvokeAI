@@ -9,8 +9,10 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image
+from pydantic import ValidationError
 
 import invokeai.app.invocations.ltx2.ltx2_audio_conditioning as ltx2_audio_conditioning
+import invokeai.app.invocations.ltx2.ltx2_extend_conditioning as ltx2_extend_conditioning
 import invokeai.app.invocations.ltx2.ltx2_video_conditioning as ltx2_video_conditioning
 import invokeai.app.invocations.vae.ltx2_latents_to_video as ltx2_latents_to_video
 from invokeai.app.invocations.fields import (
@@ -23,11 +25,16 @@ from invokeai.app.invocations.fields import (
 )
 from invokeai.app.invocations.ltx2.ltx2_audio_conditioning import LTX2AudioConditioningInvocation
 from invokeai.app.invocations.ltx2.ltx2_denoise import LTX2DenoiseInvocation
+from invokeai.app.invocations.ltx2.ltx2_extend_conditioning import (
+    LTX2_MAX_EXTEND_CONTEXT_FRAMES,
+    LTX2ExtendConditioningInvocation,
+)
 from invokeai.app.invocations.ltx2.ltx2_ideal_dimensions import LTX2IdealDimensionsInvocation
 from invokeai.app.invocations.ltx2.ltx2_latent_upsample import LTX2LatentUpsampleInvocation
 from invokeai.app.invocations.ltx2.ltx2_model_loader import LTX2ModelLoaderInvocation
 from invokeai.app.invocations.ltx2.ltx2_video_conditioning import LTX2VideoConditioningInvocation
 from invokeai.app.invocations.model import (
+    LoRAField,
     LTX2LatentUpsamplerField,
     LTX2TransformerField,
     LTX2VocoderField,
@@ -35,6 +42,7 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.invocations.vae.ltx2_latents_to_video import LTX2LatentsToVideoInvocation
+from invokeai.backend.ltx2.clip_frames import CanvasClip
 from invokeai.backend.ltx2.constants import (
     LTX2_AUDIO_LATENT_CHANNELS,
     LTX2_AUDIO_LATENT_MEL_BINS,
@@ -85,13 +93,13 @@ def test_the_schedule_follows_the_variant_unless_it_is_set_explicitly(
     """Sampling a distilled checkpoint on the dev schedule returns noise, so the default reads the
     variant the loader stamped rather than trusting a literal in the graph."""
     node = _denoise(transformer=LTX2TransformerField(transformer=_identifier(), variant=variant), schedule=schedule)
-    assert node._resolve_distilled() is expected
+    assert node._resolve_distilled(_context()) is expected
 
 
 def test_an_unstamped_transformer_cannot_resolve_the_schedule_automatically() -> None:
     node = _denoise(transformer=LTX2TransformerField(transformer=_identifier(), variant=None), schedule="auto")
     with pytest.raises(ValueError, match="Auto"):
-        node._resolve_distilled()
+        node._resolve_distilled(_context())
 
 
 def test_the_distilled_schedule_ignores_the_guidance_scales_and_says_so() -> None:
@@ -637,10 +645,10 @@ def test_the_conditioning_clip_drops_its_ragged_tail_rather_than_padding_it(
 ) -> None:
     """Padding would invent picture for the model to score a soundtrack against; the frames past
     the last whole group are simply not part of the generation."""
-    frames = [np.full((64, 64, 3), index % 256, dtype=np.uint8) for index in range(20)]
+    frames = [np.full((512, 768, 3), index % 256, dtype=np.uint8) for index in range(20)]
     encoded: dict[str, torch.Tensor] = {}
 
-    monkeypatch.setattr(ltx2_video_conditioning, "iter_video_frames", lambda *_a, **_k: iter(frames))
+    monkeypatch.setattr(ltx2_video_conditioning, "read_canvas_frames", lambda *_a, **_k: _canvas_clip(list(frames)))
 
     def encode(pixels):
         encoded["pixels"] = pixels
@@ -692,8 +700,8 @@ def test_a_conditioning_clip_under_one_frame_group_is_refused_with_its_length(
 ) -> None:
     monkeypatch.setattr(
         ltx2_video_conditioning,
-        "iter_video_frames",
-        lambda *_a, **_k: iter([np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(5)]),
+        "read_canvas_frames",
+        lambda *_a, **_k: _canvas_clip([np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(5)]),
     )
 
     with pytest.raises(ValueError, match="decoded to 5 frame"):
@@ -710,7 +718,7 @@ def test_a_conditioning_clip_under_one_frame_group_is_refused_with_its_length(
         },
         {
             "full_video_conditioning": LTX2FullVideoConditioningField(
-                latents_name="video", width=1248, height=704, num_frames=89, fps=24.0
+                latents_name="video", width=1248, height=704, num_frames=89, fps=24.0, source_video_name="clip.mp4"
             )
         },
     ],
@@ -743,7 +751,7 @@ def test_a_held_modality_cannot_be_combined_with_a_refine_pass(conditioning: dic
         (
             {
                 "full_video_conditioning": LTX2FullVideoConditioningField(
-                    latents_name="video", width=768, height=704, num_frames=89, fps=24.0
+                    latents_name="video", width=768, height=704, num_frames=89, fps=24.0, source_video_name="clip.mp4"
                 )
             },
             "width 768 vs 1248",
@@ -760,6 +768,737 @@ def test_a_conditioning_prepared_for_a_different_run_is_named_before_the_transfo
 
     with pytest.raises(ValueError, match=expected):
         node.invoke(_context())
+
+
+def _keyframe_field(frame_index: int, **kwargs) -> LTX2VideoConditioningField:
+    defaults = {"latents_name": "keyframe", "width": 1248, "height": 704, "frame_index": frame_index}
+    return LTX2VideoConditioningField(**{**defaults, **kwargs})
+
+
+@pytest.mark.parametrize(
+    ("num_frames", "frame_index", "expected"),
+    # 121 frames is 16 latent frames; 9 frames is 2.
+    [(121, -1, 15), (121, 15, 15), (121, 1, 1), (121, -15, 1), (9, -1, 1)],
+)
+def test_a_keyframes_index_is_resolved_against_the_clips_own_length(
+    num_frames: int, frame_index: int, expected: int
+) -> None:
+    """Negative indices count from the end, and they are resolved HERE rather than at the encode:
+    the conditioning node does not know how long the clip is, so resolving there would silently
+    land the frame at the wrong instant the moment someone changed the frame count."""
+    node = _denoise(num_frames=num_frames, keyframe_conditioning=_keyframe_field(frame_index))
+    context = _context()
+    context.tensors.load.return_value = torch.zeros(1, LTX2_LATENT_CHANNELS, 1, 22, 39)
+
+    assert node._resolve_keyframe(context)[1] == expected
+
+
+def test_a_keyframe_that_resolves_to_the_first_frame_names_the_input_that_owns_it() -> None:
+    """Index 0 is a different mechanism -- overwriting the grid rather than appending -- so this is
+    a wiring mistake, and the message has to say which input to use instead."""
+    node = _denoise(num_frames=121, keyframe_conditioning=_keyframe_field(0))
+
+    with pytest.raises(ValueError, match="Image Conditioning"):
+        node._resolve_keyframe(_context())
+
+
+@pytest.mark.parametrize("frame_index", [16, 40, -17, -200])
+def test_a_keyframe_outside_the_clip_is_refused_with_both_indices(frame_index: int) -> None:
+    node = _denoise(num_frames=121, keyframe_conditioning=_keyframe_field(frame_index))
+
+    with pytest.raises(ValueError, match="outside a 121-frame clip"):
+        node._resolve_keyframe(_context())
+
+
+def test_a_keyframe_encoded_for_another_canvas_is_refused_before_the_transformer_loads() -> None:
+    node = _denoise(num_frames=121, keyframe_conditioning=_keyframe_field(-1, width=768, height=512))
+
+    with pytest.raises(ValueError, match="keyframe conditioning was prepared"):
+        node._resolve_keyframe(_context())
+
+
+@pytest.mark.parametrize("refine", [False, True])
+def test_the_resolved_keyframe_reaches_the_state_the_run_is_built_from(monkeypatch, refine: bool) -> None:
+    """Resolving the index correctly is worth nothing if it is not handed on, and the resolution is
+    only reachable through a private helper -- so this crosses the seam between them, for the base
+    pass and the refine pass alike. A two-stage run that dropped the keyframe would end somewhere
+    else than a single-stage one."""
+    import invokeai.app.invocations.ltx2.ltx2_denoise as denoise_module
+
+    captured: dict[str, object] = {}
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        raise _StopAfterState
+
+    monkeypatch.setattr(denoise_module, "build_refine_state" if refine else "build_denoise_state", fake_build)
+    node = _denoise(
+        num_frames=121,
+        keyframe_conditioning=_keyframe_field(-1, strength=0.75),
+        **(
+            {"latents": LatentsField(latents_name="upscaled"), "audio_latents": LatentsField(latents_name="audio")}
+            if refine
+            else {}
+        ),
+        cfg_scale=1.0,
+        audio_cfg_scale=1.0,
+        stg_scale=0.0,
+        modality_scale=1.0,
+    )
+    context = _context()
+    context.tensors.load.return_value = torch.zeros(1, LTX2_LATENT_CHANNELS, 1, 22, 39)
+    context.conditioning.load.return_value = SimpleNamespace(
+        conditionings=[
+            LTX2ConditioningInfo(
+                video_embeds=torch.zeros(1, 4, 8),
+                audio_embeds=torch.zeros(1, 4, 6),
+                attention_mask=torch.ones(1, 4, dtype=torch.int64),
+            )
+        ]
+    )
+
+    with pytest.raises(_StopAfterState):
+        node.invoke(context)
+
+    assert captured["keyframe_latent_index"] == 15
+    assert captured["keyframe_strength"] == 0.75
+    assert captured["keyframe_latents"] is not None
+
+
+@pytest.mark.parametrize("refine", [False, True])
+def test_the_held_soundtrack_opening_reaches_both_passes(monkeypatch: pytest.MonkeyPatch, refine: bool) -> None:
+    """A continuation's held sound has to survive the whole run. Stage two re-noises every row, so a
+    prefix handed only to stage one is gone by the time the join crossfades -- which is exactly the
+    seam this exists to remove, and a two-stage run would have it back with nothing failing."""
+    import invokeai.app.invocations.ltx2.ltx2_denoise as denoise_module
+
+    captured: dict[str, object] = {}
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        raise _StopAfterState
+
+    monkeypatch.setattr(denoise_module, "build_refine_state" if refine else "build_denoise_state", fake_build)
+    prefix = torch.arange(18 * 128, dtype=torch.float32).reshape(1, 18, 128)
+    node = _denoise(
+        num_frames=121,
+        audio_prefix_conditioning=LTX2AudioConditioningField(
+            latents_name="held_opening",
+            num_audio_latents=18,
+            num_frames=17,
+            fps=24.0,
+            source_video_name="clip.mp4",
+        ),
+        **(
+            {"latents": LatentsField(latents_name="upscaled"), "audio_latents": LatentsField(latents_name="audio")}
+            if refine
+            else {}
+        ),
+        cfg_scale=1.0,
+        audio_cfg_scale=1.0,
+        stg_scale=0.0,
+        modality_scale=1.0,
+    )
+    context = _context()
+    context.tensors.load.side_effect = lambda name: (
+        prefix if name == "held_opening" else torch.zeros(1, LTX2_LATENT_CHANNELS, 16, 22, 39)
+    )
+    context.conditioning.load.return_value = SimpleNamespace(
+        conditionings=[
+            LTX2ConditioningInfo(
+                video_embeds=torch.zeros(1, 4, 8),
+                audio_embeds=torch.zeros(1, 4, 6),
+                attention_mask=torch.ones(1, 4, dtype=torch.int64),
+            )
+        ]
+    )
+
+    with pytest.raises(_StopAfterState):
+        node.invoke(context)
+
+    assert torch.equal(captured["audio_prefix_latents"], prefix)
+
+
+def _canvas_clip(frames: list[np.ndarray], source_frames: int | None = None) -> CanvasClip:
+    """What the reader hands back: the fitted frames, and how long the clip they came from is."""
+    return CanvasClip(frames, len(frames) if source_frames is None else source_frames)
+
+
+def test_a_held_opening_prepared_at_another_frame_rate_is_refused() -> None:
+    """The rate is the one thing no tensor shape records. A prefix sized at 24 fps and held at 30
+    covers a different stretch of time than the picture it belongs to, so the join crossfades real
+    source audio into the new material -- and the row count stays well inside what the clip has
+    room for, so nothing else would notice."""
+    node = _denoise(
+        num_frames=121,
+        fps=30.0,
+        audio_prefix_conditioning=LTX2AudioConditioningField(
+            latents_name="held_opening",
+            num_audio_latents=18,
+            num_frames=17,
+            fps=24.0,
+            source_video_name="clip.mp4",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Extend Conditioning - LTX-2 was prepared"):
+        node.invoke(_context())
+
+
+def _extend_conditioning(**kwargs) -> LTX2ExtendConditioningInvocation:
+    defaults = {"video": VideoField(video_name="clip.mp4"), "vae": VAEField(vae=_identifier("vae"))}
+    return LTX2ExtendConditioningInvocation(id="extend_cond", **{**defaults, **kwargs})
+
+
+def _stub_video_vae(context: MagicMock, latent_frames: int, height: int, width: int) -> dict:
+    encoded: dict = {}
+
+    def encode(pixels):
+        encoded["pixels"] = pixels
+        return SimpleNamespace(
+            latent_dist=SimpleNamespace(
+                mode=lambda: torch.zeros(1, LTX2_LATENT_CHANNELS, latent_frames, height // 32, width // 32)
+            )
+        )
+
+    vae = SimpleNamespace(
+        buffers=lambda: iter([]),
+        config=SimpleNamespace(scaling_factor=1.0),
+        enable_tiling=lambda **_kwargs: None,
+        encode=encode,
+        encoder=torch.nn.Identity(),
+        latents_mean=torch.zeros(LTX2_LATENT_CHANNELS),
+        latents_std=torch.ones(LTX2_LATENT_CHANNELS),
+        parameters=lambda: iter([torch.zeros(1)]),
+        spatial_compression_ratio=32,
+        temporal_compression_ratio=8,
+        use_framewise_decoding=False,
+        use_framewise_encoding=False,
+        use_tiling=False,
+    )
+    context.models.load.return_value.model_on_device.return_value.__enter__.return_value = (None, vae)
+    return encoded
+
+
+def test_an_extension_conditions_on_the_tail_of_the_clip_not_its_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point is to continue from where the clip ENDED. Reading the head would anchor the
+    continuation to the wrong moment, and nothing downstream could tell."""
+    captured: dict = {}
+
+    def fake_read(_path, **kwargs):
+        captured.update(kwargs)
+        return _canvas_clip([np.full((512, 768, 3), index, dtype=np.uint8) for index in range(kwargs["cap"])])
+
+    monkeypatch.setattr(ltx2_extend_conditioning, "read_canvas_frames", fake_read)
+    context = _ltx2_vae_context()
+    _stub_video_vae(context, latent_frames=3, height=512, width=768)
+    context.tensors.save.return_value = "extend_conditioning"
+
+    output = _extend_conditioning(width=768, height=512, context_frames=17).invoke(context)
+
+    assert captured["tail"] is True
+    assert captured["cap"] == 17
+    assert output.context_frames == 17
+    # Held from the first frame onward, which is what makes it a leading anchor rather than a keyframe.
+    assert output.video_conditioning.frame_index == 0
+
+
+@pytest.mark.parametrize(("requested", "expected"), [(17, 17), (20, 17), (9, 9), (100, 97)])
+def test_the_context_length_is_snapped_down_to_whole_frame_groups(
+    monkeypatch: pytest.MonkeyPatch, requested: int, expected: int
+) -> None:
+    """The VAE encodes 8k + 1 frames, so a ragged request would have its tail dropped after the
+    read. Snapping first means the read asks for what it can actually use."""
+    captured: dict = {}
+
+    def fake_read(_path, **kwargs):
+        captured.update(kwargs)
+        return _canvas_clip([np.zeros((512, 768, 3), dtype=np.uint8) for _ in range(kwargs["cap"])])
+
+    monkeypatch.setattr(ltx2_extend_conditioning, "read_canvas_frames", fake_read)
+    context = _ltx2_vae_context()
+    _stub_video_vae(context, latent_frames=(expected - 1) // 8 + 1, height=512, width=768)
+    context.tensors.save.return_value = "extend_conditioning"
+
+    output = _extend_conditioning(width=768, height=512, context_frames=requested).invoke(context)
+
+    assert output.context_frames == expected
+    # Snapped BEFORE the read, so the decode is asked for what the VAE can actually use rather than
+    # for frames that are then thrown away.
+    assert captured["cap"] == expected
+
+
+def test_a_source_shorter_than_the_context_keeps_its_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A clip with fewer frames than asked for still has to contribute its last whole group.
+    Trimming the wrong end anchors the continuation to where the clip BEGAN -- which still encodes,
+    still validates, and is simply the wrong moment."""
+    frames = [np.full((512, 768, 3), index, dtype=np.uint8) for index in range(12)]
+    monkeypatch.setattr(
+        ltx2_extend_conditioning, "read_canvas_frames", lambda _path, **_kwargs: _canvas_clip(list(frames))
+    )
+    context = _ltx2_vae_context()
+    encoded = _stub_video_vae(context, latent_frames=2, height=512, width=768)
+    context.tensors.save.return_value = "extend_conditioning"
+
+    output = _extend_conditioning(width=768, height=512, context_frames=17).invoke(context)
+
+    assert output.context_frames == 9
+    # Frames 3..11 of the source, not 0..8.
+    held = encoded["pixels"][0, 0, :, 0, 0].float()
+    assert held.tolist() == pytest.approx([(index / 127.5) - 1.0 for index in range(3, 12)], abs=2e-3)
+
+
+def test_a_clip_too_short_to_continue_from_says_how_much_is_needed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ltx2_extend_conditioning,
+        "read_canvas_frames",
+        lambda _path, **_kwargs: _canvas_clip([np.zeros((512, 768, 3), dtype=np.uint8) for _ in range(5)]),
+    )
+
+    with pytest.raises(ValueError, match="at least 9 frames of the source"):
+        _extend_conditioning(width=768, height=512).invoke(_ltx2_vae_context())
+
+
+# Ten seconds at 24 fps. The audio stubs hand the node a track of exactly this length, so its trim
+# to the picture's span is a no-op unless a test deliberately makes the decode longer.
+SOURCE_CLIP_FRAMES = 240
+
+
+def _stub_extend_audio(
+    monkeypatch: pytest.MonkeyPatch, context: MagicMock, *, samples: np.ndarray | None, rows: int = 64
+) -> dict:
+    """The soundtrack side of the extend node, with the mel front end and VAE stubbed out."""
+    seen: dict = {}
+
+    monkeypatch.setattr(
+        ltx2_extend_conditioning,
+        "extract_audio_pcm",
+        lambda _path, **_kwargs: None if samples is None else (samples, 16000),
+    )
+
+    def fake_encode(_audio_vae, _vocoder, waveform, *, sample_rate):
+        seen["waveform"] = waveform.clone()
+        seen["sample_rate"] = sample_rate
+        # One row per index, so a trim is visible in the values rather than only in the count.
+        return torch.arange(rows, dtype=torch.float32).reshape(1, rows, 1).expand(1, rows, 128).contiguous()
+
+    monkeypatch.setattr(ltx2_extend_conditioning, "encode_audio_latents", fake_encode)
+
+    saved: list[torch.Tensor] = []
+
+    def save(tensor):
+        saved.append(tensor)
+        return f"saved_{len(saved)}"
+
+    context.tensors.save.side_effect = save
+    seen["saved"] = saved
+    return seen
+
+
+def _extend_with_audio(**kwargs) -> LTX2ExtendConditioningInvocation:
+    return _extend_conditioning(
+        width=768,
+        height=512,
+        audio_vae=VAEField(vae=_identifier("audio_vae")),
+        vocoder=LTX2VocoderField(vocoder=_identifier("vocoder")),
+        **kwargs,
+    )
+
+
+def test_an_extension_holds_the_closing_sound_of_the_clip_it_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The join crossfades the held frames out of both halves. The picture survives that because it
+    is held on both sides; the soundtrack only does if it is held too. Left generated, the blend
+    fades invented audio in against the source's real audio and the new soundtrack starts an overlap
+    early -- audible as a seam at the junction."""
+    monkeypatch.setattr(
+        ltx2_extend_conditioning,
+        "read_canvas_frames",
+        lambda _path, **kwargs: _canvas_clip(
+            [np.zeros((512, 768, 3), dtype=np.uint8) for _ in range(kwargs["cap"])], SOURCE_CLIP_FRAMES
+        ),
+    )
+    context = _ltx2_vae_context()
+    _stub_video_vae(context, latent_frames=3, height=512, width=768)
+    # Ten seconds of sound, each sample naming its own index.
+    samples = np.arange(160000, dtype=np.float32).reshape(1, -1)
+    seen = _stub_extend_audio(monkeypatch, context, samples=samples)
+
+    output = _extend_with_audio(context_frames=17, fps=24.0).invoke(context)
+
+    assert output.audio_conditioning is not None
+    # The clip's END: the same 17 frames the picture holds, not its opening.
+    wanted = round(17 / 24.0 * 16000)
+    assert seen["waveform"].shape[1] == wanted
+    assert seen["waveform"][0, 0].item() == pytest.approx(160000 - wanted)
+    # Trimmed with the same function the denoise sizes the stream from, so the two cannot disagree.
+    held = audio_latent_count(17, 24.0)
+    assert output.audio_conditioning.num_audio_latents == held
+    assert output.audio_conditioning.num_frames == 17
+    assert output.audio_conditioning.fps == 24.0
+    rows = seen["saved"][0]
+    assert rows.shape[1] == held
+    # The FIRST rows of the encode, which are the earliest of the held span -- the opening of the
+    # continuation. Taking them from the end would hold the wrong instant.
+    assert rows[0, :, 0].tolist() == list(range(held))
+
+
+def test_the_held_sound_is_cut_from_the_span_the_picture_occupies_not_the_decode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decoded AAC track runs past the last frame by the codec's end padding -- 688 samples
+    (14.3 ms) on the muxes the trim node emits -- and its content is front-aligned. Taking the tail
+    of the untrimmed decode would hold audio that starts 14 ms after the picture does and ends in
+    padding, and the join would blend it against the source's own correctly-aligned tail: comb
+    filtering across the whole overlap, which is the artifact this is here to remove."""
+    monkeypatch.setattr(
+        ltx2_extend_conditioning,
+        "read_canvas_frames",
+        lambda _path, **kwargs: _canvas_clip(
+            [np.zeros((512, 768, 3), dtype=np.uint8) for _ in range(kwargs["cap"])], SOURCE_CLIP_FRAMES
+        ),
+    )
+    context = _ltx2_vae_context()
+    _stub_video_vae(context, latent_frames=3, height=512, width=768)
+    # The picture spans 240 frames at 24 fps = 160000 samples; the decode carries 688 more.
+    picture = SOURCE_CLIP_FRAMES // 24 * 16000
+    seen = _stub_extend_audio(monkeypatch, context, samples=np.arange(picture + 688, dtype=np.float32).reshape(1, -1))
+
+    _extend_with_audio(context_frames=17, fps=24.0).invoke(context)
+
+    wanted = round(17 / 24.0 * 16000)
+    assert seen["waveform"].shape[1] == wanted
+    # Ends where the PICTURE ends, not where the decode does.
+    assert seen["waveform"][0, -1].item() == pytest.approx(picture - 1)
+    assert seen["waveform"][0, 0].item() == pytest.approx(picture - wanted)
+
+
+def test_an_extension_of_a_silent_clip_still_makes_its_own_soundtrack(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing to hold is not a failure: the continuation invents the whole soundtrack, as it did
+    before any of this existed."""
+    monkeypatch.setattr(
+        ltx2_extend_conditioning,
+        "read_canvas_frames",
+        lambda _path, **kwargs: _canvas_clip(
+            [np.zeros((512, 768, 3), dtype=np.uint8) for _ in range(kwargs["cap"])], SOURCE_CLIP_FRAMES
+        ),
+    )
+    context = _ltx2_vae_context()
+    _stub_video_vae(context, latent_frames=3, height=512, width=768)
+    _stub_extend_audio(monkeypatch, context, samples=None)
+
+    assert _extend_with_audio(context_frames=17).invoke(context).audio_conditioning is None
+
+
+def test_a_track_that_ends_early_holds_silence_anchored_to_the_picture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Uploaded footage often has sound that stops before the picture does. Taking the tail of the
+    SHORT track would hold an earlier instant than the frames held beside it -- a clip whose audio
+    stops two seconds early would hold sound from two seconds before those frames, and the join
+    would blend it against the source's real soundtrack. The held span is padded to the picture
+    instead, so what is held is the silence the clip actually has there."""
+    monkeypatch.setattr(
+        ltx2_extend_conditioning,
+        "read_canvas_frames",
+        lambda _path, **kwargs: _canvas_clip(
+            [np.zeros((512, 768, 3), dtype=np.uint8) for _ in range(kwargs["cap"])], SOURCE_CLIP_FRAMES
+        ),
+    )
+    context = _ltx2_vae_context()
+    _stub_video_vae(context, latent_frames=3, height=512, width=768)
+    # Sound for the first half second of a ten-second clip, every sample naming its own index.
+    seen = _stub_extend_audio(monkeypatch, context, samples=np.arange(1, 8001, dtype=np.float32).reshape(1, -1))
+
+    output = _extend_with_audio(context_frames=17, fps=24.0).invoke(context)
+
+    assert output.audio_conditioning is not None
+    wanted = round(17 / 24.0 * 16000)
+    assert seen["waveform"].shape[1] == wanted
+    # Entirely silence: the picture's last 0.7s is long after the track ran out. Non-zero values
+    # here would mean the slice had drifted back to where the sound actually was.
+    assert seen["waveform"].abs().max().item() == 0.0
+
+
+def test_an_extension_without_the_audio_models_holds_only_the_picture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The audio models are optional inputs, so a graph that does not wire them must still run."""
+    monkeypatch.setattr(
+        ltx2_extend_conditioning,
+        "read_canvas_frames",
+        lambda _path, **kwargs: _canvas_clip(
+            [np.zeros((512, 768, 3), dtype=np.uint8) for _ in range(kwargs["cap"])], SOURCE_CLIP_FRAMES
+        ),
+    )
+    context = _ltx2_vae_context()
+    _stub_video_vae(context, latent_frames=3, height=512, width=768)
+    context.tensors.save.return_value = "extend_conditioning"
+
+    output = _extend_conditioning(width=768, height=512, context_frames=17).invoke(context)
+
+    assert output.audio_conditioning is None
+    assert output.context_frames == 17
+
+
+def test_the_lora_loader_wires_into_the_graph_the_panel_compiles() -> None:
+    """The panel splices the LoRA collection loader between the model loader and both denoise
+    passes. Every one of those edges has to be one the queue accepts, and `Graph.validate_self()`
+    runs at enqueue -- after the models have loaded -- so a type mismatch here surfaces as a failed
+    run rather than a failed compile. Numeric coercion is asymmetric and has bitten this stack
+    twice, which is why the check is against the backend's own compatibility function.
+    """
+    from invokeai.app.invocations.baseinvocation import InvocationRegistry
+    from invokeai.app.services.shared.graph import are_connection_types_compatible
+
+    invocations = InvocationRegistry.get_invocations_map()
+    loader = invocations["ltx2_lora_collection_loader"]
+    model_loader_out = invocations["ltx2_model_loader"].get_output_annotation()
+    denoise = invocations["ltx2_denoise"]
+
+    edges = [
+        (model_loader_out, "transformer", loader, "transformer"),
+        (loader.get_output_annotation(), "transformer", denoise, "transformer"),
+        (model_loader_out, "transformer", denoise, "transformer"),
+    ]
+    for source_cls, source_field, target_cls, target_field in edges:
+        source = source_cls.model_fields[source_field].annotation
+        target = target_cls.model_fields[target_field].annotation
+        assert are_connection_types_compatible(source, target), (
+            f"the queue refuses {source_cls.__name__}.{source_field} -> {target_cls.__name__}.{target_field}"
+        )
+
+
+def test_a_context_longer_than_the_model_can_generate_is_refused_before_any_decoding() -> None:
+    """A tail read cannot stop early, so `context_frames` sizes a buffer of SOURCE-resolution frames
+    held before any of them are fitted to the canvas. Unbounded, asking for 1001 frames of a 1080p
+    clip reserves ~6 GiB of host memory and encodes all of it before the denoise rejects the anchor
+    for exceeding the generation's length. Nothing past the model's own maximum is usable anyway."""
+    with pytest.raises(ValidationError):
+        _extend_conditioning(width=768, height=512, context_frames=LTX2_MAX_EXTEND_CONTEXT_FRAMES + 1)
+
+    # The boundary itself is allowed, so the cap does not quietly exclude a usable length.
+    assert _extend_conditioning(context_frames=LTX2_MAX_EXTEND_CONTEXT_FRAMES).context_frames == (
+        LTX2_MAX_EXTEND_CONTEXT_FRAMES
+    )
+
+
+def test_an_extension_refuses_a_vae_from_another_architecture() -> None:
+    with pytest.raises(ValueError, match="Expected an LTX-2"):
+        _extend_conditioning().invoke(_ltx2_vae_context(BaseModelType.Wan))
+
+
+def _full_video_field(num_frames: int = 9, **kwargs) -> LTX2FullVideoConditioningField:
+    defaults = {
+        "latents_name": "video",
+        "width": 768,
+        "height": 512,
+        "num_frames": num_frames,
+        "fps": 24.0,
+        "source_video_name": "clip.mp4",
+    }
+    return LTX2FullVideoConditioningField(**{**defaults, **kwargs})
+
+
+def test_video_to_audio_writes_the_users_own_frames_at_their_own_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The picture was the given half, so decoding the held latents would hand back a cover-cropped
+    VAE round trip of footage the user already has. Their frames are written instead -- at the
+    resolution they shot, not the canvas the model needed."""
+    source = [np.full((360, 640, 3), index, dtype=np.uint8) for index in range(12)]
+    monkeypatch.setattr(ltx2_latents_to_video, "iter_video_frames", lambda *_a, **_k: iter(source))
+
+    node = _latents_to_video(source_video=_full_video_field(num_frames=9))
+    frames, height, width = node._source_frames(_context())
+    written = list(frames)
+
+    # Trimmed to what was generated, and untouched otherwise.
+    assert (height, width) == (360, 640)
+    assert len(written) == 9
+    assert [int(frame[0, 0, 0]) for frame in written] == list(range(9))
+
+
+def test_a_source_clip_that_shrank_since_it_was_encoded_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ltx2_latents_to_video,
+        "iter_video_frames",
+        lambda *_a, **_k: iter([np.zeros((360, 640, 3), dtype=np.uint8) for _ in range(4)]),
+    )
+
+    frames, _height, _width = _latents_to_video(source_video=_full_video_field(num_frames=9))._source_frames(_context())
+
+    with pytest.raises(ValueError, match="now decodes to 4 frame"):
+        list(frames)
+
+
+def test_the_source_clip_is_streamed_rather_than_collected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These are full-resolution frames -- a 4K clip of 241 is 5.6 GiB -- and none of it is budgeted
+    by the model cache. Only the first frame may be held, to report the geometry the writer needs."""
+    decoded = 0
+
+    def counting_frames(*_a, **_k):
+        nonlocal decoded
+        for index in range(12):
+            decoded += 1
+            yield np.full((360, 640, 3), index, dtype=np.uint8)
+
+    monkeypatch.setattr(ltx2_latents_to_video, "iter_video_frames", counting_frames)
+    node = _latents_to_video(source_video=_full_video_field(num_frames=9))
+    frames, _height, _width = node._source_frames(_context())
+
+    # Geometry is known without draining the clip.
+    assert decoded == 1
+    next(frames)
+    assert decoded == 1  # the first frame was the one already read
+    next(frames)
+    assert decoded == 2
+
+
+def test_the_held_latents_are_not_decoded_when_the_source_clip_is_wired(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point is to skip that work: decoding is a second tiled VAE pass over a clip whose
+    pixels are already on disk."""
+    monkeypatch.setattr(
+        ltx2_latents_to_video,
+        "iter_video_frames",
+        lambda *_a, **_k: iter([np.zeros((360, 640, 3), dtype=np.uint8) for _ in range(9)]),
+    )
+    node = _latents_to_video(source_video=_full_video_field(num_frames=9))
+    monkeypatch.setattr(
+        type(node), "_decode_video", lambda *_a, **_k: pytest.fail("the held latents were decoded anyway")
+    )
+    monkeypatch.setattr(type(node), "_decode_audio_to_wav", lambda *_a, **_k: None)
+    context = _context()
+    context.util.is_canceled.return_value = False
+    context.videos.save.side_effect = _StopAfterState
+
+    with pytest.raises(_StopAfterState):
+        node.invoke(context)
+
+
+def test_a_last_frame_encode_wired_into_the_first_frame_slot_is_refused() -> None:
+    """The two slots are different mechanisms -- one overwrites the opening grid tokens, the other
+    appends -- so this slot cannot honour a non-zero index. Holding it at frame 0 anyway would do
+    the opposite of what the field's own description promises."""
+    node = _denoise(video_conditioning=_keyframe_field(-1))
+
+    with pytest.raises(ValueError, match="Keyframe Conditioning instead"):
+        node._load_image_latents(_context())
+
+
+def test_the_reservation_is_sized_from_what_the_patches_weigh() -> None:
+    """The reservation is subtracted from VRAM *before* any weight streams in, so it is not a
+    ceiling -- every byte over-reserved is a byte of transformer that stays in host RAM and is
+    streamed each forward. A per-LoRA constant big enough for the rank-450 distilled accelerator
+    (8.3 GiB over 1660 layers) would charge a rank-16 style LoRA the same, and two of them would
+    exceed a 24 GB card's whole budget on their own."""
+    node_type = LTX2DenoiseInvocation
+    rows, audio = 13728, 300
+    small, large = 8 * 1024**2, 9 * 1024**3
+
+    bare = node_type._estimate_working_memory(rows, audio)
+
+    # Proportional to the patch, not to the count.
+    assert node_type._estimate_working_memory(rows, audio, small) - bare == small + 1024**3
+    assert node_type._estimate_working_memory(rows, audio, large) - bare == large + 1024**3
+    # A small LoRA must not be charged like a large one -- the defect a flat constant has.
+    assert (
+        node_type._estimate_working_memory(rows, audio, large)
+        > node_type._estimate_working_memory(rows, audio, small) + 8 * 1024**3
+    )
+
+
+def test_an_auto_schedule_with_a_lora_applied_says_so() -> None:
+    """`auto` follows the transformer's VARIANT, which names the checkpoint -- and a LoRA does not
+    change it. A step-distillation LoRA on a Dev checkpoint therefore resolves to the guided
+    ~30-step schedule and samples the LoRA's 8 steps on it. The panel sets `schedule` explicitly to
+    avoid this; a hand-built graph (or the shipped workflow, whose default is `auto`) cannot be told
+    any other way, and the resulting clip looks like a broken model rather than a wiring mistake."""
+    node = _denoise(
+        num_frames=121,
+        transformer=LTX2TransformerField(
+            transformer=_identifier("transformer"),
+            loras=[LoRAField(lora=_identifier("distilled-lora"), weight=1.0)],
+            variant="ltx2_dev",
+        ),
+    )
+    context = _context()
+
+    assert node._resolve_distilled(context) is False
+    assert "Distilled" in " ".join(str(call) for call in context.logger.info.call_args_list)
+
+    # Silent where it would be wrong: on a distilled checkpoint `auto` already resolves correctly,
+    # so telling the user to set Schedule to 'Distilled' would be advice against the truth.
+    on_distilled = _context()
+    distilled_node = _denoise(
+        num_frames=121,
+        transformer=LTX2TransformerField(
+            transformer=_identifier("transformer"),
+            loras=[LoRAField(lora=_identifier("style-lora"), weight=1.0)],
+            variant="ltx2_distilled",
+        ),
+    )
+
+    assert distilled_node._resolve_distilled(on_distilled) is True
+    assert on_distilled.logger.info.call_count == 0
+
+    # And silent when the schedule was named explicitly, or when there is nothing patched.
+    quiet = _context()
+    _denoise(num_frames=121, schedule="distilled")._resolve_distilled(quiet)
+
+    assert quiet.logger.info.call_count == 0
+
+
+def test_a_directly_patched_lora_reserves_nothing_for_itself() -> None:
+    """Only the sidecar path leaves patch tensors on the device; the direct path returns each patch
+    to the CPU as it applies it. The caller passes zero for that case, and charging for it anyway
+    would cost a bf16 run -- the shipped Dev starter -- gigabytes of residency for nothing."""
+    rows, audio = 13728, 300
+
+    assert LTX2DenoiseInvocation._estimate_working_memory(
+        rows, audio, 0
+    ) == LTX2DenoiseInvocation._estimate_working_memory(rows, audio)
+
+
+def test_the_reservation_covers_the_keyframe_rows_the_transformer_attends_over(monkeypatch) -> None:
+    """A held keyframe adds rows to every forward -- 858 on top of 13728 at 1248x704 x121 -- and the
+    working-memory fit is tightest exactly where running out costs the most."""
+    import invokeai.app.invocations.ltx2.ltx2_denoise as denoise_module
+
+    captured: list[int] = []
+    # The reservation is arithmetic over the sequence, not a hardware question, but `invoke` asks the
+    # chosen device for its dtype before it gets there. Left unpinned that reaches the real
+    # accelerator: on a macOS runner MPS reports available and then fails every allocation.
+    monkeypatch.setattr(TorchDevice, "choose_torch_device", staticmethod(lambda: torch.device("cpu")))
+    node = _denoise(num_frames=121, keyframe_conditioning=_keyframe_field(-1), cfg_scale=1.0, audio_cfg_scale=1.0)
+    monkeypatch.setattr(
+        type(node),
+        "_estimate_working_memory",
+        lambda _self, sequence, _audio, _loras=0: captured.append(sequence) or (_ for _ in ()).throw(_StopAfterState()),
+    )
+    monkeypatch.setattr(denoise_module, "build_denoise_state", _denoise_state_stub(keyframe_rows=858))
+    context = _context()
+    context.tensors.load.return_value = torch.zeros(1, LTX2_LATENT_CHANNELS, 1, 22, 39)
+    context.conditioning.load.return_value = SimpleNamespace(
+        conditionings=[
+            LTX2ConditioningInfo(
+                video_embeds=torch.zeros(1, 4, 8),
+                audio_embeds=torch.zeros(1, 4, 6),
+                attention_mask=torch.ones(1, 4, dtype=torch.int64),
+            )
+        ]
+    )
+
+    with pytest.raises(_StopAfterState):
+        node.invoke(context)
+
+    assert captured == [13728 + 858]
+
+
+def _denoise_state_stub(keyframe_rows: int):
+    """A state whose sequence already carries the appended rows, as the real one would."""
+
+    def build(**_kwargs):
+        state = SimpleNamespace(
+            video_latents=torch.zeros(1, 13728 + keyframe_rows, LTX2_LATENT_CHANNELS),
+            audio_latents_count=126,
+        )
+        return state
+
+    return build
 
 
 class _StopAfterState(Exception):

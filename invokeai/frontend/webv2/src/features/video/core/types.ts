@@ -131,6 +131,13 @@ export interface VideoSettings {
    * Acceleration patches visible sampling settings and LoRAs; this flag records intent rather than hidden graph
    * state.
    */
+  /**
+   * Frames of the source an LTX-2 continuation opens with, held clean so the model reads the clip's
+   * motion rather than just its last still. On the VAE's 8k + 1 grid, and it is spent twice over:
+   * the generation reproduces these frames, and the join then crossfades exactly them out of both
+   * halves — so raising it costs new material one frame for one against a fixed Frames budget.
+   */
+  ltx2ExtendContextFrames: number;
   acceleratorEnabled: boolean;
   /**
    * Track exactly the toggle-added LoRA keys for removal; never remove matching user-owned entries, and clear

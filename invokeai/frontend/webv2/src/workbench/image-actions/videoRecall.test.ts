@@ -871,6 +871,72 @@ describe('LTX-2 recall', () => {
   const catalog = [LTX2_DEV, LTX2_DISTILLED, LTX2_COMPONENTS, LTX2_ENCODER, WAN_T2V];
   const currentValues = createDefaultVideoWidgetValues([WAN_T2V]);
 
+  it('recalls the context length a continuation was made with', () => {
+    // Not recoverable from anything else in the record: the output length folds the source, the
+    // generated half and the crossfade together, so without this a recall silently reinstates the
+    // default 17 and reproduces a different run.
+    const result = buildVideoRecallSettings({
+      currentValues: createDefaultVideoWidgetValues([LTX2_DEV]),
+      kind: 'all',
+      metadata: ltx2Metadata({ ltx2_context_frames: 49 }),
+      models: catalog,
+    });
+
+    expect(result?.values).toMatchObject({ ltx2ExtendContextFrames: 49 });
+    expect(result?.fields).toEqual(expect.arrayContaining(['extendContext']));
+  });
+
+  it('snaps a recalled context off the grid and ignores one on a non-LTX-2 clip', () => {
+    const offGrid = buildVideoRecallSettings({
+      currentValues: createDefaultVideoWidgetValues([LTX2_DEV]),
+      kind: 'all',
+      metadata: ltx2Metadata({ ltx2_context_frames: 30 }),
+      models: catalog,
+    });
+    // A Wan clip carrying the key (hand-edited metadata) must not write an LTX-2-only setting.
+    const wrongFamily = buildVideoRecallSettings({
+      currentValues: createDefaultVideoWidgetValues([WAN_T2V]),
+      kind: 'all',
+      metadata: { ...wanMetadata(), ltx2_context_frames: 49 },
+      models: [WAN_T2V, LIGHTNING_HIGH, LIGHTNING_LOW],
+    });
+
+    expect(offGrid?.values).toMatchObject({ ltx2ExtendContextFrames: 25 });
+    expect(wrongFamily?.fields).not.toContain('extendContext');
+  });
+
+  it('recalls an ordinary clip into a panel that currently has the accelerator on', () => {
+    // The accelerator hides Steps and every guidance scale, and the policy that decides what recall
+    // may write is derived from the panel's CURRENT state. Asked as-is it reports those controls
+    // invisible and drops all of them, leaving the accelerator's 8 / 1 / 1 / 1 / 0 on screen as the
+    // recalled clip's values -- numbers that clip never used, with nothing saying they were dropped.
+    const accelerated = {
+      ...createDefaultVideoWidgetValues([LTX2_DEV]),
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: ['ltx2-distilled'],
+      audioCfgScale: 1,
+      cfgScale: 1,
+      modalityScale: 1,
+      steps: 8,
+      stgScale: 0,
+    };
+    const result = buildVideoRecallSettings({
+      currentValues: accelerated,
+      kind: 'all',
+      metadata: ltx2Metadata(),
+      models: catalog,
+    });
+
+    expect(result?.values).toMatchObject({
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      steps: 30,
+      stgScale: 1,
+    });
+    expect(result?.fields).toEqual(expect.arrayContaining(['steps', 'cfg']));
+  });
+
   it('treats both LTX-2 modes as recallable video metadata', () => {
     // The mode id is the gate for every Recall button; a string the set does not know silently
     // hides them all, with nothing failing.

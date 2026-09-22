@@ -34,6 +34,9 @@ import {
   LTX2_NUM_FRAMES_MAX,
   LTX2_NUM_FRAMES_MIN,
   LTX2_NUM_FRAMES_SLIDER_MAX,
+  LTX2_EXTEND_CONTEXT_FRAMES,
+  ltx2MaxExtendContextFrames,
+  ltx2NewFramesForExtend,
   LTX2_NUM_FRAMES_STEP,
   ltx2FramesForClip,
   MINIMAX_H3_FPS,
@@ -114,7 +117,7 @@ export interface VideoFpsPolicy {
  * resolves release-specific schedules.
  */
 export interface VideoAcceleratorConfig {
-  label: 'Lightning' | 'Turbo';
+  label: 'Lightning' | 'Turbo' | 'Distilled';
   steps: number;
   /**
    * Step counts for releases whose names carry no "N-step" token. First match
@@ -123,6 +126,14 @@ export interface VideoAcceleratorConfig {
   stepOverrides?: readonly { pattern: RegExp; steps: number }[];
   cfgScale: number;
   cfgScaleLowNoise: number | null;
+  /**
+   * Guidance values the accelerator requires, for families that expose more than the primary CFG
+   * scale. A step-distilled model is trained to predict without guidance at all, so leaving the
+   * extra scales at their guided defaults does not merely waste compute — it pushes the sample off
+   * the distribution the distillation was fitted to. Absent for accelerators whose family has no
+   * extra guidance, in which case the toggle leaves those settings alone.
+   */
+  guidance?: { audioCfgScale: number; modalityScale: number; stgScale: number };
 }
 
 interface VideoVariantConfig {
@@ -184,6 +195,18 @@ export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   label: 'Turbo',
   steps: 6,
   stepOverrides: [{ pattern: LIGHTX2V_PATTERN, steps: 8 }],
+};
+
+/**
+ * The LTX-2.5 step-distillation LoRA: 8 guidance-free steps against Dev's ~30 guided ones, so every guidance
+ * scale goes to its identity. `steps: 8` is stated because the release name only carries the rank (450).
+ */
+export const LTX2_DISTILLED_ACCELERATOR: VideoAcceleratorConfig = {
+  cfgScale: 1,
+  cfgScaleLowNoise: null,
+  guidance: { audioCfgScale: 1, modalityScale: 1, stgScale: 0 },
+  label: 'Distilled',
+  steps: 8,
 };
 
 /** Ref2VA Turbo uses a four-step reference count; LightX2V releases override it to eight. */
@@ -326,9 +349,10 @@ const LTX2_COMMON = {
   fps: { defaultValue: LTX2_FPS_DEFAULT, editable: true, max: LTX2_FPS_MAX, min: LTX2_FPS_MIN },
   frames: LTX2_FRAMES,
   minSteps: 1,
-  // Text-to-video and first-frame image-to-video, both with a generated soundtrack, plus the two
-  // whole-modality conditioned modes. Keyframes and extension follow.
-  modes: ['txt2vid', 'first-frame', 'audio-to-video', 'video-to-audio'] as const,
+  // Every conditioning shape the family supports: text-to-video, a held first and/or last frame,
+  // continuing an existing clip, and the two whole-modality modes -- all with a generated
+  // soundtrack.
+  modes: ['txt2vid', 'first-frame', 'last-frame', 'first-last', 'extend', 'audio-to-video', 'video-to-audio'] as const,
   pixelMultiple: LTX2_CANVAS_MULTIPLE,
   targetResolutions: LTX2_TARGET_RESOLUTION_OPTIONS,
 };
@@ -341,6 +365,9 @@ const LTX2_COMMON = {
  */
 const LTX2_DEV: VideoVariantConfig = {
   ...LTX2_COMMON,
+  // Only Dev offers it. The distilled *checkpoint* already is the fast path, and stacking the LoRA
+  // on top of it would patch a model the distillation was not fitted to.
+  accelerator: LTX2_DISTILLED_ACCELERATOR,
   // The release guides against this list, not against an empty string: it is as much a part of the
   // recipe as the scales are. Mirrors LTX2_DEFAULT_NEGATIVE_PROMPT in
   // invokeai/backend/ltx2/constants.py, which is the node's own default.
@@ -618,11 +645,34 @@ export const getEffectiveVideoTiming = (
   };
 };
 
+/**
+ * Whether the run is guidance-free because an accelerator made it so.
+ *
+ * An accelerator that declares a guidance triple drives every scale to its identity AND makes the
+ * graph send `schedule: 'distilled'`. The backend then *discards* the guidance scales and the step
+ * count outright (`_resolve_guidance` and the step clamp in `ltx2_denoise.py`, both of which log
+ * that they are ignoring what was asked). So those controls are not merely redundant while the
+ * accelerator is on -- they cannot take effect at all, and the panel must stop offering them.
+ *
+ * Which is to say: an accelerated Dev model *is* the family's distilled variant, and presents like
+ * it. Families whose accelerator declares no guidance (Wan, MiniMax H3) only change steps and CFG
+ * and are unaffected.
+ */
+const isGuidanceDistilled = (
+  config: VideoVariantConfig,
+  settings: Pick<VideoSettings, 'acceleratorEnabled'>
+): boolean => settings.acceleratorEnabled && config.accelerator?.guidance !== undefined;
+
 export const getVideoPromptPolicy = (
   model: MainModelConfig | undefined,
   settings: Pick<
     VideoSettings,
-    'audioCfgScale' | 'cfgScale' | 'cfgScaleLowNoise' | 'negativePromptEnabled' | 'wanLowNoiseModel'
+    | 'acceleratorEnabled'
+    | 'audioCfgScale'
+    | 'cfgScale'
+    | 'cfgScaleLowNoise'
+    | 'negativePromptEnabled'
+    | 'wanLowNoiseModel'
   >
 ) => {
   const config = getVideoConfig(model);
@@ -635,13 +685,25 @@ export const getVideoPromptPolicy = (
   // And LTX-2's audio stream is guided on its own scale, off one shared unconditional pass
   // (`LTX2Guidance.passes`): audio CFG above 1 consumes the negative prompt even at video CFG 1.
   const audioCfgActive = config.guidance.audioVisible && settings.audioCfgScale !== null && settings.audioCfgScale > 1;
+  // An accelerator that declares a guidance triple drives every scale to its identity, which makes
+  // the run guidance-free -- the same model the family's distilled *checkpoint* variant is, and that
+  // variant declares `usage: 'never'`. Presenting the accelerated model any differently leaves a
+  // populated negative prompt on screen that silently stops mattering, and the user never typed the
+  // CFG of 1 that disabled it: the toggle did. Families whose accelerator declares no guidance
+  // (Wan, MiniMax H3) are unaffected.
+  //
+  // Not conditioned on the live scale values: with the accelerator on the backend discards them, so
+  // there is no state in which raising one makes the negative prompt count again. The scales are
+  // not editable in that state either (see `isGuidanceDistilled`), so this cannot strand a value.
+  const guidanceDistilled = isGuidanceDistilled(config, settings);
   const negativeUsedInGraph =
+    !guidanceDistilled &&
     settings.negativePromptEnabled &&
     (config.negativePrompt.usage === 'always' ||
       (config.negativePrompt.usage === 'cfg-gated' && (settings.cfgScale > 1 || lowNoiseCfgActive || audioCfgActive)));
 
   return {
-    negativeVisible: config.negativePrompt.visible,
+    negativeVisible: config.negativePrompt.visible && !guidanceDistilled,
     negativeUsedInGraph,
     ...(config.negativePrompt.usage === 'cfg-gated' ? { negativeHelpTextKey: 'widgets.video.negativeCfgHelp' } : {}),
   };
@@ -686,6 +748,13 @@ export interface VideoModelPolicy {
     fpsVisible: boolean;
     /** False when the schedule is fixed: the steps control shows the count read-only. */
     stepsEditable: boolean;
+    /**
+     * The extend-mode context control, or null when the mode or family does not have one. `max`
+     * moves with the source's own pixels (the join blends at the clip's native resolution), and
+     * `newFrames` is what the run actually adds once the crossfade has consumed the context from
+     * both halves — the number Frames alone does not reveal.
+     */
+    extendContext: { value: number; min: number; max: number; step: number; newFrames: number } | null;
     /** The family's distillation fast path, or null when it has none. */
     accelerator: VideoAcceleratorConfig | null;
     /** Steps for the fast path as currently configured, or null when it has none. */
@@ -696,6 +765,21 @@ export interface VideoModelPolicy {
 
 export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings: VideoSettings): VideoModelPolicy => {
   const config = getVideoConfig(model);
+  // With an accelerator that removes guidance, the backend ignores the scales and the step count
+  // outright, so the panel stops offering the controls it would ignore.
+  const guidanceDistilled = isGuidanceDistilled(config, settings);
+  // Offered only where it means something: LTX-2's extend mode, with a source picked. The ceiling
+  // is the source's, so it cannot be computed without one.
+  const extendContext =
+    model?.base === 'ltx-2' && resolveVideoMode(settings) === 'extend' && settings.sourceVideo
+      ? {
+          value: settings.ltx2ExtendContextFrames,
+          min: 1 + LTX2_NUM_FRAMES_STEP,
+          max: ltx2MaxExtendContextFrames(settings.sourceVideo.width, settings.sourceVideo.height),
+          step: LTX2_NUM_FRAMES_STEP,
+          newFrames: ltx2NewFramesForExtend(settings.numFrames, settings.ltx2ExtendContextFrames),
+        }
+      : null;
 
   return {
     aspectRatioOptions: getVideoAspectRatioOptions(model),
@@ -712,18 +796,21 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
-      audioCfgVisible: config.guidance.audioVisible,
+      audioCfgVisible: config.guidance.audioVisible && !guidanceDistilled,
       // Show the active LoRA's schedule while retaining accelerator as the family reference config.
       acceleratorSteps: config.accelerator
         ? getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings))
         : null,
       audioOutput: config.audioOutput,
-      cfgLowNoiseVisible: config.cfg.lowNoiseVisible,
-      cfgVisible: config.cfg.visible,
+      extendContext: extendContext,
+      cfgLowNoiseVisible: config.cfg.lowNoiseVisible && !guidanceDistilled,
+      cfgVisible: config.cfg.visible && !guidanceDistilled,
       fpsVisible: config.fps.editable,
-      modalityVisible: config.guidance.modalityVisible,
-      stepsEditable: config.stepsEditable,
-      stgVisible: config.guidance.stgVisible,
+      modalityVisible: config.guidance.modalityVisible && !guidanceDistilled,
+      // The distilled schedule is a fixed step count the backend clamps to; an editable scrubber
+      // here would silently do nothing.
+      stepsEditable: config.stepsEditable && !guidanceDistilled,
+      stgVisible: config.guidance.stgVisible && !guidanceDistilled,
     },
   };
 };
@@ -827,23 +914,82 @@ export const findMiniMaxH3TurboLora = (
  * Return a complete candidate accelerator set or null. Pass the effective model: its H3 task variant determines
  * compatible Turbo releases.
  */
+/**
+ * The LTX-2.5 step-distillation LoRA in a catalog, or null.
+ *
+ * Unlike the H3 and Wan families there is one release, and its name states its rank rather than its
+ * schedule (`ltx-2.5-22b-distilled-lora-450`), so matching keys on the word that names what it does.
+ * `requireFamilyName` exists for the same reason it does elsewhere: on a model switch the panel
+ * re-verifies a recorded accelerator, and a bare "distilled" in some other family's LoRA should not
+ * satisfy that check.
+ */
+const LTX2_DISTILLED_PATTERN = /(?:^|[^a-z0-9])distill(?:ed|ation)?(?:[^a-z0-9]|$)/i;
+const LTX2_NAME_PATTERN = /(?:^|[^a-z0-9])ltx[ _-]?2(?:\.\d)?(?:[^a-z0-9]|$)/i;
+
+export const findLtx2DistilledLora = (
+  models: readonly ModelConfig[],
+  { requireFamilyName = false }: FindAcceleratorLoraOptions = {}
+): LoraModelConfig | null => {
+  const matches = models.filter(
+    (model): model is LoraModelConfig =>
+      isLoraModelConfig(model) &&
+      model.base === 'ltx-2' &&
+      LTX2_DISTILLED_PATTERN.test(model.name) &&
+      (!requireFamilyName || LTX2_NAME_PATTERN.test(model.name))
+  );
+
+  return (
+    matches
+      .slice()
+      // Family-named first, then a deterministic tie-break — there is no step count to rank on.
+      .sort(
+        (a, b) =>
+          Number(LTX2_NAME_PATTERN.test(b.name)) - Number(LTX2_NAME_PATTERN.test(a.name)) ||
+          a.name.localeCompare(b.name)
+      )[0] ?? null
+  );
+};
+
 export const findAcceleratorLorasIn = (
   model: MainModelConfig,
   candidates: readonly ModelConfig[],
   options: FindAcceleratorLoraOptions = {}
 ): LoraModelConfig[] | null => {
-  if (model.base === 'minimax-h3') {
+  const find = ACCELERATOR_FINDERS[model.base as SupportedVideoBase];
+
+  return find ? find(candidates, model, options) : null;
+};
+
+/**
+ * How each family locates its own accelerator LoRAs, keyed by base so a new family plugs in without
+ * touching the others. Wan's is a *pair* (one per expert); the rest are a single LoRA.
+ */
+const ACCELERATOR_FINDERS: Record<
+  SupportedVideoBase,
+  (
+    candidates: readonly ModelConfig[],
+    model: MainModelConfig,
+    options: FindAcceleratorLoraOptions
+  ) => LoraModelConfig[] | null
+> = {
+  'ltx-2': (candidates, _model, options) => {
+    const distilled = findLtx2DistilledLora(candidates, options);
+
+    return distilled ? [distilled] : null;
+  },
+  'minimax-h3': (candidates, model, options) => {
     const turbo = findMiniMaxH3TurboLora(candidates, {
       ...options,
       variant: typeof model.variant === 'string' ? model.variant : 'fl2va',
     });
 
     return turbo ? [turbo] : null;
-  }
+  },
+  wan: (candidates, model, options) => {
+    const pair = findWanLightningLoraPair(candidates, model.variant, options);
 
-  const pair = findWanLightningLoraPair(candidates, model.variant, options);
-
-  return pair ? [pair.high, pair.low] : null;
+    return pair ? [pair.high, pair.low] : null;
+  },
 };
 
 // Limit schedule tokens to two digits so checkpoint tags such as step600 cannot become step counts.
@@ -968,6 +1114,16 @@ export const getAcceleratorToggleResult = (
         acceleratorLoraKeys: [],
         cfgScale: config.defaults.cfgScale,
         cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
+        // Only for a family whose accelerator drove these down in the first place. Restoring them
+        // unconditionally would reset a user's own guidance tweak on families whose accelerator
+        // never touched it.
+        ...(config.accelerator?.guidance
+          ? {
+              audioCfgScale: config.defaults.audioCfgScale,
+              modalityScale: config.defaults.modalityScale,
+              stgScale: config.defaults.stgScale,
+            }
+          : {}),
         loras: withoutAccelerators,
         steps: config.defaults.steps,
       },
@@ -994,6 +1150,10 @@ export const getAcceleratorToggleResult = (
       acceleratorLoraKeys: entries.map((entry) => entry.model.key),
       cfgScale: config.accelerator.cfgScale,
       cfgScaleLowNoise: config.accelerator.cfgScaleLowNoise,
+      // A step-distilled model predicts the clean sample directly; leaving the extra guidance
+      // scales at their guided defaults samples off the distribution it was fitted to, not merely
+      // slower. Families without extra guidance declare none and keep whatever is set.
+      ...config.accelerator.guidance,
       loras: [
         ...withoutAccelerators.filter((lora) => !entries.some((e) => e.model.key === lora.model.key)),
         ...entries,
@@ -1051,6 +1211,7 @@ export const getAcceleratorLoraChangeResult = (
         acceleratorLoraKeys: replacement.map((lora) => lora.key),
         cfgScale: config.accelerator.cfgScale,
         cfgScaleLowNoise: config.accelerator.cfgScaleLowNoise,
+        ...config.accelerator.guidance,
         steps: getAcceleratorSteps(config.accelerator, replacement),
       },
     };
@@ -1065,6 +1226,17 @@ export const getAcceleratorLoraChangeResult = (
       acceleratorLoraKeys: [],
       cfgScale: config.defaults.cfgScale,
       cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
+      // The same restore the toggle-off path does. Without it, turning the accelerator off by
+      // disabling its LoRA leaves the extra scales at the identity values the accelerator wrote --
+      // a guided run with three quarters of its guidance silently off, which is the washed-out
+      // output this file works to prevent. Only for accelerators that set them in the first place.
+      ...(config.accelerator?.guidance
+        ? {
+            audioCfgScale: config.defaults.audioCfgScale,
+            modalityScale: config.defaults.modalityScale,
+            stgScale: config.defaults.stgScale,
+          }
+        : {}),
       steps: config.defaults.steps,
     },
   };
@@ -1484,6 +1656,7 @@ export const getDefaultVideoSettings = (
   const config = getVideoConfig(model);
 
   const base: VideoSettings = {
+    ltx2ExtendContextFrames: LTX2_EXTEND_CONTEXT_FRAMES,
     acceleratorEnabled: false,
     acceleratorLoraKeys: [],
     aspectRatioId: '16:9',
@@ -2048,6 +2221,49 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
       `A two-stage target resolution needs at least ${LTX2_MIN_TWO_STAGE_STEPS} steps; the second pass ` +
         `refines what the first produced and cannot run in one.`
     );
+  }
+
+  // An LTX-2 continuation replays the front of the source and then joins the two halves by
+  // crossfading exactly those frames out of each. Both sides therefore have a floor, and both fail
+  // late and confusingly without one: the generated side after the encoders have run, the source
+  // side inside the join, after the whole generation.
+  if (mode === 'extend' && model.base === 'ltx-2' && settings.sourceVideo) {
+    // The user's own value now, not a constant, so every message quotes what they actually set.
+    const context = settings.ltx2ExtendContextFrames;
+
+    if (settings.numFrames <= context) {
+      reasons.push(
+        `A continuation opens with ${context} frames of the source, so anything at or ` +
+          `below that would be all replay and no continuation. Raise Frames above ${context}.`
+      );
+    }
+
+    const affordable = ltx2MaxExtendContextFrames(settings.sourceVideo.width, settings.sourceVideo.height);
+
+    if (affordable === 0) {
+      reasons.push(
+        `The join blends the held frames of the initial video at its own ` +
+          `${settings.sourceVideo.width}x${settings.sourceVideo.height}, which needs more memory than it is ` +
+          `allowed even at the smallest context. Use a source at or below about 2560x1440.`
+      );
+    } else if (context > affordable) {
+      // Reachable by loading a recalled or stored setting against a larger source than it was made
+      // for; the control itself is bounded, so dragging cannot get here.
+      reasons.push(
+        `Context Frames is ${context}, but blending that many frames of a ` +
+          `${settings.sourceVideo.width}x${settings.sourceVideo.height} source needs more memory than the join ` +
+          `is allowed. Lower it to ${affordable} or less.`
+      );
+    }
+
+    const kept = settings.sourceVideo.endFrame - settings.sourceVideo.startFrame + 1;
+
+    if (kept < context) {
+      reasons.push(
+        `The join blends ${context} frames out of each half, but the initial video's trim ` +
+          `keeps only ${kept}. Keep at least ${context} frames of it, or lower Context Frames.`
+      );
+    }
   }
 
   if (config.cfg.visible && (!Number.isFinite(settings.cfgScale) || settings.cfgScale < 1)) {

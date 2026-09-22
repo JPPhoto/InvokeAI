@@ -295,6 +295,65 @@ export const ltx2FramesForClip = (conditioning: VideoConditioningClip, fps: numb
   return snapLtx2FramesDown(Math.trunc(seconds * fps));
 };
 
+/**
+ * Frames of the source an LTX-2 continuation opens with, held clean so the model can read the
+ * clip's motion rather than just its last still. Mirrors `LTX2_DEFAULT_EXTEND_CONTEXT_FRAMES` in
+ * `invokeai/app/invocations/ltx2/ltx2_extend_conditioning.py`, which is the node's own default.
+ */
+export const LTX2_EXTEND_CONTEXT_FRAMES = 17;
+
+/**
+ * What the join can afford to blend, in source pixels. `video_concat` buffers the crossfade at the
+ * FIRST input's native resolution -- the trimmed source, not the generation canvas -- and refuses
+ * anything over 512 MiB. Mirrors `MAX_TRANSITION_MEMORY_BYTES` and `_BLEND_WORKING_FRAMES` in
+ * `invokeai/app/invocations/video_concat.py`, whose estimate is
+ * `width * height * 3 * (transition_frames * 2 + 13)` for a crossfade.
+ *
+ * At LTX-2's 17-frame overlap that caps a source at ~3.8 megapixels: 2560x1440 fits with 3% to
+ * spare, 4K needs 1115 MiB and does not. Without this the refusal lands in the join, after both
+ * encodes, the transformer and the decode have already run, and neither remedy its message offers
+ * is reachable from the panel.
+ */
+export const ltx2ExtendJoinFitsInMemory = (width: number, height: number, contextFrames: number): boolean =>
+  width * height * 3 * (contextFrames * 2 + 13) <= 512 * 1024 * 1024;
+
+/**
+ * The widest context the join can blend for a given source, on the 8k + 1 grid.
+ *
+ * The memory ceiling is a property of the *source's* pixels, not the generation canvas, so it moves
+ * with the clip the user picked: a 2560x1440 source affords 17 frames with 3% to spare while a 4K
+ * one affords none. Exposed as a live bound rather than a fixed check because the control is now the
+ * user's to drag — without it they could set a value that is refused only at enqueue, after both
+ * encodes and the transformer have already run.
+ *
+ * Returns 0 when even the smallest usable context (9) does not fit, which is the panel's signal that
+ * this source cannot be extended at all.
+ */
+export const ltx2MaxExtendContextFrames = (width: number, height: number): number => {
+  for (
+    let frames = snapLtx2FramesDown(LTX2_NUM_FRAMES_MAX);
+    frames >= 1 + LTX2_NUM_FRAMES_STEP;
+    frames -= LTX2_NUM_FRAMES_STEP
+  ) {
+    if (ltx2ExtendJoinFitsInMemory(width, height, frames)) {
+      return frames;
+    }
+  }
+
+  return 0;
+};
+
+/**
+ * New material a continuation actually adds, in frames.
+ *
+ * The join emits `sum(inputs) - transition_frames * (n - 1)`, and the transition is the context, so
+ * with two clips the source keeps its own length and the generation contributes `numFrames - context`.
+ * Every frame of context is therefore a frame of new video given up — the trade the panel shows
+ * beside the control, because Frames alone does not reveal it.
+ */
+export const ltx2NewFramesForExtend = (numFrames: number, contextFrames: number): number =>
+  Math.max(0, numFrames - contextFrames);
+
 export const LTX2_FPS_MIN = 1;
 export const LTX2_FPS_MAX = 60;
 export const LTX2_FPS_DEFAULT = 24;

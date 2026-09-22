@@ -1,7 +1,11 @@
 import type { GenerationModelCatalogItem, MainModelConfig } from '@features/generation/contracts';
 
 import { architectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
-import { isLtx2TwoStage, LTX2_DEFAULT_NEGATIVE_PROMPT } from '@features/video/core/dimensions';
+import {
+  isLtx2TwoStage,
+  LTX2_DEFAULT_NEGATIVE_PROMPT,
+  LTX2_EXTEND_CONTEXT_FRAMES,
+} from '@features/video/core/dimensions';
 import { isVideoTargetResolution, normalizeVideoSettings } from '@features/video/core/settings';
 import { describe, expect, it } from 'vitest';
 
@@ -13,6 +17,7 @@ import {
   getAcceleratorLoraChangeResult,
   getAcceleratorSteps,
   getAcceleratorToggleResult,
+  findLtx2DistilledLora,
   getDefaultVideoSettings,
   getEffectiveVideoTiming,
   getVideoComponentSectionPolicy,
@@ -31,6 +36,7 @@ import {
   snapVideoNumFrames,
   WAN_LIGHTNING_ACCELERATOR,
 } from './videoPolicies';
+import { syncVideoWidgetValuesWithModels } from './widgetValues';
 
 const wanModel = (variant: string, format = 'gguf_quantized', key = `wan-${variant}-${format}`): MainModelConfig => ({
   base: 'wan',
@@ -223,6 +229,7 @@ describe('getVideoDimensions', () => {
 
 describe('getVideoPromptPolicy', () => {
   const promptSettings = (overrides: Partial<Parameters<typeof getVideoPromptPolicy>[1]> = {}) => ({
+    acceleratorEnabled: false,
     audioCfgScale: null,
     cfgScale: 5,
     cfgScaleLowNoise: null,
@@ -369,6 +376,349 @@ describe('Lightning', () => {
     expect(withoutPair).toMatchObject({ cfgScale: 5, acceleratorEnabled: false, steps: 40 });
     // The catalog holds no H3 Turbo LoRA, so H3 falls back to its slow defaults.
     expect(h3Defaults).toMatchObject({ fps: 24, acceleratorEnabled: false, numFrames: 124, steps: 50 });
+  });
+});
+
+describe('LTX-2 extend context control', () => {
+  const model = ltx2('ltx2_dev');
+  const extendSettings = (overrides: Partial<VideoSettings> = {}) => ({
+    ...getDefaultVideoSettings(model, []),
+    sourceVideo: {
+      endFrame: 200,
+      fps: 24,
+      height: 704,
+      numFrames: 201,
+      startFrame: 0,
+      video_name: 's.mp4',
+      width: 1248,
+    },
+    ...overrides,
+  });
+
+  it('offers the control only in extend mode, with a source to size it against', () => {
+    // The ceiling is a property of the SOURCE's pixels -- the join blends at the clip's own
+    // resolution, not the generation canvas -- so without a clip there is nothing to bound.
+    expect(getVideoModelPolicy(model, extendSettings()).ui.extendContext).not.toBeNull();
+    expect(getVideoModelPolicy(model, getDefaultVideoSettings(model, [])).ui.extendContext).toBeNull();
+    expect(getVideoModelPolicy(wanModel('i2v_a14b'), extendSettings()).ui.extendContext).toBeNull();
+  });
+
+  it('bounds the control by what the join can afford for THIS source', () => {
+    // video_concat buffers the crossfade at the source's native resolution and refuses over
+    // 512 MiB, so a larger clip affords a shorter context. Without a live bound the user could set
+    // a value refused only at enqueue -- after both encodes and the transformer have run.
+    const hd = getVideoModelPolicy(model, extendSettings()).ui.extendContext;
+    const uhd = getVideoModelPolicy(
+      model,
+      extendSettings({
+        sourceVideo: {
+          endFrame: 200,
+          fps: 24,
+          height: 2160,
+          numFrames: 201,
+          startFrame: 0,
+          video_name: 's.mp4',
+          width: 3840,
+        },
+      })
+    ).ui.extendContext;
+
+    expect(hd?.max ?? 0).toBeGreaterThan(LTX2_EXTEND_CONTEXT_FRAMES);
+    // 4K cannot blend even the smallest usable context; 0 is the panel's "not extendable" signal.
+    expect(uhd).toMatchObject({ max: 0 });
+  });
+
+  it('reports the new material left after the join consumes the context', () => {
+    // output = source + numFrames - context, so every held frame costs a frame of new video. That
+    // trade is invisible in Frames alone, which is why the control states it.
+    const at17 = getVideoModelPolicy(model, extendSettings({ numFrames: 121 })).ui.extendContext;
+    const at49 = getVideoModelPolicy(model, extendSettings({ ltx2ExtendContextFrames: 49, numFrames: 121 })).ui
+      .extendContext;
+
+    expect(at17).toMatchObject({ newFrames: 104 });
+    expect(at49).toMatchObject({ newFrames: 72 });
+  });
+
+  it('refuses a context the source cannot afford, naming what would fit', () => {
+    // Not reachable by dragging (the control is bounded), but a recalled or stored value can carry
+    // a context made for a smaller source.
+    const reasons = getVideoValidationReasons(
+      model,
+      extendSettings({
+        ltx2ExtendContextFrames: 97,
+        sourceVideo: {
+          endFrame: 200,
+          fps: 24,
+          height: 1440,
+          numFrames: 201,
+          startFrame: 0,
+          video_name: 's.mp4',
+          width: 2560,
+        },
+      })
+    );
+
+    expect(reasons.join(' ')).toMatch(/Context Frames is 97/);
+  });
+
+  it('refuses a trim that keeps fewer frames than the join will blend', () => {
+    const reasons = getVideoValidationReasons(
+      model,
+      extendSettings({
+        ltx2ExtendContextFrames: 49,
+        sourceVideo: {
+          endFrame: 20,
+          fps: 24,
+          height: 704,
+          numFrames: 201,
+          startFrame: 0,
+          video_name: 's.mp4',
+          width: 1248,
+        },
+      })
+    );
+
+    expect(reasons.join(' ')).toMatch(/keeps only 21/);
+  });
+
+  it('snaps a stored off-grid value onto the VAE grid', () => {
+    // The node snaps a ragged request DOWN silently, so an unsnapped setting would leave the panel
+    // showing a count the run did not use.
+    expect(normalizeVideoSettings({ ...extendSettings(), ltx2ExtendContextFrames: 24 })).toMatchObject({
+      ltx2ExtendContextFrames: 17,
+    });
+    expect(normalizeVideoSettings({ ...extendSettings(), ltx2ExtendContextFrames: 3 })).toMatchObject({
+      ltx2ExtendContextFrames: 9,
+    });
+  });
+});
+
+describe('LTX-2 distilled accelerator', () => {
+  const DISTILLED = { base: 'ltx-2', key: 'ltx2-distilled', name: 'LTX-2.5 Distilled LoRA', type: 'lora' as const };
+  const STYLE = { base: 'ltx-2', key: 'ltx2-style', name: 'LTX-2 Painterly', type: 'lora' as const };
+
+  it('finds the distilled LoRA and ignores other families and other LTX-2 LoRAs', () => {
+    expect(findLtx2DistilledLora([STYLE, DISTILLED])).toMatchObject({ key: 'ltx2-distilled' });
+    expect(findLtx2DistilledLora([STYLE])).toBeNull();
+    // A distillation LoRA for a different architecture must not satisfy the LTX-2 slot.
+    expect(findLtx2DistilledLora([{ base: 'wan', key: 'w', name: 'Wan Distilled', type: 'lora' as const }])).toBeNull();
+  });
+
+  it('turns the whole guided recipe off, not just the step count', () => {
+    // The distillation retrains the model to predict the clean sample directly. Cutting steps to 8
+    // while still paying for CFG, STG and modality guidance samples off the distribution it was
+    // fitted to -- the failure looks like a broken model, not like a slow one.
+    const model = ltx2('ltx2_dev');
+    const settings = getDefaultVideoSettings(model, []);
+    const result = getAcceleratorToggleResult(settings, model, [DISTILLED], true);
+
+    expect(result.missingLoras).toBe(false);
+    expect(result.settings).toMatchObject({
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: ['ltx2-distilled'],
+      audioCfgScale: 1,
+      cfgScale: 1,
+      modalityScale: 1,
+      steps: 8,
+      stgScale: 0,
+    });
+  });
+
+  it('puts the guided recipe back when switched off', () => {
+    const model = ltx2('ltx2_dev');
+    const on = getAcceleratorToggleResult(getDefaultVideoSettings(model, []), model, [DISTILLED], true).settings;
+    const off = getAcceleratorToggleResult(on, model, [DISTILLED], false).settings;
+
+    expect(off).toMatchObject({
+      acceleratorEnabled: false,
+      acceleratorLoraKeys: [],
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      steps: 30,
+      stgScale: 1,
+    });
+    expect(off.loras).toEqual([]);
+  });
+
+  it('hides the negative prompt once guidance is gone, like the distilled checkpoint', () => {
+    // The accelerator drives every scale to identity, so the negative prompt stops being used --
+    // but LTX-2 is the only family that pre-fills it, so leaving it on screen shows a populated box
+    // full of terms that silently do nothing, under a CFG of 1 the user never typed.
+    const model = ltx2('ltx2_dev');
+    const guided = getVideoPromptPolicy(model, {
+      acceleratorEnabled: false,
+      audioCfgScale: 7,
+      cfgScale: 3,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+    const accelerated = getVideoPromptPolicy(model, {
+      acceleratorEnabled: true,
+      audioCfgScale: 1,
+      cfgScale: 1,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+
+    expect(guided).toMatchObject({ negativeUsedInGraph: true, negativeVisible: true });
+    expect(accelerated).toMatchObject({ negativeUsedInGraph: false, negativeVisible: false });
+    // The same shape the distilled checkpoint presents, which is the model an accelerated Dev is.
+    expect(accelerated.negativeVisible).toBe(
+      getVideoPromptPolicy(ltx2('ltx2_distilled'), {
+        acceleratorEnabled: false,
+        audioCfgScale: null,
+        cfgScale: 1,
+        cfgScaleLowNoise: null,
+        negativePromptEnabled: true,
+        wanLowNoiseModel: null,
+      }).negativeVisible
+    );
+  });
+
+  it('stops offering every control the distilled path would ignore', () => {
+    // The graph sends `schedule: 'distilled'` whenever the accelerator is on, and the backend then
+    // DISCARDS the guidance scales and the step count (`_resolve_guidance` and the step clamp both
+    // log that they are ignoring what was asked). Leaving those scrubbers editable would let a user
+    // set a value, see it accepted, and get a run that silently used something else.
+    const model = ltx2('ltx2_dev');
+    const guided = getVideoModelPolicy(model, getDefaultVideoSettings(model, []));
+    const accelerated = getVideoModelPolicy(model, {
+      ...getDefaultVideoSettings(model, []),
+      acceleratorEnabled: true,
+    });
+
+    expect(guided.ui).toMatchObject({
+      audioCfgVisible: true,
+      cfgVisible: true,
+      modalityVisible: true,
+      stepsEditable: true,
+      stgVisible: true,
+    });
+    expect(accelerated.ui).toMatchObject({
+      audioCfgVisible: false,
+      cfgVisible: false,
+      modalityVisible: false,
+      stepsEditable: false,
+      stgVisible: false,
+    });
+    // Same presentation the distilled checkpoint gives, which is the model this now is.
+    const checkpoint = getVideoModelPolicy(ltx2('ltx2_distilled'), getDefaultVideoSettings(ltx2('ltx2_distilled')));
+
+    expect(accelerated.ui.stepsEditable).toBe(checkpoint.ui.stepsEditable);
+    expect(accelerated.ui.cfgVisible).toBe(checkpoint.ui.cfgVisible);
+    expect(accelerated.prompt.negativeVisible).toBe(checkpoint.prompt.negativeVisible);
+  });
+
+  it('restores the whole recipe when the accelerator LoRA is disabled, not just steps and CFG', () => {
+    // Turning the accelerator off by unticking its LoRA in Concepts goes through a different path
+    // than the toggle. If that path restores only steps and CFG, the run is the undistilled Dev
+    // model with audio CFG, modality and STG still pinned at the accelerator's identity values --
+    // guided sampling with three quarters of its guidance off, and nothing says so.
+    const model = ltx2('ltx2_dev');
+    const on = getAcceleratorToggleResult(getDefaultVideoSettings(model, []), model, [DISTILLED], true).settings;
+    const disabled = on.loras.map((entry) => ({ ...entry, isEnabled: false }));
+    const result = getAcceleratorLoraChangeResult({ ...on, loras: disabled }, model, [DISTILLED], disabled);
+
+    expect(result.outcome).toBe('disabled');
+    expect(result.settings).toMatchObject({
+      acceleratorEnabled: false,
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      steps: 30,
+      stgScale: 1,
+    });
+  });
+
+  it('treats the negative prompt as unused even if a stale scale says otherwise', () => {
+    // The panel cannot produce this, but recall can: metadata carrying a guided CFG alongside the
+    // accelerator's LoRA set. The graph still sends `schedule: 'distilled'` whenever the toggle is
+    // on, and the backend discards the scale -- so the answer must follow the accelerator, not the
+    // stale number, or the panel claims a prompt is in use that the run throws away.
+    const policy = getVideoPromptPolicy(ltx2('ltx2_dev'), {
+      acceleratorEnabled: true,
+      audioCfgScale: 7,
+      cfgScale: 3,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+
+    expect(policy).toMatchObject({ negativeUsedInGraph: false, negativeVisible: false });
+  });
+
+  it('writes the guidance recipe when the accelerator LoRA is swapped for another', () => {
+    // The recorded LoRA is gone and a replacement is found, so the accelerator stays on under a
+    // different file. That path has to write the same recipe the toggle does, or the swap silently
+    // leaves guidance wherever it happened to be.
+    const model = ltx2('ltx2_dev');
+    const settings = {
+      ...getDefaultVideoSettings(model, []),
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: ['a-release-that-is-gone'],
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      stgScale: 1,
+    };
+    // The distilled LoRA is present and on; the key the toggle recorded is not.
+    const present = [{ isEnabled: true, model: DISTILLED, weight: 1 }];
+    const result = getAcceleratorLoraChangeResult({ ...settings, loras: present }, model, [DISTILLED], present);
+
+    expect(result.outcome).toBe('switched');
+    expect(result.settings).toMatchObject({
+      acceleratorEnabled: true,
+      audioCfgScale: 1,
+      cfgScale: 1,
+      modalityScale: 1,
+      steps: 8,
+      stgScale: 0,
+    });
+  });
+
+  it('restores the whole recipe when the accelerator LoRA leaves the catalog entirely', () => {
+    // A different route than unticking it in Concepts: this one runs when the LoRA is deleted in
+    // Model Manager. It goes through `syncVideoWidgetValues`, which copies named fields out of the
+    // change result -- so a field the result restores but the copy does not name is silently lost,
+    // leaving a guided Dev run with its audio, STG and modality guidance pinned at identity.
+    const model = ltx2('ltx2_dev');
+    const on = getAcceleratorToggleResult(getDefaultVideoSettings(model, []), model, [DISTILLED], true).settings;
+    // The LoRA is gone from the catalog: only the main model remains.
+    const synced = syncVideoWidgetValuesWithModels({ ...on, loras: [], model }, [model]);
+
+    expect(synced).toMatchObject({
+      acceleratorEnabled: false,
+      audioCfgScale: 7,
+      cfgScale: 3,
+      modalityScale: 3,
+      steps: 30,
+      stgScale: 1,
+    });
+  });
+
+  it('leaves families whose accelerator keeps guidance alone', () => {
+    // Wan and H3 declare no guidance triple, so their accelerator drops CFG but does not make the
+    // run guidance-free -- their negative prompt stays visible, exactly as before.
+    const wan = getVideoPromptPolicy(wanModel('t2v_a14b'), {
+      acceleratorEnabled: true,
+      audioCfgScale: null,
+      cfgScale: 1,
+      cfgScaleLowNoise: null,
+      negativePromptEnabled: true,
+      wanLowNoiseModel: null,
+    });
+
+    expect(wan.negativeVisible).toBe(true);
+  });
+
+  it('is not offered on the distilled checkpoint, which already is the fast path', () => {
+    // Patching a distillation LoRA onto a model the distillation was not fitted to.
+    const policy = getVideoModelPolicy(ltx2('ltx2_distilled'), getDefaultVideoSettings(ltx2('ltx2_distilled')));
+
+    expect(policy.ui.accelerator).toBeNull();
   });
 });
 
@@ -1516,14 +1866,11 @@ const LTX2_ENCODER = {
 };
 
 describe('LTX-2 policy', () => {
-  it('offers text-to-video, first-frame and whole-modality conditioning on both checkpoints', () => {
-    expect(getVideoModes(ltx2('ltx2_dev'))).toEqual(['txt2vid', 'first-frame', 'audio-to-video', 'video-to-audio']);
-    expect(getVideoModes(ltx2('ltx2_distilled'))).toEqual([
-      'txt2vid',
-      'first-frame',
-      'audio-to-video',
-      'video-to-audio',
-    ]);
+  it('offers every conditioning shape on both checkpoints', () => {
+    const modes = ['txt2vid', 'first-frame', 'last-frame', 'first-last', 'extend', 'audio-to-video', 'video-to-audio'];
+
+    expect(getVideoModes(ltx2('ltx2_dev'))).toEqual(modes);
+    expect(getVideoModes(ltx2('ltx2_distilled'))).toEqual(modes);
   });
 
   describe('whole-modality conditioning clips', () => {
@@ -1593,6 +1940,71 @@ describe('LTX-2 policy', () => {
       const stale = { ...settingsFor(wan), conditioningClip: { clip: CLIP, fpsKnown: true, role: 'video' as const } };
 
       expect(getVideoDimensions(wan, stale)?.source).toBe('aspect-ratio');
+    });
+
+    it('refuses a continuation with no room left to continue', () => {
+      // The generation opens by replaying the source's tail, so a frame count at or below that is
+      // all context and no continuation. Left to the backend it fails after both encoders have run,
+      // with a shape error about an anchor that does not fit its clip.
+      const clip = {
+        endFrame: 94,
+        fps: 24,
+        height: 704,
+        numFrames: 96,
+        startFrame: 0,
+        video_name: 's.mp4',
+        width: 1248,
+      };
+      const extending = (numFrames: number) =>
+        settingsFor(model, {
+          componentSourceModel: LTX2_COMPONENTS,
+          ltx2TextEncoderModel: LTX2_ENCODER,
+          numFrames,
+          sourceVideo: clip,
+        });
+
+      expect(getVideoValidationReasons(model, extending(17)).join(' ')).toContain('Raise Frames above 17');
+      expect(getVideoValidationReasons(model, extending(9)).join(' ')).toContain('Raise Frames above 17');
+      expect(getVideoValidationReasons(model, extending(25))).toEqual([]);
+    });
+
+    it('refuses a source the join could not afford to blend', () => {
+      // The crossfade is buffered at the SOURCE's own resolution, not the generation canvas, and
+      // `video_concat` refuses over 512 MiB. Unchecked, that refusal lands after both encodes, the
+      // transformer and the decode -- and neither remedy it names is reachable from the panel.
+      const atSize = (width: number, height: number) =>
+        settingsFor(model, {
+          componentSourceModel: LTX2_COMPONENTS,
+          ltx2TextEncoderModel: LTX2_ENCODER,
+          numFrames: 121,
+          sourceVideo: { endFrame: 94, fps: 24, height, numFrames: 96, startFrame: 0, video_name: 's.mp4', width },
+        });
+
+      expect(getVideoValidationReasons(model, atSize(2560, 1440))).toEqual([]);
+      expect(getVideoValidationReasons(model, atSize(3840, 2160)).join(' ')).toContain('at or below about 2560x1440');
+    });
+
+    it('refuses a trim the join could not blend out of', () => {
+      // The other side of the same arithmetic: the crossfade takes 17 frames from EACH half, so a
+      // source trimmed shorter than that fails inside the join -- after the whole generation.
+      const trimmed = (kept: number) =>
+        settingsFor(model, {
+          componentSourceModel: LTX2_COMPONENTS,
+          ltx2TextEncoderModel: LTX2_ENCODER,
+          numFrames: 121,
+          sourceVideo: {
+            endFrame: kept - 1,
+            fps: 24,
+            height: 704,
+            numFrames: 96,
+            startFrame: 0,
+            video_name: 's.mp4',
+            width: 1248,
+          },
+        });
+
+      expect(getVideoValidationReasons(model, trimmed(10)).join(' ')).toContain('keeps only 10');
+      expect(getVideoValidationReasons(model, trimmed(17))).toEqual([]);
     });
 
     it('derives the canvas from the clip only when its picture is the given one', () => {

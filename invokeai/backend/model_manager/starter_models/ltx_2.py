@@ -95,6 +95,17 @@ ltx2_5_distilled_transformer_int8 = StarterModel(
     dependencies=[ltx2_5_components, ltx2_5_text_encoder_int8],
 )
 
+ltx2_5_distilled_lora = StarterModel(
+    name="LTX-2.5 Distilled LoRA",
+    base=BaseModelType.LTX2,
+    source=f"{_MIRROR}::ltx-2.5-22b-distilled-lora-450_bf16.safetensors",
+    description="Step-distillation LoRA for the LTX-2.5 Dev transformer: renders in 8 steps without "
+    "guidance instead of ~30 with it. Rank 450 over all 1660 attention and feed-forward projections, "
+    f"bf16 (~8.9 GB) — large for a LoRA because the distillation is not a light touch. {_LICENSE_NOTE}",
+    type=ModelType.LoRA,
+    format=ModelFormat.LyCORIS,
+)
+
 ltx2_5_dev_transformer_bf16 = StarterModel(
     name="LTX-2.5 Dev Transformer (bf16)",
     base=BaseModelType.LTX2,

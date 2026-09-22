@@ -213,6 +213,59 @@ def base_canvas(height: int, width: int) -> tuple[int, int]:
     return height // 2, width // 2
 
 
+def prepare_keyframe_coords(
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    *,
+    pixel_frame_index: int,
+    num_pixel_frames: int,
+    fps: float,
+    device: torch.device | None = None,
+) -> torch.Tensor:
+    """RoPE coordinates for a keyframe appended to the sequence, as ``[1, 3, patches, 2]``.
+
+    A frame conditioned at latent index 0 overwrites tokens already in the grid, so it needs no
+    coordinates of its own. A frame conditioned anywhere else is *appended* to the sequence instead
+    -- there is no room in the grid for a second value at one position -- so it carries its own
+    position, which is what these are. Mirrors ``LTX2ConditionPipeline._prepare_keyframe_coords``
+    (diffusers ``pipelines/ltx2/pipeline_ltx2_condition.py``), itself a port of
+    ``VideoConditionByKeyframeIndex.apply_to``.
+
+    Two details are load-bearing and easy to get wrong. The causal fix that
+    ``prepare_video_coords`` applies to the first frame is deliberately NOT applied here: it exists
+    because latent frame 0 covers one pixel frame while the rest cover eight, and a keyframe placed
+    at a non-zero index is not that frame. And a single-pixel-frame keyframe has its temporal extent
+    clamped to ``[idx, idx + 1)`` rather than the VAE's eight-frame span, so it occupies one instant
+    instead of smearing across the group it lands in.
+    """
+    grid = torch.meshgrid(
+        torch.arange(0, latent_frames, LTX2_PATCH_SIZE_T, dtype=torch.float32, device=device),
+        torch.arange(0, latent_height, LTX2_PATCH_SIZE, dtype=torch.float32, device=device),
+        torch.arange(0, latent_width, LTX2_PATCH_SIZE, dtype=torch.float32, device=device),
+        indexing="ij",
+    )
+    starts = torch.stack(grid, dim=0)
+    extent = torch.tensor(
+        (LTX2_PATCH_SIZE_T, LTX2_PATCH_SIZE, LTX2_PATCH_SIZE), dtype=starts.dtype, device=device
+    ).view(3, 1, 1, 1)
+
+    latent_coords = torch.stack([starts, starts + extent], dim=-1).flatten(1, 3).unsqueeze(0)
+    scale = torch.tensor(
+        (LTX2_TEMPORAL_COMPRESSION, LTX2_SPATIAL_COMPRESSION, LTX2_SPATIAL_COMPRESSION),
+        dtype=latent_coords.dtype,
+        device=device,
+    ).view(1, 3, 1, 1)
+    pixel_coords = latent_coords * scale
+
+    pixel_coords[:, 0, :, :] += pixel_frame_index
+    if num_pixel_frames == 1:
+        pixel_coords[:, 0, :, 1:] = pixel_coords[:, 0, :, :1] + 1
+    pixel_coords[:, 0, :, :] /= fps
+
+    return pixel_coords
+
+
 def _snap_axis(value: float, multiple: int = LTX2_CANVAS_MULTIPLE) -> int:
     # round() is half-to-even, which is the behaviour the frontend's resolver mirrors.
     return max(multiple, round(value / multiple) * multiple)

@@ -22,7 +22,9 @@ import {
   getVideoTargetResolutionOptions,
   isSupportedVideoModel,
   isValidVideoNumFrames,
+  LTX2_NUM_FRAMES_STEP,
   MINIMAX_H3_HYBRID_BLOCK_RANGE,
+  snapLtx2FramesDown,
   snapVideoNumFrames,
 } from '@features/video';
 import { SEED_MAX } from '@platform/core/seed';
@@ -59,6 +61,9 @@ const VIDEO_GENERATION_MODE_IDS: ReadonlySet<string> = new Set([
   'ltx2_i2v',
   'ltx2_a2v',
   'ltx2_v2a',
+  'ltx2_lf2v',
+  'ltx2_flf2v',
+  'ltx2_extend_video',
 ]);
 
 export type VideoRecallKind = 'all' | 'remix' | 'prompts' | 'seed';
@@ -88,6 +93,7 @@ export type VideoRecalledField =
   | 'cfg'
   | 'loras'
   | 'components'
+  | 'extendContext'
   | 'media';
 
 export interface VideoRecallResult {
@@ -562,7 +568,13 @@ export const buildVideoRecallSettings = ({
     fields.push('frames');
   }
 
-  const policy = getVideoModelPolicy(model, values);
+  // Asked with the accelerator forced OFF, not as the panel currently stands. An accelerator that
+  // removes guidance hides Steps and every guidance scale, and this policy decides which of them
+  // recall is allowed to write -- so recalling an ordinary clip into a panel that happens to have
+  // the accelerator on would drop them all and silently leave the accelerator's values in place,
+  // showing numbers the recalled clip never used. The accelerator's own state is derived further
+  // down from the recalled LoRA set, which overwrites this anyway.
+  const policy = getVideoModelPolicy(model, { ...values, acceleratorEnabled: false });
   const steps = getInteger(metadata, 'steps');
 
   // A fixed-schedule checkpoint ignores whatever step count reaches it, so recalling one would
@@ -770,6 +782,21 @@ export const buildVideoRecallSettings = ({
     fields.push('media');
   }
 
+  // Recalled alongside the source rather than with the sampling block: it is only meaningful for a
+  // continuation, and it is not recoverable from anything else in the record -- the output length
+  // folds the source, the generated half and the crossfade together. Snapped on the way in for the
+  // same reason the settings normalizer snaps it: an off-grid value would show a count the run
+  // could not use.
+  const contextFrames = getInteger(metadata, 'ltx2_context_frames');
+
+  if (contextFrames !== null && model?.base === 'ltx-2') {
+    values = {
+      ...values,
+      ltx2ExtendContextFrames: Math.max(1 + LTX2_NUM_FRAMES_STEP, snapLtx2FramesDown(contextFrames)),
+    };
+    fields.push('extendContext');
+  }
+
   return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
 };
 
@@ -786,6 +813,7 @@ const VIDEO_FIELD_LABELS: Record<VideoRecalledField, string> = {
   cfg: 'CFG',
   steps: 'steps',
   components: 'components',
+  extendContext: 'context frames',
   fps: 'FPS',
   frames: 'frames',
   loras: 'concepts',

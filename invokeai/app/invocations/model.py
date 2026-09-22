@@ -226,6 +226,7 @@ class LTX2TransformerField(BaseModel):
     """Transformer field for LTX-2 models."""
 
     transformer: ModelIdentifierField = Field(description="Info to load Transformer submodel")
+    loras: List[LoRAField] = Field(default_factory=list, description="LoRAs to apply on model loading")
     variant: Optional[str] = Field(
         default=None,
         description="The loaded transformer's variant ('ltx2_dev' / 'ltx2_distilled'), stamped by the model "

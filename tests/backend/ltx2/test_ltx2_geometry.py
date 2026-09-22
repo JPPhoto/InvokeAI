@@ -1,15 +1,26 @@
 """LTX-2 latent geometry: what the canvas rules allow and how latents pack."""
 
+import importlib.util
+import pathlib
+from types import SimpleNamespace
+
 import pytest
 import torch
 
-from invokeai.backend.ltx2.constants import LTX2_FRAME_MODULUS
+from invokeai.backend.ltx2.constants import (
+    LTX2_FRAME_MODULUS,
+    LTX2_PATCH_SIZE,
+    LTX2_PATCH_SIZE_T,
+    LTX2_SPATIAL_COMPRESSION,
+    LTX2_TEMPORAL_COMPRESSION,
+)
 from invokeai.backend.ltx2.packing import (
     audio_latent_count,
     base_canvas,
     latent_frame_count,
     pack_audio_latents,
     pack_video_latents,
+    prepare_keyframe_coords,
     require_patch_geometry,
     resolve_canvas,
     snap_num_frames,
@@ -158,3 +169,97 @@ def test_a_canvas_that_cannot_be_halved_onto_the_grid_is_refused() -> None:
 def test_a_grid_that_is_not_a_multiple_of_the_canvas_one_is_refused() -> None:
     with pytest.raises(ValueError, match="canvas grid"):
         resolve_canvas(16, 9, 1024, multiple=48)
+
+
+def _load_upstream_keyframe_coords():
+    """`_prepare_keyframe_coords` lifted out of the installed diffusers source.
+
+    The module it lives in cannot be imported here: it pulls a Gemma-4 symbol from a transformers
+    version this integration deliberately does not require (the loader builds the text tower alone
+    for exactly that reason). Compiling the one function out of the real file keeps the comparison
+    against upstream's actual code rather than against a copy of it that would drift in step.
+    """
+    import ast
+
+    # Located by path, never imported: importing it is what fails.
+    spec = importlib.util.find_spec("diffusers.pipelines.ltx2.pipeline_ltx2_condition")
+    assert spec is not None and spec.origin is not None, "diffusers LTX-2 condition pipeline not installed"
+    source = pathlib.Path(spec.origin).read_text()
+    tree = ast.parse(source)
+    node = next(
+        (
+            item
+            for cls in tree.body
+            if isinstance(cls, ast.ClassDef)
+            for item in cls.body
+            if isinstance(item, ast.FunctionDef) and item.name == "_prepare_keyframe_coords"
+        ),
+        None,
+    )
+    assert node is not None, (
+        "diffusers no longer defines `_prepare_keyframe_coords` on a pipeline class. Our port in "
+        "`prepare_keyframe_coords` was derived from it, so find where the convention moved and "
+        "re-point this comparison rather than deleting it."
+    )
+    module = ast.Module(body=[node], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace: dict = {"torch": torch}
+    exec(compile(module, "<upstream>", "exec"), namespace)  # noqa: S102
+
+    return namespace["_prepare_keyframe_coords"]
+
+
+@pytest.mark.parametrize(
+    ("latent_frames", "num_pixel_frames", "pixel_frame_index", "fps"),
+    [(1, 1, 120, 24.0), (1, 1, 0, 24.0), (2, 9, 48, 30.0), (4, 25, 96, 16.0), (1, 1, 480, 60.0)],
+)
+def test_keyframe_coords_match_the_released_pipelines_own(
+    latent_frames: int, num_pixel_frames: int, pixel_frame_index: int, fps: float
+) -> None:
+    """Our port against the implementation it is a port OF, rather than against itself.
+
+    `_prepare_keyframe_coords` is a method on the diffusers pipeline, so it is called here unbound
+    with a stub carrying only the four geometry attributes it reads. If diffusers changes the
+    convention -- the causal fix, the single-frame clamp, the seconds conversion -- this fails
+    instead of our keyframes quietly landing at the wrong instant.
+    """
+    upstream = _load_upstream_keyframe_coords()
+    stub = SimpleNamespace(
+        transformer_spatial_patch_size=LTX2_PATCH_SIZE,
+        transformer_temporal_patch_size=LTX2_PATCH_SIZE_T,
+        vae_spatial_compression_ratio=LTX2_SPATIAL_COMPRESSION,
+        vae_temporal_compression_ratio=LTX2_TEMPORAL_COMPRESSION,
+    )
+    latent_height, latent_width = 704 // LTX2_SPATIAL_COMPRESSION, 1248 // LTX2_SPATIAL_COMPRESSION
+
+    expected = upstream(
+        stub,
+        keyframe_latent_num_frames=latent_frames,
+        keyframe_latent_height=latent_height,
+        keyframe_latent_width=latent_width,
+        pixel_frame_idx=pixel_frame_index,
+        num_pixel_frames=num_pixel_frames,
+        fps=fps,
+        device=torch.device("cpu"),
+    )
+    ours = prepare_keyframe_coords(
+        latent_frames,
+        latent_height,
+        latent_width,
+        pixel_frame_index=pixel_frame_index,
+        num_pixel_frames=num_pixel_frames,
+        fps=fps,
+    )
+
+    assert ours.shape == expected.shape
+    assert torch.equal(ours, expected)
+
+
+def test_a_single_frame_keyframe_occupies_one_instant_not_the_group_it_lands_in() -> None:
+    """The clamp the port carries: without it a still frame would claim the whole 8-frame span the
+    VAE scale implies, and the model would read it as eight frames of held picture."""
+    coords = prepare_keyframe_coords(1, 2, 2, pixel_frame_index=120, num_pixel_frames=1, fps=24.0)
+    start, end = coords[0, 0, :, 0], coords[0, 0, :, 1]
+
+    assert torch.allclose(start, torch.full_like(start, 120 / 24.0))
+    assert torch.allclose(end, torch.full_like(end, 121 / 24.0))
