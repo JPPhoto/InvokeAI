@@ -33,7 +33,7 @@ import type {
   WanTargetResolution,
 } from './types';
 
-import { MINIMAX_H3_FPS } from './dimensions';
+import { LTX2_EXTEND_CONTEXT_FRAMES, LTX2_NUM_FRAMES_STEP, MINIMAX_H3_FPS, snapLtx2FramesDown } from './dimensions';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object';
 
@@ -398,6 +398,7 @@ const SETTINGS_FALLBACKS = {
   aspectRatioId: '16:9',
   cfgScale: 5,
   fps: 16,
+  ltx2ExtendContextFrames: LTX2_EXTEND_CONTEXT_FRAMES,
   numFrames: 81,
   steps: 40,
   targetResolution: '720p',
@@ -481,6 +482,13 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
       MAX_NEGATIVE_PROMPT_HEIGHT_PX,
       DEFAULT_NEGATIVE_PROMPT_HEIGHT_PX
     ),
+    // Snapped on the way in: a stored or hand-edited value off the 8k + 1 grid would otherwise
+    // reach the node, which snaps it down silently and then reports a different count than the
+    // panel shows. Bounds against the source are the validator's job, not this one's -- it has no
+    // model or clip to check against.
+    ltx2ExtendContextFrames: hasFiniteNumber(values, 'ltx2ExtendContextFrames')
+      ? Math.max(1 + LTX2_NUM_FRAMES_STEP, snapLtx2FramesDown(values.ltx2ExtendContextFrames as number))
+      : SETTINGS_FALLBACKS.ltx2ExtendContextFrames,
     numFrames: hasFiniteNumber(values, 'numFrames') ? (values.numFrames as number) : SETTINGS_FALLBACKS.numFrames,
     positivePrompt: typeof values.positivePrompt === 'string' ? values.positivePrompt : '',
     positivePromptHeightPx: getClampedNumber(

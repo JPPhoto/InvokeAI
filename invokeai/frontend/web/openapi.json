@@ -26457,6 +26457,23 @@
             "orig_required": false,
             "title": "Source Video End Frame"
           },
+          "ltx2_context_frames": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Frames of the source an LTX-2 continuation opened with, which the join then crossfaded out of both halves",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Ltx2 Context Frames"
+          },
           "fps": {
             "anyOf": [
               {
@@ -26855,7 +26872,7 @@
         "tags": ["metadata"],
         "title": "Core Metadata",
         "type": "object",
-        "version": "2.6.0",
+        "version": "2.7.0",
         "output": {
           "$ref": "#/components/schemas/MetadataOutput"
         }

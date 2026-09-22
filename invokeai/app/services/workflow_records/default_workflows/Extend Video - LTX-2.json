@@ -572,7 +572,7 @@
       "type": "invocation",
       "data": {
         "id": "core_metadata",
-        "version": "2.6.0",
+        "version": "2.7.0",
         "nodePack": "invokeai",
         "label": "",
         "notes": "Recorded on the output so runs can be told apart in the gallery. These literals are NOT synced to the nodes above -- change num_frames, steps or the canvas there and change them here too, or the metadata will describe a different run than the one you made.",
