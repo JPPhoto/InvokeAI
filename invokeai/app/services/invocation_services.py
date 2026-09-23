@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from invokeai.app.services.image_moves.image_moves_default import ImageMoveService
     from invokeai.app.services.image_records.image_records_base import ImageRecordStorageBase
     from invokeai.app.services.images.images_base import ImageServiceABC
+    from invokeai.app.services.intermediates.intermediates_base import IntermediatesServiceBase
     from invokeai.app.services.invocation_cache.invocation_cache_base import InvocationCacheBase
     from invokeai.app.services.invocation_stats.invocation_stats_base import InvocationStatsServiceBase
     from invokeai.app.services.model_images.model_images_base import ModelImageFileStorageBase
@@ -111,6 +112,7 @@ class InvocationServices:
         image_moves: "ImageMoveService | None" = None,
         progress_previews: "ProgressPreviewsBase | None" = None,
         fonts: "FontService | None" = None,
+        intermediates: "IntermediatesServiceBase | None" = None,
     ):
         self.board_images = board_images
         self.board_image_records = board_image_records
@@ -160,3 +162,4 @@ class InvocationServices:
         self.image_index_records = image_index_records
         self.image_index = image_index
         self.fonts = fonts
+        self.intermediates = intermediates

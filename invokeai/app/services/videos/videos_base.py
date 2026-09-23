@@ -6,6 +6,7 @@ from PIL import Image
 
 from invokeai.app.invocations.fields import MetadataField
 from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
+from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.video_records.video_records_common import (
@@ -62,6 +63,7 @@ class VideoServiceABC(ABC):
         user_id: Optional[str] = None,
         first_frame: Optional[Image.Image] = None,
         move_source: bool = True,
+        project_id: Optional[str] = None,
     ) -> VideoDTO:
         """Creates a video by moving the file at `source_path` into storage and recording it.
 
@@ -145,6 +147,17 @@ class VideoServiceABC(ABC):
     @abstractmethod
     def delete(self, video_name: str) -> None:
         """Deletes a video."""
+        pass
+
+    @abstractmethod
+    def delete_intermediates_by_names(
+        self, video_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
+    ) -> IntermediateDeleteResult:
+        """Deletes the named videos that are still intermediates, reporting the names removed.
+
+        Files are staged before the conditional record delete and restored for every name the
+        delete (or ``guard``) kept, so a promoted or protected video is never damaged.
+        """
         pass
 
     @abstractmethod

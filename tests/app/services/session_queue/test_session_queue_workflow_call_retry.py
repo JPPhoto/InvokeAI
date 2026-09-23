@@ -34,6 +34,7 @@ def _build_queue_item(
     status: str,
     root_item_id: int | None = None,
     retried_from_item_id: int | None = None,
+    project_id: str | None = None,
 ) -> SessionQueueItem:
     now = datetime.now()
     return SessionQueueItem(
@@ -41,6 +42,7 @@ def _build_queue_item(
         status=status,
         priority=0,
         batch_id=f"batch-{item_id}",
+        project_id=project_id,
         origin=None,
         destination=None,
         session_id=session.id,
@@ -131,3 +133,17 @@ def test_retry_items_by_id_emits_unique_owner_ids_for_multiple_roots(
         "user-1": [first_root_item.item_id],
         "user-2": [second_root_item.item_id],
     }
+
+
+def test_retried_items_inherit_the_project_of_the_root(
+    session_queue: SqliteSessionQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_item = _build_queue_item(
+        item_id=20, session=GraphExecutionState(graph=Graph()), user_id="user-1", status="failed", project_id="p1"
+    )
+    monkeypatch.setattr(session_queue, "get_queue_item", lambda item_id: {root_item.item_id: root_item}[item_id])
+
+    session_queue.retry_items_by_id("default", [root_item.item_id])
+
+    retried = [item for item in session_queue.list_all_queue_items("default") if item.retried_from_item_id == 20]
+    assert [item.project_id for item in retried] == ["p1"]

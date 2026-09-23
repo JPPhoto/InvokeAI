@@ -12,6 +12,7 @@ from invokeai.app.services.image_records.image_records_common import (
 )
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.bulk_media_delete import StagedMediaDeleteAdapter, delete_media_by_names
+from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.video_files.video_files_common import (
@@ -56,6 +57,7 @@ class VideoService(VideoServiceABC):
         user_id: Optional[str] = None,
         first_frame: Optional[Image.Image] = None,
         move_source: bool = True,
+        project_id: Optional[str] = None,
     ) -> VideoDTO:
         if video_origin not in ResourceOrigin:
             raise InvalidOriginException
@@ -89,6 +91,7 @@ class VideoService(VideoServiceABC):
                 session_id=session_id,
                 user_id=user_id,
                 video_subfolder=video_subfolder,
+                project_id=project_id,
             )
             record_saved = True
             if board_id is not None:
@@ -118,6 +121,7 @@ class VideoService(VideoServiceABC):
                 duration=duration,
                 fps=fps,
             )
+            self._record_file_size(video_name, video_subfolder)
 
             video_dto = self.get_dto(video_name)
             self._on_changed(video_dto)
@@ -159,6 +163,14 @@ class VideoService(VideoServiceABC):
             else:
                 self.__invoker.services.logger.error(f"Problem saving video record and file: {str(e)}")
             raise
+
+    def _record_file_size(self, video_name: str, video_subfolder: str) -> None:
+        """Best-effort size accounting; an unmeasured row reads as unknown, never zero."""
+        try:
+            size = self.__invoker.services.video_files.get_file_size_bytes(video_name, video_subfolder=video_subfolder)
+            self.__invoker.services.video_records.set_file_size_bytes(video_name, size)
+        except Exception as e:
+            self.__invoker.services.logger.warning(f"Failed to record the file size of video {video_name}: {e}")
 
     def copy(self, source_video_name: str, board_id: Optional[str] = None, user_id: Optional[str] = None) -> VideoDTO:
         """Duplicate a video without moving the source or exposing partial attachment semantics.
@@ -383,6 +395,33 @@ class VideoService(VideoServiceABC):
             board_id, categories=None, is_intermediate=None, user_id=user_id
         )
         return self.delete_videos_by_names(video_names)
+
+    def delete_intermediates_by_names(
+        self, video_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
+    ) -> IntermediateDeleteResult:
+        records = self.__invoker.services.video_records
+        files = self.__invoker.services.video_files
+        subfolders = records.get_subfolders(video_names)
+        if not subfolders:
+            return IntermediateDeleteResult()
+
+        # Records first, files second, like the image path: only the files of rows the conditional
+        # delete actually removed are touched, so a video promoted or protected between the preview
+        # and this call keeps both. There is no video delete journal, so a crash between the two
+        # steps leaves files without records — the exposure `delete_videos_by_names` already has.
+        deleted = records.delete_intermediates_by_names(list(subfolders.keys()), guard=guard)
+        result = IntermediateDeleteResult(deleted_names=deleted)
+        for name in deleted:
+            try:
+                files.delete(name, video_subfolder=subfolders[name])
+            except Exception as cleanup_error:
+                self.__invoker.services.logger.error(
+                    f"Failed to purge intermediate video files for {name}: {cleanup_error}"
+                )
+                result.purge_deferred.append(name)
+        for name in deleted:
+            self._on_deleted(name)
+        return result
 
     def delete_videos_by_names(self, video_names: list[str]) -> tuple[list[str], list[str]]:
         """Delete exactly these videos, returning ``(deleted, failed)``.

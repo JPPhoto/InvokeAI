@@ -1,0 +1,61 @@
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional
+
+from invokeai.app.services.intermediates.intermediates_common import (
+    IntermediatesOperation,
+    IntermediatesOperationRequest,
+    IntermediatesPreview,
+    IntermediatesPreviewRequest,
+    IntermediatesSummary,
+    IntermediatesSummarySort,
+)
+
+
+@dataclass(frozen=True)
+class IntermediatesCaller:
+    """Who is asking: the authenticated account and whether it administers the instance."""
+
+    user_id: str
+    is_admin: bool
+
+
+class IntermediatesServiceBase(ABC):
+    """Scoped cleanup of intermediate images and videos under one eligibility policy."""
+
+    @abstractmethod
+    def get_summary(
+        self,
+        caller: IntermediatesCaller,
+        *,
+        owner_id: Optional[str],
+        search: Optional[str],
+        sort: IntermediatesSummarySort,
+        descending: bool,
+        offset: int,
+        limit: int,
+    ) -> IntermediatesSummary:
+        pass
+
+    @abstractmethod
+    def create_preview(self, request: IntermediatesPreviewRequest, caller: IntermediatesCaller) -> IntermediatesPreview:
+        pass
+
+    @abstractmethod
+    def start_operation(
+        self, request: IntermediatesOperationRequest, caller: IntermediatesCaller
+    ) -> IntermediatesOperation:
+        pass
+
+    @abstractmethod
+    def get_operation(self, operation_id: str, caller: IntermediatesCaller) -> IntermediatesOperation:
+        pass
+
+    @abstractmethod
+    def retry_operation(self, operation_id: str, caller: IntermediatesCaller) -> IntermediatesOperation:
+        pass
+
+    @abstractmethod
+    def clear_all_images_now(self, caller: IntermediatesCaller) -> int:
+        """The legacy instance-wide clear: every safe intermediate image, synchronously. Admin only."""
+        pass

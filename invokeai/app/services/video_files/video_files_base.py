@@ -43,6 +43,11 @@ class VideoFileStorageBase(ABC):
         pass
 
     @abstractmethod
+    def get_file_size_bytes(self, video_name: str, video_subfolder: str = "") -> Optional[int]:
+        """Bytes the video, its thumbnail and sidecar occupy; None when the video file is missing."""
+        pass
+
+    @abstractmethod
     def delete(self, video_name: str, video_subfolder: str = "") -> None:
         """Deletes a video file and its thumbnail (if one exists)."""
         pass

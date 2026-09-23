@@ -27,6 +27,7 @@ from invokeai.app.services.images.images_base import ImageServiceABC
 from invokeai.app.services.images.images_common import ImageDTO, image_record_to_dto
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.bulk_media_delete import StagedMediaDeleteAdapter, delete_media_by_names
+from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 
@@ -70,6 +71,7 @@ class ImageService(ImageServiceABC):
         workflow: Optional[str] = None,
         graph: Optional[str] = None,
         user_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> ImageDTO:
         if image_origin not in ResourceOrigin:
             raise InvalidOriginException
@@ -112,6 +114,7 @@ class ImageService(ImageServiceABC):
                     session_id=session_id,
                     user_id=user_id,
                     image_subfolder=image_subfolder,
+                    project_id=project_id,
                 )
                 if board_id is not None:
                     try:
@@ -128,6 +131,7 @@ class ImageService(ImageServiceABC):
                     graph=graph,
                     image_subfolder=image_subfolder,
                 )
+                self._record_file_size(image_name, image_subfolder)
             image_dto = self.get_dto(image_name)
 
             self._on_changed(image_dto)
@@ -142,6 +146,18 @@ class ImageService(ImageServiceABC):
         except Exception as e:
             self.__invoker.services.logger.error(f"Problem saving image record and file: {str(e)}")
             raise e
+
+    def _record_file_size(self, image_name: str, image_subfolder: str) -> None:
+        """Measures the files just written so storage accounting never has to stat them again.
+
+        Best effort: the image exists whether or not its size is recorded, and an unmeasured row
+        reads as unknown rather than zero until the intermediates backfill measures it.
+        """
+        try:
+            size = self.__invoker.services.image_files.get_file_size_bytes(image_name, image_subfolder=image_subfolder)
+            self.__invoker.services.image_records.set_file_size_bytes(image_name, size)
+        except Exception as e:
+            self.__invoker.services.logger.warning(f"Failed to record the file size of image {image_name}: {e}")
 
     def __clean_up_failed_save(self, image_name: str, image_subfolder: str) -> None:
         """Removes the half-created image left by a failed save, record first.
@@ -270,6 +286,7 @@ class ImageService(ImageServiceABC):
                     image_subfolder=image_subfolder,
                 )
                 file_copied = True
+                self._record_file_size(image_name, image_subfolder)
 
                 image_dto = self.get_dto(image_name)
                 self._on_changed(image_dto)
@@ -568,67 +585,76 @@ class ImageService(ImageServiceABC):
                 self.__invoker.services.logger.error(f"Problem deleting image records and files: {str(e)}")
                 raise e
 
-    def delete_intermediates(self) -> int:
-        # Records first, files second, with a durable journal spanning the two. An earlier revision
-        # staged every file, then conditionally deleted the records, then restored the files of any
-        # image that had been promoted out of intermediate status mid-operation. That restore is
-        # unfixably racy: while a promoted image's files sit in a staging directory, a concurrent
-        # single-image or board delete can stage-empty (it finds no files to move) and then remove
-        # the record; the restore then puts the files back with no record referencing them and no
-        # journal to recover from — permanent orphans (JPPhoto, PR #9361).
-        #
-        # Deleting the records first removes that hazard: the conditional DELETE is atomic and
-        # reports exactly which rows it removed, and only the files of already-deleted rows are
-        # touched. A promoted image is never deleted and its files are never moved, so a concurrent
-        # delete of it operates on real files in the output folder and stays consistent. The
-        # journal covers the window the reordering opens: if this process dies, or the filesystem
-        # fails, between the commit and the purge, startup recovery finishes the purge for every
-        # journalled image whose record is gone.
-        #
-        # The mutation lock spans the snapshot through the purge so a subfolder move cannot
-        # relocate files between the two and leave the purge sweeping an abandoned path
-        # (JPPhoto, PR #9361).
+    def delete_intermediates_by_names(
+        self, image_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
+    ) -> IntermediateDeleteResult:
         with self._image_mutation_lock():
             try:
-                image_name_subfolder_pairs = self.__invoker.services.image_records.get_intermediates()
-                if not image_name_subfolder_pairs:
-                    return 0
-                subfolders = dict(image_name_subfolder_pairs)
-                token = self.__invoker.services.image_files.begin_delete(list(subfolders.items()))
-                try:
-                    # Conditional on the row still being an intermediate: an image promoted between the
-                    # snapshot above and this call keeps both its record and its files. Returns exactly
-                    # the names this call removed (already-absent and promoted rows are excluded).
-                    deleted_image_names = self.__invoker.services.image_records.delete_intermediates_by_names(
-                        list(subfolders.keys())
-                    )
-                except Exception:
-                    try:
-                        self.__invoker.services.image_files.abandon_delete(token)
-                    except Exception as cleanup_error:
-                        self.__invoker.services.logger.error(
-                            f"Failed to discard the intermediates delete journal: {cleanup_error}"
-                        )
-                    raise
-                try:
-                    # Only the names whose records this call removed are purged; a promoted image keeps
-                    # its files. The journal still lists it, which is harmless — recovery re-checks
-                    # every entry against the record store and skips the ones that survived.
-                    self.__invoker.services.image_files.commit_delete(token, image_names=deleted_image_names)
-                except Exception as cleanup_error:
-                    # The records are committed as gone, so the deletion succeeded. A file that could
-                    # not be purged keeps its journal entry and is retried at the next startup; it must
-                    # neither fail the operation nor undo the committed deletions.
-                    self.__invoker.services.logger.error(f"Failed to purge intermediate image files: {cleanup_error}")
-                for image_name in deleted_image_names:
-                    self._on_deleted(image_name)
-                return len(deleted_image_names)
+                subfolders = self.__invoker.services.image_records.get_subfolders(image_names)
+                if not subfolders:
+                    return IntermediateDeleteResult()
+                return self._delete_intermediates(subfolders, guard=guard)
             except ImageRecordDeleteException:
                 self.__invoker.services.logger.error("Failed to delete image records")
                 raise
             except Exception as e:
                 self.__invoker.services.logger.error("Problem deleting intermediate image records and files")
                 raise e
+
+    def _delete_intermediates(
+        self, subfolders: dict[str, str], guard: Optional[IntermediateDeleteGuard]
+    ) -> IntermediateDeleteResult:
+        """Deletes the given intermediates, records first, files second, with a durable journal spanning the two.
+
+        The caller holds the image mutation lock across the snapshot through the purge so a subfolder
+        move cannot relocate files between the two and leave the purge sweeping an abandoned path.
+
+        An earlier revision staged every file, then conditionally deleted the records, then restored
+        the files of any image that had been promoted out of intermediate status mid-operation. That
+        restore is unfixably racy: while a promoted image's files sit in a staging directory, a
+        concurrent single-image or board delete can stage-empty (it finds no files to move) and then
+        remove the record; the restore then puts the files back with no record referencing them and
+        no journal to recover from — permanent orphans (JPPhoto, PR #9361).
+
+        Deleting the records first removes that hazard: the conditional DELETE is atomic and reports
+        exactly which rows it removed, and only the files of already-deleted rows are touched. A
+        promoted image is never deleted and its files are never moved, so a concurrent delete of it
+        operates on real files in the output folder and stays consistent. The journal covers the
+        window the reordering opens: if this process dies, or the filesystem fails, between the
+        commit and the purge, startup recovery finishes the purge for every journalled image whose
+        record is gone.
+        """
+        token = self.__invoker.services.image_files.begin_delete(list(subfolders.items()))
+        try:
+            # Conditional on the row still being an intermediate (and on the guard's final check): an
+            # image promoted or protected between the snapshot above and this call keeps both its
+            # record and its files. Returns exactly the names this call removed.
+            deleted_image_names = self.__invoker.services.image_records.delete_intermediates_by_names(
+                list(subfolders.keys()), guard=guard
+            )
+        except Exception:
+            try:
+                self.__invoker.services.image_files.abandon_delete(token)
+            except Exception as cleanup_error:
+                self.__invoker.services.logger.error(
+                    f"Failed to discard the intermediates delete journal: {cleanup_error}"
+                )
+            raise
+        result = IntermediateDeleteResult(deleted_names=deleted_image_names)
+        try:
+            # Only the names whose records this call removed are purged; a surviving image keeps its
+            # files. The journal still lists it, which is harmless — recovery re-checks every entry
+            # against the record store and skips the ones that survived.
+            self.__invoker.services.image_files.commit_delete(token, image_names=deleted_image_names)
+        except Exception as cleanup_error:
+            # The records are committed as gone, so the deletion succeeded. A file that could not be
+            # purged keeps its journal entry and is retried at the next startup; it must neither fail
+            # the operation nor undo the committed deletions.
+            self.__invoker.services.logger.error(f"Failed to purge intermediate image files: {cleanup_error}")
+            result.purge_deferred = list(deleted_image_names)
+        for image_name in deleted_image_names:
+            self._on_deleted(image_name)
+        return result
 
     def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
         try:

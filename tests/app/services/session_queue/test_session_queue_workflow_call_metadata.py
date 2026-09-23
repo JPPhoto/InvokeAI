@@ -218,9 +218,10 @@ def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_q
                 destination,
                 retried_from_item_id,
                 user_id,
+                project_id,
                 status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "default",
@@ -234,6 +235,7 @@ def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_q
                 None,
                 None,
                 "user-1",
+                "project-1",
                 "in_progress",
             ),
         )
@@ -243,6 +245,8 @@ def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_q
     child_queue_item = session_queue.enqueue_workflow_call_child(parent_queue_item, child_session)
 
     assert child_queue_item.status == "pending"
+    # Outputs of a child workflow belong to the project that enqueued the parent.
+    assert child_queue_item.project_id == "project-1"
     assert child_queue_item.workflow_call_id == parent_session.waiting_workflow_call_execution.id
     assert child_queue_item.parent_item_id == parent_item_id
     assert child_queue_item.parent_session_id == parent_session.id

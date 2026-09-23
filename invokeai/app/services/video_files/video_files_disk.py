@@ -194,6 +194,21 @@ class DiskVideoFileStorage(VideoFileStorageBase):
         except Exception as e:
             raise VideoFileDeleteException from e
 
+    def get_file_size_bytes(self, video_name: str, video_subfolder: str = "") -> Optional[int]:
+        try:
+            size = self.get_path(video_name, video_subfolder=video_subfolder).stat().st_size
+        except FileNotFoundError:
+            return None
+        for companion in (
+            self.get_path(video_name, thumbnail=True, video_subfolder=video_subfolder),
+            self.__get_sidecar_path(video_name, video_subfolder=video_subfolder),
+        ):
+            try:
+                size += companion.stat().st_size
+            except FileNotFoundError:
+                pass
+        return size
+
     def get_path(self, video_name: str, thumbnail: bool = False, video_subfolder: str = "") -> Path:
         base_folder = self.__thumbnails_folder if thumbnail else self.__output_folder
         filename = get_video_thumbnail_name(video_name) if thumbnail else video_name

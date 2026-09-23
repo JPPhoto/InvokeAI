@@ -1,0 +1,217 @@
+"""Contracts of the intermediates manager: summaries, previews and cleanup operations."""
+
+from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+IntermediatesCleanupMode = Literal["safe", "force"]
+"""`safe` keeps everything a saved document still references; `force` deletes those too. Neither
+touches active work, recent uploads or durable media."""
+
+IntermediatesScopeKind = Literal["selection", "owner", "everyone"]
+IntermediatesOperationStatus = Literal["pending", "running", "completed", "failed"]
+IntermediatesSummarySort = Literal["reclaimable_bytes", "project_name"]
+
+# Intermediates younger than this are never collected: it covers the window between a browser
+# uploading an intermediate and either promoting it to a durable asset, saving a document that
+# references it, or enqueueing the job that consumes it.
+RECENT_GRACE_SECONDS = 30 * 60
+
+PREVIEW_TTL_SECONDS = 10 * 60
+
+
+class IntermediatesScopeTarget(BaseModel):
+    """One row of the manager: an owner's project, or their unassigned intermediates."""
+
+    user_id: str = Field(min_length=1, max_length=255, description="The owning account")
+    project_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The originating project; null selects the owner's unassigned intermediates",
+    )
+
+
+class IntermediatesScope(BaseModel):
+    kind: IntermediatesScopeKind = Field(description="How the targets were chosen")
+    targets: list[IntermediatesScopeTarget] = Field(
+        default_factory=list, max_length=1000, description="The selected rows; only read for a `selection` scope"
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The account whose rows are targeted by an `owner` scope",
+    )
+
+
+class IntermediatesKindCounts(BaseModel):
+    """How one media kind's intermediates split under the cleanup policy."""
+
+    safe: int = Field(default=0, description="Unreferenced, inactive and old enough: deleted by either mode")
+    referenced: int = Field(default=0, description="Named by a saved project or workflow: kept by safe mode")
+    active: int = Field(default=0, description="Produced or consumed by pending, waiting or running work: always kept")
+    recent: int = Field(default=0, description="Created inside the grace window: always kept")
+
+    @property
+    def total(self) -> int:
+        return self.safe + self.referenced + self.active + self.recent
+
+
+class IntermediatesRow(IntermediatesScopeTarget):
+    user_display_name: Optional[str] = Field(default=None, description="The owner's display name, if known")
+    user_email: Optional[str] = Field(default=None, description="The owner's email, if known")
+    project_name: Optional[str] = Field(default=None, description="The project's name; null for unassigned rows")
+    cover_image_name: Optional[str] = Field(
+        default=None, description="The newest durable image on the project's board, for a thumbnail"
+    )
+    images: IntermediatesKindCounts = Field(default_factory=IntermediatesKindCounts)
+    videos: IntermediatesKindCounts = Field(default_factory=IntermediatesKindCounts)
+    reclaimable_bytes: int = Field(default=0, description="Measured size of the safe items")
+    referenced_bytes: int = Field(default=0, description="Measured size of the referenced items a force clear adds")
+    unknown_size_count: int = Field(default=0, description="Safe or referenced items whose size is not yet measured")
+
+
+class IntermediatesSummaryTotals(BaseModel):
+    """Totals over every row that matches the request, not just the returned page."""
+
+    rows: int = Field(default=0)
+    safe_images: int = Field(default=0)
+    safe_videos: int = Field(default=0)
+    in_use_images: int = Field(default=0)
+    in_use_videos: int = Field(default=0)
+    reclaimable_bytes: int = Field(default=0)
+    unknown_size_count: int = Field(default=0)
+
+
+class IntermediatesSummary(BaseModel):
+    items: list[IntermediatesRow]
+    total: int = Field(description="Rows matching the request")
+    offset: int
+    limit: int
+    totals: IntermediatesSummaryTotals
+    recent_grace_seconds: int = Field(description="How long a new intermediate is protected")
+    measuring: bool = Field(description="Whether sizes are still being measured in the background")
+    can_manage_everyone: bool = Field(description="Whether the caller may target other accounts")
+
+
+class IntermediatesPreviewRequest(BaseModel):
+    mode: IntermediatesCleanupMode
+    scope: IntermediatesScope
+
+
+class IntermediatesImpact(BaseModel):
+    delete_images: int = Field(default=0)
+    delete_videos: int = Field(default=0)
+    keep_referenced_images: int = Field(default=0)
+    keep_referenced_videos: int = Field(default=0)
+    keep_active_images: int = Field(default=0)
+    keep_active_videos: int = Field(default=0)
+    keep_recent_images: int = Field(default=0)
+    keep_recent_videos: int = Field(default=0)
+    reclaimable_bytes: int = Field(default=0, description="Measured size of the items that would be deleted")
+    unknown_size_count: int = Field(default=0, description="Items to delete whose size is not yet measured")
+
+
+class IntermediatesAffectedDocument(BaseModel):
+    """A saved document a force clear would leave pointing at deleted media."""
+
+    kind: Literal["project", "workflow"]
+    user_id: str
+    owner_id: str = Field(description="The project or workflow id")
+    name: Optional[str] = Field(default=None, description="The document's name, if it still exists")
+    references: int = Field(description="How many of the targeted items the document names")
+
+
+class IntermediatesPreview(BaseModel):
+    preview_id: str
+    mode: IntermediatesCleanupMode
+    scope: IntermediatesScope
+    created_at: datetime
+    expires_at: datetime
+    target_rows: int = Field(description="Rows the scope resolved to")
+    impact: IntermediatesImpact
+    affected_documents: list[IntermediatesAffectedDocument] = Field(
+        default_factory=list,
+        description="Documents a force clear would break, limited to those the caller may see",
+    )
+    affected_documents_hidden: int = Field(
+        default=0, description="Affected documents belonging to accounts the caller may not inspect"
+    )
+
+
+class IntermediatesOperationRequest(BaseModel):
+    preview_id: str = Field(min_length=1, max_length=64)
+    idempotency_key: str = Field(min_length=1, max_length=255, description="Caller-owned retry key")
+
+
+class IntermediatesOperationProgress(BaseModel):
+    processed_images: int = Field(default=0)
+    processed_videos: int = Field(default=0)
+    deleted_images: int = Field(default=0)
+    deleted_videos: int = Field(default=0)
+    retained_images: int = Field(default=0, description="Targets the final check kept: promoted, protected or gone")
+    retained_videos: int = Field(default=0)
+    failed_images: int = Field(default=0, description="Targets whose deletion raised; retryable")
+    failed_videos: int = Field(default=0)
+    reclaimed_bytes: int = Field(default=0, description="Bytes whose files are confirmed removed")
+    unknown_size_count: int = Field(
+        default=0, description="Deleted items whose size was never measured; their bytes are not in reclaimed_bytes"
+    )
+    pending_disk_cleanup: int = Field(
+        default=0, description="Deleted records whose files could not be purged yet; the journal retries at startup"
+    )
+    unresolved_images: int = Field(default=0, description="Image targets that failed or were never attempted")
+    unresolved_videos: int = Field(default=0, description="Video targets that failed or were never attempted")
+
+
+class IntermediatesOperation(BaseModel):
+    operation_id: str
+    user_id: str = Field(description="The account that confirmed the operation")
+    mode: IntermediatesCleanupMode
+    scope: IntermediatesScope
+    status: IntermediatesOperationStatus
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error: Optional[str] = Field(default=None, description="Why the operation stopped, when it failed")
+    target_images: int = Field(description="Frozen image targets")
+    target_videos: int = Field(description="Frozen video targets")
+    progress: IntermediatesOperationProgress
+    retried_from_operation_id: Optional[str] = None
+    retried_by_operation_id: Optional[str] = Field(
+        default=None, description="The retry that took over this operation's unresolved targets, if any"
+    )
+
+    @property
+    def is_retryable(self) -> bool:
+        return (
+            self.status in ("completed", "failed")
+            and self.retried_by_operation_id is None
+            and (self.progress.unresolved_images > 0 or self.progress.unresolved_videos > 0)
+        )
+
+
+class IntermediatesPreviewNotFoundError(Exception):
+    """The preview expired, was consumed, or belongs to another caller."""
+
+
+class IntermediatesOperationNotFoundError(Exception):
+    pass
+
+
+class IntermediatesScopeForbiddenError(Exception):
+    """The caller may not target the requested rows."""
+
+
+class IntermediatesScopeInvalidError(Exception):
+    """The scope is malformed for its kind."""
+
+
+class IntermediatesIdempotencyConflictError(Exception):
+    """The idempotency key was already used with a different preview."""
+
+
+class IntermediatesUnavailableError(Exception):
+    """Cleanup cannot run right now, e.g. image storage maintenance is active."""

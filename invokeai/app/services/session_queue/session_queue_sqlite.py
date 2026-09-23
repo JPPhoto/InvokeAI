@@ -482,8 +482,8 @@ class SqliteSessionQueue(SessionQueueBase):
                     raise EnqueueReceiptLimitError("Unacknowledged enqueue receipts exceed the storage limit")
             cursor.executemany(
                 """--sql
-                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id, project_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values_to_insert,
             )
@@ -1480,6 +1480,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     destination,
                     retried_from_item_id,
                     user_id,
+                    project_id,
                     workflow_call_id,
                     parent_item_id,
                     parent_session_id,
@@ -1487,7 +1488,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     workflow_call_depth,
                     status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                 """,
                 (
                     parent_queue_item.queue_id,
@@ -1501,6 +1502,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     parent_queue_item.destination,
                     None,
                     parent_queue_item.user_id,
+                    parent_queue_item.project_id,
                     workflow_call_execution.id,
                     parent_queue_item.item_id,
                     parent_queue_item.session_id,
@@ -1954,6 +1956,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     root_queue_item.destination,
                     retried_from_item_id,
                     root_queue_item.user_id,
+                    root_queue_item.project_id,
                 )
                 values_to_insert.append(value_to_insert)
 
@@ -1962,8 +1965,8 @@ class SqliteSessionQueue(SessionQueueBase):
 
             cursor.executemany(
                 """--sql
-                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id, project_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values_to_insert,
             )
