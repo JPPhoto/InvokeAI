@@ -84,6 +84,8 @@ const _zImageDTO = z.object({
   node_id: z.string().nullish(),
   starred: z.boolean(),
   has_workflow: z.boolean(),
+  project_id: z.string().nullish(),
+  file_size_bytes: z.number().nullish(),
   board_id: z.string().nullish(),
   image_subfolder: z.string().optional(),
 });
