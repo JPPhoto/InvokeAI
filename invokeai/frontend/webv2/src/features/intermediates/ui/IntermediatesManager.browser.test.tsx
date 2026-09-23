@@ -574,4 +574,132 @@ describe('IntermediatesManager', () => {
       )
     );
   });
+  it('keeps all 119 other projects selected across pages and safe/force previews', async () => {
+    const manyRows = Array.from({ length: 120 }, (_, index) => row(`p${index}`, `Project ${index}`, 1));
+    const totals = summaryOf(manyRows).totals;
+    dependencies.getIntermediatesSummary
+      .mockReset()
+      .mockImplementation((params: { offset?: number; limit?: number }) => {
+        const offset = params.offset ?? 0;
+        return Promise.resolve({
+          ...summaryOf(manyRows.slice(offset, offset + (params.limit ?? 50))),
+          offset,
+          total: 120,
+          totals,
+        });
+      });
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 0'));
+    await act(() => checkbox('intermediates.list.selectAll').click());
+    await act(() => checkbox('intermediates.list.selectRow(name=Project 1)').click());
+    await vi.waitFor(() => expect(host.textContent).toContain('count=119'));
+    await act(() => buttonWithText('common.nextPage', host).click());
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 55'));
+    expect(checkbox('intermediates.list.selectRow(name=Project 55)').checked).toBe(true);
+    expect(checkbox('intermediates.list.selectAll').checked).toBe(false);
+    await act(() => buttonWithText('common.nextPage', host).click());
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 119'));
+    expect(checkbox('intermediates.list.selectRow(name=Project 119)').checked).toBe(true);
+    await act(() => buttonWithText('intermediates.list.delete', host).click());
+    const targets = manyRows
+      .filter(({ projectId }) => projectId !== 'p1')
+      .map(({ projectId, userId }) => ({ projectId, userId }));
+    await vi.waitFor(() =>
+      expect(dependencies.createIntermediatesPreview).toHaveBeenLastCalledWith(
+        { mode: 'safe', scope: { kind: 'selection', targets } },
+        expect.anything()
+      )
+    );
+    await act(() => document.querySelector<HTMLLabelElement>('[role="alertdialog"] label')!.click());
+    await vi.waitFor(() =>
+      expect(dependencies.createIntermediatesPreview).toHaveBeenLastCalledWith(
+        { mode: 'force', scope: { kind: 'selection', targets } },
+        expect.anything()
+      )
+    );
+  });
+
+  it('reconciles excluded rows after refresh across pages without forgetting their identities', async () => {
+    let currentRows = Array.from({ length: 120 }, (_, index) => row(`p${index}`, `Project ${index}`, 1));
+    dependencies.getIntermediatesSummary
+      .mockReset()
+      .mockImplementation((params: { offset?: number; limit?: number }) => {
+        const offset = params.offset ?? 0;
+        return Promise.resolve({
+          ...summaryOf(currentRows),
+          items: currentRows.slice(offset, offset + (params.limit ?? 50)),
+          offset,
+        });
+      });
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 0'));
+    await act(() => checkbox('intermediates.list.selectAll').click());
+    await act(() => checkbox('intermediates.list.selectRow(name=Project 1)').click());
+    await vi.waitFor(() => expect(host.textContent).toContain('count=119'));
+    const snapshots = () =>
+      dependencies.getIntermediatesSummary.mock.calls.filter(([params]) => params.limit === 1000).length;
+    const initialSnapshots = snapshots();
+    await act(() => buttonWithText('common.nextPage', host).click());
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 55'));
+    expect(snapshots()).toBe(initialSnapshots);
+
+    currentRows = [row('p55', 'Project 55', 1)];
+    await act(() => host.querySelector<HTMLButtonElement>('[aria-label="intermediates.refresh"]')!.click());
+    await vi.waitFor(() => expect(host.textContent).toContain('intermediates.selection.estimate(count=1,'));
+    expect(checkbox('intermediates.list.selectRow(name=Project 55)').checked).toBe(true);
+    expect(buttonWithText('intermediates.list.delete', host).disabled).toBe(false);
+
+    currentRows = [row('p1', 'Project 1', 1), row('p55', 'Project 55', 1)];
+    await act(() => host.querySelector<HTMLButtonElement>('[aria-label="intermediates.refresh"]')!.click());
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 1'));
+    expect(checkbox('intermediates.list.selectRow(name=Project 1)').checked).toBe(false);
+    await vi.waitFor(() =>
+      expect(host.textContent).toContain(
+        'intermediates.selection.estimate(count=1,images=intermediates.counts.images(count=1)'
+      )
+    );
+
+    // Same global totals, but all reclaimable bytes have moved to the still-selected row.
+    currentRows = [row('p1', 'Project 1', 0), row('p55', 'Project 55', 2)];
+    await act(() => host.querySelector<HTMLButtonElement>('[aria-label="intermediates.refresh"]')!.click());
+    await vi.waitFor(() =>
+      expect(host.textContent).toContain(
+        'intermediates.selection.estimate(count=1,images=intermediates.counts.images(count=2)'
+      )
+    );
+    expect(checkbox('intermediates.list.selectRow(name=Project 1)').checked).toBe(false);
+    await act(() => buttonWithText('intermediates.list.delete', host).click());
+    await vi.waitFor(() =>
+      expect(dependencies.createIntermediatesPreview).toHaveBeenLastCalledWith(
+        { mode: 'safe', scope: { kind: 'selection', targets: [{ projectId: 'p55', userId: 'alice' }] } },
+        expect.anything()
+      )
+    );
+  });
+
+  it('bounds exclusion snapshots and reports the preview limit instead of guessing a selection estimate', async () => {
+    const manyRows = Array.from({ length: 1001 }, (_, index) => row(`p${index}`, `Project ${index}`, 1));
+    dependencies.getIntermediatesSummary
+      .mockReset()
+      .mockImplementation((params: { offset?: number; limit?: number }) => {
+        const offset = params.offset ?? 0;
+        return Promise.resolve({
+          ...summaryOf(manyRows),
+          items: manyRows.slice(offset, offset + (params.limit ?? 50)),
+          offset,
+        });
+      });
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 0'));
+    await act(() => checkbox('intermediates.list.selectAll').click());
+    await act(() => checkbox('intermediates.list.selectRow(name=Project 1)').click());
+    await vi.waitFor(() => expect(host.textContent).toContain('intermediates.selection.tooManyRows'));
+    expect(dependencies.getIntermediatesSummary.mock.calls.filter(([params]) => params.limit === 1000)).toHaveLength(1);
+    expect(buttonWithText('intermediates.list.delete', host).disabled).toBe(false);
+    await act(() => buttonWithText('intermediates.list.delete', host).click());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('intermediates.dialog.tooManyRows')
+    );
+    expect(dependencies.createIntermediatesPreview).not.toHaveBeenCalled();
+  });
 });

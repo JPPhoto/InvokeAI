@@ -23,9 +23,7 @@ import {
 } from '@chakra-ui/react';
 import {
   EMPTY_SELECTION,
-  getPageSelectionState,
   isRowSelected,
-  isSelectionEmpty,
   resolveScope,
   selectAllMatching,
   summarizeSelection,
@@ -204,6 +202,15 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
   }
   const focusedRow = pendingProjectId ? rows.find((row) => row.projectId === pendingProjectId) : undefined;
   const effectiveSelection = focusedRow ? withRowSelected(selection, focusedRow) : selection;
+  const hasExclusions = effectiveSelection.mode === 'all-matching' && effectiveSelection.excluded.size > 0;
+  // One bounded read, shared across UI pages and refreshed by the same summary invalidations.
+  const matchingSnapshotQuery = useQuery({
+    ...intermediatesSummaryQueryOptions({ ...params, limit: INTERMEDIATES_MAX_ROWS, offset: 0 }),
+    enabled: hasExclusions && query.data !== undefined,
+  });
+  const matchingSnapshot = matchingSnapshotQuery.data;
+  const selectionOverLimit =
+    hasExclusions && matchingSnapshot !== undefined && matchingSnapshot.total > matchingSnapshot.items.length;
   const operationQuery = useQuery({
     ...intermediatesOperationQueryOptions(activeOperationId ?? ''),
     enabled: activeOperationId !== null,
@@ -241,20 +248,27 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
   const handleToggleRow = useCallback(
     (row: IntermediatesRow) => {
       setPendingProjectId(null);
-      setSelection(toggleRowSelection(effectiveSelection, row, rows));
+      setSelection(toggleRowSelection(effectiveSelection, row));
     },
-    [effectiveSelection, rows]
+    [effectiveSelection]
   );
+  const selectionSummary = useMemo(
+    () =>
+      summarizeSelection(
+        effectiveSelection,
+        totals ?? EMPTY_TOTALS,
+        matchingSnapshot && !matchingSnapshotQuery.isError && !selectionOverLimit ? matchingSnapshot.items : undefined
+      ),
+    [effectiveSelection, matchingSnapshot, matchingSnapshotQuery.isError, selectionOverLimit, totals]
+  );
+  const matchingRowCount = hasExclusions ? matchingSnapshot?.total : totals?.rows;
   // Select all selects every matching row, including pages not loaded; only a complete selection clears.
   const handleToggleAll = useCallback(() => {
     setPendingProjectId(null);
-    setSelection(getPageSelectionState(effectiveSelection, rows) === 'all' ? EMPTY_SELECTION : selectAllMatching());
-  }, [effectiveSelection, rows]);
-
-  const selectionSummary = useMemo(
-    () => summarizeSelection(effectiveSelection, totals ?? EMPTY_TOTALS),
-    [effectiveSelection, totals]
-  );
+    setSelection(
+      selectionSummary !== null && selectionSummary.rows === matchingRowCount ? EMPTY_SELECTION : selectAllMatching()
+    );
+  }, [selectionSummary, matchingRowCount]);
 
   const loadPreview = useCallback(
     async (mode: IntermediatesCleanupMode, scope: IntermediatesScope) => {
@@ -270,8 +284,8 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       }));
       try {
         let resolvedScope = scope;
-        // Row filters cannot be expressed by the cleanup scope; resolve them to explicit rows.
-        if (effectiveSelection.mode === 'all-matching' && hasSubsetFilter && scope.kind === 'selection') {
+        // Filters and exclusions cannot be expressed by the cleanup scope; resolve them to explicit rows.
+        if (effectiveSelection.mode === 'all-matching' && scope.kind === 'selection') {
           const everything = await getIntermediatesSummary(
             { ...params, limit: INTERMEDIATES_MAX_ROWS, offset: 0 },
             owner.signal
@@ -282,7 +296,9 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
           }
           resolvedScope = {
             kind: 'selection',
-            targets: everything.items.map(({ projectId, userId }) => ({ projectId, userId })),
+            targets: everything.items
+              .filter((row) => isRowSelected(effectiveSelection, row))
+              .map(({ projectId, userId }) => ({ projectId, userId })),
           };
         }
         const preview = await createIntermediatesPreview({ mode, scope: resolvedScope }, owner.signal);
@@ -302,7 +318,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
         }
       }
     },
-    [effectiveSelection.mode, hasSubsetFilter, params, t]
+    [effectiveSelection, params, t]
   );
   const openDialog = useCallback(
     (scope: IntermediatesScope, trigger: HTMLElement | null) => {
@@ -421,8 +437,12 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
   }, [queryClient]);
 
   const selectedScope = resolveScope({ hasSubsetFilter, loadedRows: rows, ownerId, selection: effectiveSelection });
-  const hasSelection = !isSelectionEmpty(effectiveSelection);
-  const pageSelection = getPageSelectionState(effectiveSelection, rows);
+  const hasSelection = selectionSummary ? selectionSummary.rows > 0 : hasExclusions && (totals?.rows ?? 0) > 0;
+  const selectionState = hasSelection
+    ? selectionSummary !== null && selectionSummary.rows === matchingRowCount
+      ? 'all'
+      : 'some'
+    : 'none';
   const filteredOwnerRow = ownerFilter ? rows[0] : undefined;
   const hasPreviousPage = offset > 0;
   const hasNextPage = query.data !== undefined && offset + rows.length < query.data.total;
@@ -527,7 +547,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
         <HStack borderBottomWidth="1px" borderColor="border.subtle" flexShrink={0} gap="2" minH="8" py="1.5">
           <Checkbox.Root
             aria-label={t('intermediates.list.selectAll')}
-            checked={pageSelection === 'all' ? true : pageSelection === 'some' ? 'indeterminate' : false}
+            checked={selectionState === 'all' ? true : selectionState === 'some' ? 'indeterminate' : false}
             colorPalette="accent"
             disabled={rows.length === 0}
             size="xs"
@@ -541,20 +561,29 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
             </Checkbox.Label>
           </Checkbox.Root>
           <Text color="fg.muted" flex="1" fontSize="2xs" minW="0" textAlign="end" truncate>
-            {hasSelection
-              ? t('intermediates.selection.estimate', {
-                  count: selectionSummary.rows,
-                  images: t('intermediates.counts.images', { count: selectionSummary.safeImages }),
-                  size: formatBytes(selectionSummary.reclaimableBytes),
-                  videos: t('intermediates.counts.videos', { count: selectionSummary.safeVideos }),
-                })
-              : totals
-                ? t('intermediates.selection.available', {
-                    images: t('intermediates.counts.images', { count: totals.safeImages }),
-                    size: formatBytes(totals.reclaimableBytes),
-                    videos: t('intermediates.counts.videos', { count: totals.safeVideos }),
+            {hasExclusions && selectionSummary === null
+              ? t(
+                  selectionOverLimit
+                    ? 'intermediates.selection.tooManyRows'
+                    : matchingSnapshotQuery.isError
+                      ? 'intermediates.selection.estimateFailed'
+                      : 'intermediates.selection.checking',
+                  { count: INTERMEDIATES_MAX_ROWS }
+                )
+              : hasSelection && selectionSummary
+                ? t('intermediates.selection.estimate', {
+                    count: selectionSummary.rows,
+                    images: t('intermediates.counts.images', { count: selectionSummary.safeImages }),
+                    size: formatBytes(selectionSummary.reclaimableBytes),
+                    videos: t('intermediates.counts.videos', { count: selectionSummary.safeVideos }),
                   })
-                : ''}
+                : totals
+                  ? t('intermediates.selection.available', {
+                      images: t('intermediates.counts.images', { count: totals.safeImages }),
+                      size: formatBytes(totals.reclaimableBytes),
+                      videos: t('intermediates.counts.videos', { count: totals.safeVideos }),
+                    })
+                  : ''}
           </Text>
           {query.data?.measuring ? (
             <Tooltip content={t('intermediates.stats.measuringNote')}>

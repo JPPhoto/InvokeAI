@@ -4300,6 +4300,9 @@
       "measuringNote": "Sizes are still being measured; figures grow as measurement finishes."
     },
     "selection": {
+      "checking": "Checking selection…",
+      "estimateFailed": "Could not estimate selection. Refresh to retry.",
+      "tooManyRows": "More than {{count}} matching projects. Narrow your search to review this selection.",
       "estimate": "{{count, number}} selected · {{images}}, {{videos}}, about {{size}}",
       "available": "{{images}}, {{videos}} unused · about {{size}} reclaimable"
     }

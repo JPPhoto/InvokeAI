@@ -4,7 +4,6 @@ import type { IntermediatesRow } from './types';
 
 import {
   EMPTY_SELECTION,
-  getPageSelectionState,
   isRowSelected,
   resolveScope,
   selectAllMatching,
@@ -32,22 +31,18 @@ const page = [row('a'), row('b'), row(null)];
 const totals = { reclaimableBytes: 5_000, rows: 12, safeImages: 40, safeVideos: 4, unknownSizeCount: 2 };
 
 describe('row selection', () => {
-  it('toggles rows and reports the page state', () => {
-    let selection = toggleRowSelection(EMPTY_SELECTION, page[0]!, page);
+  it('toggles rows', () => {
+    let selection = toggleRowSelection(EMPTY_SELECTION, page[0]!);
     expect(isRowSelected(selection, page[0]!)).toBe(true);
-    expect(getPageSelectionState(selection, page)).toBe('some');
 
     for (const candidate of page.slice(1)) {
-      selection = toggleRowSelection(selection, candidate, page);
+      selection = toggleRowSelection(selection, candidate);
     }
     expect(page.every((candidate) => isRowSelected(selection, candidate))).toBe(true);
-    expect(getPageSelectionState(selection, page)).toBe('all');
-    expect(getPageSelectionState(selectAllMatching(), page)).toBe('all');
-    expect(getPageSelectionState(EMPTY_SELECTION, page)).toBe('none');
   });
 
   it('keeps the unassigned row distinct from a project row of the same owner', () => {
-    const selection = toggleRowSelection(EMPTY_SELECTION, page[2]!, page);
+    const selection = toggleRowSelection(EMPTY_SELECTION, page[2]!);
 
     expect(isRowSelected(selection, page[2]!)).toBe(true);
     expect(isRowSelected(selection, page[0]!)).toBe(false);
@@ -56,10 +51,10 @@ describe('row selection', () => {
   it('keeps picks from an earlier page when the page changes', () => {
     const firstPage = [row('a'), row('b')];
     const secondPage = [row('c'), row('d')];
-    let selection = toggleRowSelection(EMPTY_SELECTION, firstPage[0]!, firstPage);
-    selection = toggleRowSelection(selection, secondPage[1]!, secondPage);
+    let selection = toggleRowSelection(EMPTY_SELECTION, firstPage[0]!);
+    selection = toggleRowSelection(selection, secondPage[1]!);
 
-    expect(summarizeSelection(selection, totals).rows).toBe(2);
+    expect(summarizeSelection(selection, totals)?.rows).toBe(2);
     expect(resolveScope({ hasSubsetFilter: false, loadedRows: secondPage, ownerId: 'alice', selection })).toEqual({
       kind: 'selection',
       targets: [
@@ -67,19 +62,37 @@ describe('row selection', () => {
         { projectId: 'd', userId: 'alice' },
       ],
     });
-    expect(getPageSelectionState(selection, firstPage)).toBe('some');
   });
 
   it('adds a row without disturbing an existing pick or an all-matching selection', () => {
     const picked = withRowSelected(withRowSelected(EMPTY_SELECTION, page[0]!), page[0]!);
-    expect(summarizeSelection(picked, totals).rows).toBe(1);
+    expect(summarizeSelection(picked, totals)?.rows).toBe(1);
     expect(withRowSelected(selectAllMatching(), page[1]!)).toEqual(selectAllMatching());
   });
 
-  it('leaving all-matching by toggling a row keeps the rest of the visible page', () => {
-    const selection = toggleRowSelection(selectAllMatching(), page[1]!, page);
+  it('excludes a row without losing matching rows on other pages', () => {
+    const selection = toggleRowSelection(selectAllMatching(), page[1]!);
 
-    expect(selection.mode).toBe('rows');
+    expect(selection.mode).toBe('all-matching');
+    expect(isRowSelected(selection, row('off-page'))).toBe(true);
+    expect(summarizeSelection(selection, totals)).toBeNull();
+    expect(summarizeSelection(selection, totals, [...page, row('off-page')])).toMatchObject({
+      rows: 3,
+      safeImages: 9,
+      safeVideos: 6,
+      reclaimableBytes: 300,
+    });
+    expect(toggleRowSelection(selection, page[1]!)).toEqual(selectAllMatching());
+    expect(
+      resolveScope({ hasSubsetFilter: false, loadedRows: [...page, row('off-page')], ownerId: 'alice', selection })
+    ).toEqual({
+      kind: 'selection',
+      targets: [
+        { userId: 'alice', projectId: 'a' },
+        { userId: 'alice', projectId: null },
+        { userId: 'alice', projectId: 'off-page' },
+      ],
+    });
     expect(isRowSelected(selection, page[0]!)).toBe(true);
     expect(isRowSelected(selection, page[1]!)).toBe(false);
     expect(isRowSelected(selection, page[2]!)).toBe(true);
@@ -88,7 +101,7 @@ describe('row selection', () => {
 
 describe('selection summary', () => {
   it('sums explicit picks from their snapshots', () => {
-    const selection = toggleRowSelection(toggleRowSelection(EMPTY_SELECTION, page[0]!, page), page[2]!, page);
+    const selection = toggleRowSelection(toggleRowSelection(EMPTY_SELECTION, page[0]!), page[2]!);
 
     expect(summarizeSelection(selection, totals)).toEqual({
       referencedBytes: 20,
@@ -126,7 +139,7 @@ describe('scope resolution', () => {
   });
 
   it('turns picks, and all-matching under a search, into explicit targets', () => {
-    const picks = toggleRowSelection(EMPTY_SELECTION, page[2]!, page);
+    const picks = toggleRowSelection(EMPTY_SELECTION, page[2]!);
 
     expect(resolveScope({ hasSubsetFilter: false, loadedRows: page, ownerId: 'alice', selection: picks })).toEqual({
       kind: 'selection',

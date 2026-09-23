@@ -5,78 +5,48 @@ import { getIntermediatesRowKey } from './types';
 /**
  * Row selection for the manager. `rows` keeps a snapshot of every picked row, so picks survive paging and can be
  * summarized and targeted without the page that showed them; `all-matching` stands for every row the current
- * filters match, including rows never loaded, and resolves against the server when a preview is requested.
+ * filters match, including rows never loaded, minus explicit exclusions. It resolves against the server when a
+ * preview is requested.
  */
 export type IntermediatesSelection =
   | { mode: 'rows'; rows: ReadonlyMap<string, IntermediatesRow> }
-  | { mode: 'all-matching' };
+  | { mode: 'all-matching'; excluded: ReadonlySet<string> };
 
 export const EMPTY_SELECTION: IntermediatesSelection = { mode: 'rows', rows: new Map() };
 
 export const isRowSelected = (selection: IntermediatesSelection, row: IntermediatesRow): boolean =>
-  selection.mode === 'all-matching' || selection.rows.has(getIntermediatesRowKey(row));
-
-export const isSelectionEmpty = (selection: IntermediatesSelection): boolean =>
-  selection.mode === 'rows' && selection.rows.size === 0;
-
-const materialize = (
-  selection: IntermediatesSelection,
-  visibleRows: readonly IntermediatesRow[]
-): Map<string, IntermediatesRow> =>
-  new Map(
-    selection.mode === 'all-matching'
-      ? visibleRows.map((row) => [getIntermediatesRowKey(row), row] as const)
-      : selection.rows
-  );
+  selection.mode === 'all-matching'
+    ? !selection.excluded.has(getIntermediatesRowKey(row))
+    : selection.rows.has(getIntermediatesRowKey(row));
 
 export const withRowSelected = (selection: IntermediatesSelection, row: IntermediatesRow): IntermediatesSelection => {
-  if (selection.mode === 'all-matching' || selection.rows.has(getIntermediatesRowKey(row))) {
-    return selection;
-  }
-  const rows = new Map(selection.rows);
-
-  rows.set(getIntermediatesRowKey(row), row);
-
-  return { mode: 'rows', rows };
+  return isRowSelected(selection, row) ? selection : toggleRowSelection(selection, row);
 };
 
 export const toggleRowSelection = (
   selection: IntermediatesSelection,
-  row: IntermediatesRow,
-  visibleRows: readonly IntermediatesRow[]
+  row: IntermediatesRow
 ): IntermediatesSelection => {
   const key = getIntermediatesRowKey(row);
-  // Leaving "all matching" materializes the visible page minus the toggled row; rows beyond the page cannot be kept.
-  const rows = materialize(selection, visibleRows);
-
+  if (selection.mode === 'all-matching') {
+    const excluded = new Set(selection.excluded);
+    if (excluded.has(key)) {
+      excluded.delete(key);
+    } else {
+      excluded.add(key);
+    }
+    return { mode: 'all-matching', excluded };
+  }
+  const rows = new Map(selection.rows);
   if (rows.has(key)) {
     rows.delete(key);
   } else {
     rows.set(key, row);
   }
-
   return { mode: 'rows', rows };
 };
 
-export const selectAllMatching = (): IntermediatesSelection => ({ mode: 'all-matching' });
-
-export type PageSelectionState = 'none' | 'some' | 'all';
-
-export const getPageSelectionState = (
-  selection: IntermediatesSelection,
-  visibleRows: readonly IntermediatesRow[]
-): PageSelectionState => {
-  if (visibleRows.length === 0) {
-    return 'none';
-  }
-  if (selection.mode === 'all-matching') {
-    return 'all';
-  }
-
-  const selected = visibleRows.filter((row) => selection.rows.has(getIntermediatesRowKey(row))).length;
-
-  return selected === 0 ? 'none' : selected === visibleRows.length ? 'all' : 'some';
-};
+export const selectAllMatching = (): IntermediatesSelection => ({ mode: 'all-matching', excluded: new Set() });
 
 export interface SelectionSummary {
   rows: number;
@@ -91,13 +61,30 @@ export interface SelectionSummary {
 
 /**
  * Sums the selection. Explicit picks are summed from their snapshots, whichever page showed them; "all matching"
- * uses the server's totals, which cover every matching row.
+ * uses the server's totals. With exclusions, a complete current matching snapshot is required: old excluded-row
+ * snapshots cannot tell us whether those rows still exist or how their counts changed.
  */
 export const summarizeSelection = (
   selection: IntermediatesSelection,
-  totals: { rows: number; safeImages: number; safeVideos: number; reclaimableBytes: number; unknownSizeCount: number }
-): SelectionSummary => {
+  totals: { rows: number; safeImages: number; safeVideos: number; reclaimableBytes: number; unknownSizeCount: number },
+  matchingRows?: readonly IntermediatesRow[]
+): SelectionSummary | null => {
   if (selection.mode === 'all-matching') {
+    if (selection.excluded.size > 0) {
+      return matchingRows
+        ? summarizeSelection(
+            {
+              mode: 'rows',
+              rows: new Map(
+                matchingRows
+                  .filter((row) => isRowSelected(selection, row))
+                  .map((row) => [getIntermediatesRowKey(row), row])
+              ),
+            },
+            totals
+          )
+        : null;
+    }
     return {
       referencedBytes: 0,
       referencedImages: 0,
@@ -139,7 +126,11 @@ export const selectionToTargets = (
   selection: IntermediatesSelection,
   loadedRows: readonly IntermediatesRow[]
 ): IntermediatesScopeTarget[] =>
-  [...(selection.mode === 'all-matching' ? loadedRows : selection.rows.values())].map(({ projectId, userId }) => ({
+  [
+    ...(selection.mode === 'all-matching'
+      ? loadedRows.filter((row) => isRowSelected(selection, row))
+      : selection.rows.values()),
+  ].map(({ projectId, userId }) => ({
     projectId,
     userId,
   }));
@@ -156,7 +147,7 @@ export const resolveScope = (options: {
 }): IntermediatesScope => {
   const { hasSubsetFilter, loadedRows, ownerId, selection } = options;
 
-  if (selection.mode === 'all-matching' && !hasSubsetFilter) {
+  if (selection.mode === 'all-matching' && selection.excluded.size === 0 && !hasSubsetFilter) {
     return ownerId === null ? { kind: 'everyone' } : { kind: 'owner', userId: ownerId };
   }
 
