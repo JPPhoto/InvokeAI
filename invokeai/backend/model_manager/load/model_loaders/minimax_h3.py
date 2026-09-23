@@ -264,6 +264,14 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         # is what applies the scale-layout check and reads each marker's own `convrot_groupsize`
         # instead of assuming 256 -- a 64-wide repack derotated with a 256-wide Hadamard runs and
         # generates noise.
+        # Not redundant with `_reject_formats_declared_in_the_header`, though it looks it. The two
+        # read the same blob by different routes: the header check decodes raw file bytes, while
+        # `parse_comfy_quant_marker` goes through `tensor.numpy()`, which returns `{}` for a dtype
+        # numpy has no equivalent for -- bfloat16 and the float8s; int8, float16 and float32 all
+        # decode the same bytes fine. A marker stored as one of those therefore passes the gate and
+        # arrives here empty -- and an empty marker is not refused downstream, it is *defaulted*:
+        # `convrot` False and a 256-wide group, so a 64-wide repack is derotated with the wrong
+        # Hadamard and renders noise. Measured at correlation 0.14 to the true weight.
         for module_name, marker in quant_markers.items():
             if marker.get("format") != INT8_TENSORWISE_FORMAT:
                 raise ValueError(f"Unsupported comfy_quant format {marker!r} on {module_name}")
@@ -386,6 +394,14 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
 
         # Shared helper, not a second copy: it applies the scale-layout check and reads each
         # marker's own `convrot_groupsize` rather than assuming 256.
+        # Not redundant with `_reject_formats_declared_in_the_header`, though it looks it. The two
+        # read the same blob by different routes: the header check decodes raw file bytes, while
+        # `parse_comfy_quant_marker` goes through `tensor.numpy()`, which returns `{}` for a dtype
+        # numpy has no equivalent for -- bfloat16 and the float8s; int8, float16 and float32 all
+        # decode the same bytes fine. A marker stored as one of those therefore passes the gate and
+        # arrives here empty -- and an empty marker is not refused downstream, it is *defaulted*:
+        # `convrot` False and a 256-wide group, so a 64-wide repack is derotated with the wrong
+        # Hadamard and renders noise. Measured at correlation 0.14 to the true weight.
         for module_name, marker in quant_markers.items():
             if marker.get("format") != INT8_TENSORWISE_FORMAT:
                 raise ValueError(f"Unsupported comfy_quant format {marker!r} on {module_name}")
