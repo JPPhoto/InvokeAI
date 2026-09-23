@@ -17,7 +17,7 @@ Administrators start on their own account. **Show everyone** expands the view to
 
 A normal clear deletes only safe items. It always keeps:
 
-- anything a pending, waiting or running job produced or uses as an input;
+- anything a pending, waiting or running job produced or uses as an input, including cached images and videos reused from an earlier job;
 - anything created in the last 30 minutes, so an upload the browser is about to reference or enqueue is never collected;
 - anything the open webv2 editor has used, including unsaved edits and canvas undo history; the browser refreshes this temporary hold while it is open;
 - anything a saved project or library workflow still names, such as canvas staging candidates or cropped reference images;

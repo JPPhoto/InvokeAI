@@ -289,6 +289,13 @@ This behavior is implemented in the runtime scheduler, not in the invocation bod
 
 1. Finish when `next()` returns `None` and the execution state is not paused waiting on a workflow call boundary.
 
+When an invocation reuses cached media, `BaseInvocation.invoke_internal()` registers a temporary hold for the consuming
+queue session before returning the cached output. The intermediates service checks that every referenced image/video
+record still exists and registers the hold under the same database lock as cleanup. If cleanup already deleted a
+record, the invocation recomputes its output. Holds remain effective while the session is pending, running or waiting;
+terminal/deleted sessions are pruned on the next cache hold or cleanup query. Holds share the cache's process lifetime;
+after restart, persisted queue sessions supply their own media references and the invocation cache is empty.
+
 In normal execution, all runtime expansion occurs in `execution_graph` with traceability back to source nodes.
 
 ## 6) Invariants

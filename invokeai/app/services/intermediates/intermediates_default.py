@@ -55,6 +55,7 @@ from invokeai.app.services.intermediates.intermediates_records_sqlite import (
 )
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
+from invokeai.app.services.shared.media_references import MediaReferences
 
 DELETE_BATCH_SIZE = 200
 MEASURE_BATCH_SIZE = 200
@@ -179,6 +180,9 @@ class IntermediatesService(IntermediatesServiceBase):
     # endregion
 
     # region summary
+
+    def hold_cached_media(self, session_id: str, references: MediaReferences) -> bool:
+        return self._records.hold_cached_media(session_id, references)
 
     def replace_browser_hold(
         self, caller: IntermediatesCaller, lease_id: str, request: IntermediatesBrowserHoldRequest

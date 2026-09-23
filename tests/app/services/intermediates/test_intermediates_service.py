@@ -1139,3 +1139,138 @@ def test_large_single_row_clears_in_bounded_batches_past_protected_items(
     assert second.impact.delete_images == 1
     assert second_result.progress.deleted_images == 1
     assert _exists(invoker, "protected-first.png")
+
+
+@pytest.mark.parametrize("cleanup_wins_race", [False, True])
+def test_running_graph_keeps_cached_media_or_recomputes_if_cleanup_won(
+    invoker, service, monkeypatch, cleanup_wins_race
+):
+    from threading import Event
+
+    from invokeai.app.invocations.image import BlankImageInvocation, ImageCropInvocation
+    from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
+    from invokeai.app.services.names.names_default import SimpleNameService
+    from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
+    from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
+    from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+    from invokeai.app.services.urls.urls_default import LocalUrlService
+    from tests.app.services.workflow_call_test_utils import _DummyStats
+    from tests.test_nodes import create_edge
+
+    services = invoker.services
+    services.session_queue.start(invoker)
+    services.configuration.node_cache_size = 512
+    services.names = SimpleNameService()
+    services.urls = LocalUrlService()
+    services.performance_statistics = _DummyStats()
+    services.progress_previews = MemoryProgressPreviews()
+    services.tensors = MagicMock()
+    services.conditioning = MagicMock()
+    cache = services.invocation_cache = MemoryInvocationCache(max_cache_size=512)
+    cache.start(invoker)
+    runner = DefaultSessionRunner()
+    runner.start(services, Event())
+    graph = Graph()
+    graph.add_node(BlankImageInvocation(id="blank", width=8, height=8, is_intermediate=True))
+    graph.add_node(ImageCropInvocation(id="crop", x=0, y=0, width=4, height=4, use_cache=False))
+    graph.add_edge(create_edge("blank", "image", "crop", "image"))
+
+    def queued_session():
+        session = GraphExecutionState(graph=graph.model_copy(deep=True))
+        item_id = _enqueue_row(
+            invoker, session_id=session.id, status="in_progress", session_json=session.model_dump_json()
+        )
+        return services.session_queue.get_queue_item(item_id)
+
+    first = queued_session()
+    first_blank = first.session.next()
+    runner.run_node(first_blank, first)
+    assert not first.session.has_error()
+    image_name = first.session.results[first_blank.id].image.image_name
+    runner.run_node(first.session.next(), first)
+    assert first.session.is_complete() and not first.session.has_error()
+    services.session_queue.save_queue_item_session(first.item_id, first.session)
+    with services.image_records._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'completed' WHERE item_id = ?", (first.item_id,))
+        cursor.execute("UPDATE images SET created_at = '2020-01-01 00:00:00.000' WHERE image_name = ?", (image_name,))
+
+    if cleanup_wins_race:
+        real_get = cache.get
+
+        def get_then_cleanup(key):
+            output = real_get(key)
+            if output is not None:
+                _, completed = _run(service, ALICE, _owner("alice"))
+                assert completed.progress.deleted_images == 1
+            return output
+
+        monkeypatch.setattr(cache, "get", get_then_cleanup)
+
+    second = queued_session()
+    second_blank = second.session.next()
+    runner.run_node(second_blank, second)
+    assert not second.session.has_error()
+    assert cache.get_status().hits == 1
+    second_image = second.session.results[second_blank.id].image.image_name
+    if cleanup_wins_race:
+        assert second_image != image_name
+    else:
+        assert second_image == image_name
+        record = services.image_records.get(image_name)
+        assert record.session_id == first.session_id
+        stored_second = services.session_queue.get_queue_item(second.item_id)
+        assert image_name not in stored_second.session.model_dump_json()
+        for mode in ("safe", "force"):
+            preview, completed = _run(service, ALICE, _owner("alice"), mode=mode)
+            assert preview.impact.keep_active_images == 1
+            assert completed.progress.deleted_images == 0
+        assert services.image_files.get_path(image_name, image_subfolder=record.image_subfolder).exists()
+
+    runner.run_node(second.session.next(), second)
+    assert second.session.is_complete() and not second.session.has_error()
+    services.session_queue.save_queue_item_session(second.item_id, second.session)
+    with services.image_records._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'completed' WHERE item_id = ?", (second.item_id,))
+    if not cleanup_wins_race:
+        _, completed = _run(service, ALICE, _owner("alice"))
+        assert completed.progress.deleted_images == 1
+
+
+@pytest.mark.parametrize("mode", ["safe", "force"])
+def test_cached_media_holds_guard_frozen_targets_until_all_consuming_sessions_end(invoker, service, mode):
+    from invokeai.app.services.shared.media_references import MediaReferences
+
+    _seed_image(invoker, "cached.png")
+    _seed_video(invoker, "cached.mp4")
+    preview = service.create_preview(IntermediatesPreviewRequest(mode=mode, scope=_owner("alice")), ALICE)
+    first = _enqueue_row(invoker, session_id="first-consumer", status="in_progress")
+    second = _enqueue_row(invoker, session_id="second-consumer", status="waiting")
+    references = MediaReferences(images={"cached.png"}, videos={"cached.mp4"})
+    assert service.hold_cached_media("first-consumer", references)
+    assert service.hold_cached_media("second-consumer", references)
+    started = service.start_operation(
+        IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="before-cache-hit"), ALICE
+    )
+    protected = _wait(service, started.operation_id)
+    assert protected.progress.retained_images == protected.progress.retained_videos == 1
+
+    with invoker.services.image_records._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'completed' WHERE item_id = ?", (first,))
+    preview, _ = _run(service, ALICE, _owner("alice"), mode=mode)
+    assert preview.impact.keep_active_images == preview.impact.keep_active_videos == 1
+    with invoker.services.image_records._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'canceled' WHERE item_id = ?", (second,))
+    _, completed = _run(service, ALICE, _owner("alice"), mode=mode)
+    assert completed.progress.deleted_images == completed.progress.deleted_videos == 1
+
+
+def test_missing_cached_media_does_not_leave_a_partial_hold(invoker, service):
+    from invokeai.app.services.shared.media_references import MediaReferences
+
+    _seed_image(invoker, "survivor.png")
+    _enqueue_row(invoker, session_id="consumer", status="in_progress")
+    assert not service.hold_cached_media(
+        "consumer", MediaReferences(images={"survivor.png"}, videos={"already-deleted.mp4"})
+    )
+    _, completed = _run(service, ALICE, _owner("alice"))
+    assert completed.progress.deleted_images == 1

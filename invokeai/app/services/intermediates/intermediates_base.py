@@ -11,6 +11,7 @@ from invokeai.app.services.intermediates.intermediates_common import (
     IntermediatesSummary,
     IntermediatesSummarySort,
 )
+from invokeai.app.services.shared.media_references import MediaReferences
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,11 @@ class IntermediatesCaller:
 
 class IntermediatesServiceBase(ABC):
     """Scoped cleanup of intermediate images and videos under one eligibility policy."""
+
+    @abstractmethod
+    def hold_cached_media(self, session_id: str, references: MediaReferences) -> bool:
+        """Pin existing cached media until the consuming queue session ends; False means recompute."""
+        pass
 
     @abstractmethod
     def replace_browser_hold(

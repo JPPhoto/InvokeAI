@@ -26,6 +26,7 @@ from invokeai.app.services.intermediates.intermediates_common import (
     IntermediatesKindCounts,
     IntermediatesScopeTarget,
 )
+from invokeai.app.services.shared.media_references import MediaReferences
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
 
 MediaKind = Literal["image", "video"]
@@ -84,6 +85,49 @@ class IntermediatesRecordsSqlite:
         # rows only, so it is safe across a rolled-back transaction; the temp table is not, which is
         # why it is rebuilt on every call rather than skipped on an unchanged set.
         self._active_inputs: dict[int, tuple[str, set[str], set[str]]] = {}
+
+    @staticmethod
+    def _prepare_session_holds(cursor: sqlite3.Cursor) -> None:
+        # These holds share the cache's process lifetime. After restart the cache is empty and
+        # recovered queue sessions protect their serialized inputs through the normal scan.
+        cursor.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS intermediates_session_media "
+            "(session_id TEXT, kind TEXT, name TEXT, PRIMARY KEY(session_id, kind, name)) WITHOUT ROWID;"
+        )
+        statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
+        cursor.execute(
+            "DELETE FROM temp.intermediates_session_media WHERE session_id NOT IN "
+            f"(SELECT session_id FROM session_queue WHERE status IN ({statuses}));"
+        )
+
+    def hold_cached_media(self, session_id: str, references: MediaReferences) -> bool:
+        if references.is_empty():
+            return True
+        with self._db.transaction() as cursor:
+            self._prepare_session_holds(cursor)
+            statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
+            cursor.execute(
+                f"SELECT 1 FROM session_queue WHERE session_id = ? AND status IN ({statuses});", (session_id,)
+            )
+            if cursor.fetchone() is None:
+                return False
+            held: list[tuple[str, str, str]] = []
+            for kind, names in (("image", references.images), ("video", references.videos)):
+                table, name_column, _ = _TABLES[cast(MediaKind, kind)]
+                ordered = sorted(names)
+                for start in range(0, len(ordered), _MAX_SQL_VARIABLES):
+                    chunk = ordered[start : start + _MAX_SQL_VARIABLES]
+                    placeholders = ",".join("?" for _ in chunk)
+                    cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {name_column} IN ({placeholders});", chunk)
+                    if cursor.fetchone()[0] != len(chunk):
+                        # Deletion won the race after the cache lookup. Do not return a stale
+                        # output; invoking the node again will create fresh media instead.
+                        return False
+                held.extend((session_id, kind, name) for name in ordered)
+            # The existence check and hold commit share the deleting transaction's lock. Cleanup
+            # either deletes first (a cache miss), or observes this active session's hold.
+            cursor.executemany("INSERT OR IGNORE INTO temp.intermediates_session_media VALUES (?, ?, ?);", held)
+        return True
 
     def replace_browser_hold(self, user_id: str, lease_id: str, images: Sequence[str], videos: Sequence[str]) -> None:
         with self._db.transaction() as cursor:
@@ -239,6 +283,7 @@ class IntermediatesRecordsSqlite:
         Runs on the caller's transaction so a classification and the enqueue it might race are
         ordered by the database lock, never by a stale cache.
         """
+        self._prepare_session_holds(cursor)
         cursor.execute(
             """--sql
             CREATE TEMP TABLE IF NOT EXISTS intermediates_active_media (
@@ -293,6 +338,10 @@ class IntermediatesRecordsSqlite:
             cursor.executemany(
                 "INSERT OR IGNORE INTO temp.intermediates_active_media (kind, name) VALUES (?, ?);", sorted(rows)
             )
+        cursor.execute(
+            "INSERT OR IGNORE INTO temp.intermediates_active_media (kind, name) "
+            "SELECT kind, name FROM temp.intermediates_session_media;"
+        )
 
     # endregion
 
