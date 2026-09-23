@@ -1,0 +1,46 @@
+---
+title: Intermediates
+description: Reclaim disk space by clearing the temporary images and videos generation leaves behind, per project and per account.
+---
+
+Generation produces intermediate images and videos: canvas composites, filter previews, staging candidates and other temporary files that were never saved to the gallery. The **Intermediates** section of Settings lists them per project, shows how much space clearing them would reclaim, and clears them safely. It is also reachable from a project's actions menu, from the Users page (administrators) and from **Data & workspace**.
+
+## What the page shows
+
+Each row is one of your projects, or **Unassigned** for intermediates without a known project. Deleted projects' leftovers appear under Unassigned. A row shows the project's cover, its **Used** count (intermediates a cleanup keeps) and its **Unused** count (intermediates nothing needs any more), with the measured reclaimable size underneath. Sizes are measured in the background after upgrading; the section says so while measurement is still running and never counts an unmeasured file as empty.
+
+Select rows, or **Select all**, and press **Delete**. The confirmation explains why kept items are kept: referenced by a saved project or workflow, used by queued or running work, or created recently.
+
+Administrators see every account's projects, can search accounts as well as project names, and can filter to one account from the Users page.
+
+## Safe and force clearing
+
+A normal clear deletes only safe items. It always keeps:
+
+- anything a pending, waiting or running job produced or uses as an input;
+- anything created in the last 30 minutes, so an upload the browser is about to reference or enqueue is never collected;
+- anything a saved project or library workflow still names, such as canvas staging candidates or cropped reference images;
+- anything that is no longer an intermediate.
+
+The advanced option in the confirmation, **also delete items that saved projects or workflows still reference**, turns the delete into a force clear. Those projects will show missing images and undo may no longer restore them. Force clearing never touches active or recent work and cannot be undone; it asks for an acknowledgement and for the word `CLEAR` to be typed.
+
+Every confirmation is based on a fresh server preview that freezes exactly which files the cleanup will act on. Files created after the preview are never included, and every batch re-checks its targets at the moment of deletion: an intermediate that was promoted, referenced or picked up by a job in the meantime is kept.
+
+## Progress and results
+
+Cleanup runs on the server, so you can navigate away while it works. The page reports deleted, kept and failed items separately, along with files whose records are gone but whose bytes could not be removed yet; those are purged on the next server start and are not counted as reclaimed. Failed items can be retried without widening the original request.
+
+## Permissions
+
+| Action | Regular user | Administrator |
+| --- | --- | --- |
+| Clear a project's intermediates | Own projects | Any project |
+| Clear an account's intermediates | Own account | Any account |
+| Clear everyone's intermediates | No | Yes |
+| Force clear referenced intermediates | Own files | Any authorized scope |
+
+Cleanup is refused while [image storage maintenance](/features/image-storage-maintenance/) is active.
+
+## Legacy endpoint
+
+The older `DELETE /api/v1/images/intermediates` route remains available to administrators. It now applies the same safety policy as a normal clear, so it keeps referenced, active and recent images and returns the number of images it deleted. It does not touch videos.
