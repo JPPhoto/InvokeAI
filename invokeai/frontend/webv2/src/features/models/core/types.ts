@@ -1,9 +1,6 @@
 /**
- * Contracts for the backend model manager (`/api/v2/models/*`). Shapes mirror
- * the pydantic models in `invokeai/backend/model_manager` and
- * `invokeai/app/services/model_install` (serialized as snake_case). Unions are
- * kept open (`| (string & {})`) so new backend architectures appear in the UI
- * without a frontend release — unknown values fall back to generic labels.
+ * Mirror snake_case backend model contracts with open unions so unknown architectures display generic labels
+ * without a frontend release.
  */
 
 /** Known model base architectures. Open union: new bases still render. */
@@ -186,7 +183,6 @@ export type ModelInstallStatus =
 
 export interface ModelInstallDownloadPart {
   source?: string;
-  url?: string;
   local_path?: string;
   bytes: number;
   total_bytes: number;
@@ -204,7 +200,19 @@ export interface ModelInstallJob {
   id: number;
   status: ModelInstallStatus;
   /** Local path, URL, or HF repo id — may be a string or a structured source. */
-  source: string | { repo_id?: string; url?: string; path?: string; type?: string; [key: string]: unknown };
+  source:
+    | string
+    | {
+        repo_id?: string;
+        url?: string;
+        path?: string;
+        type?: string;
+        variant?: string | null;
+        subfolder?: string | null;
+        provider_id?: string;
+        provider_model_id?: string;
+        [key: string]: unknown;
+      };
   error?: string | null;
   error_reason?: string | null;
   error_traceback?: string | null;
