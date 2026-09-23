@@ -619,6 +619,40 @@ describe('IntermediatesManager', () => {
     );
   });
 
+  it('shows a restored operation lookup failure and retries the lookup without starting cleanup', async () => {
+    const { followIntermediatesOperation } = await import('@features/intermediates/data/operationStore');
+    followIntermediatesOperation('op-1');
+    dependencies.getIntermediatesOperation.mockRejectedValue(new ApiError('Status temporarily unavailable', 503));
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('intermediates.operation.lookupFailed'), {
+      timeout: 4000,
+    });
+    expect(host.textContent).toContain('Status temporarily unavailable');
+    await page.screenshot({ path: '../../../../artifacts/intermediates/operation-lookup-error.png' });
+    dependencies.getIntermediatesOperation.mockResolvedValue(operationOf('completed'));
+    await act(() => buttonWithText('common.retry', host).click());
+    await vi.waitFor(() => expect(host.textContent).toContain('intermediates.operation.status.completed'));
+    expect(dependencies.startIntermediatesOperation).not.toHaveBeenCalled();
+    expect(dependencies.retryIntermediatesOperation).not.toHaveBeenCalled();
+  });
+
+  it('stops polling a missing operation and lets its receipt be dismissed', async () => {
+    const { followIntermediatesOperation, activeOperationStore } =
+      await import('@features/intermediates/data/operationStore');
+    followIntermediatesOperation('missing');
+    dependencies.getIntermediatesOperation.mockRejectedValue(new ApiError('Operation not found', 404));
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Operation not found'));
+    const calls = dependencies.getIntermediatesOperation.mock.calls.length;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 2200);
+    });
+    expect(dependencies.getIntermediatesOperation).toHaveBeenCalledTimes(calls);
+    await act(() => buttonWithText('intermediates.operation.dismiss', host).click());
+    expect(activeOperationStore.getSnapshot().operationId).toBeNull();
+    expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('[aria-label="intermediates.searchLabel"]'));
+  });
   it('reconciles excluded rows after refresh across pages without forgetting their identities', async () => {
     let currentRows = Array.from({ length: 120 }, (_, index) => row(`p${index}`, `Project ${index}`, 1));
     dependencies.getIntermediatesSummary

@@ -4265,6 +4265,7 @@
       "retry": "Retry unresolved",
       "dismiss": "Dismiss",
       "retryFailed": "Could not retry the cleanup.",
+      "lookupFailed": "Could not load cleanup status.",
       "pendingDiskNote": "Some files could not be removed yet. They are cleaned up on the next server start and their space is not counted as reclaimed."
     },
     "empty": {

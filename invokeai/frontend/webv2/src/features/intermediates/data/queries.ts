@@ -2,6 +2,7 @@ import type { IntermediatesOperation, IntermediatesSummary } from '@features/int
 
 import { isOperationSettled } from '@features/intermediates/core/types';
 import { assertAccountScopeCurrent, captureAccountScope, type AccountScope } from '@platform/state/accountLifecycle';
+import { ApiError } from '@platform/transport/http';
 import { queryOptions } from '@tanstack/react-query';
 
 import type { IntermediatesSummaryParams } from './keys';
@@ -33,6 +34,11 @@ export const intermediatesOperationQueryOptions = (operationId: string, owner = 
     queryFn: ({ signal }) =>
       fenced(owner, (fencedSignal) => getIntermediatesOperation(operationId, fencedSignal), signal),
     queryKey: intermediatesKeys.operation(owner, operationId),
-    refetchInterval: (query) => (query.state.data && isOperationSettled(query.state.data) ? false : 2_000),
+    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 404) && failureCount < 1,
+    refetchInterval: (query) =>
+      (query.state.error instanceof ApiError && query.state.error.status === 404) ||
+      (query.state.data && isOperationSettled(query.state.data))
+        ? false
+        : 2_000,
     staleTime: 1_000,
   });

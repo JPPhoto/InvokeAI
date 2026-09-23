@@ -15,6 +15,9 @@ import { formatBytes, formatCount } from './format';
 export interface OperationPanelProps {
   operation: IntermediatesOperation | null;
   isLoading: boolean;
+  isRefetching: boolean;
+  lookupError: string | null;
+  onRefetch: () => void;
   retryError: string | null;
   isRetrying: boolean;
   onRetry: () => void;
@@ -35,6 +38,9 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
 /** The active or most recent cleanup: progress while it runs, a breakdown once it stops, retry for what failed. */
 export const OperationPanel = ({
   isLoading,
+  isRefetching,
+  lookupError,
+  onRefetch,
   isRetrying,
   onDismiss,
   onRetry,
@@ -42,6 +48,26 @@ export const OperationPanel = ({
   retryError,
 }: OperationPanelProps) => {
   const { t } = useTranslation();
+
+  if (lookupError) {
+    return (
+      <Alert.Root size="sm" status="error" variant="surface">
+        <Alert.Indicator />
+        <Alert.Content>
+          <Alert.Title>{t('intermediates.operation.lookupFailed')}</Alert.Title>
+          <Alert.Description>{lookupError}</Alert.Description>
+          <HStack gap="2" mt="2">
+            <Button loading={isRefetching} size="2xs" variant="outline" onClick={onRefetch}>
+              {t('common.retry')}
+            </Button>
+            <Button size="2xs" variant="ghost" onClick={onDismiss}>
+              {t('intermediates.operation.dismiss')}
+            </Button>
+          </HStack>
+        </Alert.Content>
+      </Alert.Root>
+    );
+  }
 
   if (!operation) {
     return isLoading ? (

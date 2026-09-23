@@ -535,6 +535,13 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       {activeOperationId ? (
         <OperationPanel
           isLoading={operationQuery.isPending}
+          isRefetching={operationQuery.isFetching}
+          lookupError={
+            operationQuery.isError
+              ? getApiErrorMessage(operationQuery.error, t('intermediates.operation.lookupFailed'))
+              : null
+          }
+          onRefetch={() => void operationQuery.refetch()}
           isRetrying={isRetrying}
           operation={operationQuery.data ?? null}
           retryError={retryError}
