@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 896474,
+        "brotliBytes": 897042,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 895268,
+        "gzipBytes": 895775,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2130239,
+        "initialRawBytes": 2132017,
         "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 90438,
+        "ownedRawBytes": 91552,
         "requestCount": 37,
         "scriptRequestCount": 21,
         "sourceOwners": [
@@ -184,6 +184,7 @@
           "source:src/platform/browser/randomUuid.ts",
           "source:src/platform/browser/sha256.ts",
           "source:src/platform/core/concurrency.ts",
+          "source:src/platform/core/outputImages.ts",
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
@@ -326,15 +327,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1236046,
+        "brotliBytes": 1237634,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1229608,
+        "gzipBytes": 1231243,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3171535,
+        "initialRawBytes": 3176267,
         "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 141890,
+        "ownedRawBytes": 141925,
         "requestCount": 86,
         "scriptRequestCount": 70,
         "sourceOwners": [
@@ -693,6 +694,7 @@
           "source:src/platform/browser/webLocks.ts",
           "source:src/platform/core/concurrency.ts",
           "source:src/platform/core/json.ts",
+          "source:src/platform/core/outputImages.ts",
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
