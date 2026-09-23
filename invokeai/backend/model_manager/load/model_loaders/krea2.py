@@ -26,6 +26,7 @@ from invokeai.backend.model_manager.load.load_default import (
 )
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import GenericDiffusersLoader
+from invokeai.backend.model_manager.load.quantized_embedding import materialize_quantized_embedding
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
     BaseModelType,
@@ -34,7 +35,7 @@ from invokeai.backend.model_manager.taxonomy import (
     Qwen3VLVariantType,
     SubModelType,
 )
-from invokeai.backend.model_manager.util.qwen3_gguf import convert_qwen3_llamacpp_keys
+from invokeai.backend.model_manager.util.llamacpp_keys import convert_llamacpp_decoder_keys
 from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
 from invokeai.backend.quantization.fp8_scaled import (
     INPUT_SCALE_SUFFIXES,
@@ -1094,8 +1095,6 @@ class Qwen3VLEncoderGGUFLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEncoder_GG
         import torch
         from transformers import Qwen3VLModel
 
-        from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
-
         target_device = TorchDevice.choose_torch_device()
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
@@ -1107,7 +1106,7 @@ class Qwen3VLEncoderGGUFLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEncoder_GG
         sd = gguf_sd_loader(Path(config.path), compute_dtype=model_dtype)
         # Unconditional: identification requires the llama.cpp `token_embd.weight`, so this file is
         # llama.cpp-named by construction. (The converter passes unrecognized keys through anyway.)
-        sd = convert_qwen3_llamacpp_keys(sd)
+        sd = convert_llamacpp_decoder_keys(sd)
         # Reuse the single-file remap so both containers land on identical module paths.
         sd = _remap_qwen3vl_singlefile_keys(sd, what="Qwen3-VL encoder GGUF")
 
@@ -1122,20 +1121,7 @@ class Qwen3VLEncoderGGUFLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEncoder_GG
 
         load_state_dict_ignoring_extras(model, sd, source="Qwen3-VL encoder GGUF", assign=True, allow_missing=True)
 
-        # Embedding lookups index the weight directly, which a quantized GGMLTensor cannot serve, so
-        # this one tensor is materialized. It is also the weight least worth quantizing: it is the
-        # model's entire input representation.
-        embed_tokens = model.language_model.embed_tokens
-        if isinstance(embed_tokens.weight, GGMLTensor):
-            # The framework reserved the GGUF's file size for this load, which does not cover
-            # materializing a packed tensor on top of it: 0.78 GB for the 4B, 1.24 GB for the 8B, and
-            # twice that at the peak because `get_dequantized_tensor` builds an intermediate before
-            # casting to the compute dtype. Unreserved, that is what pushes a tight machine into swap.
-            # `.shape` is the dequantized shape; `Tensor.numel()` is not overridden and would report
-            # the packed element count.
-            dequantized_bytes = embed_tokens.weight.shape.numel() * model_dtype.itemsize
-            self._ram_cache.make_room(2 * dequantized_bytes)
-            embed_tokens.weight = torch.nn.Parameter(embed_tokens.weight.get_dequantized_tensor(), requires_grad=False)
+        materialize_quantized_embedding(model.language_model.embed_tokens, ram_cache=self._ram_cache)
 
         _reject_incomplete_load(model, what="Qwen3-VL encoder GGUF")
 
