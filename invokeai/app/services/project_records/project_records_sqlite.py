@@ -26,6 +26,11 @@ from invokeai.app.services.project_records.project_records_common import (
     ProjectRecordNotFoundError,
     ProjectSummaryDTO,
 )
+from invokeai.app.services.shared.media_references import (
+    delete_media_references,
+    extract_media_references,
+    replace_media_references,
+)
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
 from invokeai.app.util.misc import uuid_string
 
@@ -111,6 +116,15 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                         resolved_board_id,
                         minimum_canvas_schema_version,
                     ),
+                )
+                # Indexed on the same transaction as the document: a reader can never see a saved
+                # project whose referenced media the intermediates cleanup does not know about.
+                replace_media_references(
+                    cursor,
+                    owner_kind="project",
+                    user_id=user_id,
+                    owner_id=project_id,
+                    references=extract_media_references(data),
                 )
                 record = self._fetch_record(cursor, user_id=user_id, project_id=project_id)
         except sqlite3.IntegrityError as e:
@@ -272,6 +286,13 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 """,
                 (name[:BOARD_NAME_MAX_LENGTH], user_id, project_id),
             )
+            replace_media_references(
+                cursor,
+                owner_kind="project",
+                user_id=user_id,
+                owner_id=project_id,
+                references=extract_media_references(data),
+            )
             record = self._fetch_record(cursor, user_id=user_id, project_id=project_id)
 
         if record is None:
@@ -330,6 +351,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 """,
                 (user_id, project_id),
             )
+            delete_media_references(cursor, owner_kind="project", user_id=user_id, owner_id=project_id)
             # Only after the project is gone: the board FK is RESTRICT, so a claimed board cannot be
             # deleted. Deleting the board cascades its memberships, returning the media to
             # Uncategorized; the image and video records and their files are untouched.

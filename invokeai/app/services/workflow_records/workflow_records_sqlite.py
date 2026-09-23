@@ -1,7 +1,12 @@
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
 from invokeai.app.services.invoker import Invoker
+from invokeai.app.services.shared.media_references import (
+    extract_media_references,
+    replace_media_references,
+)
 from invokeai.app.services.shared.pagination import PaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
@@ -71,6 +76,7 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                 """,
                 (workflow_with_id.id, workflow_with_id.model_dump_json(), user_id, is_public),
             )
+            self._index_references(cursor, workflow_with_id, user_id=user_id)
         return self.get(workflow_with_id.id)
 
     def update(self, workflow: Workflow, user_id: Optional[str] = None) -> WorkflowRecordDTO:
@@ -96,6 +102,10 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                     """,
                     (workflow.model_dump_json(), workflow.id),
                 )
+            if cursor.rowcount:
+                self._index_references(
+                    cursor, workflow, user_id=user_id if user_id is not None else self._owner_of(cursor, workflow.id)
+                )
         return self.get(workflow.id)
 
     def delete(self, workflow_id: str, user_id: Optional[str] = None) -> None:
@@ -117,6 +127,13 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                     DELETE from workflow_library
                     WHERE workflow_id = ? AND category = 'user';
                     """,
+                    (workflow_id,),
+                )
+            if cursor.rowcount:
+                # The row is gone, so its owner is the only fact left to delete by; every owner's
+                # rows for this id are dropped since workflow ids are globally unique.
+                cursor.execute(
+                    "DELETE FROM media_references WHERE owner_kind = 'workflow' AND owner_id = ?;",
                     (workflow_id,),
                 )
         return None
@@ -155,6 +172,22 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
                     (updated_workflow.model_dump_json(), is_public, workflow_id),
                 )
         return self.get(workflow_id)
+
+    def _index_references(self, cursor: sqlite3.Cursor, workflow: Workflow, *, user_id: str) -> None:
+        """Records the media a library workflow names, on the caller's transaction."""
+        replace_media_references(
+            cursor,
+            owner_kind="workflow",
+            user_id=user_id,
+            owner_id=workflow.id,
+            references=extract_media_references(workflow.model_dump(mode="json")),
+        )
+
+    @staticmethod
+    def _owner_of(cursor: sqlite3.Cursor, workflow_id: str) -> str:
+        cursor.execute("SELECT user_id FROM workflow_library WHERE workflow_id = ?;", (workflow_id,))
+        row = cursor.fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else WORKFLOW_LIBRARY_DEFAULT_USER_ID
 
     def get_many(
         self,
