@@ -1,14 +1,14 @@
-"""Shared key handling for llama.cpp-converted Qwen3 GGUF files.
+"""Shared key handling for llama.cpp-converted decoder GGUF files.
 
-Both Qwen3 encoder families InvokeAI loads from GGUF -- the text-only one (Z-Image / FLUX.2 Klein)
-and the Qwen3-VL one (Krea-2 / Ideogram 4) -- ship the same llama.cpp tensor naming, because a
-Qwen3-VL GGUF's language tower *is* a Qwen3 decoder. Keeping one converter means a naming quirk
-found on one path is fixed for both.
+Every text encoder InvokeAI loads from a llama.cpp GGUF is a decoder stack under the same tensor
+naming: the text-only Qwen3 (Z-Image / FLUX.2 Klein), the Qwen3-VL language tower (Krea-2 /
+Ideogram 4), and Mistral / Ministral 3 (FLUX.2 [dev]). llama.cpp names them by role -- ``attn_q``,
+``ffn_gate``, ``attn_norm`` -- not by architecture, so one converter serves all three and a naming
+quirk found on one path is fixed for the others.
 
-Scope is those two: ``mistral_encoder.py`` carries a near-identical converter for the same llama.cpp
-layout, which this does not (yet) replace -- folding it in would change a path this feature does not
-otherwise touch. ``gemma2_encoder.py``'s converter stays separate on purpose: different target
-prefix, different norm convention, and it raises on an unmapped key instead of passing it through.
+``gemma2_encoder.py``'s converter stays separate on purpose: different target prefix
+(``layers.N.*``, no ``model.``), Gemma's ``1 + weight`` norm convention folded in, and it raises on
+an unmapped key instead of passing it through.
 """
 
 import re
@@ -16,13 +16,14 @@ from collections.abc import Mapping
 from typing import Any
 
 # llama.cpp block component -> transformers module path within a decoder layer.
-_QWEN3_BLOCK_COMPONENTS = {
+_BLOCK_COMPONENTS = {
     "attn_q": "self_attn.q_proj",
     "attn_k": "self_attn.k_proj",
     "attn_v": "self_attn.v_proj",
     "attn_output": "self_attn.o_proj",
-    "attn_q_norm": "self_attn.q_norm",  # Qwen3 QK normalization
-    "attn_k_norm": "self_attn.k_norm",  # Qwen3 QK normalization
+    # QK normalization: present on Qwen3 and Ministral 3, absent on architectures without it.
+    "attn_q_norm": "self_attn.q_norm",
+    "attn_k_norm": "self_attn.k_norm",
     "ffn_gate": "mlp.gate_proj",
     "ffn_up": "mlp.up_proj",
     "ffn_down": "mlp.down_proj",
@@ -31,7 +32,7 @@ _QWEN3_BLOCK_COMPONENTS = {
 }
 
 # llama.cpp top-level tensor -> transformers key.
-_QWEN3_TOP_LEVEL_KEYS = {
+_TOP_LEVEL_KEYS = {
     "token_embd.weight": "model.embed_tokens.weight",
     "output_norm.weight": "model.norm.weight",
     "output.weight": "lm_head.weight",  # absent when embeddings are tied
@@ -40,19 +41,22 @@ _QWEN3_TOP_LEVEL_KEYS = {
 _BLOCK_PATTERN = re.compile(r"^blk\.(\d+)\.(.+)$")
 
 
-def is_llamacpp_qwen3_state_dict(sd: Mapping[Any, Any]) -> bool:
+def is_llamacpp_decoder_state_dict(sd: Mapping[Any, Any]) -> bool:
     """True when the state dict uses llama.cpp's ``blk.N.*`` naming rather than the transformers one.
 
     ComfyUI-converted GGUFs keep the transformers naming, llama.cpp-converted ones do not, and both
     turn up in the wild for a text-only Qwen3 -- which is why that loader asks before converting. The
     Qwen3-VL path has no such choice to make: its identification requires the llama.cpp
     ``token_embd.weight``, so a file that reaches its loader is llama.cpp-named by construction.
+
+    The caller's own layout comes after: a bare ``MistralModel`` has no ``model.`` prefix and strips
+    it again. This function's job is the role-to-module-path mapping, not the enclosing container.
     """
     return any(isinstance(key, str) and key.startswith("blk.") for key in sd)
 
 
-def convert_qwen3_llamacpp_keys(sd: Mapping[Any, Any]) -> dict[Any, Any]:
-    """Convert llama.cpp Qwen3 GGUF keys to the transformers causal-LM layout.
+def convert_llamacpp_decoder_keys(sd: Mapping[Any, Any]) -> dict[Any, Any]:
+    """Convert llama.cpp decoder GGUF keys to the transformers causal-LM layout.
 
     ``blk.N.attn_q.weight`` -> ``model.layers.N.self_attn.q_proj.weight``, ``token_embd.weight`` ->
     ``model.embed_tokens.weight``, and so on. Unrecognized block components keep their name under the
@@ -71,10 +75,10 @@ def convert_qwen3_llamacpp_keys(sd: Mapping[Any, Any]) -> dict[Any, Any]:
         if match:
             layer_index, rest = match.groups()
             component, _, suffix = rest.partition(".")
-            mapped = _QWEN3_BLOCK_COMPONENTS.get(component, component)
+            mapped = _BLOCK_COMPONENTS.get(component, component)
             target = f"model.layers.{layer_index}.{mapped}"
             out[f"{target}.{suffix}" if suffix else target] = value
             continue
 
-        out[_QWEN3_TOP_LEVEL_KEYS.get(key, key)] = value
+        out[_TOP_LEVEL_KEYS.get(key, key)] = value
     return out
