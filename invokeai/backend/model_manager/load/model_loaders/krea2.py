@@ -10,6 +10,7 @@ from typing import Any, Generic, Optional, TypeVar
 import accelerate
 from transformers import AutoConfig, AutoTokenizer
 
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_Krea2_Config, Main_GGUF_Krea2_Config
@@ -74,21 +75,6 @@ from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_ex
 # Kept as a module-level alias: this helper moved to model_manager.util.qwen3_vl so the MiniMax H3
 # loader can share it without importing across family loaders.
 _normalize_qwen3vl_rope_config = normalize_qwen3vl_rope_config
-
-
-def _strip_comfyui_prefix(sd: dict[str, Any]) -> dict[str, Any]:
-    """Strip ComfyUI-style ``model.diffusion_model.`` / ``diffusion_model.`` key prefixes if present."""
-    prefix_to_strip = None
-    for prefix in ("model.diffusion_model.", "diffusion_model."):
-        if any(isinstance(k, str) and k.startswith(prefix) for k in sd.keys()):
-            prefix_to_strip = prefix
-            break
-    if not prefix_to_strip:
-        return sd
-    return {
-        (k[len(prefix_to_strip) :] if isinstance(k, str) and k.startswith(prefix_to_strip) else k): v
-        for k, v in sd.items()
-    }
 
 
 def _to_plain_tensor(value: Any) -> Any:
@@ -415,7 +401,7 @@ class Krea2CheckpointModel(ModelLoader):
 
         sd = load_file(model_path)
         metadata = read_safetensors_metadata(model_path, self._logger)
-        sd = _strip_comfyui_prefix(sd)
+        sd = CheckpointPrefix.detect(sd).strip(sd)
         # Discard what the key conversion below would discard anyway, before anything is spent on
         # it. One repack quantizes `last.up` with a blockwise scale grid this decode does not
         # implement; refusing a tensor that is on its way to the bin would be an odd way to fail.
@@ -672,7 +658,7 @@ class Krea2GGUFCheckpointModel(ModelLoader):
 
         # GGMLTensor wrappers (kept on CPU; dequantized on-the-fly by the cache during inference).
         sd = gguf_sd_loader(model_path, compute_dtype=compute_dtype)
-        sd = _strip_comfyui_prefix(sd)
+        sd = CheckpointPrefix.detect(sd).strip(sd)
         # GGUF conversions use the native/ComfyUI compact key naming; remap to diffusers keys.
         if _is_native_krea2_format(sd):
             sd = _convert_krea2_native_to_diffusers(sd)

@@ -1,9 +1,4 @@
-/**
- * Video generation's React-free values/policy surface: settings normalization,
- * the per-base/per-variant capabilities matrix, canvas math, and model-selection
- * transitions. Curated, caller-driven export list — add a symbol only when a
- * consumer needs it. UI and graph compilation arrive in later modules.
- */
+/** React-free video settings, capabilities, canvas math, and model-selection policy. */
 export type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
