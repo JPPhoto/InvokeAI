@@ -43,6 +43,22 @@ export interface ProjectAssetRefs {
   videos: Set<string>;
 }
 
+type CanvasHeldAssetRefs = { images: readonly string[]; videos: readonly string[] };
+const canvasHeldAssetReaders = new Map<string, () => CanvasHeldAssetRefs>();
+
+/** Canvas owns each reader for as long as its engine remains alive. */
+export const registerCanvasHeldAssetRefs = (projectId: string, read: () => CanvasHeldAssetRefs): (() => void) => {
+  canvasHeldAssetReaders.set(projectId, read);
+  return () => {
+    if (canvasHeldAssetReaders.get(projectId) === read) {
+      canvasHeldAssetReaders.delete(projectId);
+    }
+  };
+};
+
+export const getCanvasHeldAssetRefs = (projectId: string): CanvasHeldAssetRefs | undefined =>
+  canvasHeldAssetReaders.get(projectId)?.();
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 

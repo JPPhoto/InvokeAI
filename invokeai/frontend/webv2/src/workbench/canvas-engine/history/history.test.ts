@@ -62,6 +62,20 @@ describe('createHistory: redo cleared on push', () => {
 });
 
 describe('createHistory: entry-count eviction', () => {
+  it('keeps undo and redo media held until their entry is evicted', () => {
+    const history = createHistory({ maxEntries: 1 });
+    const first = { ...makeEntry('remove first', []), heldAssetRefs: { images: ['first.png'], videos: [] } };
+    const second = { ...makeEntry('remove second', []), heldAssetRefs: { images: ['second.png'], videos: [] } };
+    history.push(first);
+    history.undo();
+    expect(history.heldAssetRefs().images).toEqual(['first.png']);
+    history.redo();
+    history.push(second);
+    expect(history.heldAssetRefs().images).toEqual(['second.png']);
+    history.clear();
+    expect(history.heldAssetRefs().images).toEqual([]);
+  });
+
   it('evicts the oldest entry beyond the 64-entry budget', () => {
     const log: string[] = [];
     const history = createHistory();

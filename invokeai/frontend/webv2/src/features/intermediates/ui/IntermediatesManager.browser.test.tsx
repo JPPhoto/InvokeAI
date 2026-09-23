@@ -243,6 +243,29 @@ describe('IntermediatesManager', () => {
     expect(host.textContent).not.toContain('intermediates.owner.showMine');
   });
 
+  it('identifies the account in repeated admin row selections', async () => {
+    dependencies.getIntermediatesSummary.mockImplementation((params: { ownerId: string | null }) =>
+      Promise.resolve(
+        summaryOf(
+          params.ownerId
+            ? [row(null, null, 1)]
+            : [row(null, null, 1), { ...row(null, null, 1), userDisplayName: 'Alice', userId: 'bob' }]
+        )
+      )
+    );
+    await renderManager({ canClearOthersIntermediates: true });
+    await act(() => host.querySelector<HTMLButtonElement>('[aria-label="intermediates.owner.showEveryone"]')!.click());
+    await vi.waitFor(() => expect(host.querySelectorAll('[role="list"] li')).toHaveLength(2));
+
+    const names = [...host.querySelectorAll('[role="list"] li [aria-label]')].map((element) =>
+      element.getAttribute('aria-label')
+    );
+    expect(names).toEqual([
+      'intermediates.list.selectRowForOwner(name=intermediates.list.unassigned,owner=Alice,userId=alice)',
+      'intermediates.list.selectRowForOwner(name=intermediates.list.unassigned,owner=Alice,userId=bob)',
+    ]);
+  });
+
   it('fetches a focused project by id even when it is outside the first page', async () => {
     dependencies.getIntermediatesSummary.mockImplementation((params: { projectId?: string }) =>
       Promise.resolve(summaryOf(params.projectId === 'p55' ? [row('p55', 'Far project', 2)] : [row('p1', 'First', 1)]))
@@ -448,6 +471,30 @@ describe('IntermediatesManager', () => {
     // A search hides rows; hidden selections must not survive it.
     expect(buttonWithText('intermediates.list.delete', host).disabled).toBe(true);
   });
+
+  it('refreshes measured sizes while an open summary is still being measured', async () => {
+    const initial = summaryOf([{ ...row('p1', 'Portraits', 1), reclaimableBytes: 0, unknownSizeCount: 1 }]);
+    initial.measuring = true;
+    initial.totals.reclaimableBytes = 0;
+    initial.totals.unknownSizeCount = 1;
+    const measured = summaryOf([row('p1', 'Portraits', 1)]);
+    dependencies.getIntermediatesSummary.mockImplementationOnce(() => Promise.resolve(initial));
+    dependencies.getIntermediatesSummary.mockImplementation(() => Promise.resolve(measured));
+
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('intermediates.list.unmeasured(count=1)'));
+    await act(() => host.querySelector<HTMLButtonElement>('[role="list"] li [aria-label]')!.click());
+    expect(host.textContent).toContain('intermediates.selection.estimate');
+    await vi.waitFor(
+      () => {
+        expect(dependencies.getIntermediatesSummary.mock.calls.length).toBeGreaterThan(1);
+        expect(host.textContent).toContain('1.0 MB');
+        expect(host.textContent).toContain('size=1.0 MB');
+        expect(host.querySelector('[aria-label="intermediates.stats.measuringNote"]')).toBeNull();
+      },
+      { timeout: 8_000 }
+    );
+  }, 10_000);
 
   it('previews the delete, starts the operation, and reports it once it settles', async () => {
     await renderManager({ focusProjectId: 'p1' });

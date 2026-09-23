@@ -47,30 +47,70 @@ const getNullSnapshot = (): null => null;
 
 export const shallowEqual = selectorShallowEqual;
 
+type GetCanvasHeldAssetRefs = (
+  projectId: string
+) => { images: readonly string[]; videos: readonly string[] } | undefined;
+
 /** An open editor keeps its unsaved and undo media protected while the tab is alive. */
-const startBrowserIntermediateHold = (store: WorkbenchInternalStore, owner: AccountScope): (() => void) => {
+export const startBrowserIntermediateHold = (
+  store: WorkbenchInternalStore,
+  owner: AccountScope,
+  getCanvasHeldAssetRefs: GetCanvasHeldAssetRefs
+): (() => void) => {
   const leaseId = createUuid();
   let disposed = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight = false;
   let pending = false;
   let pendingRefresh = false;
-  const lastSentSignatures: string[] = [];
+  const leaseSignatures: [string[], string[]] = [[], []];
+  let activeSlot: 0 | 1 | null = null;
   let lastProjects = store.getSnapshot().projects;
-  // Canvas undo owns some references outside Project. Retain every asset observed in this open
-  // editor until its lease expires, so removing a layer cannot expose its undo image to cleanup.
-  const seenImages = new Set<string>();
-  const seenVideos = new Set<string>();
-  const observe = (projects: readonly Project[]): void => {
-    const refs = collectHeldAssetRefs(projects);
-    for (const name of refs.images) {
-      seenImages.add(name);
+  // Project snapshots are immutable; reuse each open project's scan until its object changes.
+  const projectRefs = new Map<string, { project: Project; refs: ReturnType<typeof collectHeldAssetRefs> }>();
+
+  const releaseSlot = async (slot: 0 | 1, from = 0): Promise<void> => {
+    const signatures = leaseSignatures[slot];
+    for (let index = from; index < signatures.length; index += 1) {
+      if (!signatures[index] || disposed || owner.signal.aborted) {
+        continue;
+      }
+      try {
+        await apiFetch(`/api/v1/intermediates/holds/${encodeURIComponent(`${leaseId}-${slot}-${index}`)}`, {
+          method: 'DELETE',
+          signal: owner.signal,
+        });
+        signatures[index] = '';
+      } catch {
+        // Keep the signature so a later send can retry releasing this lease.
+      }
     }
-    for (const name of refs.videos) {
-      seenVideos.add(name);
+    while (signatures.at(-1) === '') {
+      signatures.pop();
     }
   };
-  observe(lastProjects);
+
+  const putBatch = async (
+    slot: 0 | 1,
+    index: number,
+    batch: { images: string[]; videos: string[] }
+  ): Promise<boolean> => {
+    if (disposed || owner.signal.aborted) {
+      return false;
+    }
+    try {
+      await apiFetch(`/api/v1/intermediates/holds/${encodeURIComponent(`${leaseId}-${slot}-${index}`)}`, {
+        body: JSON.stringify(batch),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'PUT',
+        signal: owner.signal,
+      });
+      leaseSignatures[slot][index] = JSON.stringify([batch.images, batch.videos]);
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   const send = async (refresh = false): Promise<void> => {
     if (disposed || owner.signal.aborted) {
@@ -85,36 +125,75 @@ const startBrowserIntermediateHold = (store: WorkbenchInternalStore, owner: Acco
     try {
       do {
         pending = false;
-        observe(store.getSnapshot().projects);
-        const images = [...seenImages];
-        const videos = [...seenVideos];
+        const projects = store.getSnapshot().projects;
+        const refs = { images: new Set<string>(), videos: new Set<string>() };
+        const openProjectIds = new Set<string>();
+        for (const project of projects) {
+          openProjectIds.add(project.id);
+          const cached = projectRefs.get(project.id);
+          const projectAssets = cached?.project === project ? cached.refs : collectHeldAssetRefs([project]);
+          if (cached?.project !== project) {
+            projectRefs.set(project.id, { project, refs: projectAssets });
+          }
+          projectAssets.images.forEach((name) => refs.images.add(name));
+          projectAssets.videos.forEach((name) => refs.videos.add(name));
+          const retained = getCanvasHeldAssetRefs(project.id);
+          retained?.images.forEach((name) => refs.images.add(name));
+          retained?.videos.forEach((name) => refs.videos.add(name));
+        }
+        for (const projectId of projectRefs.keys()) {
+          if (!openProjectIds.has(projectId)) {
+            projectRefs.delete(projectId);
+          }
+        }
+        const images = [...refs.images].sort();
+        const videos = [...refs.videos].sort();
         const mustRefresh = refresh || pendingRefresh;
         refresh = false;
         pendingRefresh = false;
-        if (!images.length && !videos.length && lastSentSignatures.length === 0) {
+        if (!images.length && !videos.length) {
+          await releaseSlot(0);
+          await releaseSlot(1);
+          activeSlot = null;
           continue;
         }
         const batches = partitionHeldAssetNames(images, videos);
-        for (let index = 0; index < batches.length; index += 1) {
-          if (disposed || owner.signal.aborted) {
-            break;
+        const signatures = batches.map((batch) => JSON.stringify([batch.images, batch.videos]));
+        const current = activeSlot === null ? null : leaseSignatures[activeSlot];
+        let trimActive = false;
+        if (
+          current &&
+          current.length === signatures.length &&
+          signatures.every((value, index) => value === current[index])
+        ) {
+          if (mustRefresh) {
+            for (let index = 0; index < batches.length; index += 1) {
+              await putBatch(activeSlot!, index, batches[index]!);
+            }
           }
-          const batch = batches[index]!;
-          const signature = JSON.stringify([batch.images, batch.videos]);
-          if (!mustRefresh && signature === lastSentSignatures[index]) {
-            continue;
+          trimActive = true;
+        } else {
+          // Stage all replacement batches under the other lease set. Old names stay protected
+          // even when sorting moves them across the per-request batch boundary.
+          const nextSlot: 0 | 1 = activeSlot === 0 ? 1 : 0;
+          let staged = true;
+          for (let index = 0; index < batches.length; index += 1) {
+            staged = (await putBatch(nextSlot, index, batches[index]!)) && staged;
           }
-          try {
-            await apiFetch(`/api/v1/intermediates/holds/${encodeURIComponent(`${leaseId}-${index}`)}`, {
-              body: JSON.stringify(batch),
-              headers: { 'Content-Type': 'application/json' },
-              method: 'PUT',
-              signal: owner.signal,
-            });
-            lastSentSignatures[index] = signature;
-          } catch {
-            // Each failed batch keeps its prior server hold and retries on the next heartbeat.
+          if (staged && !disposed && !owner.signal.aborted) {
+            const oldSlot = activeSlot;
+            activeSlot = nextSlot;
+            trimActive = true;
+            if (oldSlot !== null) {
+              await releaseSlot(oldSlot);
+            }
           }
+        }
+        if (activeSlot !== null) {
+          if (trimActive) {
+            await releaseSlot(activeSlot, batches.length);
+          }
+          await releaseSlot(activeSlot === 0 ? 1 : 0);
         }
         if (disposed || owner.signal.aborted) {
           break;
@@ -129,9 +208,7 @@ const startBrowserIntermediateHold = (store: WorkbenchInternalStore, owner: Acco
     if (projects === lastProjects) {
       return;
     }
-    const changedProjects = projects.filter((project, index) => project !== lastProjects[index]);
     lastProjects = projects;
-    observe(changedProjects);
     if (timer !== null) {
       clearTimeout(timer);
     }
@@ -162,9 +239,11 @@ const startBrowserIntermediateHold = (store: WorkbenchInternalStore, owner: Acco
 
 export const WorkbenchProvider = ({
   children,
+  getCanvasHeldAssetRefs,
   loadOptions,
 }: {
   children: ReactNode;
+  getCanvasHeldAssetRefs: GetCanvasHeldAssetRefs;
   /** Boot-time session options (deep-linked project, fresh draft). Read once at mount. */
   loadOptions?: WorkbenchLoadOptions;
 }) => {
@@ -250,7 +329,7 @@ export const WorkbenchProvider = ({
     });
 
     persistenceRuntime.start();
-    const releaseIntermediateHold = startBrowserIntermediateHold(store, owner);
+    const releaseIntermediateHold = startBrowserIntermediateHold(store, owner, getCanvasHeldAssetRefs);
 
     return () => {
       releaseIntermediateHold();

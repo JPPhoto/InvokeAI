@@ -320,6 +320,24 @@ def test_summary_triggers_measurement_of_unmeasured_sizes(invoker: Invoker, serv
     assert invoker.services.image_records.get("missing.png").file_size_bytes == 0
 
 
+def test_measurement_retries_when_an_unmeasured_file_is_still_too_new(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(intermediates_default, "MEASURE_MIN_AGE_SECONDS", 1)
+    _seed_image(invoker, "young.png", created_at=None)
+    invoker.services.image_records.set_file_size_bytes("young.png", None)
+
+    summary = service.get_summary(
+        ALICE, owner_id=None, search=None, sort="project_name", descending=False, offset=0, limit=50
+    )
+    assert summary.measuring is True
+
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline and invoker.services.image_records.get("young.png").file_size_bytes is None:
+        time.sleep(0.02)
+    assert invoker.services.image_records.get("young.png").file_size_bytes is not None
+
+
 # ── previews and policy ──
 
 
@@ -788,6 +806,28 @@ def test_inputs_added_to_an_active_session_after_it_was_scanned_are_protected(
     assert second.impact.keep_active_images == 1
 
 
+def test_cleanup_rechecks_same_length_active_session_rewrites_with_an_unchanged_timestamp(
+    invoker: Invoker, service: IntermediatesService
+) -> None:
+    _seed_image(invoker, "old.png")
+    _seed_image(invoker, "new.png")
+    item_id = _enqueue_row(invoker, session_id="parent", status="waiting", session_json='{"image_name":"old.png"}')
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
+    assert preview.impact.delete_images == 1
+
+    # The queue timestamp has millisecond precision. Suppress its trigger to make the
+    # same-millisecond, same-length rewrite deterministic instead of timing dependent.
+    with invoker.services.image_records._db.transaction() as cursor:
+        cursor.execute("DROP TRIGGER tg_session_queue_updated_at;")
+        cursor.execute("UPDATE session_queue SET session = ? WHERE item_id = ?;", ('{"image_name":"new.png"}', item_id))
+
+    started = service.start_operation(
+        IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="same-stamp"), ALICE
+    )
+    assert _wait(service, started.operation_id).progress.retained_images == 1
+    assert _exists(invoker, "new.png")
+
+
 def test_retries_are_authorized_as_the_retrying_caller(
     invoker: Invoker, service: IntermediatesService, monkeypatch
 ) -> None:
@@ -1043,6 +1083,51 @@ def test_operation_receipt_and_retry_survive_restart(
         assert not _exists(invoker, "restart-flaky.png")
     finally:
         restored.stop()
+
+
+def test_receipt_pruning_keeps_unresolved_targets_retryable(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS", 2)
+    _seed_image(invoker, "flaky.png")
+    real_delete = invoker.services.images.delete_intermediates_by_names
+    monkeypatch.setattr(
+        invoker.services.images, "delete_intermediates_by_names", MagicMock(side_effect=OSError("busy"))
+    )
+    _, failed = _run(service, ALICE, _owner("alice"))
+    assert failed.progress.unresolved_images == 1
+    monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
+
+    # New successful receipts may be pruned; the failed operation's exact target must not be.
+    for _ in range(2):
+        _run(service, ADMIN, _owner("bob"))
+
+    assert service.get_operation(failed.operation_id, ALICE).progress.unresolved_images == 1
+    retry = service.retry_operation(failed.operation_id, ALICE)
+    assert _wait(service, retry.operation_id).progress.deleted_images == 1
+
+
+def test_recovery_capacity_refuses_new_work_but_allows_the_unresolved_retry(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS", 1)
+    _seed_image(invoker, "flaky.png")
+    real_delete = invoker.services.images.delete_intermediates_by_names
+    monkeypatch.setattr(
+        invoker.services.images, "delete_intermediates_by_names", MagicMock(side_effect=OSError("busy"))
+    )
+    _, failed = _run(service, ALICE, _owner("alice"))
+    assert failed.progress.unresolved_images == 1
+    monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
+
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("bob")), ADMIN)
+    with pytest.raises(IntermediatesUnavailableError, match="Retry unresolved"):
+        service.start_operation(
+            IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="another"), ADMIN
+        )
+    assert service.get_operation(failed.operation_id, ALICE).progress.unresolved_images == 1
+    retry = service.retry_operation(failed.operation_id, ALICE)
+    assert _wait(service, retry.operation_id).progress.deleted_images == 1
 
 
 def test_force_confirmation_guard_survives_failed_batch_and_restart(

@@ -112,6 +112,7 @@ class IntermediatesService(IntermediatesServiceBase):
         self._idempotency: dict[tuple[str, str], tuple[str, str]] = {}
         self._pending: "queue.Queue[str]" = queue.Queue()
         self._measure_requested = threading.Event()
+        self._measure_due_at: Optional[float] = None
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
 
@@ -120,6 +121,7 @@ class IntermediatesService(IntermediatesServiceBase):
     def start(self, invoker: Invoker) -> None:
         self._invoker = invoker
         self._stop.clear()
+        self._measure_due_at = None
         with self._lock:
             for user_id, preview_id, key, state in self._records.load_operations():
                 dto = IntermediatesOperation.model_validate(state["dto"])
@@ -489,6 +491,7 @@ class IntermediatesService(IntermediatesServiceBase):
             preview = self._previews.get(request.preview_id)
             if preview is None or preview.caller_user_id != caller.user_id:
                 raise IntermediatesPreviewNotFoundError("Preview expired or unknown; request a new one")
+            self._require_operation_capacity(len(preview.targets["image"]) + len(preview.targets["video"]))
             # Single use: a second confirmation of the same preview must go through a new preview.
             del self._previews[request.preview_id]
 
@@ -552,6 +555,7 @@ class IntermediatesService(IntermediatesServiceBase):
                 raise IntermediatesUnavailableError("The operation has nothing left to retry")
             # A retry is authorized as the retrying caller, never as the original one.
             self._authorize_scope(original.dto.scope, caller)
+            self._require_operation_capacity(len(unresolved["image"]) + len(unresolved["video"]), replacing=original)
             operation = self._register_operation_locked(
                 caller=caller,
                 mode=original.dto.mode,
@@ -634,6 +638,29 @@ class IntermediatesService(IntermediatesServiceBase):
             for name, size in names.items()
         ]
 
+    def _can_prune_operation_locked(self, operation: _Operation) -> bool:
+        if operation.dto.status not in ("completed", "failed") or any(operation.unresolved.values()):
+            return False
+        retry_id = operation.dto.retried_by_operation_id
+        retry = self._operations.get(retry_id) if retry_id is not None else None
+        return retry is None or retry.dto.status not in ("pending", "running")
+
+    def _require_operation_capacity(self, incoming_targets: int, *, replacing: Optional[_Operation] = None) -> None:
+        outstanding = sum(
+            len(operation.unresolved["image"]) + len(operation.unresolved["video"])
+            for operation in self._operations.values()
+        )
+        if replacing is not None:
+            outstanding -= len(replacing.unresolved["image"]) + len(replacing.unresolved["video"])
+        if outstanding + incoming_targets > MAX_RETAINED_TARGETS:
+            raise IntermediatesUnavailableError("Retry unresolved cleanup targets before starting more cleanup")
+        if (
+            len(self._operations) >= MAX_RETAINED_OPERATIONS
+            and replacing is None
+            and not any(self._can_prune_operation_locked(operation) for operation in self._operations.values())
+        ):
+            raise IntermediatesUnavailableError("Retry unresolved cleanup operations before starting more cleanup")
+
     def _prune_operations_locked(self) -> None:
         evicted: list[str] = []
         retained_order = list(self._operation_order)
@@ -645,11 +672,7 @@ class IntermediatesService(IntermediatesServiceBase):
             oldest = None
             for operation_id in retained_order:
                 candidate = self._operations[operation_id]
-                retry_id = candidate.dto.retried_by_operation_id
-                retry = self._operations.get(retry_id) if retry_id is not None else None
-                if candidate.dto.status in ("completed", "failed") and (
-                    retry is None or retry.dto.status not in ("pending", "running")
-                ):
+                if self._can_prune_operation_locked(candidate):
                     oldest = operation_id
                     break
             if oldest is None:
@@ -707,7 +730,9 @@ class IntermediatesService(IntermediatesServiceBase):
             try:
                 operation_id = self._pending.get(timeout=0.5)
             except queue.Empty:
-                if self._measure_requested.is_set():
+                if self._measure_requested.is_set() or (
+                    self._measure_due_at is not None and time.monotonic() >= self._measure_due_at
+                ):
                     self._measure_once()
                 continue
             if not operation_id:
@@ -865,12 +890,14 @@ class IntermediatesService(IntermediatesServiceBase):
     def _measure_once(self) -> None:
         """Measures a bounded batch of unmeasured intermediates; clears the request when none remain."""
         self._measure_requested.clear()
+        self._measure_due_at = None
         image_moves = getattr(self._services, "image_moves", None)
         if image_moves is not None and image_moves.is_maintenance_active():
             # Files are being relocated; a measurement now could record a missing file as empty.
             return
         try:
             remaining = False
+            retry_young = False
             for kind, files, records in (
                 ("image", self._services.image_files, self._services.image_records),
                 ("video", self._services.video_files, self._services.video_records),
@@ -900,10 +927,16 @@ class IntermediatesService(IntermediatesServiceBase):
                 records.set_file_sizes_bytes(sizes)
                 if len(pending) == MEASURE_BATCH_SIZE:
                     remaining = True
+                elif self._records.next_unmeasured(cast(MediaKind, kind), 1):
+                    # All older rows were measured or skipped; a new row still needs its file
+                    # to be written before measuring it. Wake after the minimum age has elapsed.
+                    retry_young = True
             if remaining:
                 self._measure_requested.set()
                 # Yield the database lock between batches so generation and saves keep flowing.
                 time.sleep(0.05)
+            elif retry_young:
+                self._measure_due_at = time.monotonic() + MEASURE_MIN_AGE_SECONDS
         except Exception as error:
             self._logger.warning(f"Measuring intermediate file sizes failed; will retry on demand: {error}")
 

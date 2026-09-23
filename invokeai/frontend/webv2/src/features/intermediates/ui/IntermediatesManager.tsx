@@ -6,6 +6,7 @@ import type {
 } from '@features/intermediates/core/types';
 /* eslint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { IntermediatesSummaryParams } from '@features/intermediates/data/keys';
+import type { TFunction } from 'i18next';
 
 import {
   Badge,
@@ -87,6 +88,11 @@ export interface IntermediatesManagerProps {
 const SEARCH_ICON = <Icon as={SearchIcon} boxSize="3.5" color="fg.subtle" />;
 const EMPTY_ROWS: readonly IntermediatesRow[] = [];
 const EMPTY_TOTALS = { reclaimableBytes: 0, rows: 0, safeImages: 0, safeVideos: 0, unknownSizeCount: 0 };
+
+const formatSummarySize = (bytes: number, unknownCount: number, t: TFunction): string =>
+  unknownCount > 0
+    ? `${formatBytes(bytes)} ${t('intermediates.list.unmeasured', { count: unknownCount })}`
+    : formatBytes(bytes);
 
 let nextIdempotencyKey = 1;
 const createIdempotencyKey = (): string => `intermediates:${Date.now().toString(36)}:${nextIdempotencyKey++}`;
@@ -257,9 +263,10 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       summarizeSelection(
         effectiveSelection,
         totals ?? EMPTY_TOTALS,
-        matchingSnapshot && !matchingSnapshotQuery.isError && !selectionOverLimit ? matchingSnapshot.items : undefined
+        matchingSnapshot && !matchingSnapshotQuery.isError && !selectionOverLimit ? matchingSnapshot.items : undefined,
+        rows
       ),
-    [effectiveSelection, matchingSnapshot, matchingSnapshotQuery.isError, selectionOverLimit, totals]
+    [effectiveSelection, matchingSnapshot, matchingSnapshotQuery.isError, rows, selectionOverLimit, totals]
   );
   const matchingRowCount = hasExclusions ? matchingSnapshot?.total : totals?.rows;
   // Select all selects every matching row, including pages not loaded; only a complete selection clears.
@@ -581,13 +588,13 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
                 ? t('intermediates.selection.estimate', {
                     count: selectionSummary.rows,
                     images: t('intermediates.counts.images', { count: selectionSummary.safeImages }),
-                    size: formatBytes(selectionSummary.reclaimableBytes),
+                    size: formatSummarySize(selectionSummary.reclaimableBytes, selectionSummary.unknownSizeCount, t),
                     videos: t('intermediates.counts.videos', { count: selectionSummary.safeVideos }),
                   })
                 : totals
                   ? t('intermediates.selection.available', {
                       images: t('intermediates.counts.images', { count: totals.safeImages }),
-                      size: formatBytes(totals.reclaimableBytes),
+                      size: formatSummarySize(totals.reclaimableBytes, totals.unknownSizeCount, t),
                       videos: t('intermediates.counts.videos', { count: totals.safeVideos }),
                     })
                   : ''}

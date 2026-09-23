@@ -104,7 +104,15 @@ export const IntermediatesList = ({ isSelected, onToggleRow, rows, showOwner }: 
             onClick={() => onToggleRow(row)}
           >
             <Checkbox.Root
-              aria-label={t('intermediates.list.selectRow', { name: label })}
+              aria-label={
+                showOwner
+                  ? t('intermediates.list.selectRowForOwner', {
+                      name: label,
+                      owner: getOwnerLabel(row),
+                      userId: row.userId,
+                    })
+                  : t('intermediates.list.selectRow', { name: label })
+              }
               checked={selected}
               colorPalette="accent"
               size="xs"

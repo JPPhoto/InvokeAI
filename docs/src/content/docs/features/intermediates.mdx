@@ -19,7 +19,7 @@ A normal clear deletes only safe items. It always keeps:
 
 - anything a pending, waiting or running job produced or uses as an input, including cached images and videos reused from an earlier job;
 - anything created in the last 30 minutes, so an upload the browser is about to reference or enqueue is never collected;
-- anything the open webv2 editor has used, including unsaved edits and canvas undo history; the browser refreshes this temporary hold while it is open;
+- anything the open webv2 editor still references, including unsaved edits and available undo history; the browser refreshes this temporary hold while it is open;
 - anything a saved project or library workflow still names, such as canvas staging candidates or cropped reference images;
 - anything that is no longer an intermediate.
 
@@ -29,13 +29,13 @@ A single preview includes at most 50,000 eligible items. If more remain, the con
 
 Every confirmation is based on a fresh server preview that freezes exactly which files the cleanup will act on. Files created after the preview are never included, and every batch re-checks its targets at the moment of deletion: an intermediate that was promoted, referenced or picked up by a job in the meantime is kept.
 
-An open editor refreshes its browser hold every five minutes and when the tab becomes visible. The hold expires one day after the last refresh if the tab closes or crashes. If you have an unsaved browser-only draft that has stayed closed longer than a day, reopen it before clearing old intermediates.
+An open editor refreshes its browser hold every five minutes and when the tab becomes visible. It releases names removed from the current projects and undo history. The hold expires one day after the last refresh if the tab closes or crashes. If you have an unsaved browser-only draft that has stayed closed longer than a day, reopen it before clearing old intermediates.
 
 ## Progress and results
 
 Cleanup runs on the server, so you can navigate away while it works. The page reports deleted, kept and failed items separately, along with files whose records are gone but whose bytes could not be removed yet; those are purged on the next server start and are not counted as reclaimed. Operation receipts and unresolved targets survive a server restart; interrupted work is shown as failed and can be retried without widening the original request. The browser also restores its last operation after a page reload.
 
-The server accepts at most eight active operations at a time. Wait for one to finish before confirming more cleanup if that limit is reached.
+The server accepts at most eight active operations at a time. Wait for one to finish before confirming more cleanup if that limit is reached. If unresolved targets fill the recovery limit, retry them before starting another cleanup; the server keeps their receipts rather than silently discarding them.
 
 ## Permissions
 

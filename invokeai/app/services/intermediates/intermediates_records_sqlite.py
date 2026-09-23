@@ -79,9 +79,9 @@ class IntermediatesRecordsSqlite:
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
         # Media names an active queue item's session names, keyed by item id and stamped with the
-        # row's status, status sequence, session length and updated_at: a session rewritten while
-        # the item stays active (a workflow-call parent resuming with its child's outputs) is
-        # re-scanned. Entries live as long as the item is active. This cache is derived from committed
+        # row's status and monotonic session revision: a session rewritten while the item stays
+        # active (a workflow-call parent resuming with its child's outputs) is re-scanned. Entries
+        # live as long as the item is active. This cache is derived from committed
         # rows only, so it is safe across a rolled-back transaction; the temp table is not, which is
         # why it is rebuilt on every call rather than skipped on an unchanged set.
         self._active_inputs: dict[int, tuple[str, set[str], set[str]]] = {}
@@ -296,7 +296,7 @@ class IntermediatesRecordsSqlite:
         statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
         cursor.execute(
             f"""--sql
-            SELECT item_id, status || ':' || COALESCE(status_sequence, 0) || ':' || LENGTH(session) || ':' || updated_at
+            SELECT item_id, status || ':' || COALESCE(session_revision, 0)
             FROM session_queue WHERE status IN ({statuses});
             """
         )
@@ -315,7 +315,7 @@ class IntermediatesRecordsSqlite:
             cursor.execute(
                 f"""--sql
                 SELECT item_id,
-                       status || ':' || COALESCE(status_sequence, 0) || ':' || LENGTH(session) || ':' || updated_at,
+                       status || ':' || COALESCE(session_revision, 0),
                        session
                 FROM session_queue WHERE item_id IN ({placeholders});
                 """,
@@ -416,9 +416,16 @@ class IntermediatesRecordsSqlite:
 
     def has_unmeasured_intermediates(self) -> bool:
         with self._db.transaction() as cursor:
-            for table, _, _ in _TABLES.values():
+            cursor.execute(
+                "CREATE TEMP TABLE IF NOT EXISTS intermediates_unmeasurable "
+                "(kind TEXT, name TEXT, PRIMARY KEY(kind, name));"
+            )
+            for kind, (table, name_column, _) in _TABLES.items():
                 cursor.execute(
-                    f"SELECT 1 FROM {table} WHERE is_intermediate = TRUE AND file_size_bytes IS NULL LIMIT 1;"
+                    f"SELECT 1 FROM {table} m WHERE m.is_intermediate = TRUE AND m.file_size_bytes IS NULL "
+                    f"AND NOT EXISTS (SELECT 1 FROM temp.intermediates_unmeasurable u "
+                    f"WHERE u.kind = ? AND u.name = m.{name_column}) LIMIT 1;",
+                    (kind,),
                 )
                 if cursor.fetchone() is not None:
                     return True

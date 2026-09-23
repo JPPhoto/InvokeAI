@@ -11,6 +11,7 @@ import {
   type CanvasEngine,
   type CanvasEngineOptions,
 } from '@workbench/canvas-operations/createCanvasEngine';
+import { registerCanvasHeldAssetRefs } from '@workbench/projects/projectAssets';
 
 /** Engine creation dependencies, minus the project id the registry supplies. */
 export type EngineDeps = Omit<CanvasEngineOptions, 'projectId'>;
@@ -38,6 +39,7 @@ export interface EngineRegistry {
 
 interface RegistryEntry {
   engine: CanvasEngine;
+  releaseHeldAssetRefs: () => void;
   refCount: number;
   disposeHandle: number | null;
   generation: number;
@@ -53,6 +55,7 @@ const defaultTimers: RegistryTimers = {
 export const createEngineRegistry = (
   options: {
     gracePeriodMs?: number;
+    registerHeldAssetRefs?: typeof registerCanvasHeldAssetRefs;
     timers?: RegistryTimers;
   } = {}
 ): EngineRegistry => {
@@ -80,6 +83,7 @@ export const createEngineRegistry = (
           return;
         }
         entries.delete(projectId);
+        entry.releaseHeldAssetRefs();
         entry.engine.lifecycle.dispose();
       });
     }, gracePeriodMs);
@@ -93,6 +97,7 @@ export const createEngineRegistry = (
       entries.clear();
       for (const entry of ownedEntries) {
         cancelDisposal(entry);
+        entry.releaseHeldAssetRefs();
         try {
           entry.engine.lifecycle.dispose();
         } catch (error) {
@@ -118,7 +123,16 @@ export const createEngineRegistry = (
         return existing.engine;
       }
       const engine = createCanvasEngine({ projectId, ...deps });
-      entries.set(projectId, { cooldown: null, disposeHandle: null, engine, generation: 0, refCount: 1 });
+      const releaseHeldAssetRefs =
+        options.registerHeldAssetRefs?.(projectId, () => engine.history.getHeldAssetRefs()) ?? (() => undefined);
+      entries.set(projectId, {
+        cooldown: null,
+        disposeHandle: null,
+        engine,
+        generation: 0,
+        refCount: 1,
+        releaseHeldAssetRefs,
+      });
       return engine;
     },
     releaseEngine: (projectId) => {
@@ -139,7 +153,7 @@ export const createEngineRegistry = (
 };
 
 /** The process-wide default registry shared by all widget surfaces. */
-const defaultRegistry = createEngineRegistry();
+const defaultRegistry = createEngineRegistry({ registerHeldAssetRefs: registerCanvasHeldAssetRefs });
 
 registerAccountOwnedResource({
   clear: defaultRegistry.disposeAll,

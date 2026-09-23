@@ -67,7 +67,8 @@ export interface SelectionSummary {
 export const summarizeSelection = (
   selection: IntermediatesSelection,
   totals: { rows: number; safeImages: number; safeVideos: number; reclaimableBytes: number; unknownSizeCount: number },
-  matchingRows?: readonly IntermediatesRow[]
+  matchingRows?: readonly IntermediatesRow[],
+  visibleRows: readonly IntermediatesRow[] = []
 ): SelectionSummary | null => {
   if (selection.mode === 'all-matching') {
     if (selection.excluded.size > 0) {
@@ -108,7 +109,9 @@ export const summarizeSelection = (
     unknownSizeCount: 0,
   };
 
-  for (const row of selection.rows.values()) {
+  const freshRows = new Map(visibleRows.map((row) => [getIntermediatesRowKey(row), row]));
+  for (const [key, snapshot] of selection.rows) {
+    const row = freshRows.get(key) ?? snapshot;
     summary.rows += 1;
     summary.safeImages += row.images.safe;
     summary.safeVideos += row.videos.safe;

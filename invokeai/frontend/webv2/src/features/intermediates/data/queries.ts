@@ -25,6 +25,7 @@ export const intermediatesSummaryQueryOptions = (params: IntermediatesSummaryPar
   queryOptions<IntermediatesSummary>({
     queryFn: ({ signal }) => fenced(owner, (fencedSignal) => getIntermediatesSummary(params, fencedSignal), signal),
     queryKey: intermediatesKeys.summary(owner, params),
+    refetchInterval: (query) => (query.state.data?.measuring ? 5_000 : false),
     staleTime: 15_000,
   });
 

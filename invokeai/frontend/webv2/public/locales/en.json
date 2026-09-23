@@ -4287,6 +4287,7 @@
     "list": {
       "selectAll": "Select all",
       "selectRow": "Select {{name}}",
+      "selectRowForOwner": "Select {{name}} for {{owner}} (account {{userId}})",
       "delete": "Delete",
       "used": "Used",
       "unused": "Unused",

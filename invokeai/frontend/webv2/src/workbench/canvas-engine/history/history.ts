@@ -10,12 +10,39 @@ export const HISTORY_MAX_ENTRIES = 64;
 /** Max total bytes retained across the undo + redo stacks before the oldest is evicted (256 MB). */
 export const HISTORY_BYTE_BUDGET = 256 * 1024 * 1024;
 
+/** Media names captured by an undo entry, including sources no longer in the live document. */
+export const collectHistoryMediaRefs = (...values: unknown[]): { images: string[]; videos: string[] } => {
+  const images = new Set<string>();
+  const videos = new Set<string>();
+  const pending: unknown[] = [...values];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value !== 'object' || value === null) {
+      continue;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (typeof child === 'string' && child.length > 0 && child.length <= 255) {
+        if (key === 'imageName' || key === 'image_name') {
+          images.add(child);
+        } else if (key === 'video_name') {
+          videos.add(child);
+        }
+      } else if (typeof child === 'object' && child !== null) {
+        pending.push(child);
+      }
+    }
+  }
+  return { images: [...images], videos: [...videos] };
+};
+
 /** One reversible step. `bytes` is the (approximate) memory the entry pins, for the budget. */
 export interface HistoryEntry {
   /** Human-readable label (e.g. "Brush stroke"). */
   readonly label: string;
   /** Approximate retained size in bytes (e.g. before+after ImageData byteLength). */
   readonly bytes: number;
+  /** Media names this entry can restore after they leave the current document. */
+  readonly heldAssetRefs?: { readonly images: readonly string[]; readonly videos: readonly string[] };
   /**
    * Opts into failure-atomic replay. When true, History moves this entry only
    * after `undo`/`redo` returns successfully, so a preparation failure remains
@@ -74,6 +101,8 @@ export interface History {
    * what `undo()` reverts), `future` next-redo-first. Fresh arrays per call.
    */
   entries(): { past: readonly string[]; future: readonly string[] };
+  /** Union of media references retained by undo and redo entries. */
+  heldAssetRefs(): { images: string[]; videos: string[] };
   /** Subscribes to every stack mutation (push, amend, undo, redo, clear, eviction). Returns an unsubscribe function. */
   subscribe(listener: () => void): () => void;
 }
@@ -144,6 +173,16 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     future: redoStack.map((entry) => entry.label).reverse(),
     past: undoStack.map((entry) => entry.label),
   });
+
+  const heldAssetRefs = (): { images: string[]; videos: string[] } => {
+    const images = new Set<string>();
+    const videos = new Set<string>();
+    for (const entry of [...undoStack, ...redoStack]) {
+      entry.heldAssetRefs?.images.forEach((name) => images.add(name));
+      entry.heldAssetRefs?.videos.forEach((name) => videos.add(name));
+    }
+    return { images: [...images], videos: [...videos] };
+  };
 
   const push = (entry: HistoryEntry): void => {
     // Replaying an entry must never record a new one; drop it defensively.
@@ -326,6 +365,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     amendLast,
     byteSize: () => undoBytes + redoBytes,
     entries,
+    heldAssetRefs,
     canRetain: (bytes) => Number.isFinite(bytes) && Math.max(0, Math.ceil(bytes)) <= byteBudget,
     canRedo: () => redoStack.length > 0,
     canUndo: () => undoStack.length > 0,

@@ -21,6 +21,7 @@ import {
 } from '@workbench/canvas-operations/generationCompositePlan';
 import { createEmptyCanvasDocument } from '@workbench/canvasMigration';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
+import { getCanvasHeldAssetRefs } from '@workbench/projects/projectAssets';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -148,10 +149,12 @@ describe('createEngineRegistry', () => {
     accountLifecycle.activate('user-a');
     const engine = getOrCreateEngine('shared-project-id', createFakeDeps());
     const dispose = vi.spyOn(engine.lifecycle, 'dispose');
+    expect(getCanvasHeldAssetRefs('shared-project-id')).toEqual({ images: [], videos: [] });
 
     accountLifecycle.invalidate();
 
     expect(getCanvasEngine('shared-project-id')).toBeUndefined();
+    expect(getCanvasHeldAssetRefs('shared-project-id')).toBeUndefined();
     expect(dispose).toHaveBeenCalledOnce();
   });
 
