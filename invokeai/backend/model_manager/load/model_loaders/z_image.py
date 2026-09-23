@@ -39,6 +39,10 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     SubModelType,
 )
+from invokeai.backend.model_manager.util.qwen3_gguf import (
+    convert_qwen3_llamacpp_keys,
+    is_llamacpp_qwen3_state_dict,
+)
 from invokeai.backend.quantization.fp8_scaled import (
     QKV_SPLIT_SIDECHANNEL_SUFFIXES,
     attach_fp8_scales,
@@ -1506,12 +1510,9 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
         # via apply_custom_layers_to_model() and the partial loading cache
         sd = gguf_sd_loader(model_path, compute_dtype=compute_dtype)
 
-        # Check if this is llama.cpp format (blk.X.) or PyTorch format (model.layers.X.)
-        is_llamacpp_format = any(k.startswith("blk.") for k in sd.keys() if isinstance(k, str))
-
-        if is_llamacpp_format:
+        if is_llamacpp_qwen3_state_dict(sd):
             logger.info("Detected llama.cpp GGUF format, converting keys to PyTorch format")
-            sd = self._convert_llamacpp_to_pytorch(sd)
+            sd = convert_qwen3_llamacpp_keys(sd)
 
         # Determine Qwen model configuration from state dict
         # Count the number of layers by looking at layer keys
@@ -1667,84 +1668,6 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
             )
 
         return model
-
-    def _convert_llamacpp_to_pytorch(self, sd: dict[str, Any]) -> dict[str, Any]:
-        """Convert llama.cpp GGUF keys to PyTorch/HuggingFace format for Qwen models.
-
-        llama.cpp format:
-        - blk.X.attn_q.weight -> model.layers.X.self_attn.q_proj.weight
-        - blk.X.attn_k.weight -> model.layers.X.self_attn.k_proj.weight
-        - blk.X.attn_v.weight -> model.layers.X.self_attn.v_proj.weight
-        - blk.X.attn_output.weight -> model.layers.X.self_attn.o_proj.weight
-        - blk.X.attn_q_norm.weight -> model.layers.X.self_attn.q_norm.weight (Qwen3 QK norm)
-        - blk.X.attn_k_norm.weight -> model.layers.X.self_attn.k_norm.weight (Qwen3 QK norm)
-        - blk.X.ffn_gate.weight -> model.layers.X.mlp.gate_proj.weight
-        - blk.X.ffn_up.weight -> model.layers.X.mlp.up_proj.weight
-        - blk.X.ffn_down.weight -> model.layers.X.mlp.down_proj.weight
-        - blk.X.attn_norm.weight -> model.layers.X.input_layernorm.weight
-        - blk.X.ffn_norm.weight -> model.layers.X.post_attention_layernorm.weight
-        - token_embd.weight -> model.embed_tokens.weight
-        - output_norm.weight -> model.norm.weight
-        - output.weight -> lm_head.weight (if not tied)
-        """
-        import re
-
-        key_map = {
-            "attn_q": "self_attn.q_proj",
-            "attn_k": "self_attn.k_proj",
-            "attn_v": "self_attn.v_proj",
-            "attn_output": "self_attn.o_proj",
-            "attn_q_norm": "self_attn.q_norm",  # Qwen3 QK normalization
-            "attn_k_norm": "self_attn.k_norm",  # Qwen3 QK normalization
-            "ffn_gate": "mlp.gate_proj",
-            "ffn_up": "mlp.up_proj",
-            "ffn_down": "mlp.down_proj",
-            "attn_norm": "input_layernorm",
-            "ffn_norm": "post_attention_layernorm",
-        }
-
-        new_sd: dict[str, Any] = {}
-        blk_pattern = re.compile(r"^blk\.(\d+)\.(.+)$")
-
-        for key, value in sd.items():
-            if not isinstance(key, str):
-                new_sd[key] = value
-                continue
-
-            # Handle block layers
-            match = blk_pattern.match(key)
-            if match:
-                layer_idx = match.group(1)
-                rest = match.group(2)
-
-                # Split rest into component and suffix (e.g., "attn_q.weight" -> "attn_q", "weight")
-                parts = rest.split(".", 1)
-                component = parts[0]
-                suffix = parts[1] if len(parts) > 1 else ""
-
-                if component in key_map:
-                    new_component = key_map[component]
-                    new_key = f"model.layers.{layer_idx}.{new_component}"
-                    if suffix:
-                        new_key += f".{suffix}"
-                    new_sd[new_key] = value
-                else:
-                    # Unknown component, keep as-is with model.layers prefix
-                    new_sd[f"model.layers.{layer_idx}.{rest}"] = value
-                continue
-
-            # Handle non-block keys
-            if key == "token_embd.weight":
-                new_sd["model.embed_tokens.weight"] = value
-            elif key == "output_norm.weight":
-                new_sd["model.norm.weight"] = value
-            elif key == "output.weight":
-                new_sd["lm_head.weight"] = value
-            else:
-                # Keep other keys as-is
-                new_sd[key] = value
-
-        return new_sd
 
 
 @ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3Encoder, format=ModelFormat.SDNQQuantized)

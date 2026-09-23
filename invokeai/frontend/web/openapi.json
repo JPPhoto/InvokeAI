@@ -1636,6 +1636,9 @@
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
                     },
                     {
@@ -2088,6 +2091,9 @@
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
                     },
                     {
@@ -2538,6 +2544,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -3035,6 +3044,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -3559,6 +3571,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -4937,6 +4952,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -17535,6 +17553,9 @@
           },
           {
             "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+          },
+          {
+            "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
           },
           {
             "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -80365,6 +80386,9 @@
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
               },
               {
+                "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
               },
               {
@@ -81063,6 +81087,9 @@
                     "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
                   },
                   {
+                    "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+                  },
+                  {
                     "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
                   },
                   {
@@ -81646,6 +81673,9 @@
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
               },
               {
+                "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
               },
               {
@@ -82083,6 +82113,9 @@
               },
               {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
               },
               {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -83002,6 +83035,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                },
+                {
+                  "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                 },
                 {
                   "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -87860,6 +87896,160 @@
         ],
         "title": "Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config",
         "description": "Configuration for MiniMax H3's truncated Qwen3-VL-32B conditioning encoder single files\n(Comfy-Org ``qwen3vl_32b_minimax_h3_*.safetensors`` and mirrors).\n\nThese are NOT complete Qwen3-VL-32B checkpoints: the language stack is truncated to the 50\nlayers H3 conditions on (the file's ``minimax_h3_te`` metadata records the contract:\n\"unnormalized_hidden_after_layer_50\"), the final norm and LM head are omitted, and the\nbf16/int8-convrot repacks quantize only the 50 language layers (vision tower stays bf16).\n\nIdentified primarily by the explicit ``minimax_h3_te`` safetensors metadata; a structural\nfallback covers metadata-stripped re-uploads. ``Qwen3VLEncoder_Checkpoint_Config`` accepts only\nthe two widths it can build (2560 and 4096), so neither config can claim the other's files.\n\nThe nvfp4 repacks share this layout and are accepted here, but the loader rejects their\nquantization format early (header-only check) with a clear error - mirroring how the H3\ntransformer checkpoint config treats fp8_scaled files."
+      },
+      "Qwen3VLEncoder_GGUF_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "config_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Path",
+            "description": "Path to the config for this model, if any."
+          },
+          "base": {
+            "type": "string",
+            "const": "any",
+            "title": "Base",
+            "default": "any"
+          },
+          "type": {
+            "type": "string",
+            "const": "qwen3_vl_encoder",
+            "title": "Type",
+            "default": "qwen3_vl_encoder"
+          },
+          "format": {
+            "type": "string",
+            "const": "gguf_quantized",
+            "title": "Format",
+            "default": "gguf_quantized"
+          },
+          "variant": {
+            "$ref": "#/components/schemas/Qwen3VLVariantType",
+            "description": "Which Qwen3-VL encoder this is. The consuming architecture is fixed: Krea-2 needs the 4B, Ideogram 4 the 8B, and the two are not interchangeable."
+          },
+          "cpu_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Only",
+            "description": "Whether this model should run on CPU only"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "config_path",
+          "base",
+          "type",
+          "format",
+          "variant",
+          "cpu_only"
+        ],
+        "title": "Qwen3VLEncoder_GGUF_Config",
+        "description": "Configuration for a single-file GGUF Qwen3-VL encoder (llama.cpp, e.g.\n``Qwen3VL-4B-Instruct-Q4_K_M.gguf``).\n\nllama.cpp splits Qwen3-VL across two files: the language tower -- all Krea-2 and Ideogram 4\ncondition on -- and a companion ``mmproj-*.gguf`` holding the visual tower. Only the language\ntower is accepted here; the ``mmproj`` file is turned away with its own reason.\n\nIdentified by the ``general.architecture`` metadata, which is the only honest discriminator: a\nQwen3-VL language tower is structurally indistinguishable from a text-only Qwen3 of the same\nsize (both 36 layers at hidden 2560 for the 4B), so a shape probe would accept a stock Qwen3\nGGUF as a Krea-2 encoder. That file loads without error and produces silently wrong\nconditioning, which is precisely the failure identification exists to prevent."
       },
       "Qwen3VLEncoder_Qwen3VLEncoder_Config": {
         "properties": {
