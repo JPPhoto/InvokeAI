@@ -182,6 +182,21 @@ def test_delete_user(user_service: UserService):
     assert retrieved_user is None
 
 
+def test_delete_user_drops_references_only_of_documents_that_cascade(user_service: UserService, db: SqliteDatabase):
+    user = user_service.create(
+        UserCreateRequest(email="test@example.com", display_name="T", password="TestPassword123")
+    )
+    db._conn.executemany(
+        "INSERT INTO media_references VALUES (?, ?, 'owner', 'image', 'a.png');",
+        [(kind, user.user_id) for kind in ("project", "client_state", "workflow", "quarantined_project")],
+    )
+
+    user_service.delete(user.user_id)
+
+    rows = db._conn.execute("SELECT owner_kind FROM media_references ORDER BY owner_kind;").fetchall()
+    assert [row[0] for row in rows] == ["quarantined_project", "workflow"]
+
+
 def test_authenticate_valid_credentials(user_service: UserService):
     """Test authenticating with valid credentials."""
     user_data = UserCreateRequest(

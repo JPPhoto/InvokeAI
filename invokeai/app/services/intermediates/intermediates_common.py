@@ -5,6 +5,8 @@ from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from invokeai.app.services.shared.media_references import MediaReferenceOwnerKind
+
 IntermediatesCleanupMode = Literal["safe", "force"]
 """`safe` keeps everything a saved document still references; `force` deletes those too. Neither
 touches active work, recent uploads or durable media."""
@@ -20,12 +22,17 @@ RECENT_GRACE_SECONDS = 30 * 60
 
 PREVIEW_TTL_SECONDS = 10 * 60
 
+# An open editor refreshes its hold every few minutes; a tab that closes without releasing it
+# stops protecting its media after this long.
+BROWSER_HOLD_TTL_SECONDS = 15 * 60
+MAX_BROWSER_HOLD_NAMES = 50_000
+
 MediaName = Annotated[str, Field(min_length=1, max_length=255)]
 
 
 class IntermediatesBrowserHoldRequest(BaseModel):
-    images: list[MediaName] = Field(default_factory=list, max_length=50_000)
-    videos: list[MediaName] = Field(default_factory=list, max_length=50_000)
+    images: list[MediaName] = Field(default_factory=list, max_length=MAX_BROWSER_HOLD_NAMES)
+    videos: list[MediaName] = Field(default_factory=list, max_length=MAX_BROWSER_HOLD_NAMES)
 
 
 class IntermediatesScopeTarget(BaseModel):
@@ -57,7 +64,7 @@ class IntermediatesKindCounts(BaseModel):
     """How one media kind's intermediates split under the cleanup policy."""
 
     safe: int = Field(default=0, description="Unreferenced, inactive and old enough: deleted by either mode")
-    referenced: int = Field(default=0, description="Named by a saved project or workflow: kept by safe mode")
+    referenced: int = Field(default=0, description="Named by a saved document: kept by safe mode")
     active: int = Field(default=0, description="Produced or consumed by pending, waiting or running work: always kept")
     recent: int = Field(default=0, description="Created inside the grace window: always kept")
 
@@ -124,9 +131,15 @@ class IntermediatesImpact(BaseModel):
 class IntermediatesAffectedDocument(BaseModel):
     """A saved document a force clear would leave pointing at deleted media."""
 
-    kind: Literal["project", "workflow"]
+    kind: MediaReferenceOwnerKind = Field(
+        description=(
+            "`client_state` is the legacy editor's persisted state; `quarantined_project` is a project kept for repair"
+        )
+    )
     user_id: str
-    owner_id: str = Field(description="The project or workflow id")
+    user_display_name: Optional[str] = Field(default=None, description="The owner's display name, if known")
+    user_email: Optional[str] = Field(default=None, description="The owner's email, if known")
+    owner_id: str = Field(description="The project or workflow id, or the client state key")
     name: Optional[str] = Field(default=None, description="The document's name, if it still exists")
     references: int = Field(description="How many of the targeted items the document names")
 
@@ -144,10 +157,10 @@ class IntermediatesPreview(BaseModel):
     impact: IntermediatesImpact
     affected_documents: list[IntermediatesAffectedDocument] = Field(
         default_factory=list,
-        description="Documents a force clear would break, limited to those the caller may see",
-    )
-    affected_documents_hidden: int = Field(
-        default=0, description="Affected documents belonging to accounts the caller may not inspect"
+        description=(
+            "Documents a force clear would break. A non-administrator's force clear keeps media other accounts'"
+            " documents name, so these are always the caller's own"
+        ),
     )
 
 

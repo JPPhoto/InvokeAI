@@ -171,11 +171,6 @@ class ImageServiceABC(ABC):
         pass
 
     @abstractmethod
-    def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
-        """Gets the number of intermediate images. If user_id is provided, only counts that user's intermediates."""
-        pass
-
-    @abstractmethod
     def delete_images_by_names(self, image_names: list[str]) -> tuple[list[str], list[str]]:
         """Deletes exactly these images; returns ``(deleted_names, failed_names)``.
 

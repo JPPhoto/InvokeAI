@@ -302,11 +302,15 @@ def clear_intermediates(
 def get_intermediates_count(
     current_user: CurrentUserOrDefault,
 ) -> int:
-    """Gets the count of intermediate images. Non-admin users only see their own intermediates."""
+    """Counts the intermediate images a clear would delete. Non-admin users only see their own intermediates.
+
+    Active, recent and referenced images are left out, as `DELETE /intermediates` keeps them.
+    """
 
     try:
-        user_id = None if current_user.is_admin else current_user.user_id
-        return ApiDependencies.invoker.services.images.get_intermediates_count(user_id=user_id)
+        return ApiDependencies.invoker.services.intermediates.count_safe_images(
+            IntermediatesCaller(user_id=current_user.user_id, is_admin=current_user.is_admin)
+        )
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to get intermediates")
 

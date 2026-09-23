@@ -108,11 +108,6 @@ class ImageRecordStorageBase(ABC):
         pass
 
     @abstractmethod
-    def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
-        """Gets a count of intermediate images. If user_id is provided, only counts that user's intermediates."""
-        pass
-
-    @abstractmethod
     def save(
         self,
         image_name: str,
@@ -140,7 +135,7 @@ class ImageRecordStorageBase(ABC):
 
     @abstractmethod
     def set_file_sizes_bytes(self, sizes: dict[str, int]) -> None:
-        """Records many measured sizes in one transaction."""
+        """Records many measured sizes in one transaction, leaving rows that already have a size."""
         pass
 
     @abstractmethod

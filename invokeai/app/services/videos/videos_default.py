@@ -13,7 +13,12 @@ from invokeai.app.services.image_records.image_records_common import (
 )
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.bulk_media_delete import StagedMediaDeleteAdapter, delete_media_by_names
-from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
+from invokeai.app.services.shared.intermediate_delete import (
+    IntermediateDeleteGuard,
+    IntermediateDeleteResult,
+    JournaledDeleteAdapter,
+    delete_journaled_intermediates,
+)
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.video_files.video_files_common import (
@@ -415,27 +420,19 @@ class VideoService(VideoServiceABC):
             subfolders = records.get_subfolders(video_names)
             if not subfolders:
                 return IntermediateDeleteResult()
-
-            # Journal the live paths before deleting records. The guard decides inside that transaction
-            # which records still qualify; a promoted or newly protected video retains its files.
-            token = files.begin_delete(list(subfolders.items()))
-            try:
-                deleted = records.delete_intermediates_by_names(list(subfolders.keys()), guard=guard)
-            except Exception:
-                try:
-                    files.abandon_delete(token)
-                except Exception as cleanup_error:
-                    self.__invoker.services.logger.error(f"Failed to discard pending video deletion: {cleanup_error}")
-                raise
-            result = IntermediateDeleteResult(deleted_names=deleted)
-            try:
-                files.commit_delete(token, video_names=deleted)
-            except Exception as cleanup_error:
-                self.__invoker.services.logger.error(f"Failed to purge intermediate video files: {cleanup_error}")
-                result.purge_deferred = list(deleted)
-            for name in deleted:
-                self._on_deleted(name)
-            return result
+            return delete_journaled_intermediates(
+                subfolders,
+                guard,
+                JournaledDeleteAdapter(
+                    kind="video",
+                    begin=files.begin_delete,
+                    delete_records=lambda names, g: records.delete_intermediates_by_names(names, guard=g),
+                    abandon=files.abandon_delete,
+                    commit=lambda token, names: files.commit_delete(token, video_names=names),
+                    notify_deleted=self._on_deleted,
+                    log_error=self.__invoker.services.logger.error,
+                ),
+            )
 
     def delete_videos_by_names(self, video_names: list[str]) -> tuple[list[str], list[str]]:
         """Delete exactly these videos, returning ``(deleted, failed)``.

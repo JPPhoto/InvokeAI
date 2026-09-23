@@ -77,3 +77,8 @@ class IntermediatesServiceBase(ABC):
     def clear_all_images_now(self, caller: IntermediatesCaller) -> int:
         """The legacy instance-wide clear: every safe intermediate image, synchronously. Admin only."""
         pass
+
+    @abstractmethod
+    def count_safe_images(self, caller: IntermediatesCaller) -> int:
+        """The legacy count: the intermediate images `clear_all_images_now` would delete, within the caller's view."""
+        pass

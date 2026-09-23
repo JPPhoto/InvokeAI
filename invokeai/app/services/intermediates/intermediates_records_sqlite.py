@@ -6,8 +6,9 @@ is the same SQL whether it aggregates a summary, freezes a preview's targets or 
 - ``active``: produced or referenced by a pending, waiting or running queue item, or a
   completed child of an active root workflow.
 - ``recent``: created inside the grace window, so an in-flight browser upload is never collected
-  before it is promoted, referenced or enqueued.
-- ``referenced``: named by a saved project document or library workflow (`media_references`).
+  before it is promoted, referenced or enqueued; or a cached output whose consuming session ended
+  inside that window, since a cache hit reuses an old row.
+- ``referenced``: named by a saved document (`media_references`).
 - ``safe``: none of the above.
 
 Queue inputs are found by scanning each active item's stored session for media-name keys; the
@@ -19,15 +20,16 @@ import re
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Iterable, Literal, Optional, Sequence, cast
+from typing import Collection, Iterable, Literal, Optional, Sequence, cast
 
 from invokeai.app.services.intermediates.intermediates_common import (
+    BROWSER_HOLD_TTL_SECONDS,
     RECENT_GRACE_SECONDS,
     IntermediatesCleanupMode,
     IntermediatesKindCounts,
     IntermediatesScopeTarget,
 )
-from invokeai.app.services.shared.media_references import MediaReferences
+from invokeai.app.services.shared.media_references import IMAGE_NAME_KEYS, VIDEO_NAME_KEYS, MediaReferences
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
 
 MediaKind = Literal["image", "video"]
@@ -57,8 +59,14 @@ def _protected_queue_items_sql() -> str:
 _MAX_SQL_VARIABLES = 500
 _TARGETS_PER_STATEMENT = 200
 
-_IMAGE_NAME_RE = re.compile(r'"(?:image_name|imageName)"\s*:\s*"([^"\\]{1,255})"')
-_VIDEO_NAME_RE = re.compile(r'"(?:video_name|videoName)"\s*:\s*"([^"\\]{1,255})"')
+
+def _name_pattern(keys: frozenset[str]) -> re.Pattern[str]:
+    alternatives = "|".join(sorted(re.escape(key) for key in keys))
+    return re.compile(rf'"(?:{alternatives})"\s*:\s*"([^"\\]{{1,255}})"')
+
+
+_IMAGE_NAME_RE = _name_pattern(IMAGE_NAME_KEYS)
+_VIDEO_NAME_RE = _name_pattern(VIDEO_NAME_KEYS)
 
 _TABLES: dict[MediaKind, tuple[str, str, str]] = {
     "image": ("images", "image_name", "image_subfolder"),
@@ -109,13 +117,21 @@ class IntermediatesRecordsSqlite:
     def _prepare_session_holds(cursor: sqlite3.Cursor) -> None:
         # These holds share the cache's process lifetime. After restart the cache is empty and
         # recovered queue sessions protect their serialized inputs through the normal scan.
+        # A cache hit reuses an old row, so the recency grace a fresh output gets is counted from
+        # when the consuming session is first seen finished instead.
         cursor.execute(
             "CREATE TEMP TABLE IF NOT EXISTS intermediates_session_media "
-            "(session_id TEXT, kind TEXT, name TEXT, PRIMARY KEY(session_id, kind, name)) WITHOUT ROWID;"
+            "(session_id TEXT, kind TEXT, name TEXT, released_at TEXT, PRIMARY KEY(session_id, kind, name)) "
+            "WITHOUT ROWID;"
         )
         cursor.execute(
-            "DELETE FROM temp.intermediates_session_media WHERE session_id NOT IN "
+            "UPDATE temp.intermediates_session_media SET released_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW') "
+            "WHERE released_at IS NULL AND session_id NOT IN "
             f"(SELECT session_id FROM ({_protected_queue_items_sql()}));"
+        )
+        cursor.execute(
+            "DELETE FROM temp.intermediates_session_media "
+            f"WHERE released_at <= STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '-{RECENT_GRACE_SECONDS} seconds');"
         )
 
     def hold_cached_media(self, session_id: str, references: MediaReferences) -> bool:
@@ -144,11 +160,12 @@ class IntermediatesRecordsSqlite:
                 held.extend((session_id, kind, name) for name in ordered)
             # The existence check and hold commit share the deleting transaction's lock. Cleanup
             # either deletes first (a cache miss), or observes this active session's hold.
-            cursor.executemany("INSERT OR IGNORE INTO temp.intermediates_session_media VALUES (?, ?, ?);", held)
+            cursor.executemany("INSERT OR REPLACE INTO temp.intermediates_session_media VALUES (?, ?, ?, NULL);", held)
         return True
 
     def replace_browser_hold(self, user_id: str, lease_id: str, images: Sequence[str], videos: Sequence[str]) -> None:
         with self._db.transaction() as cursor:
+            # Indexed on expires_at, so the sweep touches only what expired.
             cursor.execute(
                 "DELETE FROM intermediates_browser_holds WHERE expires_at <= STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW');"
             )
@@ -167,7 +184,8 @@ class IntermediatesRecordsSqlite:
                     f"""--sql
                     INSERT INTO intermediates_browser_holds
                     (user_id, lease_id, media_kind, media_name, expires_at)
-                    SELECT ?, ?, ?, m.{name_column}, STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '+1 day')
+                    SELECT ?, ?, ?, m.{name_column},
+                           STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '+{BROWSER_HOLD_TTL_SECONDS} seconds')
                     FROM {table} m
                     JOIN temp.intermediates_hold_names h ON h.name = m.{name_column}
                     WHERE m.user_id = ? AND m.is_intermediate = TRUE;
@@ -286,7 +304,10 @@ class IntermediatesRecordsSqlite:
                       AND h.expires_at > STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')
                 ) THEN 'active'
                 WHEN m.created_at > STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '-{RECENT_GRACE_SECONDS} seconds')
-                    THEN 'recent'
+                    OR m.{name_column} IN (
+                        SELECT name FROM temp.intermediates_session_media
+                        WHERE kind = '{kind}' AND released_at IS NOT NULL
+                    ) THEN 'recent'
                 WHEN EXISTS (
                     SELECT 1 FROM media_references r WHERE r.media_kind = '{kind}' AND r.media_name = m.{name_column}
                 ) THEN 'referenced'
@@ -356,15 +377,17 @@ class IntermediatesRecordsSqlite:
             )
         cursor.execute(
             "INSERT OR IGNORE INTO temp.intermediates_active_media (kind, name) "
-            "SELECT kind, name FROM temp.intermediates_session_media;"
+            "SELECT kind, name FROM temp.intermediates_session_media WHERE released_at IS NULL;"
         )
 
     # endregion
 
     # region summary
 
-    def summarize(self, user_id: Optional[str]) -> dict[tuple[str, Optional[str]], dict[MediaKind, ScopeCounts]]:
-        """Aggregates every intermediate by (owner, project) and classification.
+    def summarize(
+        self, user_ids: Optional[Collection[str]]
+    ) -> dict[tuple[str, Optional[str]], dict[MediaKind, ScopeCounts]]:
+        """Aggregates the intermediates of ``user_ids`` (None: everyone) by (owner, project) and classification.
 
         Media whose project no longer exists, or that never had one, fold into the owner's
         unassigned row (``project_id`` None).
@@ -372,12 +395,19 @@ class IntermediatesRecordsSqlite:
         rows: dict[tuple[str, Optional[str]], dict[MediaKind, ScopeCounts]] = defaultdict(
             lambda: {"image": ScopeCounts(), "video": ScopeCounts()}
         )
+        owners = sorted(user_ids) if user_ids is not None else None
+        # Owner chunks partition the GROUP BY, so their rows never need merging.
+        owner_chunks: list[Optional[list[str]]] = (
+            [owners[start : start + _MAX_SQL_VARIABLES] for start in range(0, len(owners), _MAX_SQL_VARIABLES)]
+            if owners is not None
+            else [None]
+        )
         with self._db.transaction() as cursor:
             self._prepare(cursor)
-            for kind in ("image", "video"):
+            for kind, chunk in ((kind, chunk) for kind in ("image", "video") for chunk in owner_chunks):
                 table, _, _ = _TABLES[cast(MediaKind, kind)]
-                owner_filter = "AND m.user_id = ?" if user_id is not None else ""
-                params: list[object] = [user_id] if user_id is not None else []
+                owner_filter = f"AND m.user_id IN ({','.join('?' for _ in chunk)})" if chunk is not None else ""
+                params: list[object] = list(chunk) if chunk is not None else []
                 cursor.execute(
                     f"""--sql
                     SELECT user_id, project_key, cls, COUNT(*) AS n,
@@ -561,8 +591,34 @@ class IntermediatesRecordsSqlite:
                 candidates.extend(self._to_candidates(cursor.fetchall()))
         return candidates
 
+    def page_intermediates(
+        self, kind: MediaKind, *, after_rowid: int, limit: int
+    ) -> tuple[list[IntermediateCandidate], Optional[int]]:
+        """One page of every intermediate in insertion order, classified, and the rowid to resume after.
+
+        Paging by rowid classifies each row once however many are kept, where re-querying for the
+        next safe batch would re-classify every kept row in front of it. None means no rows remain.
+        """
+        table, name_column, _ = _TABLES[kind]
+        with self._db.transaction() as cursor:
+            self._prepare(cursor)
+            cursor.execute(
+                f"""--sql
+                SELECT m.rowid, m.{name_column}, {self._classification_sql(kind)}, m.file_size_bytes, m.user_id, NULL
+                FROM {table} m
+                WHERE m.is_intermediate = TRUE AND m.rowid > ?
+                ORDER BY m.rowid
+                LIMIT ?;
+                """,
+                (after_rowid, limit),
+            )
+            rows = cursor.fetchall()
+        if not rows:
+            return [], None
+        return self._to_candidates(row[1:] for row in rows), cast(int, rows[-1][0])
+
     @staticmethod
-    def _to_candidates(rows: Iterable[sqlite3.Row]) -> list[IntermediateCandidate]:
+    def _to_candidates(rows: Iterable[Sequence[object]]) -> list[IntermediateCandidate]:
         return [
             IntermediateCandidate(
                 name=cast(str, row[0]),
@@ -610,15 +666,19 @@ class IntermediatesRecordsSqlite:
         return owners
 
     def get_document_names(self, refs: Sequence[AffectedReference]) -> dict[tuple[str, str, str], str]:
+        """Names of the referencing documents; client state has none."""
+        queries = {
+            "project": "SELECT name FROM projects WHERE user_id = ? AND project_id = ?;",
+            "quarantined_project": "SELECT name FROM orphaned_projects_2026_08_06 WHERE user_id = ? AND project_id = ?;",
+            "workflow": "SELECT name FROM workflow_library WHERE workflow_id = ?;",
+        }
         names: dict[tuple[str, str, str], str] = {}
         with self._db.transaction() as cursor:
             for ref in refs:
-                if ref.owner_kind == "project":
-                    cursor.execute(
-                        "SELECT name FROM projects WHERE user_id = ? AND project_id = ?;", (ref.user_id, ref.owner_id)
-                    )
-                else:
-                    cursor.execute("SELECT name FROM workflow_library WHERE workflow_id = ?;", (ref.owner_id,))
+                query = queries.get(ref.owner_kind)
+                if query is None:
+                    continue
+                cursor.execute(query, (ref.owner_id,) if ref.owner_kind == "workflow" else (ref.user_id, ref.owner_id))
                 row = cursor.fetchone()
                 if row is not None and row[0] is not None:
                     names[(ref.owner_kind, ref.user_id, ref.owner_id)] = cast(str, row[0])

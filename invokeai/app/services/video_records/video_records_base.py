@@ -117,7 +117,7 @@ class VideoRecordStorageBase(ABC):
 
     @abstractmethod
     def set_file_sizes_bytes(self, sizes: dict[str, int]) -> None:
-        """Records many measured sizes in one transaction."""
+        """Records many measured sizes in one transaction, leaving rows that already have a size."""
         pass
 
     @abstractmethod

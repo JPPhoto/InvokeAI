@@ -103,8 +103,10 @@ class SqliteVideoRecordStorage(VideoRecordStorageBase):
             return
         with self._db.transaction() as cursor:
             try:
+                # Backfill only fills gaps: the writer's own measurement, taken after the file exists,
+                # wins over one taken before it was written.
                 cursor.executemany(
-                    "UPDATE videos SET file_size_bytes = ? WHERE video_name = ?;",
+                    "UPDATE videos SET file_size_bytes = ? WHERE video_name = ? AND file_size_bytes IS NULL;",
                     [(size, name) for name, size in sizes.items()],
                 )
             except sqlite3.Error as e:

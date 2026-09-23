@@ -27,7 +27,12 @@ from invokeai.app.services.images.images_base import ImageServiceABC
 from invokeai.app.services.images.images_common import ImageDTO, image_record_to_dto
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.bulk_media_delete import StagedMediaDeleteAdapter, delete_media_by_names
-from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
+from invokeai.app.services.shared.intermediate_delete import (
+    IntermediateDeleteGuard,
+    IntermediateDeleteResult,
+    JournaledDeleteAdapter,
+    delete_journaled_intermediates,
+)
 from invokeai.app.services.shared.pagination import OffsetPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 
@@ -593,75 +598,27 @@ class ImageService(ImageServiceABC):
                 subfolders = self.__invoker.services.image_records.get_subfolders(image_names)
                 if not subfolders:
                     return IntermediateDeleteResult()
-                return self._delete_intermediates(subfolders, guard=guard)
+                files = self.__invoker.services.image_files
+                records = self.__invoker.services.image_records
+                return delete_journaled_intermediates(
+                    subfolders,
+                    guard,
+                    JournaledDeleteAdapter(
+                        kind="image",
+                        begin=files.begin_delete,
+                        delete_records=lambda names, g: records.delete_intermediates_by_names(names, guard=g),
+                        abandon=files.abandon_delete,
+                        commit=lambda token, names: files.commit_delete(token, image_names=names),
+                        notify_deleted=self._on_deleted,
+                        log_error=self.__invoker.services.logger.error,
+                    ),
+                )
             except ImageRecordDeleteException:
                 self.__invoker.services.logger.error("Failed to delete image records")
                 raise
             except Exception as e:
                 self.__invoker.services.logger.error("Problem deleting intermediate image records and files")
                 raise e
-
-    def _delete_intermediates(
-        self, subfolders: dict[str, str], guard: Optional[IntermediateDeleteGuard]
-    ) -> IntermediateDeleteResult:
-        """Deletes the given intermediates, records first, files second, with a durable journal spanning the two.
-
-        The caller holds the image mutation lock across the snapshot through the purge so a subfolder
-        move cannot relocate files between the two and leave the purge sweeping an abandoned path.
-
-        An earlier revision staged every file, then conditionally deleted the records, then restored
-        the files of any image that had been promoted out of intermediate status mid-operation. That
-        restore is unfixably racy: while a promoted image's files sit in a staging directory, a
-        concurrent single-image or board delete can stage-empty (it finds no files to move) and then
-        remove the record; the restore then puts the files back with no record referencing them and
-        no journal to recover from — permanent orphans (JPPhoto, PR #9361).
-
-        Deleting the records first removes that hazard: the conditional DELETE is atomic and reports
-        exactly which rows it removed, and only the files of already-deleted rows are touched. A
-        promoted image is never deleted and its files are never moved, so a concurrent delete of it
-        operates on real files in the output folder and stays consistent. The journal covers the
-        window the reordering opens: if this process dies, or the filesystem fails, between the
-        commit and the purge, startup recovery finishes the purge for every journalled image whose
-        record is gone.
-        """
-        token = self.__invoker.services.image_files.begin_delete(list(subfolders.items()))
-        try:
-            # Conditional on the row still being an intermediate (and on the guard's final check): an
-            # image promoted or protected between the snapshot above and this call keeps both its
-            # record and its files. Returns exactly the names this call removed.
-            deleted_image_names = self.__invoker.services.image_records.delete_intermediates_by_names(
-                list(subfolders.keys()), guard=guard
-            )
-        except Exception:
-            try:
-                self.__invoker.services.image_files.abandon_delete(token)
-            except Exception as cleanup_error:
-                self.__invoker.services.logger.error(
-                    f"Failed to discard the intermediates delete journal: {cleanup_error}"
-                )
-            raise
-        result = IntermediateDeleteResult(deleted_names=deleted_image_names)
-        try:
-            # Only the names whose records this call removed are purged; a surviving image keeps its
-            # files. The journal still lists it, which is harmless — recovery re-checks every entry
-            # against the record store and skips the ones that survived.
-            self.__invoker.services.image_files.commit_delete(token, image_names=deleted_image_names)
-        except Exception as cleanup_error:
-            # The records are committed as gone, so the deletion succeeded. A file that could not be
-            # purged keeps its journal entry and is retried at the next startup; it must neither fail
-            # the operation nor undo the committed deletions.
-            self.__invoker.services.logger.error(f"Failed to purge intermediate image files: {cleanup_error}")
-            result.purge_deferred = list(deleted_image_names)
-        for image_name in deleted_image_names:
-            self._on_deleted(image_name)
-        return result
-
-    def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
-        try:
-            return self.__invoker.services.image_records.get_intermediates_count(user_id=user_id)
-        except Exception as e:
-            self.__invoker.services.logger.error("Problem getting intermediates count")
-            raise e
 
     def get_image_names(
         self,

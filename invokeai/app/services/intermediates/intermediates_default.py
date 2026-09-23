@@ -17,6 +17,7 @@ import queue
 import threading
 import time
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Sequence, cast
@@ -47,6 +48,7 @@ from invokeai.app.services.intermediates.intermediates_common import (
     IntermediatesSummaryTotals,
     IntermediatesUnavailableError,
 )
+from invokeai.app.services.intermediates.intermediates_measurement import IntermediatesSizeMeasurer
 from invokeai.app.services.intermediates.intermediates_records_sqlite import (
     AffectedReference,
     IntermediateCandidate,
@@ -56,18 +58,16 @@ from invokeai.app.services.intermediates.intermediates_records_sqlite import (
 )
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
-from invokeai.app.services.shared.media_references import MediaReferences
+from invokeai.app.services.shared.media_references import MediaReferenceOwnerKind, MediaReferences
 
 DELETE_BATCH_SIZE = 200
-MEASURE_BATCH_SIZE = 200
-# A row is written before its file; measuring it a moment later would record a missing file.
-MEASURE_MIN_AGE_SECONDS = 10
 MAX_RETAINED_OPERATIONS = 100
 MAX_RETAINED_TARGETS = 500_000
 MAX_ACTIVE_OPERATIONS = 8
 MAX_OPERATION_TARGETS = 50_000
 MAX_PREVIEWS = 200
-# Frozen (name, size) pairs held across every live preview; the oldest previews expire first.
+MAX_PREVIEWS_PER_CALLER = 4
+# Frozen (name, size) pairs held across every live preview; the heaviest caller gives up previews first.
 MAX_FROZEN_PREVIEW_TARGETS = 500_000
 PROGRESS_EVENT_INTERVAL_SECONDS = 1.0
 WORKER_STOP_TIMEOUT_SECONDS = 10.0
@@ -112,9 +112,8 @@ class IntermediatesService(IntermediatesServiceBase):
         self._operation_order: list[str] = []
         self._idempotency: dict[tuple[str, str], tuple[str, str]] = {}
         self._pending: "queue.Queue[str]" = queue.Queue()
-        self._measure_requested = threading.Event()
-        self._measure_due_at: Optional[float] = None
         self._stop = threading.Event()
+        self._measurer = IntermediatesSizeMeasurer(records, lambda: self._services, self._stop, self._logger)
         self._worker: Optional[threading.Thread] = None
 
     # region lifecycle
@@ -122,7 +121,7 @@ class IntermediatesService(IntermediatesServiceBase):
     def start(self, invoker: Invoker) -> None:
         self._invoker = invoker
         self._stop.clear()
-        self._measure_due_at = None
+        self._measurer.reset()
         with self._lock:
             for user_id, preview_id, key, state in self._records.load_operations():
                 dto = IntermediatesOperation.model_validate(state["dto"])
@@ -208,7 +207,7 @@ class IntermediatesService(IntermediatesServiceBase):
         project_id: Optional[str] = None,
     ) -> IntermediatesSummary:
         owner_filter = self._resolve_owner_filter(caller, owner_id)
-        aggregated = self._records.summarize(owner_filter)
+        aggregated = self._records.summarize([owner_filter] if owner_filter is not None else None)
         projects = self._records.get_projects(owner_filter)
         users = self._services.users.get_many([user_id for user_id, _ in aggregated])
 
@@ -255,7 +254,7 @@ class IntermediatesService(IntermediatesServiceBase):
 
         measuring = self._records.has_unmeasured_intermediates()
         if measuring:
-            self._measure_requested.set()
+            self._measurer.request()
             self._ensure_worker()
 
         return IntermediatesSummary(
@@ -292,7 +291,7 @@ class IntermediatesService(IntermediatesServiceBase):
         scope = request.scope
         allowed = self._authorize_scope(scope, caller)
         candidates, has_more_eligible = self._collect_candidates(scope, request.mode)
-        counts = self._records.summarize(scope.user_id if scope.kind == "owner" else None)
+        counts = self._records.summarize(allowed)
         if scope.kind == "selection":
             selected_rows = {(target.user_id, target.project_id) for target in scope.targets}
             counts = {row: kinds for row, kinds in counts.items() if row in selected_rows}
@@ -310,22 +309,28 @@ class IntermediatesService(IntermediatesServiceBase):
                         f"keep_referenced_{suffix}",
                         getattr(impact, f"keep_referenced_{suffix}") + scope_counts.referenced,
                     )
+        # Force mode confirms the documents it breaks. Another account's document is never the
+        # caller's to break unless the caller administers the instance, so its media is kept.
+        confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]] = {"image": {}, "video": {}}
         targets: dict[MediaKind, list[tuple[str, Optional[int]]]] = {"image": [], "video": []}
         for kind in ("image", "video"):
             media_kind = cast(MediaKind, kind)
-            for candidate in candidates[media_kind]:
-                self._tally(impact, media_kind, candidate, request.mode, targets)
-
-        confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]] = {"image": {}, "video": {}}
-        affected: list[IntermediatesAffectedDocument] = []
-        hidden = 0
-        if request.mode == "force":
-            for kind in ("image", "video"):
-                media_kind = cast(MediaKind, kind)
-                confirmed_references[media_kind] = self._records.reference_owners(
-                    media_kind, [name for name, _ in targets[media_kind]]
+            owners: dict[str, set[tuple[str, str, str]]] = {}
+            if request.mode == "force":
+                owners = self._records.reference_owners(
+                    media_kind, [c.name for c in candidates[media_kind] if c.classification == "referenced"]
                 )
-            affected, hidden = self._describe_affected(confirmed_references, caller)
+            for candidate in candidates[media_kind]:
+                references = owners.get(candidate.name, set())
+                deletable = candidate.classification == "safe" or (
+                    request.mode == "force"
+                    and candidate.classification == "referenced"
+                    and (caller.is_admin or all(user_id == caller.user_id for _, user_id, _ in references))
+                )
+                self._tally(impact, media_kind, candidate, deletable, targets)
+                if deletable and references:
+                    confirmed_references[media_kind][candidate.name] = references
+        affected = self._describe_affected(confirmed_references) if request.mode == "force" else []
 
         created = _now()
         dto = IntermediatesPreview(
@@ -338,7 +343,6 @@ class IntermediatesService(IntermediatesServiceBase):
             impact=impact,
             has_more_eligible=has_more_eligible,
             affected_documents=affected,
-            affected_documents_hidden=hidden,
         )
         with self._lock:
             self._previews[dto.preview_id] = _Preview(
@@ -348,7 +352,7 @@ class IntermediatesService(IntermediatesServiceBase):
                 allowed_user_ids=allowed,
                 confirmed_references=confirmed_references,
             )
-            self._expire_previews_locked(created)
+            self._expire_previews_locked(created, keep=dto.preview_id)
         return dto
 
     def _authorize_scope(self, scope: IntermediatesScope, caller: IntermediatesCaller) -> Optional[frozenset[str]]:
@@ -406,11 +410,10 @@ class IntermediatesService(IntermediatesServiceBase):
         impact: IntermediatesImpact,
         kind: MediaKind,
         candidate: IntermediateCandidate,
-        mode: IntermediatesCleanupMode,
+        deletable: bool,
         targets: dict[MediaKind, list[tuple[str, Optional[int]]]],
     ) -> None:
         suffix = "images" if kind == "image" else "videos"
-        deletable = candidate.classification == "safe" or (mode == "force" and candidate.classification == "referenced")
         if deletable:
             setattr(impact, f"delete_{suffix}", getattr(impact, f"delete_{suffix}") + 1)
             if candidate.file_size_bytes is None:
@@ -423,10 +426,8 @@ class IntermediatesService(IntermediatesServiceBase):
             setattr(impact, attribute, getattr(impact, attribute) + 1)
 
     def _describe_affected(
-        self,
-        confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]],
-        caller: IntermediatesCaller,
-    ) -> tuple[list[IntermediatesAffectedDocument], int]:
+        self, confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]]
+    ) -> list[IntermediatesAffectedDocument]:
         counts: dict[tuple[str, str, str], int] = {}
         for owners in confirmed_references.values():
             for refs_for_name in owners.values():
@@ -436,34 +437,53 @@ class IntermediatesService(IntermediatesServiceBase):
             AffectedReference(kind, user_id, owner_id, count) for (kind, user_id, owner_id), count in counts.items()
         ]
         names = self._records.get_document_names(refs)
-        visible: list[IntermediatesAffectedDocument] = []
-        hidden = 0
-        for ref in refs:
-            if not caller.is_admin and ref.user_id != caller.user_id:
-                hidden += 1
-                continue
-            visible.append(
-                IntermediatesAffectedDocument(
-                    kind=cast(str, ref.owner_kind),  # type: ignore[arg-type]
-                    user_id=ref.user_id,
-                    owner_id=ref.owner_id,
-                    name=names.get((ref.owner_kind, ref.user_id, ref.owner_id)),
-                    references=ref.references,
-                )
+        users = self._services.users.get_many(sorted({ref.user_id for ref in refs}))
+        documents = [
+            IntermediatesAffectedDocument(
+                kind=cast(MediaReferenceOwnerKind, ref.owner_kind),
+                user_id=ref.user_id,
+                user_display_name=users[ref.user_id].display_name if ref.user_id in users else None,
+                user_email=users[ref.user_id].email if ref.user_id in users else None,
+                owner_id=ref.owner_id,
+                name=names.get((ref.owner_kind, ref.user_id, ref.owner_id)),
+                references=ref.references,
             )
-        visible.sort(key=lambda doc: (doc.kind, (doc.name or "").casefold(), doc.owner_id))
-        return visible, hidden
+            for ref in refs
+        ]
+        documents.sort(key=lambda doc: (doc.kind, (doc.name or "").casefold(), doc.owner_id))
+        return documents
 
-    def _expire_previews_locked(self, now: datetime) -> None:
-        expired = [pid for pid, preview in self._previews.items() if preview.dto.expires_at <= now]
-        for pid in expired:
+    def _expire_previews_locked(self, now: datetime, *, keep: Optional[str] = None) -> None:
+        """Drops expired previews, then enforces the caps; ``keep`` (the one just created) always survives."""
+        for pid in [pid for pid, preview in self._previews.items() if preview.dto.expires_at <= now]:
             del self._previews[pid]
-        frozen = sum(len(p.targets["image"]) + len(p.targets["video"]) for p in self._previews.values())
-        # Oldest first; the newest preview always survives so the caller who just asked can confirm.
-        while len(self._previews) > 1 and (len(self._previews) > MAX_PREVIEWS or frozen > MAX_FROZEN_PREVIEW_TARGETS):
-            oldest = next(iter(self._previews))
-            frozen -= len(self._previews[oldest].targets["image"]) + len(self._previews[oldest].targets["video"])
-            del self._previews[oldest]
+        by_caller: dict[str, list[str]] = defaultdict(list)
+        for pid, preview in self._previews.items():
+            by_caller[preview.caller_user_id].append(pid)
+        for pids in by_caller.values():
+            for pid in [pid for pid in pids if pid != keep][: max(0, len(pids) - MAX_PREVIEWS_PER_CALLER)]:
+                del self._previews[pid]
+
+        # Past the global caps, the caller holding the most frozen targets gives up its oldest
+        # preview first, so no account can evict another's pending confirmation by previewing.
+        frozen: dict[str, int] = defaultdict(int)
+        for preview in self._previews.values():
+            frozen[preview.caller_user_id] += len(preview.targets["image"]) + len(preview.targets["video"])
+        keep_caller = self._previews[keep].caller_user_id if keep in self._previews else None
+        while len(self._previews) > MAX_PREVIEWS or sum(frozen.values()) > MAX_FROZEN_PREVIEW_TARGETS:
+            evictable = [pid for pid in self._previews if pid != keep]
+            if not evictable:
+                break
+            victim = max(
+                evictable,
+                key=lambda pid: (
+                    frozen[self._previews[pid].caller_user_id],
+                    # On a tie, the caller whose request overflowed the cap pays for it.
+                    self._previews[pid].caller_user_id == keep_caller,
+                ),
+            )
+            preview = self._previews.pop(victim)
+            frozen[preview.caller_user_id] -= len(preview.targets["image"]) + len(preview.targets["video"])
 
     # endregion
 
@@ -711,16 +731,23 @@ class IntermediatesService(IntermediatesServiceBase):
     def clear_all_images_now(self, caller: IntermediatesCaller) -> int:
         if not caller.is_admin:
             raise IntermediatesScopeForbiddenError("Only admins can clear all intermediates")
-        candidates = self._records.list_candidates("image", user_id=None, targets=None)
-        names = [c.name for c in candidates if c.classification == "safe"]
         guard = self._records.make_delete_guard("image", mode="safe", allowed_user_ids=None)
         deleted = 0
-        for start in range(0, len(names), DELETE_BATCH_SIZE):
-            result = self._services.images.delete_intermediates_by_names(
-                names[start : start + DELETE_BATCH_SIZE], guard
+        after_rowid: Optional[int] = 0
+        # Bounded pages keep memory flat however many intermediates exist; the guard re-checks each
+        # batch on the deleting transaction.
+        while after_rowid is not None:
+            page, after_rowid = self._records.page_intermediates(
+                "image", after_rowid=after_rowid, limit=DELETE_BATCH_SIZE
             )
-            deleted += len(result.deleted_names)
+            names = [candidate.name for candidate in page if candidate.classification == "safe"]
+            if names:
+                deleted += len(self._services.images.delete_intermediates_by_names(names, guard).deleted_names)
         return deleted
+
+    def count_safe_images(self, caller: IntermediatesCaller) -> int:
+        counts = self._records.summarize(None if caller.is_admin else [caller.user_id])
+        return sum(kinds["image"].counts.safe for kinds in counts.values())
 
     # endregion
 
@@ -731,10 +758,8 @@ class IntermediatesService(IntermediatesServiceBase):
             try:
                 operation_id = self._pending.get(timeout=0.5)
             except queue.Empty:
-                if self._measure_requested.is_set() or (
-                    self._measure_due_at is not None and time.monotonic() >= self._measure_due_at
-                ):
-                    self._measure_once()
+                if self._measurer.is_due():
+                    self._measurer.measure_once()
                 continue
             if not operation_id:
                 continue
@@ -887,58 +912,5 @@ class IntermediatesService(IntermediatesServiceBase):
             self._prune_operations_locked()
             snapshot = operation.dto.model_copy(deep=True)
         self._services.events.emit_intermediates_operation_changed(snapshot)
-
-    def _measure_once(self) -> None:
-        """Measures a bounded batch of unmeasured intermediates; clears the request when none remain."""
-        self._measure_requested.clear()
-        self._measure_due_at = None
-        image_moves = getattr(self._services, "image_moves", None)
-        if image_moves is not None and image_moves.is_maintenance_active():
-            # Files are being relocated; a measurement now could record a missing file as empty.
-            return
-        try:
-            remaining = False
-            retry_young = False
-            for kind, files, records in (
-                ("image", self._services.image_files, self._services.image_records),
-                ("video", self._services.video_files, self._services.video_records),
-            ):
-                pending = self._records.next_unmeasured(
-                    cast(MediaKind, kind),
-                    MEASURE_BATCH_SIZE,
-                    min_age_seconds=MEASURE_MIN_AGE_SECONDS,
-                )
-                sizes: dict[str, int] = {}
-                unmeasurable: list[str] = []
-                for name, subfolder in pending:
-                    if self._stop.is_set():
-                        return
-                    try:
-                        size = files.get_file_size_bytes(name, subfolder)
-                    except Exception as error:
-                        self._logger.warning(f"Could not measure {kind} {name}; skipping it until restart: {error}")
-                        unmeasurable.append(name)
-                        continue
-                    # A missing file occupies nothing; recording 0 is a measurement, not a guess, and
-                    # keeps the row from being re-measured forever.
-                    sizes[name] = size if size is not None else 0
-                self._records.mark_unmeasurable(cast(MediaKind, kind), unmeasurable)
-                # One transaction per batch: a library of hundreds of thousands of intermediates is
-                # measured in a few thousand commits rather than one per file.
-                records.set_file_sizes_bytes(sizes)
-                if len(pending) == MEASURE_BATCH_SIZE:
-                    remaining = True
-                elif self._records.next_unmeasured(cast(MediaKind, kind), 1):
-                    # All older rows were measured or skipped; a new row still needs its file
-                    # to be written before measuring it. Wake after the minimum age has elapsed.
-                    retry_young = True
-            if remaining:
-                self._measure_requested.set()
-                # Yield the database lock between batches so generation and saves keep flowing.
-                time.sleep(0.05)
-            elif retry_young:
-                self._measure_due_at = time.monotonic() + MEASURE_MIN_AGE_SECONDS
-        except Exception as error:
-            self._logger.warning(f"Measuring intermediate file sizes failed; will retry on demand: {error}")
 
     # endregion

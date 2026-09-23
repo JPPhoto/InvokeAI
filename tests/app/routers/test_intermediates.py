@@ -232,7 +232,8 @@ def test_legacy_clear_keeps_its_shape_and_the_safety_policy(
     _seed_intermediate(mock_invoker, "referenced.png", user1)
     mock_invoker.services.project_records.create(user1, "P", {"imageName": "referenced.png"})
 
-    assert client.get("/api/v1/images/intermediates", headers=_auth(user1_token)).json() == 2
+    # The count is what the clear would delete, so the legacy button settles at zero.
+    assert client.get("/api/v1/images/intermediates", headers=_auth(user1_token)).json() == 1
     assert (
         client.delete("/api/v1/images/intermediates", headers=_auth(user1_token)).status_code
         == status.HTTP_403_FORBIDDEN
@@ -241,4 +242,5 @@ def test_legacy_clear_keeps_its_shape_and_the_safety_policy(
     cleared = client.delete("/api/v1/images/intermediates", headers=_auth(admin_token))
     assert cleared.status_code == 200
     assert cleared.json() == 1
-    assert client.get("/api/v1/images/intermediates", headers=_auth(user1_token)).json() == 1
+    assert client.get("/api/v1/images/intermediates", headers=_auth(user1_token)).json() == 0
+    assert mock_invoker.services.image_records.get("referenced.png").is_intermediate

@@ -5995,7 +5995,7 @@
       "get": {
         "tags": ["images"],
         "summary": "Get Intermediates Count",
-        "description": "Gets the count of intermediate images. Non-admin users only see their own intermediates.",
+        "description": "Counts the intermediate images a clear would delete. Non-admin users only see their own intermediates.\n\nActive, recent and referenced images are left out, as `DELETE /intermediates` keeps them.",
         "operationId": "get_intermediates_count",
         "responses": {
           "200": {
@@ -49225,17 +49225,42 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": ["project", "workflow"],
-            "title": "Kind"
+            "enum": ["project", "workflow", "client_state", "quarantined_project"],
+            "title": "Kind",
+            "description": "`client_state` is the legacy editor's persisted state; `quarantined_project` is a project kept for repair"
           },
           "user_id": {
             "type": "string",
             "title": "User Id"
           },
+          "user_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Display Name",
+            "description": "The owner's display name, if known"
+          },
+          "user_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Email",
+            "description": "The owner's email, if known"
+          },
           "owner_id": {
             "type": "string",
             "title": "Owner Id",
-            "description": "The project or workflow id"
+            "description": "The project or workflow id, or the client state key"
           },
           "name": {
             "anyOf": [
@@ -49355,7 +49380,7 @@
           "referenced": {
             "type": "integer",
             "title": "Referenced",
-            "description": "Named by a saved project or workflow: kept by safe mode",
+            "description": "Named by a saved document: kept by safe mode",
             "default": 0
           },
           "active": {
@@ -49655,13 +49680,7 @@
             },
             "type": "array",
             "title": "Affected Documents",
-            "description": "Documents a force clear would break, limited to those the caller may see"
-          },
-          "affected_documents_hidden": {
-            "type": "integer",
-            "title": "Affected Documents Hidden",
-            "description": "Affected documents belonging to accounts the caller may not inspect",
-            "default": 0
+            "description": "Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own"
           }
         },
         "type": "object",

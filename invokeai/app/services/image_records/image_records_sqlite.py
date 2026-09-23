@@ -249,8 +249,10 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
             return
         with self._db.transaction() as cursor:
             try:
+                # Backfill only fills gaps: the writer's own measurement, taken after the file exists,
+                # wins over one taken before it was written.
                 cursor.executemany(
-                    "UPDATE images SET file_size_bytes = ? WHERE image_name = ?;",
+                    "UPDATE images SET file_size_bytes = ? WHERE image_name = ? AND file_size_bytes IS NULL;",
                     [(size, name) for name, size in sizes.items()],
                 )
             except sqlite3.Error as e:
@@ -458,17 +460,6 @@ class SqliteImageRecordStorage(ImageRecordStorageBase):
 
             except sqlite3.Error as e:
                 raise ImageRecordDeleteException from e
-
-    def get_intermediates_count(self, user_id: Optional[str] = None) -> int:
-        with self._db.transaction() as cursor:
-            query = "SELECT COUNT(*) FROM images WHERE is_intermediate = TRUE"
-            params: list[str] = []
-            if user_id is not None:
-                query += " AND user_id = ?"
-                params.append(user_id)
-            cursor.execute(query, params)
-            count = cast(int, cursor.fetchone()[0])
-        return count
 
     def get_subfolders(self, image_names: list[str]) -> dict[str, str]:
         subfolders: dict[str, str] = {}

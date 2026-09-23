@@ -1295,7 +1295,9 @@ export type paths = {
         };
         /**
          * Get Intermediates Count
-         * @description Gets the count of intermediate images. Non-admin users only see their own intermediates.
+         * @description Counts the intermediate images a clear would delete. Non-admin users only see their own intermediates.
+         *
+         *     Active, recent and referenced images are left out, as `DELETE /intermediates` keeps them.
          */
         get: operations["get_intermediates_count"];
         put?: never;
@@ -20628,14 +20630,25 @@ export type components = {
         IntermediatesAffectedDocument: {
             /**
              * Kind
+             * @description `client_state` is the legacy editor's persisted state; `quarantined_project` is a project kept for repair
              * @enum {string}
              */
-            kind: "project" | "workflow";
+            kind: "project" | "workflow" | "client_state" | "quarantined_project";
             /** User Id */
             user_id: string;
             /**
+             * User Display Name
+             * @description The owner's display name, if known
+             */
+            user_display_name?: string | null;
+            /**
+             * User Email
+             * @description The owner's email, if known
+             */
+            user_email?: string | null;
+            /**
              * Owner Id
-             * @description The project or workflow id
+             * @description The project or workflow id, or the client state key
              */
             owner_id: string;
             /**
@@ -20724,7 +20737,7 @@ export type components = {
             safe?: number;
             /**
              * Referenced
-             * @description Named by a saved project or workflow: kept by safe mode
+             * @description Named by a saved document: kept by safe mode
              * @default 0
              */
             referenced?: number;
@@ -20934,15 +20947,9 @@ export type components = {
             impact: components["schemas"]["IntermediatesImpact"];
             /**
              * Affected Documents
-             * @description Documents a force clear would break, limited to those the caller may see
+             * @description Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own
              */
             affected_documents?: components["schemas"]["IntermediatesAffectedDocument"][];
-            /**
-             * Affected Documents Hidden
-             * @description Affected documents belonging to accounts the caller may not inspect
-             * @default 0
-             */
-            affected_documents_hidden?: number;
         };
         /** IntermediatesPreviewRequest */
         IntermediatesPreviewRequest: {
