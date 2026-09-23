@@ -267,7 +267,7 @@ def _get_source_activation_dependencies(
     if key in state._if_activation_dependencies_by_source:
         return state._if_activation_dependencies_by_source[key]
 
-    if not _can_use_fresh_flat_if_activation(state):
+    if not state._can_use_fresh_flat_if_activation():
         return state._if_activation_controller().get_source_dependencies(source_node_id, iteration_path)
 
     dependencies = tuple(

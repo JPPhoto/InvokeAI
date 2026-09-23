@@ -205,8 +205,11 @@ class BaseInvocation(ABC, BaseModel):
         return cls.model_fields["type"].default
 
     @classmethod
+    @lru_cache(maxsize=None)
     def get_output_annotation(cls) -> Type[BaseInvocationOutput]:
         """Gets the invocation's output annotation (i.e. the return annotation of its `invoke()` method)."""
+        # Cached per class: the execution engine asks for this on every node completion, and
+        # `inspect.signature` is far too slow for that.
         return signature(cls.invoke).return_annotation
 
     @staticmethod
