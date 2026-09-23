@@ -303,16 +303,19 @@ describe('ImageContextMenu new canvas from image', () => {
     const images = Array.from({ length: count }, (_, index) => image(`image-${index}.png`));
     await renderMenu(actions, images);
 
-    // A nested menu opens from a mouse hover on its trigger item, after zag's open delay.
+    // A nested menu opens from a mouse hover on its trigger item, after zag's open delay. Waited for rather than
+    // slept through: on a loaded CI runner the submenu can take longer than any fixed delay to appear.
     const trigger = getMenuItem('widgets.canvas.import.newFromImage');
     await interact(() =>
       trigger.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
     );
-    await act(
+    await settleUntil(
       () =>
-        new Promise<void>((resolve) => {
-          globalThis.setTimeout(resolve, 300);
-        })
+        Array.from(document.querySelectorAll('[role="menuitem"]')).some(
+          (candidate) => candidate.textContent?.trim() === 'widgets.canvas.import.newCanvasFromImage'
+        ),
+      'the new-from-image submenu to open',
+      5000
     );
     await interact(() => getMenuItem('widgets.canvas.import.newCanvasFromImage').click());
 
