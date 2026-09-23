@@ -738,6 +738,37 @@ def test_keep_in_fp32_modules_are_not_cast():
     assert model.attn.weight.dtype == torch.float8_e4m3fn
 
 
+class TestComputeDtypeIsAlwaysAFloat:
+    """The compute dtype is read off the model's parameters, and not every parameter is arithmetic.
+
+    `_is_quantized_param` exists because a checkpoint quantized by an external tool can reach the
+    cast with packed `uint8` weights that `_should_use_fp8`'s format check cannot see. Taking the
+    *first* parameter's dtype would record one of those as the dtype the model computes in: the
+    pre-hook would widen every other layer to `uint8`, and `get_model_compute_dtype` would hand
+    `uint8` to the denoise loop. Finite garbage, nothing logged.
+    """
+
+    def _model(self, leading: torch.Tensor) -> torch.nn.Module:
+        model = torch.nn.Module()
+        # Registered first, so `model.parameters()` yields it first.
+        model.register_parameter("packed", torch.nn.Parameter(leading, requires_grad=False))
+        model.add_module("attn", torch.nn.Linear(4, 4).to(torch.bfloat16))
+        return model
+
+    def test_a_packed_leading_param_is_not_taken_as_the_compute_dtype(self) -> None:
+        """A leading *float8* param is covered by a different guard — `count_fp8_weights` returns
+        before the dtype is derived at all — so only the packed-integer case reaches this code."""
+        loader = _make_loader(device="cuda")
+        model = self._model(torch.zeros(4, 4, dtype=torch.uint8))
+
+        with patch.object(ModelLoader, "_should_use_fp8", return_value=True):
+            loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
+
+        assert getattr(model, FP8_COMPUTE_DTYPE_ATTR) is torch.bfloat16
+        # And the cast actually ran against that dtype rather than skipping the model.
+        assert model.attn.weight.dtype is torch.float8_e4m3fn
+
+
 class TestAlreadyFp8StorageGuard:
     """FP8 storage must not run over weights that are already fp8 and headed for the tensor cores.
 

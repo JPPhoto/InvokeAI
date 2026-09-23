@@ -542,10 +542,19 @@ class ModelLoader(ModelLoaderBase):
 
         # Detect the model's current dtype to use as compute dtype, since models
         # (e.g. Flux) may require a specific dtype (bf16) that differs from the global torch dtype (fp16).
+        #
+        # The first *floating-point* param, and never a float8 one. A bare `next(model.parameters())`
+        # reads whatever comes first, and `_is_quantized_param` below exists precisely because a
+        # checkpoint quantized by an external tool can reach here with packed `uint8` weights. One of
+        # those as the leading param would be recorded as the compute dtype, so the cast hooks would
+        # widen every other layer to `uint8` and `get_model_compute_dtype` would hand `uint8` to the
+        # denoise loop — finite garbage, nothing logged. A float8 leading param is skipped for the
+        # same reason `set_fp8_compute_dtype` rejects one: it is storage, not arithmetic.
         if isinstance(model, torch.nn.Module):
-            first_param = next(model.parameters(), None)
-            if first_param is not None:
-                compute_dtype = first_param.dtype
+            compute_dtype = next(
+                (p.dtype for p in model.parameters() if p.is_floating_point() and p.dtype not in FP8_STORAGE_DTYPES),
+                compute_dtype,
+            )
 
         # We use our own hook-based path for every nn.Module — including diffusers ModelMixin —
         # rather than `model.enable_layerwise_casting()`. Diffusers' LayerwiseCastingHook installs

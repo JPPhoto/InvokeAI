@@ -1111,6 +1111,11 @@ def dequantize_weight(weight: torch.Tensor, weight_scale: torch.Tensor | None, d
     out = weight.to(dtype)
     if weight_scale is None:
         return out
+    # Refuse an MX grid here, before the cast. `expand_weight_scale` makes the same check, but it
+    # keys on the scale's dtype, and casting to the compute dtype is exactly what erases that
+    # evidence — so the guard below would be unreachable on this path and an undecoded exponent
+    # byte would be multiplied in as a linear factor (~127x, and paired with the wrong rows).
+    reject_undecoded_mx_scale("<weight_scale>", weight_scale)
     scale = weight_scale.to(device=out.device, dtype=dtype)
     return out * expand_weight_scale(out, scale)
 

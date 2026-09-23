@@ -546,6 +546,18 @@ class TestDequantize:
         dequantize_fp8_scaled(sd, layers)
         assert torch.equal(sd["lin.weight"], dequantize_weight(q, scale, torch.bfloat16))
 
+    @pytest.mark.parametrize("grid_dtype", [torch.uint8, getattr(torch, "float8_e8m0fnu", torch.uint8)])
+    def test_an_undecoded_mx_grid_is_refused_not_multiplied(self, grid_dtype: torch.dtype):
+        """`reject_undecoded_mx_scale` keys on the scale's dtype, and this is the one caller that
+        used to cast the scale to the compute dtype first — which erases the evidence. An exponent
+        byte multiplied in as a linear factor is ~127x, paired with the wrong rows besides: the
+        finite-but-wrong noise the whole MX decode exists to prevent."""
+        q = torch.randn(256, 8, dtype=torch.bfloat16).to(FP8_DTYPE)
+        grid = torch.full((256, 8), 127, dtype=grid_dtype)
+
+        with pytest.raises(NotImplementedError, match="MXFP8"):
+            dequantize_weight(q, grid, torch.bfloat16)
+
 
 class TestAttach:
     def test_registers_non_persistent_buffers(self):
