@@ -1870,26 +1870,30 @@ export const createDurableSyncedWorkbenchPersistence = (
           throw error;
         }
       }),
-    ensureProjectOnServer: (project) =>
-      enqueue(async () => {
-        const assertProjectIdentityCurrent = () => {
-          assertNotCleared();
-          assertOwner();
-          if (deletedProjectIds.has(project.id) || retargetedProjects.has(project.id)) {
-            throw new ProjectFlushError('superseded');
-          }
-          if (conflicts.get(project.id)?.kind === 'deleted') {
-            throw new ProjectFlushError('conflicted');
-          }
-        };
+    ensureProjectOnServer: (project) => {
+      const assertProjectIdentityCurrent = () => {
+        assertNotCleared();
+        assertOwner();
+        if (deletedProjectIds.has(project.id) || retargetedProjects.has(project.id)) {
+          throw new ProjectFlushError('superseded');
+        }
+        if (conflicts.get(project.id)?.kind === 'deleted') {
+          throw new ProjectFlushError('conflicted');
+        }
+      };
+      // Upload provenance only needs the project's acknowledged identity; later edits stay with autosave. An
+      // acknowledged project answers at once instead of waiting behind every queued save.
+      if (syncEntries.has(project.id)) {
+        return Promise.resolve().then(assertProjectIdentityCurrent);
+      }
+      return enqueue(async () => {
         assertProjectIdentityCurrent();
-        // Upload provenance only needs the project's acknowledged identity. Subsequent edits
-        // remain with autosave, avoiding a document serialization/write per paint upload.
         if (!syncEntries.has(project.id)) {
           assertProjectFlushed(await pushProject(project));
         }
         assertProjectIdentityCurrent();
-      }),
+      });
+    },
     flushProjectToServer: (project) => {
       if (isTerminallyCleared) {
         return Promise.reject(new Error('Workbench persistence was cleared and must be reloaded.'));

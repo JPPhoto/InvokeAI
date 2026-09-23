@@ -54,8 +54,11 @@ describe('project-owned canvas uploads', () => {
     }
   });
 
-  it('does not upload when project creation fails, and allows a later retry', async () => {
-    const ensure = vi.fn().mockRejectedValueOnce(new Error('creation failed')).mockResolvedValue(undefined);
+  it('uploads without provenance when the server has not accepted the project, and with it once it has', async () => {
+    const ensure = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('creation failed'), { reason: 'unsynced' }))
+      .mockResolvedValue(undefined);
     const engine = createEngine(ensure);
     const upload = vi.spyOn(canvasApplicationPort, 'uploadImage').mockResolvedValue({
       height: 8,
@@ -63,10 +66,25 @@ describe('project-owned canvas uploads', () => {
       width: 8,
     });
     try {
-      await expect(getCanvasOperations(engine).uploadIntermediate(new Blob())).rejects.toThrow('creation failed');
-      expect(upload).not.toHaveBeenCalled();
       await getCanvasOperations(engine).uploadIntermediate(new Blob());
-      expect(upload).toHaveBeenCalledOnce();
+      expect(upload.mock.calls[0]![1]).toMatchObject({ isIntermediate: true, projectId: undefined });
+      await getCanvasOperations(engine).uploadIntermediate(new Blob());
+      expect(upload.mock.calls[1]![1]).toMatchObject({ isIntermediate: true, projectId: engine.projectId });
+    } finally {
+      engine.lifecycle.dispose();
+    }
+  });
+
+  it('does not upload for a project that closed while it waited', async () => {
+    const engine = createEngine(() =>
+      Promise.reject(new DOMException('The canvas project is no longer open.', 'AbortError'))
+    );
+    const upload = vi.spyOn(canvasApplicationPort, 'uploadImage');
+    try {
+      await expect(getCanvasOperations(engine).uploadIntermediate(new Blob())).rejects.toMatchObject({
+        name: 'AbortError',
+      });
+      expect(upload).not.toHaveBeenCalled();
     } finally {
       engine.lifecycle.dispose();
     }

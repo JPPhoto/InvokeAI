@@ -197,6 +197,19 @@ describe('durable project persistence', () => {
     expect(ready).toHaveBeenCalledOnce();
   });
 
+  it('answers an acknowledged project without waiting behind queued saves of other projects', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const other = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    await service.ensureProjectOnServer(project);
+    vi.mocked(api.createProject).mockReturnValueOnce(new Promise<never>(() => {}));
+    void service.ensureProjectOnServer(other).catch(() => undefined);
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledTimes(2));
+
+    await expect(service.ensureProjectOnServer(project)).resolves.toBeUndefined();
+  });
+
   it('fences an upload when its project is deleted while creation is pending', async () => {
     const api = createApi();
     const project = createDraftProject([]);

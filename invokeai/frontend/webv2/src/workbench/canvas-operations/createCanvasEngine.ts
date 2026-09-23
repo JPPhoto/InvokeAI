@@ -20,7 +20,10 @@ export interface CanvasEngineOptions extends Omit<
   CoreCanvasEngineOptions,
   'uploadImage' | 'uploadIntermediateImage' | 'getMainModelBase'
 > {
-  /** Waits for the owning project identity to be acknowledged by the server before uploading. */
+  /**
+   * Waits for the owning project identity to be acknowledged by the server, so uploads can carry it as provenance.
+   * Rejects with an `AbortError` when the project closed.
+   */
   ensureProjectOnServer(): Promise<void>;
   getMainModelBase?: () => string | null;
   selectObjectDeps?: {
@@ -50,6 +53,19 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
   const { ensureProjectOnServer, filterDeps, selectObjectDeps, ...coreOptions } = options;
   const owner = captureAccountScope();
   const uploadLifetime = new AbortController();
+  const resolveUploadProjectId = async (): Promise<string | undefined> => {
+    try {
+      await ensureProjectOnServer();
+      return options.projectId;
+    } catch (error) {
+      // A project the server has not accepted (offline, conflicted, deleted elsewhere) costs the upload its
+      // provenance, never the edit; only a closed project stops it.
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw error;
+      }
+      return undefined;
+    }
+  };
   const uploadImage: typeof canvasApplicationPort.uploadImage = async (blob, uploadOptions) => {
     assertAccountScopeCurrent(owner);
     const signal = AbortSignal.any([
@@ -58,10 +74,10 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
       ...(uploadOptions?.signal ? [uploadOptions.signal] : []),
     ]);
     signal.throwIfAborted();
-    await ensureProjectOnServer();
+    const projectId = await resolveUploadProjectId();
     assertAccountScopeCurrent(owner);
     signal.throwIfAborted();
-    return canvasApplicationPort.uploadImage(blob, { ...uploadOptions, projectId: options.projectId, signal });
+    return canvasApplicationPort.uploadImage(blob, { ...uploadOptions, projectId, signal });
   };
   const composition = createCanvasEngineCore({
     ...coreOptions,
