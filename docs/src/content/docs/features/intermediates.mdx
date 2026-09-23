@@ -11,7 +11,7 @@ Each row is one of your projects, or **Unassigned** for intermediates without a 
 
 Select rows, or **Select all**, and press **Delete**. The confirmation explains why kept items are kept: referenced by a saved project or workflow, used by queued or running work, or created recently.
 
-Administrators see every account's projects, can search accounts as well as project names, and can filter to one account from the Users page.
+Administrators start on their own account. **Show everyone** expands the view to every account; they can search accounts as well as project names and can open one account from the Users page. Opening the section from a project action shows that project directly, even when it is outside the first results page.
 
 ## Safe and force clearing
 
@@ -19,16 +19,23 @@ A normal clear deletes only safe items. It always keeps:
 
 - anything a pending, waiting or running job produced or uses as an input;
 - anything created in the last 30 minutes, so an upload the browser is about to reference or enqueue is never collected;
+- anything the open webv2 editor has used, including unsaved edits and canvas undo history; the browser refreshes this temporary hold while it is open;
 - anything a saved project or library workflow still names, such as canvas staging candidates or cropped reference images;
 - anything that is no longer an intermediate.
 
-The advanced option in the confirmation, **also delete items that saved projects or workflows still reference**, turns the delete into a force clear. Those projects will show missing images and undo may no longer restore them. Force clearing never touches active or recent work and cannot be undone; it asks for an acknowledgement and for the word `CLEAR` to be typed.
+The advanced option in the confirmation, **also delete items that saved projects or workflows still reference**, turns the delete into a force clear. Those projects will show missing images and undo may no longer restore them. Force clearing never touches active, browser-held or recent work and cannot be undone; it asks for an acknowledgement and for the word `CLEAR` to be typed. A new saved reference added after the preview is kept until a new preview is confirmed.
+
+A single preview includes at most 50,000 eligible items. If more remain, the confirmation says so; run Clear again after that batch finishes. Protected items do not use up the batch limit.
 
 Every confirmation is based on a fresh server preview that freezes exactly which files the cleanup will act on. Files created after the preview are never included, and every batch re-checks its targets at the moment of deletion: an intermediate that was promoted, referenced or picked up by a job in the meantime is kept.
 
+An open editor refreshes its browser hold every five minutes and when the tab becomes visible. The hold expires one day after the last refresh if the tab closes or crashes. If you have an unsaved browser-only draft that has stayed closed longer than a day, reopen it before clearing old intermediates.
+
 ## Progress and results
 
-Cleanup runs on the server, so you can navigate away while it works. The page reports deleted, kept and failed items separately, along with files whose records are gone but whose bytes could not be removed yet; those are purged on the next server start and are not counted as reclaimed. Failed items can be retried without widening the original request.
+Cleanup runs on the server, so you can navigate away while it works. The page reports deleted, kept and failed items separately, along with files whose records are gone but whose bytes could not be removed yet; those are purged on the next server start and are not counted as reclaimed. Operation receipts and unresolved targets survive a server restart; interrupted work is shown as failed and can be retried without widening the original request. The browser also restores its last operation after a page reload.
+
+The server accepts at most eight active operations at a time. Wait for one to finish before confirming more cleanup if that limit is reached.
 
 ## Permissions
 

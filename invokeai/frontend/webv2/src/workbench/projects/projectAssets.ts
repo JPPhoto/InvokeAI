@@ -94,6 +94,59 @@ export const collectLiveAssetRefs = (projectDocument: Record<string, unknown>): 
   return refs;
 };
 
+/** Open editors hold live content and undo state, but not completed queue/event or gallery history. */
+export const collectHeldAssetRefs = (projects: readonly object[]): ProjectAssetRefs => {
+  const refs: ProjectAssetRefs = { images: new Set<string>(), videos: new Set<string>() };
+  const pending: unknown[] = [];
+  for (const project of projects) {
+    for (const [key, value] of Object.entries(project)) {
+      if (!PROJECT_HISTORY_ROOT_KEYS.has(key)) {
+        pending.push(value);
+      }
+    }
+  }
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (Array.isArray(node)) {
+      for (const value of node) {
+        pending.push(value);
+      }
+    } else if (isRecord(node)) {
+      for (const [key, value] of Object.entries(node)) {
+        if (key === 'recentImages' || GALLERY_SELECTION_KEYS.has(key)) {
+          continue;
+        }
+        if (typeof value === 'string' && value.length <= 255) {
+          if (IMAGE_NAME_KEYS.has(key)) {
+            refs.images.add(value);
+          } else if (VIDEO_NAME_KEYS.has(key)) {
+            refs.videos.add(value);
+          }
+        } else if (typeof value === 'object' && value !== null) {
+          pending.push(value);
+        }
+      }
+    }
+  }
+  return refs;
+};
+
+/** Each lease request must stay within the backend's per-kind 50,000-name limit. */
+export const partitionHeldAssetNames = (
+  images: readonly string[],
+  videos: readonly string[]
+): { images: string[]; videos: string[] }[] => {
+  const batchSize = 50_000;
+  const batches: { images: string[]; videos: string[] }[] = [];
+  for (let start = 0; start < Math.max(images.length, videos.length); start += batchSize) {
+    batches.push({
+      images: images.slice(start, start + batchSize),
+      videos: videos.slice(start, start + batchSize),
+    });
+  }
+  return batches;
+};
+
 /** `{ drop: true }` removes the key, `{ value }` replaces it, `null` recurses into it. */
 type NodeVisit = { drop: true } | { value: unknown } | null;
 

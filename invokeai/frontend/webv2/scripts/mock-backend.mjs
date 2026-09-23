@@ -1066,6 +1066,11 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         return json(200, []);
       }
 
+      if ((method === 'PUT' || method === 'DELETE') && /^\/api\/v1\/intermediates\/holds\/[^/]+$/.test(path)) {
+        response.writeHead(204);
+        return response.end();
+      }
+
       if (method === 'GET' && path === '/api/v1/intermediates/summary') {
         const search = (url.searchParams.get('search') ?? '').trim().toLowerCase();
         const sort = url.searchParams.get('sort') ?? 'reclaimable_bytes';

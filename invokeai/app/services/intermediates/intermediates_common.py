@@ -1,7 +1,7 @@
 """Contracts of the intermediates manager: summaries, previews and cleanup operations."""
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,13 @@ IntermediatesSummarySort = Literal["reclaimable_bytes", "project_name"]
 RECENT_GRACE_SECONDS = 30 * 60
 
 PREVIEW_TTL_SECONDS = 10 * 60
+
+MediaName = Annotated[str, Field(min_length=1, max_length=255)]
+
+
+class IntermediatesBrowserHoldRequest(BaseModel):
+    images: list[MediaName] = Field(default_factory=list, max_length=50_000)
+    videos: list[MediaName] = Field(default_factory=list, max_length=50_000)
 
 
 class IntermediatesScopeTarget(BaseModel):
@@ -131,6 +138,9 @@ class IntermediatesPreview(BaseModel):
     created_at: datetime
     expires_at: datetime
     target_rows: int = Field(description="Rows the scope resolved to")
+    has_more_eligible: bool = Field(
+        default=False, description="More eligible intermediates remain outside this bounded preview batch"
+    )
     impact: IntermediatesImpact
     affected_documents: list[IntermediatesAffectedDocument] = Field(
         default_factory=list,

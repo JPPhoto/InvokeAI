@@ -3,14 +3,14 @@
 Previews freeze the exact targets a confirmation will act on; nothing created afterwards can join
 an operation. Operations run on one background worker in bounded batches, and every batch
 re-applies the policy on the deleting transaction, so a target that became active, referenced or
-durable since the preview is kept. Operation state lives in this process: a restart abandons an
-in-flight operation part-way, which cannot broaden it (the targets were frozen) and cannot lose a
-file (the image delete journal finishes any purge the crash interrupted).
+durable since the preview is kept. Operation receipts and unresolved targets persist; a restart
+makes interrupted work retryable.
 
 Lock order, for anyone adding a caller: image mutation lock (image service) → database lock. The
 queue and document writers take only the database lock, so no cycle is possible.
 """
 
+import json
 import logging
 import queue
 import threading
@@ -25,6 +25,7 @@ from invokeai.app.services.intermediates.intermediates_common import (
     PREVIEW_TTL_SECONDS,
     RECENT_GRACE_SECONDS,
     IntermediatesAffectedDocument,
+    IntermediatesBrowserHoldRequest,
     IntermediatesCleanupMode,
     IntermediatesIdempotencyConflictError,
     IntermediatesImpact,
@@ -46,9 +47,11 @@ from invokeai.app.services.intermediates.intermediates_common import (
     IntermediatesUnavailableError,
 )
 from invokeai.app.services.intermediates.intermediates_records_sqlite import (
+    AffectedReference,
     IntermediateCandidate,
     IntermediatesRecordsSqlite,
     MediaKind,
+    ScopeCounts,
 )
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
@@ -58,6 +61,9 @@ MEASURE_BATCH_SIZE = 200
 # A row is written before its file; measuring it a moment later would record a missing file.
 MEASURE_MIN_AGE_SECONDS = 10
 MAX_RETAINED_OPERATIONS = 100
+MAX_RETAINED_TARGETS = 500_000
+MAX_ACTIVE_OPERATIONS = 8
+MAX_OPERATION_TARGETS = 50_000
 MAX_PREVIEWS = 200
 # Frozen (name, size) pairs held across every live preview; the oldest previews expire first.
 MAX_FROZEN_PREVIEW_TARGETS = 500_000
@@ -76,6 +82,7 @@ class _Preview:
     # Frozen targets with the size known at preview time; sizes are what an operation reclaims.
     targets: dict[MediaKind, list[tuple[str, Optional[int]]]]
     allowed_user_ids: Optional[frozenset[str]]
+    confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]]
 
 
 @dataclass
@@ -84,6 +91,9 @@ class _Operation:
     caller: IntermediatesCaller
     targets: dict[MediaKind, list[tuple[str, Optional[int]]]]
     allowed_user_ids: Optional[frozenset[str]]
+    confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]] = field(
+        default_factory=lambda: {"image": {}, "video": {}}
+    )
     # Names whose deletion raised, or that were never attempted; a retry takes exactly these.
     unresolved: dict[MediaKind, dict[str, Optional[int]]] = field(default_factory=lambda: {"image": {}, "video": {}})
     last_progress_event_at: float = 0.0
@@ -101,9 +111,6 @@ class IntermediatesService(IntermediatesServiceBase):
         self._idempotency: dict[tuple[str, str], tuple[str, str]] = {}
         self._pending: "queue.Queue[str]" = queue.Queue()
         self._measure_requested = threading.Event()
-        # Rows a measurement raised on; skipped for the rest of the process so one bad file cannot
-        # stall every later row.
-        self._measure_skipped: set[str] = set()
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
 
@@ -112,6 +119,36 @@ class IntermediatesService(IntermediatesServiceBase):
     def start(self, invoker: Invoker) -> None:
         self._invoker = invoker
         self._stop.clear()
+        with self._lock:
+            for user_id, preview_id, key, state in self._records.load_operations():
+                dto = IntermediatesOperation.model_validate(state["dto"])
+                unresolved = {cast(MediaKind, kind): dict(state["unresolved"][kind]) for kind in ("image", "video")}
+                operation = _Operation(
+                    dto=dto,
+                    caller=IntermediatesCaller(user_id=user_id, is_admin=bool(state["caller_is_admin"])),
+                    targets={"image": [], "video": []},
+                    allowed_user_ids=(
+                        frozenset(state["allowed_user_ids"]) if state["allowed_user_ids"] is not None else None
+                    ),
+                    confirmed_references={
+                        cast(MediaKind, kind): {
+                            name: {tuple(ref) for ref in refs}
+                            for name, refs in state.get("confirmed_references", {}).get(kind, {}).items()
+                        }
+                        for kind in ("image", "video")
+                    },
+                    unresolved=unresolved,
+                )
+                if dto.status in ("pending", "running"):
+                    dto.status = "failed"
+                    dto.error = "Server restarted before cleanup finished; retry the remaining targets"
+                    dto.completed_at = _now()
+                    self._records.save_operation(dto.operation_id, user_id, self._operation_state(operation))
+                self._operations[dto.operation_id] = operation
+                self._operation_order.append(dto.operation_id)
+                if key is not None and preview_id is not None:
+                    self._idempotency[(user_id, key)] = (preview_id, dto.operation_id)
+            self._prune_operations_locked()
 
     def stop(self, invoker: Optional[Invoker] = None) -> None:
         self._stop.set()
@@ -143,6 +180,14 @@ class IntermediatesService(IntermediatesServiceBase):
 
     # region summary
 
+    def replace_browser_hold(
+        self, caller: IntermediatesCaller, lease_id: str, request: IntermediatesBrowserHoldRequest
+    ) -> None:
+        self._records.replace_browser_hold(caller.user_id, lease_id, request.images, request.videos)
+
+    def release_browser_hold(self, caller: IntermediatesCaller, lease_id: str) -> None:
+        self._records.release_browser_hold(caller.user_id, lease_id)
+
     def get_summary(
         self,
         caller: IntermediatesCaller,
@@ -153,6 +198,7 @@ class IntermediatesService(IntermediatesServiceBase):
         descending: bool,
         offset: int,
         limit: int,
+        project_id: Optional[str] = None,
     ) -> IntermediatesSummary:
         owner_filter = self._resolve_owner_filter(caller, owner_id)
         aggregated = self._records.summarize(owner_filter)
@@ -160,13 +206,13 @@ class IntermediatesService(IntermediatesServiceBase):
         users = self._services.users.get_many([user_id for user_id, _ in aggregated])
 
         rows: list[IntermediatesRow] = []
-        for (user_id, project_id), kinds in aggregated.items():
+        for (user_id, row_project_id), kinds in aggregated.items():
             user = users.get(user_id)
-            project = projects.get((user_id, project_id)) if project_id is not None else None
+            project = projects.get((user_id, row_project_id)) if row_project_id is not None else None
             rows.append(
                 IntermediatesRow(
                     user_id=user_id,
-                    project_id=project_id,
+                    project_id=row_project_id,
                     user_display_name=user.display_name if user is not None else None,
                     user_email=user.email if user is not None else None,
                     project_name=project[0] if project is not None else None,
@@ -179,6 +225,8 @@ class IntermediatesService(IntermediatesServiceBase):
                 )
             )
 
+        if project_id is not None:
+            rows = [row for row in rows if row.project_id == project_id]
         if search:
             needle = search.casefold()
             rows = [row for row in rows if self._matches(row, needle, include_owner=caller.is_admin)]
@@ -236,19 +284,41 @@ class IntermediatesService(IntermediatesServiceBase):
     def create_preview(self, request: IntermediatesPreviewRequest, caller: IntermediatesCaller) -> IntermediatesPreview:
         scope = request.scope
         allowed = self._authorize_scope(scope, caller)
-        candidates = self._collect_candidates(scope)
+        candidates, has_more_eligible = self._collect_candidates(scope, request.mode)
+        counts = self._records.summarize(scope.user_id if scope.kind == "owner" else None)
+        if scope.kind == "selection":
+            selected_rows = {(target.user_id, target.project_id) for target in scope.targets}
+            counts = {row: kinds for row, kinds in counts.items() if row in selected_rows}
 
         impact = IntermediatesImpact()
+        for kinds in counts.values():
+            for kind in ("image", "video"):
+                suffix = "images" if kind == "image" else "videos"
+                scope_counts = kinds[cast(MediaKind, kind)].counts
+                setattr(impact, f"keep_active_{suffix}", getattr(impact, f"keep_active_{suffix}") + scope_counts.active)
+                setattr(impact, f"keep_recent_{suffix}", getattr(impact, f"keep_recent_{suffix}") + scope_counts.recent)
+                if request.mode == "safe":
+                    setattr(
+                        impact,
+                        f"keep_referenced_{suffix}",
+                        getattr(impact, f"keep_referenced_{suffix}") + scope_counts.referenced,
+                    )
         targets: dict[MediaKind, list[tuple[str, Optional[int]]]] = {"image": [], "video": []}
         for kind in ("image", "video"):
             media_kind = cast(MediaKind, kind)
             for candidate in candidates[media_kind]:
                 self._tally(impact, media_kind, candidate, request.mode, targets)
 
+        confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]] = {"image": {}, "video": {}}
         affected: list[IntermediatesAffectedDocument] = []
         hidden = 0
         if request.mode == "force":
-            affected, hidden = self._describe_affected(candidates, caller)
+            for kind in ("image", "video"):
+                media_kind = cast(MediaKind, kind)
+                confirmed_references[media_kind] = self._records.reference_owners(
+                    media_kind, [name for name, _ in targets[media_kind]]
+                )
+            affected, hidden = self._describe_affected(confirmed_references, caller)
 
         created = _now()
         dto = IntermediatesPreview(
@@ -257,14 +327,19 @@ class IntermediatesService(IntermediatesServiceBase):
             scope=scope,
             created_at=created,
             expires_at=created + timedelta(seconds=PREVIEW_TTL_SECONDS),
-            target_rows=self._count_target_rows(scope, candidates),
+            target_rows=self._count_target_rows(scope, counts),
             impact=impact,
+            has_more_eligible=has_more_eligible,
             affected_documents=affected,
             affected_documents_hidden=hidden,
         )
         with self._lock:
             self._previews[dto.preview_id] = _Preview(
-                dto=dto, caller_user_id=caller.user_id, targets=targets, allowed_user_ids=allowed
+                dto=dto,
+                caller_user_id=caller.user_id,
+                targets=targets,
+                allowed_user_ids=allowed,
+                confirmed_references=confirmed_references,
             )
             self._expire_previews_locked(created)
         return dto
@@ -288,7 +363,9 @@ class IntermediatesService(IntermediatesServiceBase):
             raise IntermediatesScopeForbiddenError("Only administrators can clear another account's intermediates")
         return owners
 
-    def _collect_candidates(self, scope: IntermediatesScope) -> dict[MediaKind, list[IntermediateCandidate]]:
+    def _collect_candidates(
+        self, scope: IntermediatesScope, mode: IntermediatesCleanupMode
+    ) -> tuple[dict[MediaKind, list[IntermediateCandidate]], bool]:
         targets: Optional[Sequence[IntermediatesScopeTarget]] = None
         user_id: Optional[str] = None
         if scope.kind == "selection":
@@ -296,17 +373,26 @@ class IntermediatesService(IntermediatesServiceBase):
             targets = list({(t.user_id, t.project_id): t for t in scope.targets}.values())
         elif scope.kind == "owner":
             user_id = scope.user_id
-        return {
-            "image": self._records.list_candidates("image", user_id=user_id, targets=targets),
-            "video": self._records.list_candidates("video", user_id=user_id, targets=targets),
-        }
+        images = self._records.list_candidates(
+            "image", user_id=user_id, targets=targets, max_results=MAX_OPERATION_TARGETS, eligible_mode=mode
+        )
+        if len(images) > MAX_OPERATION_TARGETS:
+            return {"image": images[:MAX_OPERATION_TARGETS], "video": []}, True
+        remaining = MAX_OPERATION_TARGETS - len(images)
+        videos = self._records.list_candidates(
+            "video", user_id=user_id, targets=targets, max_results=remaining, eligible_mode=mode
+        )
+        has_more = len(videos) > remaining
+        return {"image": images, "video": videos[:remaining]}, has_more
 
     @staticmethod
-    def _count_target_rows(scope: IntermediatesScope, candidates: dict[MediaKind, list[IntermediateCandidate]]) -> int:
+    def _count_target_rows(
+        scope: IntermediatesScope, counts: dict[tuple[str, Optional[str]], dict[MediaKind, ScopeCounts]]
+    ) -> int:
         """Rows (owner, project) the scope resolved to, counted the same way for every scope kind."""
         if scope.kind == "selection":
             return len({(t.user_id, t.project_id) for t in scope.targets})
-        return len({(candidate.user_id, candidate.project_id) for kind in candidates.values() for candidate in kind})
+        return len(counts)
 
     @staticmethod
     def _tally(
@@ -330,13 +416,18 @@ class IntermediatesService(IntermediatesServiceBase):
             setattr(impact, attribute, getattr(impact, attribute) + 1)
 
     def _describe_affected(
-        self, candidates: dict[MediaKind, list[IntermediateCandidate]], caller: IntermediatesCaller
+        self,
+        confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]],
+        caller: IntermediatesCaller,
     ) -> tuple[list[IntermediatesAffectedDocument], int]:
-        refs = []
-        for kind in ("image", "video"):
-            media_kind = cast(MediaKind, kind)
-            names = [c.name for c in candidates[media_kind] if c.classification == "referenced"]
-            refs.extend(self._records.affected_references(media_kind, names))
+        counts: dict[tuple[str, str, str], int] = {}
+        for owners in confirmed_references.values():
+            for refs_for_name in owners.values():
+                for owner in refs_for_name:
+                    counts[owner] = counts.get(owner, 0) + 1
+        refs = [
+            AffectedReference(kind, user_id, owner_id, count) for (kind, user_id, owner_id), count in counts.items()
+        ]
         names = self._records.get_document_names(refs)
         visible: list[IntermediatesAffectedDocument] = []
         hidden = 0
@@ -385,6 +476,11 @@ class IntermediatesService(IntermediatesServiceBase):
                 return self._operations[operation_id].dto.model_copy(deep=True)
 
             self._require_cleanup_available()
+            if (
+                sum(op.dto.status in ("pending", "running") for op in self._operations.values())
+                >= MAX_ACTIVE_OPERATIONS
+            ):
+                raise IntermediatesUnavailableError("Too many cleanup operations are already running")
             self._expire_previews_locked(_now())
             preview = self._previews.get(request.preview_id)
             if preview is None or preview.caller_user_id != caller.user_id:
@@ -398,9 +494,25 @@ class IntermediatesService(IntermediatesServiceBase):
                 scope=preview.dto.scope,
                 targets=preview.targets,
                 allowed_user_ids=preview.allowed_user_ids,
+                confirmed_references=preview.confirmed_references,
                 retried_from=None,
             )
+            try:
+                self._records.save_operation(
+                    operation.dto.operation_id,
+                    caller.user_id,
+                    self._operation_state(operation),
+                    preview_id=request.preview_id,
+                    idempotency_key=request.idempotency_key,
+                    targets=self._operation_target_rows(operation),
+                )
+            except Exception:
+                self._operations.pop(operation.dto.operation_id)
+                self._operation_order.remove(operation.dto.operation_id)
+                self._previews[request.preview_id] = preview
+                raise
             self._idempotency[key] = (request.preview_id, operation.dto.operation_id)
+            self._prune_operations_locked()
         self._enqueue(operation)
         return operation.dto.model_copy(deep=True)
 
@@ -412,7 +524,6 @@ class IntermediatesService(IntermediatesServiceBase):
             return operation.dto.model_copy(deep=True)
 
     def retry_operation(self, operation_id: str, caller: IntermediatesCaller) -> IntermediatesOperation:
-        self._require_cleanup_available()
         with self._lock:
             original = self._operations.get(operation_id)
             if original is None or (original.caller.user_id != caller.user_id and not caller.is_admin):
@@ -422,7 +533,16 @@ class IntermediatesService(IntermediatesServiceBase):
             if original.dto.retried_by_operation_id is not None:
                 # A duplicated retry request (lost response, double click) must not run the same
                 # targets twice; the retry that already took them over is the answer.
-                return self._operations[original.dto.retried_by_operation_id].dto.model_copy(deep=True)
+                existing_retry = self._operations[original.dto.retried_by_operation_id]
+                if existing_retry.caller.user_id != caller.user_id and not caller.is_admin:
+                    raise IntermediatesUnavailableError("Another account already retried this operation")
+                return existing_retry.dto.model_copy(deep=True)
+            self._require_cleanup_available()
+            if (
+                sum(op.dto.status in ("pending", "running") for op in self._operations.values())
+                >= MAX_ACTIVE_OPERATIONS
+            ):
+                raise IntermediatesUnavailableError("Too many cleanup operations are already running")
             unresolved = {kind: list(names.items()) for kind, names in original.unresolved.items()}
             if not unresolved["image"] and not unresolved["video"]:
                 raise IntermediatesUnavailableError("The operation has nothing left to retry")
@@ -434,9 +554,26 @@ class IntermediatesService(IntermediatesServiceBase):
                 scope=original.dto.scope,
                 targets=unresolved,
                 allowed_user_ids=original.allowed_user_ids,
+                confirmed_references=original.confirmed_references,
                 retried_from=operation_id,
             )
             original.dto.retried_by_operation_id = operation.dto.operation_id
+            try:
+                self._records.save_operation(
+                    operation.dto.operation_id,
+                    caller.user_id,
+                    self._operation_state(operation),
+                    linked_operation=(operation_id, self._operation_state(original)),
+                    targets=self._operation_target_rows(operation),
+                )
+            except Exception:
+                self._operations.pop(operation.dto.operation_id)
+                self._operation_order.remove(operation.dto.operation_id)
+                original.dto.retried_by_operation_id = None
+                raise
+            original.unresolved = {"image": {}, "video": {}}
+            original.confirmed_references = {"image": {}, "video": {}}
+            self._prune_operations_locked()
         self._enqueue(operation)
         return operation.dto.model_copy(deep=True)
 
@@ -448,6 +585,7 @@ class IntermediatesService(IntermediatesServiceBase):
         scope: IntermediatesScope,
         targets: dict[MediaKind, list[tuple[str, Optional[int]]]],
         allowed_user_ids: Optional[frozenset[str]],
+        confirmed_references: dict[MediaKind, dict[str, set[tuple[str, str, str]]]],
         retried_from: Optional[str],
     ) -> _Operation:
         dto = IntermediatesOperation(
@@ -469,18 +607,63 @@ class IntermediatesService(IntermediatesServiceBase):
             caller=caller,
             targets={"image": list(targets["image"]), "video": list(targets["video"])},
             allowed_user_ids=allowed_user_ids,
+            confirmed_references={kind: dict(owners) for kind, owners in confirmed_references.items()},
             unresolved={"image": dict(targets["image"]), "video": dict(targets["video"])},
         )
         self._operations[dto.operation_id] = operation
         self._operation_order.append(dto.operation_id)
-        while len(self._operation_order) > MAX_RETAINED_OPERATIONS:
-            oldest = self._operation_order[0]
-            if self._operations[oldest].dto.status in ("pending", "running"):
-                break
-            self._operation_order.pop(0)
-            self._operations.pop(oldest, None)
-            self._idempotency = {k: v for k, v in self._idempotency.items() if v[1] != oldest}
         return operation
+
+    @staticmethod
+    def _operation_state(operation: _Operation) -> dict:
+        return {
+            "dto": operation.dto.model_dump(mode="json"),
+            "caller_is_admin": operation.caller.is_admin,
+            "allowed_user_ids": sorted(operation.allowed_user_ids) if operation.allowed_user_ids is not None else None,
+        }
+
+    @staticmethod
+    def _operation_target_rows(operation: _Operation) -> list[tuple[str, str, Optional[int], str]]:
+        return [
+            (kind, name, size, json.dumps(sorted(operation.confirmed_references[kind].get(name, set()))))
+            for kind, names in operation.unresolved.items()
+            for name, size in names.items()
+        ]
+
+    def _prune_operations_locked(self) -> None:
+        evicted: list[str] = []
+        retained_order = list(self._operation_order)
+        unresolved_count = sum(
+            len(operation.unresolved["image"]) + len(operation.unresolved["video"])
+            for operation in self._operations.values()
+        )
+        while len(retained_order) > MAX_RETAINED_OPERATIONS or unresolved_count > MAX_RETAINED_TARGETS:
+            oldest = None
+            for operation_id in retained_order:
+                candidate = self._operations[operation_id]
+                retry_id = candidate.dto.retried_by_operation_id
+                retry = self._operations.get(retry_id) if retry_id is not None else None
+                if candidate.dto.status in ("completed", "failed") and (
+                    retry is None or retry.dto.status not in ("pending", "running")
+                ):
+                    oldest = operation_id
+                    break
+            if oldest is None:
+                break
+            retained_order.remove(oldest)
+            removed = self._operations[oldest]
+            unresolved_count -= len(removed.unresolved["image"]) + len(removed.unresolved["video"])
+            evicted.append(oldest)
+        try:
+            self._records.delete_operations(evicted)
+        except Exception as error:
+            self._logger.warning(f"Could not prune old intermediates operations: {error}")
+            return
+        self._operation_order = retained_order
+        for operation_id in evicted:
+            self._operations.pop(operation_id)
+        evicted_set = set(evicted)
+        self._idempotency = {k: v for k, v in self._idempotency.items() if v[1] not in evicted_set}
 
     def _enqueue(self, operation: _Operation) -> None:
         self._ensure_worker()
@@ -532,12 +715,23 @@ class IntermediatesService(IntermediatesServiceBase):
                     self._run(operation)
                 except Exception as error:  # pragma: no cover - defensive: the worker must survive
                     self._logger.error(f"Intermediates operation {operation_id} crashed: {error}", exc_info=True)
-                    self._finish(operation, error=str(error))
+                    try:
+                        self._finish(operation, error=str(error))
+                    except Exception as finish_error:
+                        # A failed receipt write must not strand the rest of the accepted queue.
+                        # The target rows remain durable and are retryable after a restart.
+                        self._logger.error(
+                            f"Could not persist failure for intermediates operation {operation_id}: {finish_error}",
+                            exc_info=True,
+                        )
 
     def _run(self, operation: _Operation) -> None:
         with self._lock:
             operation.dto.status = "running"
             operation.dto.started_at = _now()
+            self._records.save_operation(
+                operation.dto.operation_id, operation.caller.user_id, self._operation_state(operation)
+            )
         self._services.events.emit_intermediates_operation_changed(operation.dto.model_copy(deep=True))
 
         deleters: dict[MediaKind, Callable[[list[str], IntermediateDeleteGuard], IntermediateDeleteResult]] = {
@@ -548,7 +742,10 @@ class IntermediatesService(IntermediatesServiceBase):
             media_kind = cast(MediaKind, kind)
             targets = operation.targets[media_kind]
             guard = self._records.make_delete_guard(
-                media_kind, mode=operation.dto.mode, allowed_user_ids=operation.allowed_user_ids
+                media_kind,
+                mode=operation.dto.mode,
+                allowed_user_ids=operation.allowed_user_ids,
+                confirmed_references=operation.confirmed_references[media_kind],
             )
             for start in range(0, len(targets), DELETE_BATCH_SIZE):
                 batch = targets[start : start + DELETE_BATCH_SIZE]
@@ -630,7 +827,14 @@ class IntermediatesService(IntermediatesServiceBase):
             for name in names:
                 if name not in failed_set:
                     unresolved.pop(name, None)
+                    operation.confirmed_references[kind].pop(name, None)
             setattr(progress, f"unresolved_{suffix}", len(unresolved))
+            self._records.save_operation(
+                operation.dto.operation_id,
+                operation.caller.user_id,
+                self._operation_state(operation),
+                resolved_targets=(kind, [name for name in names if name not in failed_set]),
+            )
             # Progress events are coalesced; the final state always goes out from `_finish`.
             now = time.monotonic()
             if now - operation.last_progress_event_at < PROGRESS_EVENT_INTERVAL_SECONDS:
@@ -647,6 +851,10 @@ class IntermediatesService(IntermediatesServiceBase):
             # Only the unresolved names matter after this point; the frozen list is the bulk of an
             # operation's memory and would otherwise live for as long as the operation is retained.
             operation.targets = {"image": [], "video": []}
+            self._records.save_operation(
+                operation.dto.operation_id, operation.caller.user_id, self._operation_state(operation)
+            )
+            self._prune_operations_locked()
             snapshot = operation.dto.model_copy(deep=True)
         self._services.events.emit_intermediates_operation_changed(snapshot)
 
@@ -667,27 +875,26 @@ class IntermediatesService(IntermediatesServiceBase):
                     cast(MediaKind, kind),
                     MEASURE_BATCH_SIZE,
                     min_age_seconds=MEASURE_MIN_AGE_SECONDS,
-                    exclude=sorted(self._measure_skipped),
                 )
                 sizes: dict[str, int] = {}
+                unmeasurable: list[str] = []
                 for name, subfolder in pending:
                     if self._stop.is_set():
                         return
-                    if name in self._measure_skipped:
-                        continue
                     try:
                         size = files.get_file_size_bytes(name, subfolder)
                     except Exception as error:
                         self._logger.warning(f"Could not measure {kind} {name}; skipping it until restart: {error}")
-                        self._measure_skipped.add(name)
+                        unmeasurable.append(name)
                         continue
                     # A missing file occupies nothing; recording 0 is a measurement, not a guess, and
                     # keeps the row from being re-measured forever.
                     sizes[name] = size if size is not None else 0
+                self._records.mark_unmeasurable(cast(MediaKind, kind), unmeasurable)
                 # One transaction per batch: a library of hundreds of thousands of intermediates is
                 # measured in a few thousand commits rather than one per file.
                 records.set_file_sizes_bytes(sizes)
-                if len(pending) == MEASURE_BATCH_SIZE and sizes:
+                if len(pending) == MEASURE_BATCH_SIZE:
                     remaining = True
             if remaining:
                 self._measure_requested.set()

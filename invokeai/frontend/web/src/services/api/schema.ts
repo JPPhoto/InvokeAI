@@ -1820,6 +1820,27 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/intermediates/holds/{lease_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace Intermediates Browser Hold
+         * @description Protect names still held by this account's open browser editor, including undo state.
+         */
+        put: operations["replace_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__put"];
+        post?: never;
+        /** Release Intermediates Browser Hold */
+        delete: operations["release_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/intermediates/summary": {
         parameters: {
             query?: never;
@@ -20628,6 +20649,13 @@ export type components = {
              */
             references: number;
         };
+        /** IntermediatesBrowserHoldRequest */
+        IntermediatesBrowserHoldRequest: {
+            /** Images */
+            images?: string[];
+            /** Videos */
+            videos?: string[];
+        };
         /** IntermediatesImpact */
         IntermediatesImpact: {
             /**
@@ -20760,6 +20788,11 @@ export type components = {
             progress: components["schemas"]["IntermediatesOperationProgress"];
             /** Retried From Operation Id */
             retried_from_operation_id?: string | null;
+            /**
+             * Retried By Operation Id
+             * @description The retry that took over this operation's unresolved targets, if any
+             */
+            retried_by_operation_id?: string | null;
         };
         /**
          * IntermediatesOperationChangedEvent
@@ -20833,11 +20866,29 @@ export type components = {
              */
             reclaimed_bytes?: number;
             /**
+             * Unknown Size Count
+             * @description Deleted items whose size was never measured; their bytes are not in reclaimed_bytes
+             * @default 0
+             */
+            unknown_size_count?: number;
+            /**
              * Pending Disk Cleanup
              * @description Deleted records whose files could not be purged yet; the journal retries at startup
              * @default 0
              */
             pending_disk_cleanup?: number;
+            /**
+             * Unresolved Images
+             * @description Image targets that failed or were never attempted
+             * @default 0
+             */
+            unresolved_images?: number;
+            /**
+             * Unresolved Videos
+             * @description Video targets that failed or were never attempted
+             * @default 0
+             */
+            unresolved_videos?: number;
         };
         /** IntermediatesOperationRequest */
         IntermediatesOperationRequest: {
@@ -20874,6 +20925,12 @@ export type components = {
              * @description Rows the scope resolved to
              */
             target_rows: number;
+            /**
+             * Has More Eligible
+             * @description More eligible intermediates remain outside this bounded preview batch
+             * @default false
+             */
+            has_more_eligible?: boolean;
             impact: components["schemas"]["IntermediatesImpact"];
             /**
              * Affected Documents
@@ -20923,6 +20980,11 @@ export type components = {
              * @description The project's name; null for unassigned rows
              */
             project_name?: string | null;
+            /**
+             * Cover Image Name
+             * @description The newest durable image on the project's board, for a thumbnail
+             */
+            cover_image_name?: string | null;
             images?: components["schemas"]["IntermediatesKindCounts"];
             videos?: components["schemas"]["IntermediatesKindCounts"];
             /**
@@ -53166,11 +53228,74 @@ export interface operations {
             };
         };
     };
+    replace_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntermediatesBrowserHoldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_intermediates_summary: {
         parameters: {
             query?: {
                 /** @description Admins only: restrict rows to one account */
                 owner_id?: string | null;
+                project_id?: string | null;
                 /** @description Project (and, for admins, owner) filter */
                 search?: string | null;
                 sort?: "reclaimable_bytes" | "project_name";

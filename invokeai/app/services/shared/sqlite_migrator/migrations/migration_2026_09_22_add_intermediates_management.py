@@ -46,6 +46,47 @@ class AddIntermediatesManagementCallback:
                 """
             )
         create_media_references_table(cursor)
+        cursor.execute(
+            """--sql
+            CREATE TABLE IF NOT EXISTS intermediates_operations (
+                operation_id TEXT PRIMARY KEY,
+                caller_user_id TEXT NOT NULL,
+                preview_id TEXT,
+                idempotency_key TEXT,
+                state_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(caller_user_id, idempotency_key)
+            );
+            """
+        )
+        cursor.execute(
+            """--sql
+            CREATE TABLE IF NOT EXISTS intermediates_browser_holds (
+                user_id TEXT NOT NULL,
+                lease_id TEXT NOT NULL,
+                media_kind TEXT NOT NULL,
+                media_name TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                PRIMARY KEY(user_id, lease_id, media_kind, media_name)
+            );
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_intermediates_browser_holds_media "
+            "ON intermediates_browser_holds(media_kind, media_name, expires_at);"
+        )
+        cursor.execute(
+            """--sql
+            CREATE TABLE IF NOT EXISTS intermediates_operation_targets (
+                operation_id TEXT NOT NULL,
+                media_kind TEXT NOT NULL,
+                media_name TEXT NOT NULL,
+                size_bytes INTEGER,
+                confirmed_refs_json TEXT NOT NULL,
+                PRIMARY KEY(operation_id, media_kind, media_name)
+            );
+            """
+        )
         self._backfill_references(cursor)
 
     @staticmethod

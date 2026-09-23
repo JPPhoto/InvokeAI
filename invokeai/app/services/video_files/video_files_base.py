@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
+from typing import Collection, Optional, Sequence
 
 from PIL import Image
 
@@ -58,7 +58,17 @@ class VideoFileStorageBase(ABC):
         pass
 
     @abstractmethod
-    def commit_delete(self, token: object) -> None:
+    def begin_delete(self, videos: Sequence[tuple[str, str]]) -> object:
+        """Durably journals a conditional delete before video records are removed."""
+        pass
+
+    @abstractmethod
+    def abandon_delete(self, token: object) -> None:
+        """Discards a pending journal after record deletion fails."""
+        pass
+
+    @abstractmethod
+    def commit_delete(self, token: object, video_names: Optional[Collection[str]] = None) -> None:
         """Permanently removes files represented by a staged-delete token."""
         pass
 

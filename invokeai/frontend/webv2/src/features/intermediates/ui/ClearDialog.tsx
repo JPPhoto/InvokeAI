@@ -209,6 +209,14 @@ export const ClearDialog = ({
                     )}
                   </Box>
                 </Dialog.Description>
+                {preview?.hasMoreEligible ? (
+                  <Alert.Root size="sm" status="info" variant="surface">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Description>{t('intermediates.dialog.batchLimit')}</Alert.Description>
+                    </Alert.Content>
+                  </Alert.Root>
+                ) : null}
                 <Checkbox.Root
                   checked={isForce}
                   colorPalette="red"

@@ -145,18 +145,18 @@ export const selectionToTargets = (
   }));
 
 /**
- * The scope a confirmation acts on. With no search, "all matching" is exactly the owner filter (or everyone), which
- * the server can freeze without the client enumerating rows.
+ * The scope a confirmation acts on. Without a row filter, "all matching" is exactly the owner filter (or everyone),
+ * which the server can freeze without the client enumerating rows.
  */
 export const resolveScope = (options: {
   selection: IntermediatesSelection;
   loadedRows: readonly IntermediatesRow[];
-  hasSearch: boolean;
+  hasSubsetFilter: boolean;
   ownerId: string | null;
 }): IntermediatesScope => {
-  const { hasSearch, loadedRows, ownerId, selection } = options;
+  const { hasSubsetFilter, loadedRows, ownerId, selection } = options;
 
-  if (selection.mode === 'all-matching' && !hasSearch) {
+  if (selection.mode === 'all-matching' && !hasSubsetFilter) {
     return ownerId === null ? { kind: 'everyone' } : { kind: 'owner', userId: ownerId };
   }
 

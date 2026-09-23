@@ -98,6 +98,7 @@ export interface IntermediatesPreview {
   createdAt: string;
   expiresAt: string;
   targetRows: number;
+  hasMoreEligible: boolean;
   impact: IntermediatesImpact;
   affectedDocuments: IntermediatesAffectedDocument[];
   affectedDocumentsHidden: number;

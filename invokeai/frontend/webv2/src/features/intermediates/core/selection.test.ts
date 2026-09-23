@@ -60,7 +60,7 @@ describe('row selection', () => {
     selection = toggleRowSelection(selection, secondPage[1]!, secondPage);
 
     expect(summarizeSelection(selection, totals).rows).toBe(2);
-    expect(resolveScope({ hasSearch: false, loadedRows: secondPage, ownerId: 'alice', selection })).toEqual({
+    expect(resolveScope({ hasSubsetFilter: false, loadedRows: secondPage, ownerId: 'alice', selection })).toEqual({
       kind: 'selection',
       targets: [
         { projectId: 'a', userId: 'alice' },
@@ -116,27 +116,30 @@ describe('selection summary', () => {
 describe('scope resolution', () => {
   it('turns all-matching without a search into the owner or everyone scope', () => {
     expect(
-      resolveScope({ hasSearch: false, loadedRows: page, ownerId: 'alice', selection: selectAllMatching() })
+      resolveScope({ hasSubsetFilter: false, loadedRows: page, ownerId: 'alice', selection: selectAllMatching() })
     ).toEqual({ kind: 'owner', userId: 'alice' });
-    expect(resolveScope({ hasSearch: false, loadedRows: page, ownerId: null, selection: selectAllMatching() })).toEqual(
-      {
-        kind: 'everyone',
-      }
-    );
+    expect(
+      resolveScope({ hasSubsetFilter: false, loadedRows: page, ownerId: null, selection: selectAllMatching() })
+    ).toEqual({
+      kind: 'everyone',
+    });
   });
 
   it('turns picks, and all-matching under a search, into explicit targets', () => {
     const picks = toggleRowSelection(EMPTY_SELECTION, page[2]!, page);
 
-    expect(resolveScope({ hasSearch: false, loadedRows: page, ownerId: 'alice', selection: picks })).toEqual({
+    expect(resolveScope({ hasSubsetFilter: false, loadedRows: page, ownerId: 'alice', selection: picks })).toEqual({
       kind: 'selection',
       targets: [{ projectId: null, userId: 'alice' }],
     });
     expect(
-      resolveScope({ hasSearch: true, loadedRows: page, ownerId: 'alice', selection: selectAllMatching() })
+      resolveScope({ hasSubsetFilter: true, loadedRows: page, ownerId: 'alice', selection: selectAllMatching() })
     ).toEqual({
       kind: 'selection',
       targets: page.map(({ projectId, userId }) => ({ projectId, userId })),
     });
+    expect(
+      resolveScope({ hasSubsetFilter: true, loadedRows: page, ownerId: 'alice', selection: selectAllMatching() })
+    ).not.toEqual({ kind: 'owner', userId: 'alice' });
   });
 });

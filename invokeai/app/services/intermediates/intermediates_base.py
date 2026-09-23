@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from invokeai.app.services.intermediates.intermediates_common import (
+    IntermediatesBrowserHoldRequest,
     IntermediatesOperation,
     IntermediatesOperationRequest,
     IntermediatesPreview,
@@ -24,6 +25,16 @@ class IntermediatesServiceBase(ABC):
     """Scoped cleanup of intermediate images and videos under one eligibility policy."""
 
     @abstractmethod
+    def replace_browser_hold(
+        self, caller: IntermediatesCaller, lease_id: str, request: IntermediatesBrowserHoldRequest
+    ) -> None:
+        pass
+
+    @abstractmethod
+    def release_browser_hold(self, caller: IntermediatesCaller, lease_id: str) -> None:
+        pass
+
+    @abstractmethod
     def get_summary(
         self,
         caller: IntermediatesCaller,
@@ -34,6 +45,7 @@ class IntermediatesServiceBase(ABC):
         descending: bool,
         offset: int,
         limit: int,
+        project_id: Optional[str] = None,
     ) -> IntermediatesSummary:
         pass
 

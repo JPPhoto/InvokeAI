@@ -3,6 +3,7 @@ import type { AccountScope } from '@platform/state/accountLifecycle';
 
 export interface IntermediatesSummaryParams {
   ownerId?: string | null;
+  projectId?: string | null;
   search?: string;
   sort?: IntermediatesSummarySort;
   order?: 'asc' | 'desc';

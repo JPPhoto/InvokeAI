@@ -82,6 +82,7 @@ describe('intermediates transport', () => {
         affected_documents_hidden: 0,
         created_at: 'now',
         expires_at: 'later',
+        has_more_eligible: true,
         impact: {
           delete_images: 1,
           delete_videos: 0,
@@ -115,6 +116,7 @@ describe('intermediates transport', () => {
     });
     expect(preview.scope).toEqual({ kind: 'selection', targets: [{ projectId: null, userId: 'a' }] });
     expect(preview.impact.deleteImages).toBe(1);
+    expect(preview.hasMoreEligible).toBe(true);
   });
 
   it('maps operation progress including the unresolved counts a retry depends on', () => {

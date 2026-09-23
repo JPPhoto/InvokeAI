@@ -78,6 +78,8 @@ def test_every_route_requires_authentication(enable_multiuser: Any, client: Test
     )
     assert client.get("/api/v1/intermediates/operations/x").status_code == status.HTTP_401_UNAUTHORIZED
     assert client.post("/api/v1/intermediates/operations/x/retry").status_code == status.HTTP_401_UNAUTHORIZED
+    assert client.put("/api/v1/intermediates/holds/tab", json={"images": ["x.png"]}).status_code == 401
+    assert client.delete("/api/v1/intermediates/holds/tab").status_code == 401
 
 
 def test_non_admins_see_only_their_rows_and_cannot_widen_scope(
@@ -182,6 +184,44 @@ def test_mutations_are_refused_during_image_storage_maintenance(
     )
     assert started.status_code == status.HTTP_409_CONFLICT
     assert started.json()["detail"] == "Image storage maintenance is active"
+
+
+def test_replayed_start_succeeds_during_image_storage_maintenance(
+    storage_ready: None, mock_invoker: Invoker, client: TestClient, user1_token: str
+) -> None:
+    user1 = _user_id(mock_invoker, "user1@test.com")
+    _seed_intermediate(mock_invoker, "replay.png", user1)
+    preview = client.post(
+        "/api/v1/intermediates/previews",
+        json={"mode": "safe", "scope": {"kind": "owner", "user_id": user1}},
+        headers=_auth(user1_token),
+    ).json()
+    request = {"preview_id": preview["preview_id"], "idempotency_key": "replay-maintenance"}
+    first = client.post("/api/v1/intermediates/operations", json=request, headers=_auth(user1_token))
+    assert first.status_code == 202
+    _wait(client, user1_token, first.json()["operation_id"])
+    mock_invoker.services.image_moves.is_maintenance_active.return_value = True
+
+    replay = client.post("/api/v1/intermediates/operations", json=request, headers=_auth(user1_token))
+
+    assert replay.status_code == 202
+    assert replay.json()["operation_id"] == first.json()["operation_id"]
+
+
+def test_hold_is_account_scoped_at_the_http_boundary(
+    storage_ready: None, mock_invoker: Invoker, client: TestClient, user1_token: str, user2_token: str
+) -> None:
+    user1 = _user_id(mock_invoker, "user1@test.com")
+    _seed_intermediate(mock_invoker, "held.png", user1)
+    assert (
+        client.put(
+            "/api/v1/intermediates/holds/tab", json={"images": ["held.png"]}, headers=_auth(user1_token)
+        ).status_code
+        == 204
+    )
+    assert client.delete("/api/v1/intermediates/holds/tab", headers=_auth(user2_token)).status_code == 204
+    summary = client.get("/api/v1/intermediates/summary", headers=_auth(user1_token)).json()
+    assert summary["items"][0]["images"]["active"] == 1
 
 
 def test_legacy_clear_keeps_its_shape_and_the_safety_policy(

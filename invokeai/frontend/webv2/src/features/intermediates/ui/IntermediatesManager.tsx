@@ -35,13 +35,21 @@ import {
 } from '@features/intermediates/core/selection';
 import {
   createIntermediatesPreview,
+  getIntermediatesOperation,
   getIntermediatesSummary,
   retryIntermediatesOperation,
   startIntermediatesOperation,
 } from '@features/intermediates/data/api';
 import { takeIntermediatesFocus } from '@features/intermediates/data/focus';
 import { intermediatesKeys } from '@features/intermediates/data/keys';
-import { activeOperationStore, followIntermediatesOperation } from '@features/intermediates/data/operationStore';
+import {
+  activeOperationStore,
+  clearPendingIntermediatesStart,
+  followIntermediatesOperation,
+  isPendingIntermediatesStartCurrent,
+  recordPendingIntermediatesStart,
+  restoreIntermediatesReceipt,
+} from '@features/intermediates/data/operationStore';
 import {
   INTERMEDIATES_MAX_ROWS,
   INTERMEDIATES_PAGE_SIZE,
@@ -85,6 +93,19 @@ const EMPTY_TOTALS = { reclaimableBytes: 0, rows: 0, safeImages: 0, safeVideos: 
 let nextIdempotencyKey = 1;
 const createIdempotencyKey = (): string => `intermediates:${Date.now().toString(36)}:${nextIdempotencyKey++}`;
 
+const isDefinitiveStartRejection = (error: unknown): boolean =>
+  error instanceof ApiError && error.status >= 400 && error.status < 500 && error.status !== 408;
+
+const getLatestRetry = async (operationId: string, signal: AbortSignal) => {
+  let operation = await getIntermediatesOperation(operationId, signal);
+  const visited = new Set<string>([operationId]);
+  while (operation.retriedByOperationId && !visited.has(operation.retriedByOperationId)) {
+    visited.add(operation.retriedByOperationId);
+    operation = await getIntermediatesOperation(operation.retriedByOperationId, signal);
+  }
+  return operation;
+};
+
 /** The Settings section: search, a select-all row with the delete action, and one row per project. */
 export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserId }: IntermediatesManagerProps) => {
   const { t } = useTranslation();
@@ -93,34 +114,88 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
   const [focus] = useState(takeIntermediatesFocus);
   const [search, setSearch] = useState('');
   const [ownerFilter, setOwnerFilter] = useState<string | null>(() =>
-    focus?.ownerId && canClearOthersIntermediates ? focus.ownerId : null
+    focus?.ownerId && canClearOthersIntermediates ? focus.ownerId : currentUserId
   );
+  const [projectFilter, setProjectFilter] = useState<string | null>(focus?.projectId ?? null);
   const [offset, setOffset] = useState(0);
   const [selection, setSelection] = useState<IntermediatesSelection>(EMPTY_SELECTION);
-  // A project to preselect is resolved against loaded rows, whichever page and owner it turns out to have; the
-  // intent is consumed by the first selection change.
+  // The focused project is queried directly, so pagination cannot hide the entry point's selection.
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(focus?.projectId ?? null);
   const [dialog, setDialog] = useState<ClearDialogState | null>(null);
   const activeOperationId = activeOperationStore.useSelector((snapshot) => snapshot.operationId);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
   const dialogTriggerRef = useRef<HTMLElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const previewRequestRef = useRef(0);
   const pendingScopeRef = useRef<IntermediatesScope | null>(null);
 
-  useMountEffect(() => attachIntermediatesRealtime(queryClient));
+  useMountEffect(() => {
+    let mounted = true;
+    const detach = attachIntermediatesRealtime(queryClient);
+    const pending = restoreIntermediatesReceipt();
+    if (pending) {
+      const owner = captureAccountScope();
+      void startIntermediatesOperation(pending, owner.signal)
+        .then((operation) => {
+          if (mounted && isAccountScopeCurrent(owner) && isPendingIntermediatesStartCurrent(pending)) {
+            queryClient.setQueryData(intermediatesKeys.operation(owner, operation.operationId), operation);
+            followIntermediatesOperation(operation.operationId);
+          }
+        })
+        .catch((error: unknown) => {
+          if (mounted && isAccountScopeCurrent(owner) && isPendingIntermediatesStartCurrent(pending)) {
+            if (isDefinitiveStartRejection(error)) {
+              clearPendingIntermediatesStart();
+            }
+            setRecoveryError(getApiErrorMessage(error, t('intermediates.dialog.startFailed')));
+          }
+        });
+    } else {
+      const operationId = activeOperationStore.getSnapshot().operationId;
+      if (operationId) {
+        const owner = captureAccountScope();
+        void getLatestRetry(operationId, owner.signal)
+          .then((operation) => {
+            if (
+              mounted &&
+              isAccountScopeCurrent(owner) &&
+              activeOperationStore.getSnapshot().operationId === operationId &&
+              operation.operationId !== operationId
+            ) {
+              queryClient.setQueryData(intermediatesKeys.operation(owner, operation.operationId), operation);
+              followIntermediatesOperation(operation.operationId);
+            }
+          })
+          .catch(() => undefined); // The operation query reports lookup failures in the panel.
+      }
+    }
+    return () => {
+      mounted = false;
+      detach();
+    };
+  });
 
-  // Non-admins are confined to their own rows by the server whatever is sent; admins see everyone unless filtered.
+  // Non-admins are confined to their own rows by the server whatever is sent.
   const ownerId: string | null = canClearOthersIntermediates ? ownerFilter : currentUserId;
   const params = useMemo<IntermediatesSummaryParams>(
-    () => ({ limit: INTERMEDIATES_PAGE_SIZE, offset, order: 'desc', ownerId, search, sort: 'reclaimable_bytes' }),
-    [offset, ownerId, search]
+    () => ({
+      limit: INTERMEDIATES_PAGE_SIZE,
+      offset,
+      order: 'desc',
+      ownerId,
+      projectId: projectFilter,
+      search,
+      sort: 'reclaimable_bytes',
+    }),
+    [offset, ownerId, projectFilter, search]
   );
   const query = useQuery(intermediatesSummaryQueryOptions(params));
   const rows = query.data?.items ?? EMPTY_ROWS;
   const totals = query.data?.totals;
   const hasSearch = search.trim().length > 0;
+  const hasSubsetFilter = hasSearch || projectFilter !== null;
   // Rows disappearing (a cleanup, a narrower search) can leave the offset past the end; step back to a valid page.
   if (query.data && offset > 0 && offset >= query.data.total) {
     setOffset(
@@ -141,6 +216,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
   const handleSearchChange = useCallback(
     (value: string) => {
       setSearch(value);
+      setProjectFilter(null);
       setOffset(0);
       // A filter change hides rows; hidden selections would act on what the user can no longer see.
       resetSelection();
@@ -149,6 +225,16 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
   );
   const clearOwnerFilter = useCallback(() => {
     setOwnerFilter(null);
+    setOffset(0);
+    resetSelection();
+  }, [resetSelection]);
+  const showOwnAccount = useCallback(() => {
+    setOwnerFilter(currentUserId);
+    setOffset(0);
+    resetSelection();
+  }, [currentUserId, resetSelection]);
+  const clearProjectFilter = useCallback(() => {
+    setProjectFilter(null);
     setOffset(0);
     resetSelection();
   }, [resetSelection]);
@@ -184,8 +270,8 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       }));
       try {
         let resolvedScope = scope;
-        // "All matching" under a search cannot be expressed to the server; resolve it to explicit rows.
-        if (effectiveSelection.mode === 'all-matching' && hasSearch && scope.kind === 'selection') {
+        // Row filters cannot be expressed by the cleanup scope; resolve them to explicit rows.
+        if (effectiveSelection.mode === 'all-matching' && hasSubsetFilter && scope.kind === 'selection') {
           const everything = await getIntermediatesSummary(
             { ...params, limit: INTERMEDIATES_MAX_ROWS, offset: 0 },
             owner.signal
@@ -216,7 +302,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
         }
       }
     },
-    [effectiveSelection.mode, hasSearch, params, t]
+    [effectiveSelection.mode, hasSubsetFilter, params, t]
   );
   const openDialog = useCallback(
     (scope: IntermediatesScope, trigger: HTMLElement | null) => {
@@ -252,6 +338,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       return;
     }
     const owner = captureAccountScope();
+    recordPendingIntermediatesStart({ idempotencyKey: dialog.idempotencyKey, previewId: preview.previewId });
     setDialog((current) => (current ? { ...current, isStarting: true, startError: null } : current));
     try {
       const operation = await startIntermediatesOperation(
@@ -270,6 +357,9 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       // A 404 means the preview expired or was consumed by a request whose response was lost; only a new
       // preview can move forward, so offer that instead of a dead Confirm.
       const previewGone = error instanceof ApiError && error.status === 404;
+      if (isDefinitiveStartRejection(error)) {
+        clearPendingIntermediatesStart();
+      }
       setDialog((current) =>
         current
           ? {
@@ -298,6 +388,20 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       followIntermediatesOperation(operation.operationId);
     } catch (error) {
       if (isAccountScopeCurrent(owner)) {
+        try {
+          const latest = await getLatestRetry(activeOperationId, owner.signal);
+          if (
+            latest.operationId !== activeOperationId &&
+            isAccountScopeCurrent(owner) &&
+            activeOperationStore.getSnapshot().operationId === activeOperationId
+          ) {
+            queryClient.setQueryData(intermediatesKeys.operation(owner, latest.operationId), latest);
+            followIntermediatesOperation(latest.operationId);
+            return;
+          }
+        } catch {
+          // Preserve the original retry error when reconciliation is unavailable.
+        }
         setRetryError(getApiErrorMessage(error, t('intermediates.operation.retryFailed')));
       }
     } finally {
@@ -316,7 +420,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
     void queryClient.invalidateQueries({ queryKey: intermediatesKeys.all });
   }, [queryClient]);
 
-  const selectedScope = resolveScope({ hasSearch, loadedRows: rows, ownerId, selection: effectiveSelection });
+  const selectedScope = resolveScope({ hasSubsetFilter, loadedRows: rows, ownerId, selection: effectiveSelection });
   const hasSelection = !isSelectionEmpty(effectiveSelection);
   const pageSelection = getPageSelectionState(effectiveSelection, rows);
   const filteredOwnerRow = ownerFilter ? rows[0] : undefined;
@@ -348,8 +452,13 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
           </IconButton>
         </Tooltip>
       </HStack>
-      <HStack gap="2">
-        <InputGroup flex="1" startElement={SEARCH_ICON}>
+      {recoveryError ? (
+        <Text color="fg.error" fontSize="xs" role="alert">
+          {recoveryError}
+        </Text>
+      ) : null}
+      <HStack flexWrap="wrap" gap="2">
+        <InputGroup flex="1 1 16rem" minW="0" startElement={SEARCH_ICON}>
           <Input
             ref={searchRef}
             aria-label={t('intermediates.searchLabel')}
@@ -363,7 +472,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
             onChange={(event) => handleSearchChange(event.currentTarget.value)}
           />
         </InputGroup>
-        {ownerFilter ? (
+        {canClearOthersIntermediates && ownerFilter ? (
           <Badge flexShrink={0} fontSize="2xs" gap="1" pe="0.5" variant="surface">
             {t('intermediates.owner.filtered', {
               name: filteredOwnerRow ? getOwnerLabel(filteredOwnerRow) : ownerFilter,
@@ -375,6 +484,27 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
                 size="2xs"
                 variant="ghost"
                 onClick={clearOwnerFilter}
+              >
+                <Icon as={XIcon} boxSize="3" />
+              </IconButton>
+            </Tooltip>
+          </Badge>
+        ) : null}
+        {canClearOthersIntermediates && !ownerFilter && currentUserId ? (
+          <Button size="2xs" variant="outline" onClick={showOwnAccount}>
+            {t('intermediates.owner.showMine')}
+          </Button>
+        ) : null}
+        {projectFilter ? (
+          <Badge flexShrink={0} fontSize="2xs" gap="1" pe="0.5" variant="surface">
+            {focusedRow?.projectName ?? t('intermediates.owner.projectFilter')}
+            <Tooltip content={t('intermediates.owner.showAllProjects')}>
+              <IconButton
+                aria-label={t('intermediates.owner.showAllProjects')}
+                minW="4"
+                size="2xs"
+                variant="ghost"
+                onClick={clearProjectFilter}
               >
                 <Icon as={XIcon} boxSize="3" />
               </IconButton>

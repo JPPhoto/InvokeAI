@@ -97,6 +97,7 @@ interface PreviewDTO {
   created_at: string;
   expires_at: string;
   target_rows: number;
+  has_more_eligible: boolean;
   impact: ImpactDTO;
   affected_documents: AffectedDocumentDTO[];
   affected_documents_hidden: number;
@@ -247,6 +248,9 @@ const buildSummaryUrl = (params: IntermediatesSummaryParams): string => {
   if (params.ownerId) {
     query.set('owner_id', params.ownerId);
   }
+  if (params.projectId) {
+    query.set('project_id', params.projectId);
+  }
   if (params.search?.trim()) {
     query.set('search', params.search.trim());
   }
@@ -315,6 +319,7 @@ export const createIntermediatesPreview = async (
     previewId: dto.preview_id,
     scope: mapScope(dto.scope),
     targetRows: dto.target_rows,
+    hasMoreEligible: dto.has_more_eligible,
   };
 };
 

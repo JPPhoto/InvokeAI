@@ -4220,6 +4220,7 @@
       "title": "Delete intermediates?",
       "forceTitle": "Force clear intermediates?",
       "loadingPreview": "Checking what can be cleared…",
+      "batchLimit": "This preview includes up to 50,000 eligible items. More remain in this scope; run Clear again after this batch finishes.",
       "previewFailed": "Could not check what can be cleared.",
       "summary": "Clear {{images}} and {{videos}} from {{projects}}?",
       "reclaim": "Approximately {{size}} can be reclaimed.",
@@ -4277,7 +4278,10 @@
     },
     "owner": {
       "filtered": "Account: {{name}}",
-      "showEveryone": "Show everyone"
+      "showEveryone": "Show everyone",
+      "showMine": "My account",
+      "projectFilter": "Selected project",
+      "showAllProjects": "Show all projects"
     },
     "list": {
       "selectAll": "Select all",

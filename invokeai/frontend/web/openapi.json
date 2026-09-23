@@ -7518,6 +7518,95 @@
         }
       }
     },
+    "/api/v1/intermediates/holds/{lease_id}": {
+      "put": {
+        "tags": ["intermediates"],
+        "summary": "Replace Intermediates Browser Hold",
+        "description": "Protect names still held by this account's open browser editor, including undo state.",
+        "operationId": "replace_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lease_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Lease Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntermediatesBrowserHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["intermediates"],
+        "summary": "Release Intermediates Browser Hold",
+        "operationId": "release_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lease_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Lease Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/intermediates/summary": {
       "get": {
         "tags": ["intermediates"],
@@ -7549,6 +7638,24 @@
               "title": "Owner Id"
             },
             "description": "Admins only: restrict rows to one account"
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
           },
           {
             "name": "search",
@@ -49153,6 +49260,32 @@
         "title": "IntermediatesAffectedDocument",
         "description": "A saved document a force clear would leave pointing at deleted media."
       },
+      "IntermediatesBrowserHoldRequest": {
+        "properties": {
+          "images": {
+            "items": {
+              "type": "string",
+              "maxLength": 255,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50000,
+            "title": "Images"
+          },
+          "videos": {
+            "items": {
+              "type": "string",
+              "maxLength": 255,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50000,
+            "title": "Videos"
+          }
+        },
+        "type": "object",
+        "title": "IntermediatesBrowserHoldRequest"
+      },
       "IntermediatesImpact": {
         "properties": {
           "delete_images": {
@@ -49330,6 +49463,18 @@
               }
             ],
             "title": "Retried From Operation Id"
+          },
+          "retried_by_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retried By Operation Id",
+            "description": "The retry that took over this operation's unresolved targets, if any"
           }
         },
         "type": "object",
@@ -49418,10 +49563,28 @@
             "description": "Bytes whose files are confirmed removed",
             "default": 0
           },
+          "unknown_size_count": {
+            "type": "integer",
+            "title": "Unknown Size Count",
+            "description": "Deleted items whose size was never measured; their bytes are not in reclaimed_bytes",
+            "default": 0
+          },
           "pending_disk_cleanup": {
             "type": "integer",
             "title": "Pending Disk Cleanup",
             "description": "Deleted records whose files could not be purged yet; the journal retries at startup",
+            "default": 0
+          },
+          "unresolved_images": {
+            "type": "integer",
+            "title": "Unresolved Images",
+            "description": "Image targets that failed or were never attempted",
+            "default": 0
+          },
+          "unresolved_videos": {
+            "type": "integer",
+            "title": "Unresolved Videos",
+            "description": "Video targets that failed or were never attempted",
             "default": 0
           }
         },
@@ -49477,6 +49640,12 @@
             "title": "Target Rows",
             "description": "Rows the scope resolved to"
           },
+          "has_more_eligible": {
+            "type": "boolean",
+            "title": "Has More Eligible",
+            "description": "More eligible intermediates remain outside this bounded preview batch",
+            "default": false
+          },
           "impact": {
             "$ref": "#/components/schemas/IntermediatesImpact"
           },
@@ -49518,13 +49687,17 @@
         "properties": {
           "user_id": {
             "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
             "title": "User Id",
             "description": "The owning account"
           },
           "project_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
               },
               {
                 "type": "null"
@@ -49568,6 +49741,18 @@
             ],
             "title": "Project Name",
             "description": "The project's name; null for unassigned rows"
+          },
+          "cover_image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image Name",
+            "description": "The newest durable image on the project's board, for a thumbnail"
           },
           "images": {
             "$ref": "#/components/schemas/IntermediatesKindCounts"
@@ -49618,7 +49803,9 @@
           "user_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
               },
               {
                 "type": "null"
@@ -49636,13 +49823,17 @@
         "properties": {
           "user_id": {
             "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
             "title": "User Id",
             "description": "The owning account"
           },
           "project_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
               },
               {
                 "type": "null"

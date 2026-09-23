@@ -140,34 +140,32 @@ class SqliteWorkflowRecordsStorage(WorkflowRecordsStorageBase):
 
     def update_is_public(self, workflow_id: str, is_public: bool, user_id: Optional[str] = None) -> WorkflowRecordDTO:
         """Updates the is_public field of a workflow and manages the 'shared' tag automatically."""
-        record = self.get(workflow_id)
-        workflow = record.workflow
-
-        # Manage "shared" tag: add when public, remove when private
-        tags_list = [t.strip() for t in workflow.tags.split(",") if t.strip()] if workflow.tags else []
-        if is_public and "shared" not in tags_list:
-            tags_list.append("shared")
-        elif not is_public and "shared" in tags_list:
-            tags_list.remove("shared")
-        updated_tags = ", ".join(tags_list)
-        updated_workflow = workflow.model_copy(update={"tags": updated_tags})
-
+        # Read and rewrite the current document under one transaction. A concurrent workflow edit
+        # must not land between the read and this full-document write: its reference index would
+        # then describe the edit while the stored workflow names the previous assets.
         with self._db.transaction() as cursor:
             if user_id is not None:
                 cursor.execute(
-                    """--sql
-                    UPDATE workflow_library
-                    SET workflow = ?, is_public = ?
-                    WHERE workflow_id = ? AND category = 'user' AND user_id = ?;
-                    """,
-                    (updated_workflow.model_dump_json(), is_public, workflow_id, user_id),
+                    "SELECT workflow FROM workflow_library WHERE workflow_id = ? AND category = 'user' AND user_id = ?;",
+                    (workflow_id, user_id),
                 )
             else:
                 cursor.execute(
+                    "SELECT workflow FROM workflow_library WHERE workflow_id = ? AND category = 'user';", (workflow_id,)
+                )
+            row = cursor.fetchone()
+            if row is not None:
+                workflow = Workflow.model_validate_json(row[0])
+                tags_list = [t.strip() for t in workflow.tags.split(",") if t.strip()] if workflow.tags else []
+                if is_public and "shared" not in tags_list:
+                    tags_list.append("shared")
+                elif not is_public and "shared" in tags_list:
+                    tags_list.remove("shared")
+                updated_workflow = workflow.model_copy(update={"tags": ", ".join(tags_list)})
+                cursor.execute(
                     """--sql
                     UPDATE workflow_library
-                    SET workflow = ?, is_public = ?
-                    WHERE workflow_id = ? AND category = 'user';
+                    SET workflow = ?, is_public = ? WHERE workflow_id = ?;
                     """,
                     (updated_workflow.model_dump_json(), is_public, workflow_id),
                 )

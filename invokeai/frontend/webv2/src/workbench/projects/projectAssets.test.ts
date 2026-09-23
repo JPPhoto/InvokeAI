@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectLiveAssetRefs, remapAssetRefs, selectCoverImageName, stripInstallationState } from './projectAssets';
+import {
+  collectHeldAssetRefs,
+  collectLiveAssetRefs,
+  partitionHeldAssetNames,
+  remapAssetRefs,
+  selectCoverImageName,
+  stripInstallationState,
+} from './projectAssets';
 
 const imageRef = (imageName: string) => ({ height: 512, imageName, width: 512 });
 
@@ -28,6 +35,31 @@ const galleryInstance = (recentImageNames: string[]) => ({
 });
 
 const noMappings = { images: new Map<string, string>(), videos: new Map<string, string>() };
+
+it('holds media from unsaved editor state and undo history', () => {
+  const refs = collectHeldAssetRefs([
+    {
+      canvas: { imageName: 'unsaved.png' },
+      queue: { items: [{ imageName: 'completed-job.png' }] },
+      widgetInstances: galleryInstance(['gallery-recent.png']),
+      undoRedo: { past: [{ project: { imageName: 'undo.png', video_name: 'undo.mp4' } }] },
+    },
+  ]);
+
+  expect(refs.images).toEqual(new Set(['unsaved.png', 'undo.png']));
+  expect(refs.videos).toEqual(new Set(['undo.mp4']));
+});
+
+it('partitions a long editor hold without dropping names or exceeding either API limit', () => {
+  const images = Array.from({ length: 50_001 }, (_, index) => `image-${index}`);
+  const videos = ['first.mp4', 'second.mp4'];
+  const batches = partitionHeldAssetNames(images, videos);
+
+  expect(batches).toHaveLength(2);
+  expect(batches.every((batch) => batch.images.length <= 50_000 && batch.videos.length <= 50_000)).toBe(true);
+  expect(batches.flatMap((batch) => batch.images)).toEqual(images);
+  expect(batches.flatMap((batch) => batch.videos)).toEqual(videos);
+});
 
 const projectDocument = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   canvas: {

@@ -57,6 +57,15 @@ def test_adds_provenance_and_size_columns(cursor: sqlite3.Cursor) -> None:
     assert {"project_id", "file_size_bytes"} <= _columns(cursor, "images")
     assert {"project_id", "file_size_bytes"} <= _columns(cursor, "videos")
     assert "project_id" in _columns(cursor, "session_queue")
+    assert {"operation_id", "caller_user_id", "idempotency_key", "state_json"} <= _columns(
+        cursor, "intermediates_operations"
+    )
+    assert {"user_id", "lease_id", "media_kind", "media_name", "expires_at"} <= _columns(
+        cursor, "intermediates_browser_holds"
+    )
+    assert {"operation_id", "media_kind", "media_name", "size_bytes", "confirmed_refs_json"} <= _columns(
+        cursor, "intermediates_operation_targets"
+    )
 
     # Existing media stays unassigned and unmeasured rather than guessed.
     cursor.execute("INSERT INTO images (image_name) VALUES ('old.png');")

@@ -6,11 +6,13 @@ import type {
 } from '@features/intermediates/core/types';
 
 import { ChakraProvider } from '@chakra-ui/react';
+import { ApiError } from '@platform/transport/http';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 
 const dependencies = vi.hoisted(() => ({
   createIntermediatesPreview: vi.fn(),
@@ -93,6 +95,7 @@ const previewOf = (mode: 'safe' | 'force', deleteImages: number): IntermediatesP
     unknownSizeCount: 0,
   },
   mode,
+  hasMoreEligible: false,
   previewId: `preview-${mode}`,
   scope: { kind: 'owner', userId: 'alice' },
   targetRows: 1,
@@ -134,7 +137,7 @@ let root: Root;
 let queryClient: QueryClient;
 
 const renderManager = async (
-  options: { focusProjectId?: string; currentUserId?: string | null } = {}
+  options: { focusProjectId?: string; currentUserId?: string | null; canClearOthersIntermediates?: boolean } = {}
 ): Promise<void> => {
   host = document.createElement('div');
   host.style.height = '640px';
@@ -155,7 +158,7 @@ const renderManager = async (
       <ChakraProvider value={system}>
         <QueryClientProvider client={queryClient}>
           <IntermediatesManager
-            canClearOthersIntermediates={false}
+            canClearOthersIntermediates={options.canClearOthersIntermediates ?? false}
             currentUserId={options.currentUserId === undefined ? 'alice' : options.currentUserId}
           />
         </QueryClientProvider>
@@ -189,6 +192,7 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
 
 describe('IntermediatesManager', () => {
   beforeEach(() => {
+    sessionStorage.clear();
     dependencies.getIntermediatesSummary
       .mockReset()
       .mockImplementation((params: { search?: string }) =>
@@ -211,6 +215,208 @@ describe('IntermediatesManager', () => {
   afterEach(async () => {
     await act(() => root?.unmount());
     host?.remove();
+    const { followIntermediatesOperation } = await import('@features/intermediates/data/operationStore');
+    followIntermediatesOperation(null);
+  });
+
+  it('starts an admin in their own account and exposes an explicit everyone switch', async () => {
+    await renderManager({ canClearOthersIntermediates: true });
+    host.style.width = '400px';
+    await vi.waitFor(() =>
+      expect(dependencies.getIntermediatesSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'alice' }),
+        expect.anything()
+      )
+    );
+    const everyoneControl = host.querySelector<HTMLElement>('[aria-label="intermediates.owner.showEveryone"]')!;
+    expect(everyoneControl.getBoundingClientRect().right).toBeLessThanOrEqual(host.getBoundingClientRect().right);
+    await page.screenshot({ path: '../../../../artifacts/intermediates/admin-own-narrow.png' });
+    await act(() => host.querySelector<HTMLButtonElement>('[aria-label="intermediates.owner.showEveryone"]')!.click());
+    await vi.waitFor(() =>
+      expect(dependencies.getIntermediatesSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({ ownerId: null }),
+        expect.anything()
+      )
+    );
+    await act(() => buttonWithText('intermediates.owner.showMine', host).click());
+    expect(host.querySelector('[aria-label="intermediates.owner.showEveryone"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('intermediates.owner.showMine');
+  });
+
+  it('fetches a focused project by id even when it is outside the first page', async () => {
+    dependencies.getIntermediatesSummary.mockImplementation((params: { projectId?: string }) =>
+      Promise.resolve(summaryOf(params.projectId === 'p55' ? [row('p55', 'Far project', 2)] : [row('p1', 'First', 1)]))
+    );
+    await renderManager({ focusProjectId: 'p55' });
+    await vi.waitFor(() => expect(host.textContent).toContain('Far project'));
+    expect(checkbox('intermediates.list.selectRow(name=Far project)').checked).toBe(true);
+    expect(dependencies.getIntermediatesSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'p55' }),
+      expect.anything()
+    );
+  });
+
+  it('keeps Select all within a focused project', async () => {
+    dependencies.getIntermediatesSummary.mockImplementation((params: { projectId?: string }) =>
+      Promise.resolve(summaryOf(params.projectId === 'p1' ? [row('p1', 'Portraits', 4)] : [row('p2', 'Other', 3)]))
+    );
+    await renderManager({ focusProjectId: 'p1' });
+    await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+    await act(() => checkbox('intermediates.list.selectAll').click());
+    await act(() => checkbox('intermediates.list.selectAll').click());
+    await act(() => buttonWithText('intermediates.list.delete', host).click());
+    await vi.waitFor(() =>
+      expect(dependencies.createIntermediatesPreview).toHaveBeenCalledWith(
+        { mode: 'safe', scope: { kind: 'selection', targets: [{ projectId: 'p1', userId: 'alice' }] } },
+        expect.anything()
+      )
+    );
+  });
+
+  it('labels a bounded preview as a repeatable batch', async () => {
+    dependencies.createIntermediatesPreview.mockResolvedValue({ ...previewOf('safe', 4), hasMoreEligible: true });
+    await renderManager({ focusProjectId: 'p1' });
+    await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+    await act(() => buttonWithText('intermediates.list.delete', host).click());
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('intermediates.dialog.batchLimit')
+    );
+  });
+
+  it('replays a confirmed start receipt after a reload', async () => {
+    const { recordPendingIntermediatesStart } = await import('@features/intermediates/data/operationStore');
+    recordPendingIntermediatesStart({ idempotencyKey: 'confirmed-key', previewId: 'confirmed-preview' });
+
+    await renderManager();
+    await vi.waitFor(() =>
+      expect(dependencies.startIntermediatesOperation).toHaveBeenCalledWith(
+        { idempotencyKey: 'confirmed-key', previewId: 'confirmed-preview' },
+        expect.anything()
+      )
+    );
+    await vi.waitFor(() => expect(host.textContent).toContain('intermediates.operation.status.running'));
+    expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toContain('op-1');
+  });
+
+  it('does not let a late start replay replace a newer confirmed operation', async () => {
+    const { activeOperationStore, recordPendingIntermediatesStart } =
+      await import('@features/intermediates/data/operationStore');
+    let resolveOld!: (operation: IntermediatesOperation) => void;
+    const oldStart = new Promise<IntermediatesOperation>((resolve) => {
+      resolveOld = resolve;
+    });
+    recordPendingIntermediatesStart({ idempotencyKey: 'old-key', previewId: 'old-preview' });
+    dependencies.startIntermediatesOperation.mockImplementation((request: { previewId: string }) =>
+      request.previewId === 'old-preview'
+        ? oldStart
+        : Promise.resolve({ ...operationOf('running'), operationId: 'new-op' })
+    );
+    await renderManager({ focusProjectId: 'p1' });
+    await vi.waitFor(() =>
+      expect(dependencies.startIntermediatesOperation).toHaveBeenCalledWith(
+        { idempotencyKey: 'old-key', previewId: 'old-preview' },
+        expect.anything()
+      )
+    );
+    await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+    await act(() => buttonWithText('intermediates.list.delete', host).click());
+    const dialog = await vi.waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[role="alertdialog"]');
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    await vi.waitFor(() => expect(dialog.textContent).toContain('intermediates.dialog.reclaim'));
+    await act(() => buttonWithText('intermediates.dialog.confirm', dialog).click());
+    await vi.waitFor(() => expect(activeOperationStore.getSnapshot().operationId).toBe('new-op'));
+    await act(() => resolveOld({ ...operationOf('completed'), operationId: 'old-op' }));
+    expect(activeOperationStore.getSnapshot().operationId).toBe('new-op');
+  });
+
+  it('does not let an old rejected replay erase a newer pending confirmation', async () => {
+    const { recordPendingIntermediatesStart } = await import('@features/intermediates/data/operationStore');
+    let rejectOld!: (error: Error) => void;
+    let resolveNew!: (operation: IntermediatesOperation) => void;
+    const oldStart = new Promise<IntermediatesOperation>((_resolve, reject) => {
+      rejectOld = reject;
+    });
+    const newStart = new Promise<IntermediatesOperation>((resolve) => {
+      resolveNew = resolve;
+    });
+    recordPendingIntermediatesStart({ idempotencyKey: 'old-key', previewId: 'old-preview' });
+    dependencies.startIntermediatesOperation.mockImplementation((request: { previewId: string }) =>
+      request.previewId === 'old-preview' ? oldStart : newStart
+    );
+    await renderManager({ focusProjectId: 'p1' });
+    await vi.waitFor(() =>
+      expect(dependencies.startIntermediatesOperation).toHaveBeenCalledWith(
+        { idempotencyKey: 'old-key', previewId: 'old-preview' },
+        expect.anything()
+      )
+    );
+    await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+    await act(() => buttonWithText('intermediates.list.delete', host).click());
+    const dialog = await vi.waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[role="alertdialog"]');
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    await vi.waitFor(() => expect(dialog.textContent).toContain('intermediates.dialog.reclaim'));
+    await act(() => buttonWithText('intermediates.dialog.confirm', dialog).click());
+    await vi.waitFor(() =>
+      expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toContain('preview-safe')
+    );
+    await act(() => rejectOld(new ApiError('Rejected', 409)));
+    expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toContain('preview-safe');
+    await act(() => resolveNew({ ...operationOf('running'), operationId: 'new-op' }));
+  });
+
+  it('drops a definitively rejected start receipt', async () => {
+    const { recordPendingIntermediatesStart } = await import('@features/intermediates/data/operationStore');
+    recordPendingIntermediatesStart({ idempotencyKey: 'rejected-key', previewId: 'rejected-preview' });
+    dependencies.startIntermediatesOperation.mockRejectedValue(new ApiError('Unavailable', 409));
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Unavailable'));
+    expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toBeNull();
+  });
+
+  it('follows a retry whose response was lost before reload', async () => {
+    const { followIntermediatesOperation } = await import('@features/intermediates/data/operationStore');
+    followIntermediatesOperation('op-1');
+    dependencies.getIntermediatesOperation.mockImplementation((operationId: string) =>
+      Promise.resolve(
+        operationId === 'op-1'
+          ? { ...operationOf('failed'), retriedByOperationId: 'op-2' }
+          : { ...operationOf('running'), operationId: 'op-2' }
+      )
+    );
+    await renderManager();
+    await vi.waitFor(() =>
+      expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toContain('op-2')
+    );
+    expect(host.textContent).toContain('intermediates.operation.status.running');
+  });
+
+  it('does not let a late retry lookup replace a newer followed operation', async () => {
+    const { activeOperationStore, followIntermediatesOperation } =
+      await import('@features/intermediates/data/operationStore');
+    let resolveOriginal!: (operation: IntermediatesOperation) => void;
+    const original = new Promise<IntermediatesOperation>((resolve) => {
+      resolveOriginal = resolve;
+    });
+    dependencies.getIntermediatesOperation.mockImplementation((operationId: string) =>
+      operationId === 'op-1' ? original : Promise.resolve({ ...operationOf('running'), operationId })
+    );
+    followIntermediatesOperation('op-1');
+    await renderManager();
+    await vi.waitFor(() =>
+      expect(dependencies.getIntermediatesOperation).toHaveBeenCalledWith('op-1', expect.anything())
+    );
+    await act(() => followIntermediatesOperation('newer-op'));
+    await act(() => resolveOriginal({ ...operationOf('failed'), retriedByOperationId: 'op-2' }));
+    await vi.waitFor(() =>
+      expect(dependencies.getIntermediatesOperation).toHaveBeenCalledWith('op-2', expect.anything())
+    );
+    expect(activeOperationStore.getSnapshot().operationId).toBe('newer-op');
   });
 
   it('lists projects with used and unused counts and keeps Delete disabled until something is selected', async () => {

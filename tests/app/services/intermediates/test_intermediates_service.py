@@ -268,6 +268,19 @@ def test_summary_scopes_owners_search_sort_and_pages(invoker: Invoker, service: 
     assert [row.project_name for row in by_name.items] == ["Beta"]
     assert by_name.total == 2 and by_name.totals.reclaimable_bytes == 30
 
+    focused = service.get_summary(
+        ALICE,
+        owner_id=None,
+        project_id=beta,
+        search=None,
+        sort="project_name",
+        descending=False,
+        offset=0,
+        limit=1,
+    )
+    assert [(row.project_id, row.project_name) for row in focused.items] == [(beta, "Beta")]
+    assert focused.total == 1
+
     searched = service.get_summary(
         ADMIN, owner_id=None, search="bo", sort="project_name", descending=False, offset=0, limit=50
     )
@@ -635,6 +648,30 @@ def test_a_purge_failure_counts_as_pending_disk_cleanup_not_reclaimed(
     assert len(list(invoker.services.image_files.image_root.glob(".delete_*"))) == 1
 
 
+def test_failed_video_purge_is_recovered_after_restart(invoker: Invoker, monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed_video(invoker, "recover.mp4")
+    files = invoker.services.video_files
+    path = files.get_path("recover.mp4")
+    original_unlink = Path.unlink
+    failed_once = False
+
+    def fail_once(candidate: Path, *args, **kwargs) -> None:
+        nonlocal failed_once
+        if candidate == path and not failed_once:
+            failed_once = True
+            raise OSError("video file temporarily locked")
+        original_unlink(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_once)
+    result = invoker.services.videos.delete_intermediates_by_names(["recover.mp4"])
+
+    assert result.deleted_names == ["recover.mp4"]
+    assert result.purge_deferred == ["recover.mp4"]
+    assert path.exists()
+    DiskVideoFileStorage(path.parent).start(invoker)
+    assert not path.exists()
+
+
 def test_cleanup_refuses_to_start_or_continue_during_storage_maintenance(
     invoker: Invoker, service: IntermediatesService, monkeypatch
 ) -> None:
@@ -856,8 +893,10 @@ def test_a_save_cannot_slip_between_the_final_check_and_the_delete(
     guard_may_finish = threading.Event()
     delete_committed_at: list[float] = []
 
-    def slow_guard_factory(kind, *, mode, allowed_user_ids):
-        guard = real_guard_factory(kind, mode=mode, allowed_user_ids=allowed_user_ids)
+    def slow_guard_factory(kind, *, mode, allowed_user_ids, confirmed_references=None):
+        guard = real_guard_factory(
+            kind, mode=mode, allowed_user_ids=allowed_user_ids, confirmed_references=confirmed_references
+        )
 
         def paused(cursor, names):
             guard_entered.set()
@@ -937,3 +976,166 @@ def test_active_inputs_survive_a_rolled_back_batch(
 
     assert operation.progress.failed_images == 1
     assert _exists(invoker, "consumed.png"), "an input of pending work was deleted after a rolled-back batch"
+
+
+def test_force_clear_keeps_a_newly_referenced_target(invoker: Invoker, service: IntermediatesService) -> None:
+    _seed_image(invoker, "force-race.png")
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("alice")), ALICE)
+    assert preview.affected_documents == []
+    _project(invoker, "alice", "Saved after preview", {"imageName": "force-race.png"})
+
+    started = service.start_operation(
+        IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="force-race"), ALICE
+    )
+    finished = _wait(service, started.operation_id)
+
+    assert finished.progress.retained_images == 1
+    assert _exists(invoker, "force-race.png")
+
+
+def test_browser_hold_protects_unsaved_and_undo_references(invoker: Invoker, service: IntermediatesService) -> None:
+    from invokeai.app.services.intermediates.intermediates_common import IntermediatesBrowserHoldRequest
+
+    _seed_image(invoker, "browser-only.png")
+    service.replace_browser_hold(ALICE, "tab-1", IntermediatesBrowserHoldRequest(images=["browser-only.png"]))
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("alice")), ALICE)
+    assert preview.impact.keep_active_images == 1
+    assert preview.impact.delete_images == 0
+
+    service.release_browser_hold(BOB, "tab-1")
+    still_held = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
+    assert still_held.impact.keep_active_images == 1
+    service.release_browser_hold(ALICE, "tab-1")
+    service.replace_browser_hold(BOB, "tab-2", IntermediatesBrowserHoldRequest(images=["browser-only.png"]))
+    available = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
+    assert available.impact.delete_images == 1
+
+
+def test_operation_receipt_and_retry_survive_restart(
+    invoker: Invoker, service: IntermediatesService, monkeypatch
+) -> None:
+    _seed_image(invoker, "restart-flaky.png")
+    real_delete = invoker.services.images.delete_intermediates_by_names
+    monkeypatch.setattr(
+        invoker.services.images, "delete_intermediates_by_names", MagicMock(side_effect=OSError("busy"))
+    )
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
+    started = service.start_operation(
+        IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="restart-key"), ALICE
+    )
+    finished = _wait(service, started.operation_id)
+    assert finished.progress.unresolved_images == 1
+    service.stop()
+
+    restored = IntermediatesService(IntermediatesRecordsSqlite(invoker.services.image_records._db))
+    invoker.services.intermediates = restored
+    restored.start(invoker)
+    try:
+        assert restored.get_operation(finished.operation_id, ALICE).progress.unresolved_images == 1
+        replay = restored.start_operation(
+            IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="restart-key"), ALICE
+        )
+        assert replay.operation_id == finished.operation_id
+        monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
+        retry = restored.retry_operation(finished.operation_id, ALICE)
+        assert _wait(restored, retry.operation_id).progress.deleted_images == 1
+        assert restored.retry_operation(finished.operation_id, ALICE).operation_id == retry.operation_id
+        assert not _exists(invoker, "restart-flaky.png")
+    finally:
+        restored.stop()
+
+
+def test_force_confirmation_guard_survives_failed_batch_and_restart(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_image(invoker, "force-retry.png")
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("alice")), ALICE)
+    real_delete = invoker.services.images.delete_intermediates_by_names
+    monkeypatch.setattr(
+        invoker.services.images, "delete_intermediates_by_names", MagicMock(side_effect=OSError("busy"))
+    )
+    started = service.start_operation(
+        IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="force-retry"), ALICE
+    )
+    assert _wait(service, started.operation_id).progress.unresolved_images == 1
+    service.stop()
+    _project(invoker, "alice", "New reference", {"imageName": "force-retry.png"})
+
+    restored = IntermediatesService(IntermediatesRecordsSqlite(invoker.services.image_records._db))
+    invoker.services.intermediates = restored
+    restored.start(invoker)
+    monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
+    try:
+        retry = restored.retry_operation(started.operation_id, ALICE)
+        result = _wait(restored, retry.operation_id)
+        assert result.progress.retained_images == 1
+        assert _exists(invoker, "force-retry.png")
+    finally:
+        restored.stop()
+
+
+def test_measurement_skip_set_does_not_starve_later_rows(invoker: Invoker, service: IntermediatesService) -> None:
+    records = service._records
+    for index in range(501):
+        _seed_image(invoker, f"unmeasurable-{index}.png", with_file=False)
+        invoker.services.image_records.set_file_size_bytes(f"unmeasurable-{index}.png", None)
+    _seed_image(invoker, "later-measurable.png", with_file=False)
+    invoker.services.image_records.set_file_size_bytes("later-measurable.png", None)
+
+    records.mark_unmeasurable("image", [f"unmeasurable-{index}.png" for index in range(501)])
+
+    assert records.next_unmeasured("image", 1) == [("later-measurable.png", "")]
+
+
+def test_receipt_write_failure_does_not_strand_the_accepted_queue(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_ensure_worker = service._ensure_worker
+    monkeypatch.setattr(service, "_ensure_worker", lambda: None)
+    operation_ids = []
+    for index in range(2):
+        _seed_image(invoker, f"queued-{index}.png")
+        preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
+        started = service.start_operation(
+            IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key=f"queued-{index}"), ALICE
+        )
+        operation_ids.append(started.operation_id)
+
+    real_save = service._records.save_operation
+    failures = 0
+
+    def fail_two_writes(*args, **kwargs):
+        nonlocal failures
+        if failures < 2:
+            failures += 1
+            raise OSError("storage temporarily unavailable")
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(service._records, "save_operation", fail_two_writes)
+    monkeypatch.setattr(service, "_ensure_worker", original_ensure_worker)
+    service._ensure_worker()
+
+    assert _wait(service, operation_ids[0]).status == "failed"
+    assert _wait(service, operation_ids[1]).status == "completed"
+
+
+def test_large_single_row_clears_in_bounded_batches_past_protected_items(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(intermediates_default, "MAX_OPERATION_TARGETS", 2)
+    _seed_image(invoker, "protected-first.png")
+    _project(invoker, "alice", "Uses image", {"imageName": "protected-first.png"})
+    for index in range(3):
+        _seed_image(invoker, f"eligible-{index}.png")
+
+    first, first_result = _run(service, ALICE, _owner("alice"))
+    assert first.has_more_eligible
+    assert first.impact.delete_images == 2
+    assert first.impact.keep_referenced_images == 1
+    assert first_result.progress.deleted_images == 2
+
+    second, second_result = _run(service, ALICE, _owner("alice"))
+    assert not second.has_more_eligible
+    assert second.impact.delete_images == 1
+    assert second_result.progress.deleted_images == 1
+    assert _exists(invoker, "protected-first.png")

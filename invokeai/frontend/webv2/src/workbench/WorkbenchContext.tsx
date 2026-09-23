@@ -3,9 +3,11 @@ import type { Project } from '@workbench/projectContracts';
 import type { ProjectSettings } from '@workbench/settings/contracts';
 import type { WidgetInstanceId, WidgetTypeId } from '@workbench/widgetContracts';
 
+import { createUuid } from '@platform/browser/randomUuid';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { captureAccountScope } from '@platform/state/accountLifecycle';
+import { captureAccountScope, type AccountScope } from '@platform/state/accountLifecycle';
 import { shallowEqual as selectorShallowEqual, useExternalStoreSelector } from '@platform/state/selectors';
+import { apiFetch } from '@platform/transport/http';
 import { createContext, use, useEffect, useSyncExternalStore, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -17,6 +19,7 @@ import { createExtensionRegistry, type ExtensionRegistry } from './extensions/ex
 import { clearLayerPanelStates } from './layerPanelState';
 import { createWorkbenchPersistenceRuntime } from './persistenceRuntime';
 import { createOpenProjectBroker } from './projects/openProjectBroker';
+import { collectHeldAssetRefs, partitionHeldAssetNames } from './projects/projectAssets';
 import { describeRefusedProjects } from './projects/projectLoadRefusal';
 import {
   createSyncedWorkbenchPersistence,
@@ -43,6 +46,119 @@ const subscribeToNothing = (): (() => void) => () => {};
 const getNullSnapshot = (): null => null;
 
 export const shallowEqual = selectorShallowEqual;
+
+/** An open editor keeps its unsaved and undo media protected while the tab is alive. */
+const startBrowserIntermediateHold = (store: WorkbenchInternalStore, owner: AccountScope): (() => void) => {
+  const leaseId = createUuid();
+  let disposed = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight = false;
+  let pending = false;
+  let pendingRefresh = false;
+  const lastSentSignatures: string[] = [];
+  let lastProjects = store.getSnapshot().projects;
+  // Canvas undo owns some references outside Project. Retain every asset observed in this open
+  // editor until its lease expires, so removing a layer cannot expose its undo image to cleanup.
+  const seenImages = new Set<string>();
+  const seenVideos = new Set<string>();
+  const observe = (projects: readonly Project[]): void => {
+    const refs = collectHeldAssetRefs(projects);
+    for (const name of refs.images) {
+      seenImages.add(name);
+    }
+    for (const name of refs.videos) {
+      seenVideos.add(name);
+    }
+  };
+  observe(lastProjects);
+
+  const send = async (refresh = false): Promise<void> => {
+    if (disposed || owner.signal.aborted) {
+      return;
+    }
+    if (inFlight) {
+      pending = true;
+      pendingRefresh ||= refresh;
+      return;
+    }
+    inFlight = true;
+    try {
+      do {
+        pending = false;
+        observe(store.getSnapshot().projects);
+        const images = [...seenImages];
+        const videos = [...seenVideos];
+        const mustRefresh = refresh || pendingRefresh;
+        refresh = false;
+        pendingRefresh = false;
+        if (!images.length && !videos.length && lastSentSignatures.length === 0) {
+          continue;
+        }
+        const batches = partitionHeldAssetNames(images, videos);
+        for (let index = 0; index < batches.length; index += 1) {
+          if (disposed || owner.signal.aborted) {
+            break;
+          }
+          const batch = batches[index]!;
+          const signature = JSON.stringify([batch.images, batch.videos]);
+          if (!mustRefresh && signature === lastSentSignatures[index]) {
+            continue;
+          }
+          try {
+            await apiFetch(`/api/v1/intermediates/holds/${encodeURIComponent(`${leaseId}-${index}`)}`, {
+              body: JSON.stringify(batch),
+              headers: { 'Content-Type': 'application/json' },
+              method: 'PUT',
+              signal: owner.signal,
+            });
+            lastSentSignatures[index] = signature;
+          } catch {
+            // Each failed batch keeps its prior server hold and retries on the next heartbeat.
+          }
+        }
+        if (disposed || owner.signal.aborted) {
+          break;
+        }
+      } while (pending);
+    } finally {
+      inFlight = false;
+    }
+  };
+  const schedule = (): void => {
+    const projects = store.getSnapshot().projects;
+    if (projects === lastProjects) {
+      return;
+    }
+    const changedProjects = projects.filter((project, index) => project !== lastProjects[index]);
+    lastProjects = projects;
+    observe(changedProjects);
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      void send();
+    }, 250);
+  };
+  const unsubscribe = store.subscribe(schedule);
+  const heartbeat = setInterval(() => void send(true), 5 * 60_000);
+  const onVisible = (): void => {
+    if (document.visibilityState === 'visible') {
+      void send(true);
+    }
+  };
+  document.addEventListener('visibilitychange', onVisible);
+  void send();
+  return () => {
+    disposed = true;
+    unsubscribe();
+    clearInterval(heartbeat);
+    document.removeEventListener('visibilitychange', onVisible);
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  };
+};
 
 export const WorkbenchProvider = ({
   children,
@@ -134,8 +250,10 @@ export const WorkbenchProvider = ({
     });
 
     persistenceRuntime.start();
+    const releaseIntermediateHold = startBrowserIntermediateHold(store, owner);
 
     return () => {
+      releaseIntermediateHold();
       clearLayerPanelStates();
       openProjectBroker.dispose();
       persistenceRuntime.dispose();

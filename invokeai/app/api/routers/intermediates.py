@@ -2,13 +2,13 @@
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Path, Query, status
+from fastapi import APIRouter, Body, HTTPException, Path, Query, Response, status
 
 from invokeai.app.api.auth_dependencies import CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
-from invokeai.app.api.routers.image_move_maintenance import assert_image_move_maintenance_inactive
 from invokeai.app.services.intermediates.intermediates_base import IntermediatesCaller
 from invokeai.app.services.intermediates.intermediates_common import (
+    IntermediatesBrowserHoldRequest,
     IntermediatesIdempotencyConflictError,
     IntermediatesOperation,
     IntermediatesOperationNotFoundError,
@@ -25,6 +25,26 @@ from invokeai.app.services.intermediates.intermediates_common import (
 from invokeai.app.services.shared.pagination import MAX_PAGE_SIZE
 
 intermediates_router = APIRouter(prefix="/v1/intermediates", tags=["intermediates"])
+
+
+@intermediates_router.put("/holds/{lease_id}", status_code=status.HTTP_204_NO_CONTENT)
+def replace_intermediates_browser_hold(
+    current_user: CurrentUserOrDefault,
+    request: IntermediatesBrowserHoldRequest,
+    lease_id: str = Path(min_length=1, max_length=64),
+) -> Response:
+    """Protect names still held by this account's open browser editor, including undo state."""
+    ApiDependencies.invoker.services.intermediates.replace_browser_hold(_caller(current_user), lease_id, request)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@intermediates_router.delete("/holds/{lease_id}", status_code=status.HTTP_204_NO_CONTENT)
+def release_intermediates_browser_hold(
+    current_user: CurrentUserOrDefault,
+    lease_id: str = Path(min_length=1, max_length=64),
+) -> Response:
+    ApiDependencies.invoker.services.intermediates.release_browser_hold(_caller(current_user), lease_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _caller(current_user: CurrentUserOrDefault) -> IntermediatesCaller:
@@ -49,6 +69,7 @@ def get_intermediates_summary(
     owner_id: Optional[str] = Query(
         default=None, min_length=1, max_length=255, description="Admins only: restrict rows to one account"
     ),
+    project_id: Optional[str] = Query(default=None, min_length=1, max_length=255),
     search: Optional[str] = Query(default=None, max_length=200, description="Project (and, for admins, owner) filter"),
     sort: IntermediatesSummarySort = Query(default="reclaimable_bytes"),
     order: Literal["asc", "desc"] = Query(default="desc"),
@@ -65,6 +86,7 @@ def get_intermediates_summary(
             descending=order == "desc",
             offset=offset,
             limit=limit,
+            project_id=project_id,
         )
     except IntermediatesScopeForbiddenError as error:
         raise _translate(error)
@@ -83,7 +105,7 @@ def create_intermediates_preview(
     """Freezes the targets a cleanup would act on and reports its impact. Previews expire unused."""
     try:
         return ApiDependencies.invoker.services.intermediates.create_preview(request, _caller(current_user))
-    except (IntermediatesScopeForbiddenError, IntermediatesScopeInvalidError) as error:
+    except (IntermediatesScopeForbiddenError, IntermediatesScopeInvalidError, IntermediatesUnavailableError) as error:
         raise _translate(error)
 
 
@@ -98,7 +120,6 @@ def start_intermediates_operation(
     request: IntermediatesOperationRequest = Body(description="The confirmed preview"),
 ) -> IntermediatesOperation:
     """Starts the cleanup a preview described. Repeating a request with its idempotency key returns the same operation."""
-    assert_image_move_maintenance_inactive()
     try:
         return ApiDependencies.invoker.services.intermediates.start_operation(request, _caller(current_user))
     except (
@@ -133,7 +154,6 @@ def retry_intermediates_operation(
     operation_id: str = Path(min_length=1, max_length=64),
 ) -> IntermediatesOperation:
     """Retries exactly the targets a finished operation left unresolved, as a new operation."""
-    assert_image_move_maintenance_inactive()
     try:
         return ApiDependencies.invoker.services.intermediates.retry_operation(operation_id, _caller(current_user))
     except (

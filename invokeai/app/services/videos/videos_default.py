@@ -405,20 +405,23 @@ class VideoService(VideoServiceABC):
         if not subfolders:
             return IntermediateDeleteResult()
 
-        # Records first, files second, like the image path: only the files of rows the conditional
-        # delete actually removed are touched, so a video promoted or protected between the preview
-        # and this call keeps both. There is no video delete journal, so a crash between the two
-        # steps leaves files without records — the exposure `delete_videos_by_names` already has.
-        deleted = records.delete_intermediates_by_names(list(subfolders.keys()), guard=guard)
-        result = IntermediateDeleteResult(deleted_names=deleted)
-        for name in deleted:
+        # Journal the live paths before deleting records. The guard decides inside that transaction
+        # which records still qualify; a promoted or newly protected video retains its files.
+        token = files.begin_delete(list(subfolders.items()))
+        try:
+            deleted = records.delete_intermediates_by_names(list(subfolders.keys()), guard=guard)
+        except Exception:
             try:
-                files.delete(name, video_subfolder=subfolders[name])
+                files.abandon_delete(token)
             except Exception as cleanup_error:
-                self.__invoker.services.logger.error(
-                    f"Failed to purge intermediate video files for {name}: {cleanup_error}"
-                )
-                result.purge_deferred.append(name)
+                self.__invoker.services.logger.error(f"Failed to discard pending video deletion: {cleanup_error}")
+            raise
+        result = IntermediateDeleteResult(deleted_names=deleted)
+        try:
+            files.commit_delete(token, video_names=deleted)
+        except Exception as cleanup_error:
+            self.__invoker.services.logger.error(f"Failed to purge intermediate video files: {cleanup_error}")
+            result.purge_deferred = list(deleted)
         for name in deleted:
             self._on_deleted(name)
         return result
