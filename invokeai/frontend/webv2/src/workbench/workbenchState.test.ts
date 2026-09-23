@@ -49,8 +49,7 @@ import {
   workbenchReducer as reduceWorkbench,
 } from './workbenchState.testing';
 
-// Generation policy now fails closed without the capability table, and a submission cannot
-// happen before app boot has fetched it. Seeding it here is what the running app does.
+// Seed capabilities to match app boot; submission fails closed without them.
 seedArchitectureCapabilities();
 
 const generationDeviceMock = vi.hoisted(() => ({
@@ -388,10 +387,7 @@ const createInpaintMaskLayer = (id: string): CanvasLayerContract =>
   }) as CanvasLayerContract;
 
 /** Adds layers top-to-bottom in array order (each `addCanvasLayer` inserts at index 0). */
-// A new project's canvas now seeds one empty inpaint mask (see
-// `createNewCanvasState`). These layer-reducer/staging tests exercise layer
-// mechanics where that default mask is incidental, so they start from an empty
-// canvas document to keep their expectations focused on the layers under test.
+// Start without the default inpaint mask so these tests isolate layer mechanics.
 const withEmptyCanvas = (state: WorkbenchState): WorkbenchState =>
   workbenchReducer(state, { document: createEmptyCanvasDocument(), type: 'replaceCanvasDocument' });
 
@@ -496,9 +492,7 @@ describe('generation-device orchestration metadata', () => {
 describe('workbench hydration invariants', () => {
   it('seeds a draft when a projectless session hydrates', () => {
     const initial = createInitialWorkbenchState();
-    // What `persistEmptySession` caches after the last tab is closed. A load path
-    // that hands this over verbatim used to leave the store with no active project,
-    // which the first consumer to read one dereferences.
+    // Model the projectless cache written after closing the last tab.
     const emptySession: WorkbenchState = { ...initial, activeProjectId: '', projects: [] };
 
     const hydrated = workbenchReducer(initial, { state: emptySession, type: 'hydrateWorkbench' });
@@ -511,9 +505,6 @@ describe('workbench hydration invariants', () => {
   it('builds that draft from the cached account, not the shipped defaults', () => {
     const initial = createInitialWorkbenchState();
     const project = getActiveProject(initial);
-    // The account's saved override of the default preset is what an empty cache
-    // still owns; the seeded draft has to inherit it the way the offline load path's
-    // replacement draft does.
     const customizedDefault = {
       ...resolveSavedLayoutPreset(initial.account, initial.account.activeLayoutPresetId).snapshot,
       widgetRegions: {
@@ -606,10 +597,7 @@ describe('workbench widget region defaults', () => {
   });
 
   it('hydrates a pre-image-map right rail to the curated rail rather than splicing Image Map in', () => {
-    // Splicing would leave a rail no preset holds, so an untouched project
-    // would compare unequal to the preset it was loaded from — the drift dot
-    // the rail migrations exist to avoid. Adopting the curated rail is the
-    // only result that both surfaces the widget and keeps the two in step.
+    // Untouched legacy rails must adopt the exact curated preset to avoid false drift.
     const initial = createInitialWorkbenchState();
     const withRightIds = (instanceIds: Project['widgetRegions']['right']['instanceIds']): WorkbenchState => ({
       ...initial,
@@ -670,8 +658,6 @@ describe('workbench widget region defaults', () => {
       instanceIds: ['layers', 'preview'],
     });
 
-    // The brief Layers-only rail (which dropped the preview) is a shipped
-    // shape too, so it adopts the current rail and gets the preview back.
     const hydratedLayersOnly = getActiveProject(
       workbenchReducer(initial, { state: layersOnlyRail, type: 'hydrateWorkbench' })
     );
@@ -708,8 +694,6 @@ describe('workbench widget region defaults', () => {
       type: 'hydrateWorkbench',
     });
 
-    // No Video adoption any more: the curated defaults exclude it, so the
-    // legacy splice adds Upscale alone.
     expect(getActiveProject(migrated).widgetRegions.left.instanceIds).toEqual(['generate', 'workflow', 'upscale']);
     expect(getActiveProject(migrated).widgetInstances.upscale?.typeId).toBe('upscale');
     expect(getActiveProject(customized).widgetRegions.left.instanceIds).toEqual(['generate', 'gallery']);
@@ -850,8 +834,6 @@ describe('workbench panel resize bounds', () => {
     state = workbenchReducer(state, { isCollapsed: true, region: 'left', type: 'setRegionWidgetCollapsed' });
     expect(getActiveProject(state).widgetRegions.left).toMatchObject({ isCollapsed: true, sizePx: 500 });
 
-    // What the rail button does next: the stored active instance still matches,
-    // so selecting it toggles the collapse back off rather than switching.
     state = workbenchReducer(state, { region: 'left', type: 'selectRegionWidget', widgetId: activeInstanceId });
     expect(getActiveProject(state).widgetRegions.left).toMatchObject({ isCollapsed: false, sizePx: 500 });
   });
@@ -1062,11 +1044,7 @@ describe('adopting a project from another realm', () => {
   });
 
   it('drops a session-scoped search and the rank pages set against it', () => {
-    // A project opened from the server — the Open dialog, a deep link, or a
-    // conflict fork — arrives in a realm that never ran the session its values
-    // describe, and never passes the save path where this rule also runs. The
-    // ranking cannot be rebuilt here, so the pages indexing it would be read
-    // as board positions.
+    // Foreign project rankings cannot resolve in this realm; their rank pages must not become board positions.
     const values = galleryValuesOf(
       galleryProject({
         galleryPage: 3,
@@ -1090,10 +1068,7 @@ describe('adopting a project from another realm', () => {
   });
 
   it('keeps a session-scoped search this realm can still resolve', () => {
-    // Adoption is not only a foreign document arriving: closing and reopening
-    // a project runs it, and so does the conflict fork that rescues the LIVE
-    // copy. The registry entry is still here, the ranking is still on screen,
-    // and deleting it would take the user's search with it.
+    // Live reopen and conflict forks retain resolvable rankings; adoption alone does not imply a foreign session.
     const clusterId = registerImageCluster(['image:a.png', 'image:b.png'], 'beaches');
     const values = galleryValuesOf(
       galleryProject({
@@ -1108,11 +1083,7 @@ describe('adopting a project from another realm', () => {
   });
 
   it('drops an infinite window anchor on adoption, and keeps a paginated page', () => {
-    // A reveal anchors the infinite window mid-board for the session that
-    // made it; adopted anywhere else it strands the gallery there. A
-    // paginated page is the page the user was reading and survives. A
-    // gallery that never touched the setting has no paginationMode at all,
-    // and the default is infinite — that is the common shape.
+    // Infinite anchors are session-only; paginated positions persist, and absent paginationMode means infinite.
     expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'infinite' })).galleryPage).toBe(0);
     expect(galleryValuesOf(galleryProject({ galleryPage: 5 })).galleryPage).toBe(0);
     expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'paginated' })).galleryPage).toBe(5);
@@ -1924,9 +1895,6 @@ describe('workbench layout presets', () => {
     expect(state.account.activeLayoutPresetId).toBe('compose');
   });
 
-  // Contract §9.1 of the top-bar redesign. If switching presets loses work,
-  // users stop switching them and the whole centre strip becomes dead weight,
-  // so this is a correctness requirement rather than polish.
   it('preserves widget state across a Compose to Edit to Compose round trip', () => {
     let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'compose', type: 'applyPreset' });
 
@@ -2339,8 +2307,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getRasterLayerImageName(getDocumentLeaves(project.canvas.document)[0])).toBe('candidate.png');
     expect(project.canvas.document.selectedLayerId).toBe(acceptedLayerId);
     expect(project.canvas.stagingArea.pendingImages).toEqual([]);
-    // Deliberate semantic change (P0.2): canvas is engine-owned, so accepting a
-    // staged image does not create a project-level undo entry.
+    // Canvas acceptance uses engine history, not project undo.
     expect(project.undoRedo.past).toHaveLength(0);
 
     state = commitSelectedStagedImage(state);
@@ -3194,8 +3161,6 @@ describe('workbenchReducer Phase 5 generation flow', () => {
 
     const project = getActiveProject(state);
 
-    // A meaningful graph edit lands in the document, creates an undo entry,
-    // and steers the unlocked invocation route to the project graph.
     expect(project.projectGraph.nodes).toHaveLength(1);
     expect(project.undoRedo.past.at(-1)?.label).toBe('Add workflow node');
     expect(project.invocation.sourceId).toBe('workflow');
@@ -3262,8 +3227,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
         type: 'submitResolvedInvocationSnapshot',
       });
 
-    // Regression: a one-prompt expansion used to be dropped, falling the submission
-    // back to `positivePrompt` — which still holds the unexpanded `{…}` syntax.
+    // A single expansion is still concrete and must replace authored dynamic syntax.
     it('records a single expanded prompt rather than falling back to the literal', () => {
       const state = submitResolvedWithPrompts('a {red} cat', ['a red cat']);
 
@@ -3410,7 +3374,22 @@ describe('workbenchReducer Phase 5 generation flow', () => {
         batchCount: 3,
         kind: 'workflow',
         seeds: [{ fieldName: 'seed', nodeId: 'noise-1', seed: 42, seedStep: 1 }],
+        workflow: {
+          author: '',
+          contact: '',
+          description: '',
+          edges: [],
+          exposedFields: [],
+          form: { elements: expect.any(Object), rootElementId: expect.any(String) },
+          meta: { category: 'user', version: '3.0.0' },
+          name: 'Untitled Workflow',
+          nodes: [{ id: 'noise-1' }],
+          notes: '',
+          tags: '',
+          version: '1.0.0',
+        },
       });
+      expect(readSubmission(state)).not.toHaveProperty('workflow.id');
       expect(readSubmission(state)).toMatchObject({ graph: { nodes: { 'noise-1': { seed: 42 } } } });
       expect(getActiveProject(state).queue.items[0]?.snapshot.presentation.batchCount).toBe(3);
       expect(readNodeSeed(state)).toBe(45);
@@ -3420,6 +3399,86 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       expect(readSubmission(state)).toMatchObject({ seeds: [{ seed: 45 }] });
       expect(readSubmission(state, 1)).toMatchObject({ seeds: [{ seed: 42 }] });
       expect(readNodeSeed(state)).toBe(48);
+    });
+
+    it('notifies when the queued workflow omits metadata the backend would reject', () => {
+      // Multiple workflow_return nodes fail WorkflowWithoutID validation with 422; omit invalid workflow metadata
+      // rather than reject generation.
+      const returnTemplate = {
+        category: 'workflow',
+        classification: 'stable',
+        description: '',
+        inputs: {},
+        nodePack: 'invokeai',
+        outputType: 'workflow_return_output',
+        outputs: {},
+        tags: [],
+        title: 'Workflow Return',
+        type: 'workflow_return',
+        useCache: true,
+        version: '1.0.0',
+      };
+      let state = primeWorkflow(42, 'fixed');
+
+      workflowTemplatesMock.snapshot = {
+        error: null,
+        status: 'loaded',
+        templates: { noise: seedTemplate, workflow_return: returnTemplate },
+      };
+
+      for (const id of ['return-1', 'return-2']) {
+        state = workbenchReducer(state, {
+          action: {
+            node: {
+              data: {
+                inputs: {},
+                isIntermediate: true,
+                isOpen: true,
+                label: '',
+                nodePack: 'invokeai',
+                notes: '',
+                type: 'workflow_return',
+                useCache: true,
+                version: '1.0.0',
+              },
+              id,
+              position: { x: 0, y: 0 },
+              type: 'invocation',
+            },
+            type: 'addNode',
+          },
+          type: 'applyProjectGraphAction',
+        });
+      }
+
+      const nextState = submitWorkflow(state);
+      const submission = readSubmission(nextState);
+
+      // `kind` guards the assertion below: a graph that fails to compile also
+      // yields an object with no `workflow` key, which would pass for the
+      // wrong reason.
+      expect(submission).toMatchObject({ kind: 'workflow' });
+      expect(submission).not.toHaveProperty('workflow');
+      expect(
+        nextState.notifications.find((notification) => notification.title === 'Workflow metadata omitted')
+      ).toMatchObject({
+        kind: 'info',
+        message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
+        messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
+        title: 'Workflow metadata omitted',
+        titleKey: 'workflowLibrary.workflowMetadataOmitted',
+      });
+
+      // The omitted-metadata notice is additional information about the run, not
+      // a replacement for it: the run was queued, so the queued notification has
+      // to be recorded too. `category: 'enqueue'` is also what lets the toast
+      // policy honour the user's "notify when queued" preference.
+      expect(nextState.notifications.filter((notification) => notification.category === 'enqueue')).toHaveLength(1);
+      const repeatedState = submitWorkflow(nextState);
+
+      expect(
+        repeatedState.notifications.filter((notification) => notification.title === 'Workflow metadata omitted')
+      ).toHaveLength(2);
     });
 
     it('holds a fixed seed as a graph constant and repeats the graph for every run', () => {
@@ -3709,8 +3768,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       });
     });
 
-    // Recall and the history popover both write straight back into the textarea,
-    // so history has to hold what the user typed, not what generated.
+    // History restores textarea drafts, so it must retain authored rather than expanded text.
     it('records the authored prompt in prompt history', () => {
       const state = submitGenerate(
         primeGenerate(undefined, {
@@ -4480,11 +4538,8 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('stamps an explicit page into the navigation query already on a multi-selection', () => {
-    // A host navigating its own window passes the page that keeps the primary
-    // item in that window — the same contract as selectGalleryItem with
-    // preserveNavigationQuery — rather than the grid's page. The query it goes
-    // into is the one already on the selection: the grid may have moved to
-    // another board and search since, and the host's list is not that.
+    // Host navigation uses the selection's query and page, which may differ from the gallery's current
+    // board/search.
     let state = createInitialWorkbenchState();
 
     state = workbenchReducer(state, { boardId: 'board-deep', type: 'selectGalleryBoard' });
@@ -4549,8 +4604,6 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     values = getProjectWidgetValues(getActiveProject(state), 'gallery');
     expect(values.selectedImageQuery).toMatchObject({ starredOnly: true });
 
-    // Releasing the filter is a listing change too: the page resets, and a
-    // later selection is stamped against the unfiltered listing.
     state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
     state = workbenchReducer(state, { starredOnly: false, type: 'setGalleryStarredOnly' });
     state = workbenchReducer(state, {
@@ -4564,8 +4617,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('stamps a landing generation against the unfiltered listing', () => {
-    // A fresh result is never starred, so following it means leaving the
-    // starred-only listing — the stamp says so, exactly as it clears the search.
+    // Following a fresh, unstarred result must leave the starred-only listing.
     let state = primeGenerate();
     state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
     state = workbenchReducer(state, { starredOnly: true, type: 'setGalleryStarredOnly' });
@@ -4587,9 +4639,6 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('exits a similarity search when the view moves to another board', () => {
-    // A ranking answers with images from wherever they live, so it is not a
-    // view OF any board; left up, a board click would be answered with the
-    // same results under a new board name.
     let state = createInitialWorkbenchState();
 
     state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
@@ -4609,9 +4658,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('keeps a similarity search when the board already shown is picked again', () => {
-    // A text or image reference survives a reload, so a click that changes
-    // nothing about the view must not erase persisted state — and autosave
-    // the loss — on what reads as a no-op.
+    // Re-selecting the current board must preserve persisted rankings and avoid autosaving their loss.
     let state = createInitialWorkbenchState();
 
     state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
@@ -4630,11 +4677,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('leaves the page stamped on the selection alone when a search is dismissed by a board move', () => {
-    // The selection here was made BEFORE the search, so its page is a real
-    // board position that the search never rewrote (setSemanticImageQuery
-    // touches only the grid's page). Zeroing it — as the adoption path must,
-    // having no better information — would cost Preview the cursor it still
-    // has and strand its arrows at the top of the board.
+    // This selection predates search; its board page remains valid and must not be reset with ranking pages.
     let state = createInitialWorkbenchState();
 
     state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
@@ -4660,9 +4703,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('exits a similarity search when the Images/Assets tab is switched, but not when it is re-clicked', () => {
-    // The two tabs are two listings and the ranking is a view of neither. A
-    // gallery that never touched the setting has no galleryView at all, and
-    // that reads as Images — so clicking Images there is not a switch.
+    // Absent galleryView already means Images, so selecting Images is not a switch.
     let state = createInitialWorkbenchState();
 
     state = workbenchReducer(state, {
@@ -4687,9 +4728,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('exits a similarity search when the board being viewed is deleted', () => {
-    // Deleting the viewed board moves the view to Uncategorized without
-    // going through `selectGalleryBoard`, so the rule has to be applied here
-    // too — otherwise the ranking survives under a board name that is gone.
+    // Board deletion bypasses selectGalleryBoard and must independently clear the old ranking.
     let state = createInitialWorkbenchState();
 
     state = workbenchReducer(state, { boardId: 'doomed-board', type: 'selectGalleryBoard' });
@@ -4857,10 +4896,6 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     const galleryValues = (state: WorkbenchState) => getProjectWidgetValues(getActiveProject(state), 'gallery');
 
     it('entering carries the text across and ranks it at once; leaving carries it back', () => {
-      // The sparkle changes what the words mean, not whether they are there.
-      // A click is deliberate, so entering applies the ranking immediately
-      // rather than waiting for a typing pause; leaving drops the ranking
-      // because metadata search has its own listing.
       let state = createInitialWorkbenchState();
 
       state = workbenchReducer(state, { searchTerm: ' sunset ', type: 'setGallerySearchTerm' });
@@ -5029,8 +5064,6 @@ describe('workbench account and project settings', () => {
 
     const state = workbenchReducer(initial, { state: legacy, type: 'hydrateWorkbench' });
 
-    // `gallery` was retired with the three-preset model; it resolves to Compose,
-    // the arrangement it was a center-view variant of.
     expect(state.account).toEqual({
       activeLayoutPresetId: 'compose',
       customLayoutPresets: [],
@@ -6651,8 +6684,7 @@ describe('workbenchReducer canvas v2 layer reducers', () => {
     state = workbenchReducer(state, { document: createEmptyCanvasDocument(), type: 'replaceCanvasDocument' });
     expect(getCanvas(state).documentRevision).toBe(initialRevision + 1);
 
-    // restoreCanvasSnapshot is a wholesale swap: bump — even though the restored
-    // document reuses the saved layer ids at the same dimensions.
+    // Snapshot restore is a wholesale swap even when layer ids and dimensions match.
     state = workbenchReducer(state, { createdAt: 'now', id: 'snap-1', name: 'First', type: 'saveCanvasSnapshot' });
     expect(getCanvas(state).documentRevision).toBe(initialRevision + 1);
     state = workbenchReducer(state, { snapshotId: 'snap-1', type: 'restoreCanvasSnapshot' });
@@ -6987,8 +7019,6 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
   it('drops mid-flight canvas results after a new-canvas swap so cleared staging is not resurrected (F2)', () => {
     const { queueItemId, state: submitted } = submitCanvasGeneration(createInitialWorkbenchState());
 
-    // The user confirms a new canvas while the generation is still in flight: a
-    // wholesale swap that clears staging and bumps documentRevision (new session).
     const swapped = workbenchReducer(submitted, {
       document: createEmptyCanvasDocument(),
       type: 'replaceCanvasDocument',
@@ -7167,8 +7197,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
 
     const queueItem = getActiveProject(state).queue.items[0];
 
-    // A Canvas source still runs, but the resolved Gallery destination rides
-    // through so `routeQueueItemResults` keeps it out of canvas staging.
+    // Gallery-destined Canvas results must bypass canvas staging.
     expect(queueItem?.snapshot.sourceId).toBe('canvas');
     expect(queueItem?.snapshot.destination).toBe('gallery');
     expect(getActiveProject(state).invocation.destination).toBe('gallery');
@@ -7396,8 +7425,7 @@ describe('auto invocation route switching', () => {
 
     state = workbenchReducer(state, { destination: 'canvas', type: 'setInvocationDestination' });
     state = workbenchReducer(state, { sourceId: 'canvas', type: 'setInvocationSource' });
-    // Canvas compiles from generate values, so the generate panel is also the
-    // canvas parameter panel — editing it expresses canvas intent here.
+    // Generate edits express Canvas intent while serving as its parameter panel.
     state = workbenchReducer(state, { type: 'patchGenerateSettings', values: { steps: 25 } });
     state = workbenchReducer(state, { type: 'setGenerateSettings', values: createGenerateValues() });
 

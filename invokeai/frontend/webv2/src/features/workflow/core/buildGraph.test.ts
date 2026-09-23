@@ -1,3 +1,4 @@
+import { parseOpenApiToTemplates } from '@features/workflow/data/templates';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { FieldInputTemplate, InvocationTemplate, InvocationTemplatesSnapshot, ProjectGraphState } from './types';
@@ -9,6 +10,7 @@ import {
   isSeedInputField,
   planWorkflowSubmission,
 } from './buildGraph';
+import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from './callSavedWorkflow';
 import {
   buildConnectorNode,
   buildInvocationNode,
@@ -324,7 +326,7 @@ describe('compileProjectGraph', () => {
     ]);
   });
 
-  it('omits auto/none board sentinels and keeps explicit boards', () => {
+  it('omits auto/none board sentinels from ordinary nodes and keeps explicit boards', () => {
     const { doc, sinkId } = buildDocument();
     const withAutoBoard = projectGraphReducer(doc, {
       fieldName: 'board',
@@ -335,6 +337,15 @@ describe('compileProjectGraph', () => {
 
     expect(compileProjectGraph(withAutoBoard, templates).backendGraph?.nodes[sinkId]).not.toHaveProperty('board');
 
+    const withNoneBoard = projectGraphReducer(doc, {
+      fieldName: 'board',
+      nodeId: sinkId,
+      type: 'setFieldValue',
+      value: 'none',
+    });
+
+    expect(compileProjectGraph(withNoneBoard, templates).backendGraph?.nodes[sinkId]).not.toHaveProperty('board');
+
     const withExplicitBoard = projectGraphReducer(doc, {
       fieldName: 'board',
       nodeId: sinkId,
@@ -344,6 +355,27 @@ describe('compileProjectGraph', () => {
 
     expect(compileProjectGraph(withExplicitBoard, templates).backendGraph?.nodes[sinkId]).toMatchObject({
       board: { board_id: 'board-1' },
+    });
+  });
+
+  it('preserves auto/none board sentinels only in Call Saved Workflow inputs', () => {
+    const callTemplate = template('call_saved_workflow', {
+      workflow_id: input('workflow_id', { type: { batch: false, cardinality: 'SINGLE', name: 'StringField' } }),
+    });
+    const callNode = buildInvocationNode(callTemplate, { x: 0, y: 0 });
+    const dynamicBoardName = `${CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX}${callNode.id}::board`;
+    callNode.data.dynamicInputTemplates = {
+      [dynamicBoardName]: input(dynamicBoardName, {
+        type: { batch: false, cardinality: 'SINGLE', name: 'BoardField' },
+      }),
+    };
+    callNode.data.inputs[dynamicBoardName] = { label: 'Board', name: dynamicBoardName, value: 'auto' };
+    const document = { ...createProjectGraph('call-saved-workflow-board'), nodes: [callNode] };
+    const graph = compileProjectGraph(document, { call_saved_workflow: callTemplate }).backendGraph;
+
+    expect(graph.nodes[callNode.id]).not.toHaveProperty(dynamicBoardName);
+    expect(graph.nodes[callNode.id]).toMatchObject({
+      workflow_inputs: { [dynamicBoardName]: 'auto' },
     });
   });
 
@@ -649,6 +681,19 @@ describe('planWorkflowSubmission', () => {
     expect(plan.graph.nodes.find((node) => node.id === ids[1])?.inputs.seed).toBe(100);
   });
 
+  it('plans persisted dynamic seed fields', () => {
+    const dynamicTemplate = template('dynamic_node', {});
+    const node = buildInvocationNode(dynamicTemplate, { x: 0, y: 0 });
+    node.data.dynamicInputTemplates = { seed: seedInput };
+    node.data.inputs.seed = { label: 'Seed', name: 'seed', seedMode: 'increment', value: 42 };
+    const document = { ...createProjectGraph('dynamic-seed-plan'), nodes: [node] };
+
+    const plan = planWorkflowSubmission(document, { dynamic_node: dynamicTemplate }, { batchCount: 2 });
+
+    expect(plan.seeds).toEqual([{ fieldName: 'seed', nodeId: node.id, seed: 42, seedStep: 1 }]);
+    expect(plan.graph.backendGraph.nodes[node.id]?.seed).toBe(42);
+  });
+
   it('wraps the authored seed and the advance over the inclusive seed range', () => {
     const { doc } = buildSeeded([{ seed: 1, seedMode: 'decrement' }]);
     const plan = planWorkflowSubmission(doc, seededTemplates, { batchCount: 3 });
@@ -766,5 +811,78 @@ describe('seed inputs', () => {
     expect(getWorkflowFieldSeedMode({})).toBe('fixed');
     expect(getWorkflowFieldSeedMode({ seedMode: 'shuffle' as never })).toBe('fixed');
     expect(getWorkflowFieldSeedMode({ seedMode: 'decrement' })).toBe('decrement');
+  });
+});
+
+describe('integer Literal enum values in the compiled graph', () => {
+  const literalEnumSchema = {
+    components: {
+      schemas: {
+        IntegerOutput: {
+          class: 'output',
+          properties: { type: { const: 'integer_output' }, value: { field_kind: 'output', type: 'integer' } },
+          type: 'object',
+        },
+        MaxSeqLenInvocation: {
+          class: 'invocation',
+          output: { $ref: '#/components/schemas/IntegerOutput' },
+          properties: {
+            max_seq_len: {
+              default: 512,
+              enum: [256, 512],
+              field_kind: 'input',
+              orig_required: false,
+              title: 'Max Seq Length',
+              type: 'integer',
+            },
+            type: { default: 'max_seq_len_invocation' },
+          },
+          title: 'MaxSeqLen',
+          type: 'object',
+        },
+      },
+    },
+  };
+
+  // Compile template literals to backend-accepted numbers, not numeric strings.
+  it('sends a numeric Literal enum value', () => {
+    const parsedTemplates = parseOpenApiToTemplates(literalEnumSchema);
+    const parsedTemplate = parsedTemplates.max_seq_len_invocation;
+
+    if (!parsedTemplate) {
+      throw new Error('fixture template was not parsed');
+    }
+
+    const node = buildInvocationNode(parsedTemplate, { x: 0, y: 0 });
+    const doc = projectGraphReducer(createProjectGraph('literal-enum'), { node, type: 'addNode' });
+
+    expect(compileProjectGraph(doc, parsedTemplates).backendGraph?.nodes[node.id]).toMatchObject({
+      max_seq_len: 512,
+    });
+  });
+
+  // Compile selected dropdown values numerically as well as defaults.
+  it('sends a numeric value for the option the field widget offers', () => {
+    const parsedTemplates = parseOpenApiToTemplates(literalEnumSchema);
+    const parsedTemplate = parsedTemplates.max_seq_len_invocation;
+    const firstOption = parsedTemplate?.inputs.max_seq_len?.options?.[0];
+
+    if (!parsedTemplate || firstOption === undefined) {
+      throw new Error('fixture template was not parsed');
+    }
+
+    const node = buildInvocationNode(parsedTemplate, { x: 0, y: 0 });
+    let doc = projectGraphReducer(createProjectGraph('literal-enum-pick'), { node, type: 'addNode' });
+
+    doc = projectGraphReducer(doc, {
+      fieldName: 'max_seq_len',
+      nodeId: node.id,
+      type: 'setFieldValue',
+      value: firstOption,
+    });
+
+    expect(compileProjectGraph(doc, parsedTemplates).backendGraph?.nodes[node.id]).toMatchObject({
+      max_seq_len: 256,
+    });
   });
 });

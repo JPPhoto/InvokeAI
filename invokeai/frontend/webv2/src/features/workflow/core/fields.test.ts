@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { FieldInputTemplate, FieldType } from './types';
 
 import {
+  getEffectiveWorkflowFieldDescription,
   getWorkflowFieldInvalidReason,
   isDirectInputField,
   isLoraFieldCollectionEntry,
@@ -46,6 +47,18 @@ const input = (overrides: Partial<FieldInputTemplate> = {}): FieldInputTemplate 
 });
 
 describe('workflow field validation', () => {
+  it('honors an explicitly cleared description before falling back to a template', () => {
+    const template = input({ description: 'Inherited description' });
+    expect(
+      getEffectiveWorkflowFieldDescription(
+        { name: 'value', label: '', description: '', descriptionOverride: true },
+        template
+      )
+    ).toBe('');
+    expect(getEffectiveWorkflowFieldDescription({ name: 'value', label: '', description: '' }, template)).toBe(
+      'Inherited description'
+    );
+  });
   it('flags missing required direct values and ignores optional fields', () => {
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: undefined })).toBe(
       'Required value.'
@@ -189,8 +202,7 @@ describe('LoRA collection values', () => {
   });
 
   it('preserves unreadable items verbatim so an edit cannot silently delete them', () => {
-    // The widget writes back the list it is given; dropping or blanking these here would make one
-    // click on an unrelated row destroy a hand-authored entry.
+    // Keep unreadable collection entries so editing another row cannot destroy hand-authored data.
     const items = [LORA_ENTRY, { lora: { key: 'ghost' }, weight: 1 }, null, 'lora'];
 
     expect(toLoraFieldCollectionList(items)).toEqual(items);
@@ -243,6 +255,22 @@ describe('getRandomWorkflowFieldValue', () => {
 
     expect(getRandomWorkflowFieldValue(steppedExclusive, () => 0)).toBe(0.5);
     expect(getRandomWorkflowFieldValue(steppedExclusive, () => 0.999)).toBe(0.5);
+  });
+
+  it('keeps legacy numeric templates finite when optional constraints are absent', () => {
+    const legacy = input({
+      exclusiveMaximum: undefined,
+      exclusiveMinimum: undefined,
+      maximum: undefined,
+      minimum: undefined,
+      multipleOf: undefined,
+      type: single('IntegerField'),
+    });
+    const value = getRandomWorkflowFieldValue(legacy, () => 0.5);
+
+    expect(Number.isFinite(value)).toBe(true);
+    expect(Number.isInteger(value)).toBe(true);
+    expect(isWorkflowFieldValueValid(legacy, value)).toBe(true);
   });
 
   it('shuffles only direct numeric fields', () => {

@@ -7,10 +7,8 @@ import {
 import { getLibraryWorkflow, listLibraryWorkflows, type ListWorkflowsParams, type WorkflowLibraryPage } from './api';
 
 /**
- * Session-lived cache in front of the workflow library API. The library
- * dialog opens instantly on cached pages and revalidates in the background;
- * any local mutation (save/delete) invalidates everything since it shifts
- * ordering and pagination.
+ * Serve cached library pages immediately and revalidate; local mutations invalidate ordering and pagination
+ * together.
  */
 
 const pageCache = new Map<string, WorkflowLibraryPage>();
@@ -63,20 +61,22 @@ export const getLibraryWorkflowCached = async (
   return result;
 };
 
-const invalidationListeners = new Set<() => void>();
+type WorkflowLibraryCacheInvalidationListener = (workflowId?: string) => void;
+
+const invalidationListeners = new Set<WorkflowLibraryCacheInvalidationListener>();
 
 /** Registers a listener fired at the end of every `invalidateWorkflowLibraryCache()` call. */
-export const onWorkflowLibraryCacheInvalidated = (listener: () => void): (() => void) => {
+export const onWorkflowLibraryCacheInvalidated = (listener: WorkflowLibraryCacheInvalidationListener): (() => void) => {
   invalidationListeners.add(listener);
   return () => invalidationListeners.delete(listener);
 };
 
-export const invalidateWorkflowLibraryCache = (): void => {
+export const invalidateWorkflowLibraryCache = (workflowId?: string): void => {
   pageCache.clear();
   workflowCache.clear();
 
   for (const listener of invalidationListeners) {
-    listener();
+    listener(workflowId);
   }
 };
 
