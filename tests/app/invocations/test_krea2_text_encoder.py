@@ -349,6 +349,38 @@ def test_encode_uses_reference_fixed_length_layout_and_position_ids(monkeypatch)
     assert captured["position_ids"][0, 0, -5:].tolist() == [4, 5, 6, 7, 8]
 
 
+def test_visual_tower_lora_layers_are_skipped_without_blaming_the_adapter(monkeypatch) -> None:
+    """The loader drops the Qwen3-VL visual tower, so an adapter carrying layers for it finds no
+    module. The converter really does emit these keys (see `test_krea2_lora_conversion_utils`), and
+    the 4B's vision tower has 27 blocks, so left to the patcher this is ~108 "Failed to find module
+    for LoRA layer key" lines per generation -- reading as an adapter failure for layers that never
+    affected an image.
+
+    Asserted on the pattern handed to the patcher, since the suppression is the patcher's to apply.
+    """
+    import re
+
+    captured: dict = {}
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        return nullcontext()
+
+    monkeypatch.setattr(
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.LayerPatcher.apply_smart_model_patches",
+        capture,
+    )
+
+    _invocation()._encode(_context(ModelPatchRaw(layers={})))
+
+    pattern = captured["suppress_warning_layers"]
+    assert isinstance(pattern, re.Pattern)
+    assert pattern.search(f"{KREA2_LORA_QWEN3VL_PREFIX}visual.blocks.0.attn.qkv")
+    # The language tower is what the adapter is for; a miss there is a real problem and must still
+    # be reported.
+    assert not pattern.search(f"{KREA2_LORA_QWEN3VL_PREFIX}layers.0.self_attn.q_proj")
+
+
 def test_invoke_preserves_the_regional_mask_on_its_conditioning_output(monkeypatch) -> None:
     regional_mask = TensorField(tensor_name="regional-mask")
     invocation = _invocation().model_copy(update={"mask": regional_mask})

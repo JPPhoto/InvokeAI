@@ -1,3 +1,4 @@
+import re
 from contextlib import ExitStack
 from typing import Iterator
 
@@ -39,6 +40,15 @@ _KREA2_PREFIX = (
     "spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n"
 )
 _KREA2_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n"
+
+# The loader drops the Qwen3-VL visual tower: conditioning never executes it, so its weights would be
+# dead resident bytes. An adapter can still carry layers for it -- a Krea-2 LoRA's encoder keys are
+# whatever followed `text_encoder.`, and the converter does emit `lora_qwen3vl-visual.*` -- and those
+# layers now resolve to no module. Left to the patcher that is one "Failed to find module for LoRA
+# layer key" per layer per generation (~108 lines on the 4B, whose vision tower has 27 blocks),
+# reading as though the adapter were broken. It is not, and it never did anything: patching a module
+# that `forward` does not reach cannot change an image.
+_VISUAL_TOWER_LORA_LAYERS = re.compile(rf"^{re.escape(KREA2_LORA_QWEN3VL_PREFIX)}visual\.")
 
 
 @invocation(
@@ -127,6 +137,7 @@ class Krea2TextEncoderInvocation(BaseInvocation):
                     dtype=TorchDevice.choose_bfloat16_safe_dtype(device),
                     cached_weights=cached_weights,
                     force_sidecar_patching=requires_sidecar_patching(text_encoder, text_encoder_format),
+                    suppress_warning_layers=_VISUAL_TOWER_LORA_LAYERS,
                 )
             )
 

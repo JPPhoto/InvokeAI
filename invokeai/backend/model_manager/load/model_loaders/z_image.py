@@ -32,6 +32,7 @@ from invokeai.backend.model_manager.load.load_default import (
 )
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import GenericDiffusersLoader
+from invokeai.backend.model_manager.load.quantized_embedding import materialize_quantized_embedding
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
     BaseModelType,
@@ -39,9 +40,9 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     SubModelType,
 )
-from invokeai.backend.model_manager.util.qwen3_gguf import (
-    convert_qwen3_llamacpp_keys,
-    is_llamacpp_qwen3_state_dict,
+from invokeai.backend.model_manager.util.llamacpp_keys import (
+    convert_llamacpp_decoder_keys,
+    is_llamacpp_decoder_state_dict,
 )
 from invokeai.backend.quantization.fp8_scaled import (
     QKV_SPLIT_SIDECHANNEL_SUFFIXES,
@@ -290,7 +291,6 @@ class ZImageDiffusersModel(GenericDiffusersLoader):
         from transformers import Qwen3Config, Qwen3ForCausalLM
 
         from invokeai.backend.quantization.sdnq.loaders import sdnq_sd_loader
-        from invokeai.backend.quantization.sdnq.sdnq_tensor import SDNQTensor
         from invokeai.backend.util.logging import InvokeAILogger
 
         logger = InvokeAILogger.get_logger(self.__class__.__name__)
@@ -372,11 +372,7 @@ class ZImageDiffusersModel(GenericDiffusersLoader):
             "SDNQ Z-Image Qwen3 text encoder", missing, unexpected, allowed_missing={"lm_head.weight"}
         )
 
-        # Dequantize embed_tokens weight for embedding lookups
-        embed_tokens_weight = model.model.embed_tokens.weight
-        if isinstance(embed_tokens_weight, SDNQTensor):
-            dequantized = embed_tokens_weight.get_dequantized_tensor()
-            model.model.embed_tokens.weight = torch.nn.Parameter(dequantized, requires_grad=False)
+        if materialize_quantized_embedding(model.model.embed_tokens, ram_cache=self._ram_cache):
             logger.info("Dequantized embed_tokens weight for embedding lookups")
 
         # Handle tied weights
@@ -1510,9 +1506,9 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
         # via apply_custom_layers_to_model() and the partial loading cache
         sd = gguf_sd_loader(model_path, compute_dtype=compute_dtype)
 
-        if is_llamacpp_qwen3_state_dict(sd):
+        if is_llamacpp_decoder_state_dict(sd):
             logger.info("Detected llama.cpp GGUF format, converting keys to PyTorch format")
-            sd = convert_qwen3_llamacpp_keys(sd)
+            sd = convert_llamacpp_decoder_keys(sd)
 
         # Determine Qwen model configuration from state dict
         # Count the number of layers by looking at layer keys
@@ -1611,14 +1607,7 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
         # GGMLTensor wrappers will be dequantized on-the-fly during inference
         load_state_dict_ignoring_extras(model, sd, source="Qwen3 GGUF text encoder", assign=True, allow_missing=True)
 
-        # Dequantize embed_tokens weight - embedding lookups require indexed access
-        # which quantized GGMLTensors can't efficiently provide (no __torch_dispatch__ for embedding)
-        from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
-
-        embed_tokens_weight = model.model.embed_tokens.weight
-        if isinstance(embed_tokens_weight, GGMLTensor):
-            dequantized = embed_tokens_weight.get_dequantized_tensor()
-            model.model.embed_tokens.weight = torch.nn.Parameter(dequantized, requires_grad=False)
+        if materialize_quantized_embedding(model.model.embed_tokens, ram_cache=self._ram_cache):
             logger.info("Dequantized embed_tokens weight for embedding lookups")
 
         # Handle tied weights - llama.cpp GGUF doesn't include lm_head.weight when embeddings are tied
@@ -1703,7 +1692,6 @@ class Qwen3EncoderSDNQLoader(ModelLoader):
     ) -> AnyModel:
         from transformers import Qwen3Config, Qwen3ForCausalLM
 
-        from invokeai.backend.quantization.sdnq.sdnq_tensor import SDNQTensor
         from invokeai.backend.util.logging import InvokeAILogger
 
         logger = InvokeAILogger.get_logger(self.__class__.__name__)
@@ -1797,11 +1785,7 @@ class Qwen3EncoderSDNQLoader(ModelLoader):
         missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
         raise_on_incomplete_sdnq_load("SDNQ Qwen3 encoder", missing, unexpected, allowed_missing={"lm_head.weight"})
 
-        # Dequantize embed_tokens weight - embedding lookups require indexed access
-        embed_tokens_weight = model.model.embed_tokens.weight
-        if isinstance(embed_tokens_weight, SDNQTensor):
-            dequantized = embed_tokens_weight.get_dequantized_tensor()
-            model.model.embed_tokens.weight = torch.nn.Parameter(dequantized, requires_grad=False)
+        if materialize_quantized_embedding(model.model.embed_tokens, ram_cache=self._ram_cache):
             logger.info("Dequantized embed_tokens weight for embedding lookups")
 
         # Handle tied weights
