@@ -1,4 +1,9 @@
-import type { IntermediatesCleanupMode, IntermediatesPreview } from '@features/intermediates/core/types';
+import type {
+  IntermediatesAffectedDocument,
+  IntermediatesAffectedDocumentKind,
+  IntermediatesCleanupMode,
+  IntermediatesPreview,
+} from '@features/intermediates/core/types';
 /* eslint-disable react-perf/jsx-no-new-function-as-prop */
 import type { RefObject } from 'react';
 
@@ -10,6 +15,13 @@ import { useTranslation } from 'react-i18next';
 import { formatBytes } from './format';
 
 const CONFIRM_WORD = 'CLEAR';
+
+const AFFECTED_DOCUMENT_LABELS = {
+  client_state: 'intermediates.dialog.affectedClientState',
+  project: 'intermediates.dialog.affectedProject',
+  quarantined_project: 'intermediates.dialog.affectedQuarantinedProject',
+  workflow: 'intermediates.dialog.affectedWorkflow',
+} as const satisfies Record<IntermediatesAffectedDocumentKind, string>;
 
 export interface ClearDialogState {
   mode: IntermediatesCleanupMode;
@@ -24,6 +36,10 @@ export interface ClearDialogState {
 
 export interface ClearDialogProps {
   state: ClearDialogState | null;
+  /** Documents owned by anyone else name their owner; null in single-user mode. */
+  currentUserId: string | null;
+  /** Force previews for administrators may include other accounts' documents; others' are never touched. */
+  canManageEveryone: boolean;
   finalFocusRef: RefObject<HTMLElement | null>;
   /** Receives focus when the trigger can no longer take it, e.g. a Delete button disabled by the cleared selection. */
   fallbackFocusRef: RefObject<HTMLElement | null>;
@@ -35,7 +51,7 @@ export interface ClearDialogProps {
 }
 
 const Impact = ({ preview }: { preview: IntermediatesPreview }) => {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { impact } = preview;
   const referenced = impact.keepReferencedImages + impact.keepReferencedVideos;
   const active = impact.keepActiveImages + impact.keepActiveVideos;
@@ -68,9 +84,19 @@ const Impact = ({ preview }: { preview: IntermediatesPreview }) => {
         <Text color="fg.muted" fontSize="xs">
           {t('intermediates.dialog.kept', { count: kept })}{' '}
           {t('intermediates.dialog.keptReasons', {
-            active: t('intermediates.counts.items', { count: active }),
-            recent: t('intermediates.counts.items', { count: recent }),
-            referenced: t('intermediates.counts.items', { count: referenced }),
+            reasons: new Intl.ListFormat(i18n.resolvedLanguage, { style: 'long', type: 'conjunction' }).format(
+              (
+                [
+                  ['keptReferenced', referenced],
+                  ['keptActive', active],
+                  ['keptRecent', recent],
+                ] as const
+              )
+                .filter(([, count]) => count > 0)
+                .map(([key, count]) =>
+                  t(`intermediates.dialog.${key}`, { items: t('intermediates.counts.items', { count }) })
+                )
+            ),
           })}
         </Text>
       ) : null}
@@ -78,10 +104,19 @@ const Impact = ({ preview }: { preview: IntermediatesPreview }) => {
   );
 };
 
-const AffectedDocuments = ({ preview }: { preview: IntermediatesPreview }) => {
+const getDocumentOwnerLabel = (document: IntermediatesAffectedDocument): string =>
+  document.userDisplayName || document.userEmail || document.userId;
+
+const AffectedDocuments = ({
+  currentUserId,
+  preview,
+}: {
+  currentUserId: string | null;
+  preview: IntermediatesPreview;
+}) => {
   const { t } = useTranslation();
 
-  if (preview.affectedDocuments.length === 0 && preview.affectedDocumentsHidden === 0) {
+  if (preview.affectedDocuments.length === 0) {
     return null;
   }
 
@@ -93,19 +128,18 @@ const AffectedDocuments = ({ preview }: { preview: IntermediatesPreview }) => {
       <Stack as="ul" gap="0.5" maxH="32" overflowY="auto" ps="4">
         {preview.affectedDocuments.map((document) => (
           <Text as="li" fontSize="xs" key={`${document.kind}:${document.userId}:${document.ownerId}`}>
-            {t(
-              document.kind === 'project'
-                ? 'intermediates.dialog.affectedProject'
-                : 'intermediates.dialog.affectedWorkflow',
-              { count: document.references, name: document.name ?? document.ownerId }
-            )}
+            {t(AFFECTED_DOCUMENT_LABELS[document.kind], {
+              count: document.references,
+              name: document.name ?? document.ownerId,
+            })}
+            {currentUserId !== null && document.userId !== currentUserId ? (
+              <Text as="span" color="fg.muted">
+                {' '}
+                {t('intermediates.dialog.affectedOwner', { owner: getDocumentOwnerLabel(document) })}
+              </Text>
+            ) : null}
           </Text>
         ))}
-        {preview.affectedDocumentsHidden > 0 ? (
-          <Text as="li" color="fg.muted" fontSize="xs">
-            {t('intermediates.dialog.affectedHidden', { count: preview.affectedDocumentsHidden })}
-          </Text>
-        ) : null}
       </Stack>
     </Stack>
   );
@@ -116,6 +150,8 @@ const AffectedDocuments = ({ preview }: { preview: IntermediatesPreview }) => {
  * force preview, which adds the affected documents, an acknowledgement and a typed confirmation.
  */
 export const ClearDialog = ({
+  canManageEveryone,
+  currentUserId,
   fallbackFocusRef,
   finalFocusRef,
   onClose,
@@ -232,11 +268,17 @@ export const ClearDialog = ({
                   <Alert.Root size="sm" status="warning" variant="surface">
                     <Alert.Indicator />
                     <Alert.Content>
-                      <Alert.Description>{t('intermediates.dialog.forceWarning')}</Alert.Description>
+                      <Alert.Description>
+                        {t(
+                          canManageEveryone
+                            ? 'intermediates.dialog.forceWarning'
+                            : 'intermediates.dialog.forceWarningOwn'
+                        )}
+                      </Alert.Description>
                     </Alert.Content>
                   </Alert.Root>
                 ) : null}
-                {isForce && preview ? <AffectedDocuments preview={preview} /> : null}
+                {isForce && preview ? <AffectedDocuments currentUserId={currentUserId} preview={preview} /> : null}
                 {isForce && preview && !nothingToDelete ? (
                   <Stack gap="2">
                     <Checkbox.Root

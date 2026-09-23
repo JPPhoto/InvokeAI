@@ -61,11 +61,12 @@ export const attachIntermediatesRealtime = (queryClient: QueryClient): (() => vo
     noteSettled(operation);
   });
 
-  let wasConnected = false;
+  // The hub reports the current status on subscribe; only a later transition to connected is a reconnect.
+  let wasConnected: boolean | null = null;
   const detachConnection = socketHub.onConnectionChange((status) => {
     const isConnected = status === 'connected';
 
-    if (isConnected && !wasConnected && isAccountScopeCurrent(owner)) {
+    if (isConnected && wasConnected === false && isAccountScopeCurrent(owner)) {
       void queryClient.invalidateQueries({ queryKey: accountKey });
     }
     wasConnected = isConnected;

@@ -6,6 +6,7 @@ import type {
 } from '@features/intermediates/core/types';
 
 import { ChakraProvider } from '@chakra-ui/react';
+import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
@@ -32,6 +33,7 @@ vi.mock('@features/intermediates/data/api', () => ({
 vi.mock('@features/intermediates/data/realtime', () => ({ attachIntermediatesRealtime: () => () => undefined }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    i18n: { resolvedLanguage: 'en' },
     t: (key: string, options?: Record<string, unknown>) =>
       options && Object.keys(options).length > 0
         ? `${key}(${Object.entries(options)
@@ -76,10 +78,22 @@ const summaryOf = (items: IntermediatesRow[]): IntermediatesSummary => ({
   },
 });
 
+const documentOf = (userId: string) => ({
+  userDisplayName: userId === 'bob' ? 'Bob' : 'Alice',
+  userEmail: `${userId}@example.com`,
+  userId,
+});
+
 const previewOf = (mode: 'safe' | 'force', deleteImages: number): IntermediatesPreview => ({
   affectedDocuments:
-    mode === 'force' ? [{ kind: 'project', name: 'Portraits', ownerId: 'p1', references: 2, userId: 'alice' }] : [],
-  affectedDocumentsHidden: 0,
+    mode === 'force'
+      ? [
+          { ...documentOf('alice'), kind: 'project', name: 'Portraits', ownerId: 'p1', references: 2 },
+          { ...documentOf('alice'), kind: 'client_state', name: null, ownerId: 'canvas', references: 1 },
+          { ...documentOf('alice'), kind: 'quarantined_project', name: 'Old sketch', ownerId: 'q1', references: 1 },
+          { ...documentOf('bob'), kind: 'client_state', name: null, ownerId: 'canvas', references: 1 },
+        ]
+      : [],
   createdAt: 'now',
   expiresAt: 'later',
   impact: {
@@ -188,6 +202,26 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
   setter.call(input, value);
   input.dispatchEvent(new Event('input', { bubbles: true }));
+};
+
+const openForceDialogReadyToConfirm = async (
+  options: { canClearOthersIntermediates?: boolean } = {}
+): Promise<HTMLElement> => {
+  await renderManager({ focusProjectId: 'p1', ...options });
+  await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+  await act(() => buttonWithText('intermediates.list.delete', host).click());
+  const dialog = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>('[role="alertdialog"]');
+    expect(element).not.toBeNull();
+    return element!;
+  });
+  await vi.waitFor(() => expect(dialog.textContent).toContain('intermediates.dialog.reclaim'));
+  const toggles = () => [...dialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+  await act(() => toggles()[0]!.click());
+  await vi.waitFor(() => expect(dialog.textContent).toContain('intermediates.dialog.affectedClientState'));
+  await act(() => toggles()[1]!.click());
+  await act(() => setInputValue(dialog.querySelector<HTMLInputElement>('input:not([type="checkbox"])')!, 'CLEAR'));
+  return dialog;
 };
 
 describe('IntermediatesManager', () => {
@@ -393,13 +427,96 @@ describe('IntermediatesManager', () => {
     await act(() => resolveNew({ ...operationOf('running'), operationId: 'new-op' }));
   });
 
-  it('drops a definitively rejected start receipt', async () => {
+  it('replays a lost start on one remount only, even when that replay fails transiently', async () => {
     const { recordPendingIntermediatesStart } = await import('@features/intermediates/data/operationStore');
     recordPendingIntermediatesStart({ idempotencyKey: 'rejected-key', previewId: 'rejected-preview' });
-    dependencies.startIntermediatesOperation.mockRejectedValue(new ApiError('Unavailable', 409));
+    dependencies.startIntermediatesOperation.mockRejectedValue(new ApiError('Unavailable', 503));
     await renderManager();
     await vi.waitFor(() => expect(host.textContent).toContain('Unavailable'));
+    expect(dependencies.startIntermediatesOperation).toHaveBeenCalledOnce();
     expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toBeNull();
+
+    await act(() => root.unmount());
+    host.remove();
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+    expect(dependencies.startIntermediatesOperation).toHaveBeenCalledOnce();
+  });
+
+  it('forgets a start that sign-out cut off, so signing back in never replays it', async () => {
+    accountLifecycle.activate('alice');
+    try {
+      dependencies.startIntermediatesOperation.mockImplementation(
+        (_request: unknown, signal: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          })
+      );
+      const dialog = await openForceDialogReadyToConfirm();
+      await act(() => buttonWithText('intermediates.dialog.forceConfirm', dialog).click());
+      await vi.waitFor(() =>
+        expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:alice')).toContain('preview-force')
+      );
+      expect(buttonWithText('intermediates.dialog.forceConfirm', dialog).disabled).toBe(true);
+
+      await act(() => {
+        accountLifecycle.activate('mallory');
+      });
+      await vi.waitFor(() => expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:alice')).toBeNull());
+      await vi.waitFor(() => expect(buttonWithText('intermediates.dialog.forceConfirm', dialog).disabled).toBe(false));
+
+      await act(() => root.unmount());
+      host.remove();
+      dependencies.startIntermediatesOperation.mockReset();
+      accountLifecycle.activate('alice');
+      await renderManager();
+      await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+      expect(dependencies.startIntermediatesOperation).not.toHaveBeenCalled();
+    } finally {
+      accountLifecycle.invalidate();
+    }
+  });
+
+  it('explains a timed-out start and lets Confirm resume the same cleanup', async () => {
+    dependencies.startIntermediatesOperation.mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'));
+    const dialog = await openForceDialogReadyToConfirm();
+    await act(() => buttonWithText('intermediates.dialog.forceConfirm', dialog).click());
+    await vi.waitFor(() => expect(dialog.textContent).toContain('intermediates.dialog.startTimedOut'));
+    const confirm = buttonWithText('intermediates.dialog.forceConfirm', dialog);
+    expect(confirm.disabled).toBe(false);
+
+    await act(() => confirm.click());
+    await vi.waitFor(() => expect(dependencies.startIntermediatesOperation).toHaveBeenCalledTimes(2));
+    const [first, second] = dependencies.startIntermediatesOperation.mock.calls;
+    expect(second![0]).toEqual(first![0]);
+  });
+
+  it('names the owner of another account’s affected documents for an administrator', async () => {
+    const dialog = await openForceDialogReadyToConfirm({ canClearOthersIntermediates: true });
+    const items = [...dialog.querySelectorAll('li')].map((item) => item.textContent ?? '');
+    expect(items.filter((text) => text.includes('affectedOwner'))).toEqual([
+      expect.stringContaining('intermediates.dialog.affectedOwner(owner=Bob)'),
+    ]);
+    expect(dialog.textContent).toContain('intermediates.dialog.forceWarning');
+    expect(dialog.textContent).not.toContain('intermediates.dialog.forceWarningOwn');
+  });
+
+  it('never replays a force delete the user cancelled after its start failed', async () => {
+    const dialog = await openForceDialogReadyToConfirm();
+    expect(dialog.textContent).toContain('intermediates.dialog.affectedQuarantinedProject(count=1,name=Old sketch)');
+    expect(dialog.textContent).toContain('intermediates.dialog.forceWarningOwn');
+    dependencies.startIntermediatesOperation.mockRejectedValueOnce(new ApiError('Server error', 500));
+    await act(() => buttonWithText('intermediates.dialog.forceConfirm', dialog).click());
+    await vi.waitFor(() => expect(dialog.textContent).toContain('Server error'));
+    expect(sessionStorage.getItem('invokeai:webv2:intermediates-receipt:local')).toBeNull();
+
+    await act(() => buttonWithText('common.cancel', dialog).click());
+    await act(() => root.unmount());
+    host.remove();
+    dependencies.startIntermediatesOperation.mockClear();
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Portraits'));
+    expect(dependencies.startIntermediatesOperation).not.toHaveBeenCalled();
   });
 
   it('follows a retry whose response was lost before reload', async () => {
@@ -544,6 +661,7 @@ describe('IntermediatesManager', () => {
       return element!;
     });
     await vi.waitFor(() => expect(dialog.textContent).toContain('intermediates.dialog.reclaim'));
+    expect(dialog.textContent).toContain('intermediates.dialog.keptReferenced');
 
     const toggles = () => [...dialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
     await act(() => toggles()[0]!.click());
@@ -554,6 +672,9 @@ describe('IntermediatesManager', () => {
       )
     );
     await vi.waitFor(() => expect(dialog.textContent).toContain('Portraits'));
+    // Force mode keeps nothing for being referenced, so that reason is not listed at zero.
+    expect(dialog.textContent).not.toContain('intermediates.dialog.keptReferenced');
+    expect(dialog.textContent).toContain('intermediates.dialog.keptActive');
     const confirm = () => buttonWithText('intermediates.dialog.forceConfirm', dialog);
     expect(confirm().disabled).toBe(true);
 
@@ -586,6 +707,60 @@ describe('IntermediatesManager', () => {
     expect(checkbox('intermediates.list.selectRow(name=Portraits)').checked).toBe(false);
     expect(buttonWithText('intermediates.list.delete', host).disabled).toBe(false);
     expect(host.textContent).toContain('count=1');
+  });
+
+  it('keeps the current page visible but inert while the next loads, and never shows stale rows for a new search', async () => {
+    const manyRows = Array.from({ length: 60 }, (_, index) => row(`p${index}`, `Project ${index}`, 1));
+    let releaseNextPage!: () => void;
+    const nextPageGate = new Promise<void>((resolve) => {
+      releaseNextPage = resolve;
+    });
+    let releaseSearch!: () => void;
+    const searchGate = new Promise<void>((resolve) => {
+      releaseSearch = resolve;
+    });
+    dependencies.getIntermediatesSummary
+      .mockReset()
+      .mockImplementation(async (params: { offset?: number; search?: string }) => {
+        const offset = params.offset ?? 0;
+        if (params.search?.trim()) {
+          await searchGate;
+          return summaryOf([row('p1', 'Project 1', 1)]);
+        }
+        if (offset > 0) {
+          await nextPageGate;
+        }
+        return { ...summaryOf(manyRows.slice(offset, offset + 50)), offset, total: manyRows.length };
+      });
+    await renderManager();
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 0'));
+
+    await act(() => buttonWithText('common.nextPage', host).click());
+    const list = host.querySelector('[role="list"]')!;
+    await vi.waitFor(() => expect(list.getAttribute('aria-busy')).toBe('true'));
+    expect(host.textContent).toContain('Project 0');
+    expect(host.textContent).toContain('common.pageNumber(page=1)');
+    const staleRow = host
+      .querySelector('[aria-label="intermediates.list.selectRow(name=Project 0)"]')!
+      .querySelector<HTMLInputElement>('input')!;
+    expect(staleRow.disabled).toBe(true);
+    expect(checkbox('intermediates.list.selectAll').checked).toBe(false);
+    expect(host.querySelector('[aria-label="intermediates.list.selectAll"]')!.querySelector('input')!.disabled).toBe(
+      true
+    );
+
+    await act(() => releaseNextPage());
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 55'));
+    expect(host.querySelector('[role="list"]')!.getAttribute('aria-busy')).toBeNull();
+    expect(host.textContent).toContain('common.pageNumber(page=2)');
+
+    await act(() =>
+      setInputValue(host.querySelector<HTMLInputElement>('input[aria-label="intermediates.searchLabel"]')!, 'one')
+    );
+    await vi.waitFor(() => expect(host.textContent).not.toContain('Project 55'));
+    expect(host.querySelector('[role="list"]')).toBeNull();
+    await act(() => releaseSearch());
+    await vi.waitFor(() => expect(host.textContent).toContain('Project 1'));
   });
 
   it('keeps picks from another page in the estimate and the targets', async () => {

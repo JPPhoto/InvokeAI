@@ -1,5 +1,6 @@
 import type {
   IntermediatesAffectedDocument,
+  IntermediatesAffectedDocumentKind,
   IntermediatesCleanupMode,
   IntermediatesImpact,
   IntermediatesKindCounts,
@@ -83,8 +84,10 @@ interface ImpactDTO {
 }
 
 interface AffectedDocumentDTO {
-  kind: 'project' | 'workflow';
+  kind: IntermediatesAffectedDocumentKind;
   user_id: string;
+  user_display_name: string | null;
+  user_email: string | null;
   owner_id: string;
   name: string | null;
   references: number;
@@ -100,7 +103,6 @@ interface PreviewDTO {
   has_more_eligible: boolean;
   impact: ImpactDTO;
   affected_documents: AffectedDocumentDTO[];
-  affected_documents_hidden: number;
 }
 
 interface ProgressDTO {
@@ -206,6 +208,8 @@ const mapAffectedDocument = (dto: AffectedDocumentDTO): IntermediatesAffectedDoc
   name: dto.name,
   ownerId: dto.owner_id,
   references: dto.references,
+  userDisplayName: dto.user_display_name,
+  userEmail: dto.user_email,
   userId: dto.user_id,
 });
 
@@ -311,7 +315,6 @@ export const createIntermediatesPreview = async (
 
   return {
     affectedDocuments: dto.affected_documents.map(mapAffectedDocument),
-    affectedDocumentsHidden: dto.affected_documents_hidden,
     createdAt: dto.created_at,
     expiresAt: dto.expires_at,
     impact: mapImpact(dto.impact),
@@ -323,16 +326,20 @@ export const createIntermediatesPreview = async (
   };
 };
 
+/** Long enough for a slow server to accept; short enough that a hung request cannot lock the confirmation. */
+const START_TIMEOUT_MS = 30_000;
+
+/** Rejects with a `TimeoutError` DOMException when the server does not answer in time. */
 export const startIntermediatesOperation = async (
   request: { previewId: string; idempotencyKey: string },
-  signal?: AbortSignal
+  signal: AbortSignal
 ): Promise<IntermediatesOperation> =>
   mapIntermediatesOperation(
     await apiFetchJson<IntermediatesOperationDTO>(`${BASE}/operations`, {
       body: JSON.stringify({ idempotency_key: request.idempotencyKey, preview_id: request.previewId }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
-      signal,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(START_TIMEOUT_MS)]),
     })
   );
 

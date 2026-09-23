@@ -70,6 +70,8 @@ const describeRow = (row: IntermediatesRow, showOwner: boolean, t: TFunction): s
 };
 
 export interface IntermediatesListProps {
+  /** The previous page stays visible while the next loads; it is shown, not selectable. */
+  isBusy: boolean;
   rows: readonly IntermediatesRow[];
   showOwner: boolean;
   isSelected: (row: IntermediatesRow) => boolean;
@@ -77,12 +79,21 @@ export interface IntermediatesListProps {
 }
 
 /** One row per project, as the sketch: checkbox, cover, name over owner, then the used and unused counts. */
-export const IntermediatesList = ({ isSelected, onToggleRow, rows, showOwner }: IntermediatesListProps) => {
+export const IntermediatesList = ({ isBusy, isSelected, onToggleRow, rows, showOwner }: IntermediatesListProps) => {
   const { t } = useTranslation();
   const unassigned = t('intermediates.list.unassigned');
 
   return (
-    <Stack as="ul" aria-label={t('intermediates.title')} gap="0.5" listStyleType="none" m="0" p="0" role="list">
+    <Stack
+      as="ul"
+      aria-busy={isBusy || undefined}
+      aria-label={t('intermediates.title')}
+      gap="0.5"
+      listStyleType="none"
+      m="0"
+      p="0"
+      role="list"
+    >
       {rows.map((row) => {
         const label = getRowLabel(row, unassigned);
         const selected = isSelected(row);
@@ -93,7 +104,7 @@ export const IntermediatesList = ({ isSelected, onToggleRow, rows, showOwner }: 
           <Row
             as="li"
             active={selected ? 'selected' : 'none'}
-            cursor="pointer"
+            cursor={isBusy ? 'progress' : 'pointer'}
             data-selected={selected || undefined}
             gap="2.5"
             key={getIntermediatesRowKey(row)}
@@ -101,7 +112,7 @@ export const IntermediatesList = ({ isSelected, onToggleRow, rows, showOwner }: 
             px="2"
             py="1.5"
             rounded="md"
-            onClick={() => onToggleRow(row)}
+            onClick={isBusy ? undefined : () => onToggleRow(row)}
           >
             <Checkbox.Root
               aria-label={
@@ -115,6 +126,7 @@ export const IntermediatesList = ({ isSelected, onToggleRow, rows, showOwner }: 
               }
               checked={selected}
               colorPalette="accent"
+              disabled={isBusy}
               size="xs"
               onCheckedChange={() => onToggleRow(row)}
               onClick={(event) => event.stopPropagation()}

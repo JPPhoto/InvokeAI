@@ -1,4 +1,4 @@
-import { captureAccountScope, registerAccountOwnedResource } from '@platform/state/accountLifecycle';
+import { captureAccountScope, registerAccountOwnedResource, type AccountScope } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
 /**
@@ -12,34 +12,42 @@ interface PendingStart {
   idempotencyKey: string;
 }
 
-const receiptKey = (): string => {
-  const owner = captureAccountScope();
+/**
+ * A Confirm still in flight when the page reloads or the section closes is replayed once on the next mount; its
+ * idempotency key makes the replay return the same operation. A start that settled with an error is cleared, so only
+ * a fresh Confirm in the dialog can run it again.
+ */
+interface Receipt {
+  operationId?: string;
+  pendingStart?: PendingStart;
+}
+
+// Keyed per account so a start fenced by sign-out can still be cleared under the account that made it.
+const receiptKey = (owner: AccountScope = captureAccountScope()): string => {
   return `invokeai:webv2:intermediates-receipt:${owner.accountId ?? 'local'}${owner.storageSuffix}`;
 };
 
-const readReceipt = (): { operationId?: string; pendingStart?: PendingStart } => {
+const readReceipt = (owner?: AccountScope): Receipt => {
   try {
-    return JSON.parse(sessionStorage.getItem(receiptKey()) ?? '{}') as {
-      operationId?: string;
-      pendingStart?: PendingStart;
-    };
+    return JSON.parse(sessionStorage.getItem(receiptKey(owner)) ?? '{}') as Receipt;
   } catch {
     return {};
   }
 };
 
-const writeReceipt = (receipt: { operationId?: string; pendingStart?: PendingStart }): void => {
+const writeReceipt = (receipt: Receipt, owner?: AccountScope): void => {
   try {
     if (!receipt.operationId && !receipt.pendingStart) {
-      sessionStorage.removeItem(receiptKey());
+      sessionStorage.removeItem(receiptKey(owner));
     } else {
-      sessionStorage.setItem(receiptKey(), JSON.stringify(receipt));
+      sessionStorage.setItem(receiptKey(owner), JSON.stringify(receipt));
     }
   } catch {
     // A private-mode storage failure still leaves the in-memory operation visible this session.
   }
 };
 
+/** Restores the followed operation and returns a start whose response was lost, if any. */
 export const restoreIntermediatesReceipt = (): PendingStart | null => {
   const receipt = readReceipt();
   if (typeof receipt.operationId === 'string' && receipt.operationId.length > 0) {
@@ -52,14 +60,15 @@ export const recordPendingIntermediatesStart = (pendingStart: PendingStart): voi
   writeReceipt({ ...readReceipt(), pendingStart });
 };
 
-export const isPendingIntermediatesStartCurrent = (pendingStart: PendingStart): boolean => {
-  const current = readReceipt().pendingStart;
+export const isPendingIntermediatesStartCurrent = (pendingStart: PendingStart, owner?: AccountScope): boolean => {
+  const current = readReceipt(owner).pendingStart;
   return current?.previewId === pendingStart.previewId && current.idempotencyKey === pendingStart.idempotencyKey;
 };
 
-export const clearPendingIntermediatesStart = (): void => {
-  const { operationId } = readReceipt();
-  writeReceipt({ operationId });
+/** `owner` defaults to the current account; pass the one that recorded the start once it may have signed out. */
+export const clearPendingIntermediatesStart = (owner?: AccountScope): void => {
+  const { operationId } = readReceipt(owner);
+  writeReceipt({ operationId }, owner);
 };
 
 registerAccountOwnedResource({

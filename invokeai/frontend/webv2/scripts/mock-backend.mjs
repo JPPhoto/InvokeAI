@@ -1172,12 +1172,13 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
                 .map((row) => ({
                   kind: 'project',
                   user_id: row.user_id,
+                  user_display_name: row.user_display_name,
+                  user_email: row.user_email,
                   owner_id: row.project_id ?? 'unassigned',
                   name: row.project_name,
                   references: row.images.referenced + row.videos.referenced,
                 }))
             : [],
-          affected_documents_hidden: 0,
         };
         state.intermediatesPreviews.set(previewId, { preview, targets });
         return json(201, preview);
