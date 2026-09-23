@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import RLock
 from typing import Optional
 
 from PIL import Image
@@ -34,6 +35,12 @@ from invokeai.app.services.videos.videos_common import VideoDTO, video_record_to
 
 class VideoService(VideoServiceABC):
     __invoker: Invoker
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Lock order: video deletion, then database. Hold through staging, commit and
+        # rollback so a concurrent cleanup cannot purge files a staged delete restores.
+        self._delete_lock = RLock()
 
     def start(self, invoker: Invoker) -> None:
         self.__invoker = invoker
@@ -359,34 +366,37 @@ class VideoService(VideoServiceABC):
             raise e
 
     def delete(self, video_name: str) -> None:
-        token: object | None = None
-        record_deleted = False
-        try:
-            record = self.__invoker.services.video_records.get(video_name)
-            token = self.__invoker.services.video_files.stage_delete(video_name, video_subfolder=record.video_subfolder)
-            self.__invoker.services.video_records.delete(video_name)
-            record_deleted = True
+        with self._delete_lock:
+            token: object | None = None
+            record_deleted = False
             try:
-                self.__invoker.services.video_files.commit_delete(token)
-            except Exception as cleanup_error:
-                self.__invoker.services.logger.error(f"Failed to purge staged video files: {cleanup_error}")
-            self._on_deleted(video_name)
-        except VideoRecordDeleteException:
-            if token is not None:
-                self.__invoker.services.video_files.rollback_delete(token)
-            self.__invoker.services.logger.error("Failed to delete video record")
-            raise
-        except VideoFileDeleteException:
-            self.__invoker.services.logger.error("Failed to delete video file")
-            raise
-        except Exception as e:
-            if token is not None and not record_deleted:
+                record = self.__invoker.services.video_records.get(video_name)
+                token = self.__invoker.services.video_files.stage_delete(
+                    video_name, video_subfolder=record.video_subfolder
+                )
+                self.__invoker.services.video_records.delete(video_name)
+                record_deleted = True
                 try:
+                    self.__invoker.services.video_files.commit_delete(token)
+                except Exception as cleanup_error:
+                    self.__invoker.services.logger.error(f"Failed to purge staged video files: {cleanup_error}")
+                self._on_deleted(video_name)
+            except VideoRecordDeleteException:
+                if token is not None:
                     self.__invoker.services.video_files.rollback_delete(token)
-                except Exception as rollback_error:
-                    self.__invoker.services.logger.error(f"Failed to restore video files: {rollback_error}")
-            self.__invoker.services.logger.error("Problem deleting video record and file")
-            raise e
+                self.__invoker.services.logger.error("Failed to delete video record")
+                raise
+            except VideoFileDeleteException:
+                self.__invoker.services.logger.error("Failed to delete video file")
+                raise
+            except Exception as e:
+                if token is not None and not record_deleted:
+                    try:
+                        self.__invoker.services.video_files.rollback_delete(token)
+                    except Exception as rollback_error:
+                        self.__invoker.services.logger.error(f"Failed to restore video files: {rollback_error}")
+                self.__invoker.services.logger.error("Problem deleting video record and file")
+                raise e
 
     def delete_videos_on_board(self, board_id: str, user_id: Optional[str] = None) -> tuple[list[str], list[str]]:
         # When ``user_id`` is set the lookup filters to videos owned by that user so the
@@ -399,32 +409,33 @@ class VideoService(VideoServiceABC):
     def delete_intermediates_by_names(
         self, video_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
     ) -> IntermediateDeleteResult:
-        records = self.__invoker.services.video_records
-        files = self.__invoker.services.video_files
-        subfolders = records.get_subfolders(video_names)
-        if not subfolders:
-            return IntermediateDeleteResult()
+        with self._delete_lock:
+            records = self.__invoker.services.video_records
+            files = self.__invoker.services.video_files
+            subfolders = records.get_subfolders(video_names)
+            if not subfolders:
+                return IntermediateDeleteResult()
 
-        # Journal the live paths before deleting records. The guard decides inside that transaction
-        # which records still qualify; a promoted or newly protected video retains its files.
-        token = files.begin_delete(list(subfolders.items()))
-        try:
-            deleted = records.delete_intermediates_by_names(list(subfolders.keys()), guard=guard)
-        except Exception:
+            # Journal the live paths before deleting records. The guard decides inside that transaction
+            # which records still qualify; a promoted or newly protected video retains its files.
+            token = files.begin_delete(list(subfolders.items()))
             try:
-                files.abandon_delete(token)
+                deleted = records.delete_intermediates_by_names(list(subfolders.keys()), guard=guard)
+            except Exception:
+                try:
+                    files.abandon_delete(token)
+                except Exception as cleanup_error:
+                    self.__invoker.services.logger.error(f"Failed to discard pending video deletion: {cleanup_error}")
+                raise
+            result = IntermediateDeleteResult(deleted_names=deleted)
+            try:
+                files.commit_delete(token, video_names=deleted)
             except Exception as cleanup_error:
-                self.__invoker.services.logger.error(f"Failed to discard pending video deletion: {cleanup_error}")
-            raise
-        result = IntermediateDeleteResult(deleted_names=deleted)
-        try:
-            files.commit_delete(token, video_names=deleted)
-        except Exception as cleanup_error:
-            self.__invoker.services.logger.error(f"Failed to purge intermediate video files: {cleanup_error}")
-            result.purge_deferred = list(deleted)
-        for name in deleted:
-            self._on_deleted(name)
-        return result
+                self.__invoker.services.logger.error(f"Failed to purge intermediate video files: {cleanup_error}")
+                result.purge_deferred = list(deleted)
+            for name in deleted:
+                self._on_deleted(name)
+            return result
 
     def delete_videos_by_names(self, video_names: list[str]) -> tuple[list[str], list[str]]:
         """Delete exactly these videos, returning ``(deleted, failed)``.
@@ -432,30 +443,31 @@ class VideoService(VideoServiceABC):
         Split from ``delete_videos_on_board`` so a caller that must decide whether the board may go
         *before* destroying anything can enumerate first and delete second.
         """
-        try:
-            records = self.__invoker.services.video_records
-            files = self.__invoker.services.video_files
-            return delete_media_by_names(
-                video_names,
-                StagedMediaDeleteAdapter(
-                    kind="video",
-                    stage=lambda name: files.stage_delete(name, video_subfolder=records.get(name).video_subfolder),
-                    delete_records=records.delete_many,
-                    rollback=files.rollback_delete,
-                    commit=files.commit_delete,
-                    notify_deleted=self._on_deleted,
-                    log_error=self.__invoker.services.logger.error,
-                ),
-            )
-        except VideoRecordDeleteException:
-            self.__invoker.services.logger.error("Failed to delete video records")
-            raise
-        except VideoFileDeleteException:
-            self.__invoker.services.logger.error("Failed to delete video files")
-            raise
-        except Exception as e:
-            self.__invoker.services.logger.error(f"Problem deleting video records and files: {str(e)}")
-            raise e
+        with self._delete_lock:
+            try:
+                records = self.__invoker.services.video_records
+                files = self.__invoker.services.video_files
+                return delete_media_by_names(
+                    video_names,
+                    StagedMediaDeleteAdapter(
+                        kind="video",
+                        stage=lambda name: files.stage_delete(name, video_subfolder=records.get(name).video_subfolder),
+                        delete_records=records.delete_many,
+                        rollback=files.rollback_delete,
+                        commit=files.commit_delete,
+                        notify_deleted=self._on_deleted,
+                        log_error=self.__invoker.services.logger.error,
+                    ),
+                )
+            except VideoRecordDeleteException:
+                self.__invoker.services.logger.error("Failed to delete video records")
+                raise
+            except VideoFileDeleteException:
+                self.__invoker.services.logger.error("Failed to delete video files")
+                raise
+            except Exception as e:
+                self.__invoker.services.logger.error(f"Problem deleting video records and files: {str(e)}")
+                raise e
 
     def get_video_names(
         self,

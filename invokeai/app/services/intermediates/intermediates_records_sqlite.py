@@ -3,7 +3,8 @@
 One classification expression decides what every intermediate is under the cleanup policy, and it
 is the same SQL whether it aggregates a summary, freezes a preview's targets or guards a delete:
 
-- ``active``: produced by, or named as an input of, a pending, waiting or running queue item.
+- ``active``: produced or referenced by a pending, waiting or running queue item, or a
+  completed child of an active root workflow.
 - ``recent``: created inside the grace window, so an in-flight browser upload is never collected
   before it is promoted, referenced or enqueued.
 - ``referenced``: named by a saved project document or library workflow (`media_references`).
@@ -33,6 +34,24 @@ MediaKind = Literal["image", "video"]
 Classification = Literal["safe", "referenced", "active", "recent"]
 
 ACTIVE_QUEUE_STATUSES = ("pending", "in_progress", "waiting")
+
+
+def _protected_queue_items_sql() -> str:
+    statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
+    # A child becomes completed before its outputs reach its waiting parent. Keep the
+    # whole completed subtree protected until the root finishes, including nested calls.
+    # CROSS JOIN pins the active roots first, then indexed child lookups, rather than
+    # scanning all completed history. Session JSON is fetched only for changed rows.
+    return f"""
+        SELECT item_id, session_id, status, session_revision FROM session_queue
+        WHERE status IN ({statuses})
+        UNION ALL
+        SELECT child.item_id, child.session_id, child.status, child.session_revision
+        FROM session_queue root
+        CROSS JOIN session_queue child ON child.root_item_id = root.item_id
+        WHERE root.status IN ({statuses}) AND child.status = 'completed'
+    """
+
 
 # Keeps the OR-chain of a selection scope, and every IN list, under SQLITE_MAX_VARIABLE_NUMBER.
 _MAX_SQL_VARIABLES = 500
@@ -94,10 +113,9 @@ class IntermediatesRecordsSqlite:
             "CREATE TEMP TABLE IF NOT EXISTS intermediates_session_media "
             "(session_id TEXT, kind TEXT, name TEXT, PRIMARY KEY(session_id, kind, name)) WITHOUT ROWID;"
         )
-        statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
         cursor.execute(
             "DELETE FROM temp.intermediates_session_media WHERE session_id NOT IN "
-            f"(SELECT session_id FROM session_queue WHERE status IN ({statuses}));"
+            f"(SELECT session_id FROM ({_protected_queue_items_sql()}));"
         )
 
     def hold_cached_media(self, session_id: str, references: MediaReferences) -> bool:
@@ -255,12 +273,11 @@ class IntermediatesRecordsSqlite:
     @staticmethod
     def _classification_sql(kind: MediaKind) -> str:
         table, name_column, _ = _TABLES[kind]
-        statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
         return f"""
             CASE
                 WHEN (
                     m.session_id IS NOT NULL
-                    AND m.session_id IN (SELECT session_id FROM session_queue WHERE status IN ({statuses}))
+                    AND m.session_id IN (SELECT session_id FROM ({_protected_queue_items_sql()}))
                 ) OR m.{name_column} IN (
                     SELECT name FROM temp.intermediates_active_media WHERE kind = '{kind}'
                 ) OR EXISTS (
@@ -293,11 +310,10 @@ class IntermediatesRecordsSqlite:
             ) WITHOUT ROWID;
             """
         )
-        statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
         cursor.execute(
             f"""--sql
             SELECT item_id, status || ':' || COALESCE(session_revision, 0)
-            FROM session_queue WHERE status IN ({statuses});
+            FROM ({_protected_queue_items_sql()});
             """
         )
         active = {cast(int, row[0]): str(row[1]) for row in cursor.fetchall()}

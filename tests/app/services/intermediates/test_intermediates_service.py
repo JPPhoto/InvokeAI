@@ -140,13 +140,21 @@ def _seed_video(invoker: Invoker, name: str, *, user_id: str = "alice", is_inter
 
 
 def _enqueue_row(
-    invoker: Invoker, *, session_id: str, status: str, user_id: str = "alice", session_json: str = "{}"
+    invoker: Invoker,
+    *,
+    session_id: str,
+    status: str,
+    user_id: str = "alice",
+    session_json: str = "{}",
+    root_item_id: Optional[int] = None,
+    parent_item_id: Optional[int] = None,
 ) -> int:
     with invoker.services.image_records._db.transaction() as cursor:
         cursor.execute(
-            "INSERT INTO session_queue (queue_id, session, session_id, batch_id, priority, user_id, status)"
-            " VALUES ('default', ?, ?, ?, 0, ?, ?);",
-            (session_json, session_id, uuid.uuid4().hex, user_id, status),
+            "INSERT INTO session_queue "
+            "(queue_id, session, session_id, batch_id, priority, user_id, status, root_item_id, parent_item_id)"
+            " VALUES ('default', ?, ?, ?, 0, ?, ?, ?, ?);",
+            (session_json, session_id, uuid.uuid4().hex, user_id, status, root_item_id, parent_item_id),
         )
         return int(cursor.lastrowid or 0)
 
@@ -1359,3 +1367,189 @@ def test_missing_cached_media_does_not_leave_a_partial_hold(invoker, service):
     )
     _, completed = _run(service, ALICE, _owner("alice"))
     assert completed.progress.deleted_images == 1
+
+
+@pytest.mark.parametrize("mode", ["safe", "force"])
+@pytest.mark.parametrize("reload_records", [False, True])
+def test_completed_child_media_survives_until_its_root_finishes(invoker, service, mode, reload_records):
+    from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
+    from invokeai.app.invocations.fields import ImageField, VideoField
+    from invokeai.app.invocations.workflow_return import WorkflowReturnOutput
+    from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+    from invokeai.app.services.shared.media_references import MediaReferences
+
+    queue = invoker.services.session_queue
+    queue.start(invoker)
+    _seed_image(invoker, "cached.png")
+    _seed_video(invoker, "cached.mp4")
+    frozen = service.create_preview(IntermediatesPreviewRequest(mode=mode, scope=_owner("alice")), ALICE)
+
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="call", workflow_id="workflow"))
+    root = GraphExecutionState(graph=graph)
+    invocation = root.next()
+    assert isinstance(invocation, CallSavedWorkflowInvocation)
+    frame = root.build_workflow_call_frame(invocation.id, "workflow")
+    root.begin_waiting_on_workflow_call(frame)
+    children = [root.create_child_workflow_execution_state(Graph(), frame) for _ in range(2)]
+    root.attach_waiting_workflow_call_child_sessions(children)
+    root_id = _enqueue_row(invoker, session_id=root.id, status="in_progress", session_json=root.model_dump_json())
+    queue.enqueue_workflow_call_children(queue.get_queue_item(root_id), [(session, None) for session in children])
+    child = queue.dequeue()
+    assert child is not None
+    assert service.hold_cached_media(child.session_id, MediaReferences(images={"cached.png"}, videos={"cached.mp4"}))
+    output = WorkflowReturnOutput(
+        values={"image": ImageField(image_name="cached.png"), "video": VideoField(video_name="cached.mp4")}
+    )
+    child.session.results["return"] = output
+    queue.save_queue_item_session(child.item_id, child.session)
+    _seed_image(invoker, "produced.png", session_id=child.session_id)
+    queue.complete_queue_item(child.item_id)
+    # This is the real gap: the child is terminal, its sibling is pending, and the waiting
+    # parent's persisted session does not contain the returned media yet.
+    assert "cached.png" not in queue.get_queue_item(root_id).session.model_dump_json()
+
+    # Clearing completed queue history must not discard an unconsumed child result.
+    assert queue.prune("default").deleted == 0
+
+    if reload_records:
+        service.stop()
+        with invoker.services.image_records._db.transaction() as cursor:
+            cursor.execute("DROP TABLE IF EXISTS temp.intermediates_session_media;")
+        service = IntermediatesService(IntermediatesRecordsSqlite(invoker.services.image_records._db))
+        service.start(invoker)
+    try:
+        if not reload_records:
+            operation = service.start_operation(
+                IntermediatesOperationRequest(preview_id=frozen.preview_id, idempotency_key="handoff"), ALICE
+            )
+            completed = _wait(service, operation.operation_id)
+            assert completed.progress.deleted_images == completed.progress.deleted_videos == 0
+        preview, completed = _run(service, ALICE, _owner("alice"), mode=mode)
+        assert preview.impact.keep_active_images == 2
+        assert preview.impact.keep_active_videos == 1
+        assert completed.progress.deleted_images == completed.progress.deleted_videos == 0
+        assert _exists(invoker, "cached.png") and _exists(invoker, "produced.png")
+
+        queue.record_workflow_call_child_completion(root_id, child.item_id, output.values)
+        queue.cancel_queue_item(root_id)
+        _, completed = _run(service, ALICE, _owner("alice"), mode=mode)
+        assert completed.progress.deleted_images == 2
+        assert completed.progress.deleted_videos == 1
+    finally:
+        if reload_records:
+            service.stop()
+
+
+def test_completed_nested_child_keeps_media_while_its_root_is_active(invoker, service):
+    from invokeai.app.services.shared.media_references import MediaReferences
+
+    root = _enqueue_row(invoker, session_id="root", status="waiting")
+    parent = _enqueue_row(invoker, session_id="parent", status="completed", root_item_id=root, parent_item_id=root)
+    child = _enqueue_row(invoker, session_id="leaf", status="in_progress", root_item_id=root, parent_item_id=parent)
+    _seed_image(invoker, "produced.png", session_id="leaf")
+    _seed_video(invoker, "cached.mp4")
+    assert service.hold_cached_media("leaf", MediaReferences(videos={"cached.mp4"}))
+    with invoker.services.image_records._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'completed' WHERE item_id = ?", (child,))
+
+    for mode in ("safe", "force"):
+        preview, completed = _run(service, ALICE, _owner("alice"), mode=mode)
+        assert preview.impact.keep_active_images == preview.impact.keep_active_videos == 1
+        assert completed.progress.deleted_images == completed.progress.deleted_videos == 0
+
+    with invoker.services.image_records._db.transaction() as cursor:
+        cursor.execute("UPDATE session_queue SET status = 'completed' WHERE item_id = ?", (root,))
+    _, completed = _run(service, ALICE, _owner("alice"))
+    assert completed.progress.deleted_images == completed.progress.deleted_videos == 1
+
+
+def test_child_protection_does_not_scan_unrelated_completed_history(invoker, service):
+    root = _enqueue_row(invoker, session_id="root", status="waiting")
+    _enqueue_row(invoker, session_id="child", status="completed", root_item_id=root, parent_item_id=root)
+    _seed_image(invoker, "produced.png", session_id="child")
+    db = invoker.services.image_records._db
+
+    def classify():
+        instructions = 0
+
+        def count_instructions():
+            nonlocal instructions
+            instructions += 100
+            return 0
+
+        db._conn.set_progress_handler(count_instructions, 100)
+        try:
+            candidates = service._records.list_candidates("image", user_id="alice", targets=None)
+            assert [(item.name, item.classification) for item in candidates] == [("produced.png", "active")]
+            return instructions
+        finally:
+            db._conn.set_progress_handler(None, 0)
+
+    baseline = classify()
+    with db.transaction() as cursor:
+        cursor.executemany(
+            "INSERT INTO session_queue (queue_id, session, session_id, batch_id, user_id, status) "
+            "VALUES ('default', '{}', ?, 'history', 'alice', 'completed');",
+            [(f"history-{index}",) for index in range(20_000)],
+        )
+    # Count SQLite VM work instead of machine-dependent elapsed time. A scan of
+    # completed rows grows by orders of magnitude; indexed active-root lookups do not.
+    assert 0 < baseline < 5_000
+    assert classify() < 3 * baseline
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_video_cleanup_cannot_purge_files_during_staged_deletion(invoker, service, monkeypatch, bulk):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from threading import Event
+
+    _seed_video(invoker, "racy.mp4")
+    files = invoker.services.video_files
+    video_path = files.get_path("racy.mp4")
+    thumbnail_path = files.get_path("racy.mp4", thumbnail=True)
+    thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+    thumbnail_path.write_bytes(b"thumbnail")
+    staging_paused = Event()
+    resume_staging = Event()
+    cleanup_started = Event()
+    real_replace = Path.replace
+
+    def pause_thumbnail_move(path, target):
+        if path == thumbnail_path:
+            staging_paused.set()
+            assert resume_staging.wait(10)
+        return real_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", pause_thumbnail_move)
+
+    def delete_video():
+        if bulk:
+            assert invoker.services.videos.delete_videos_by_names(["racy.mp4"]) == (["racy.mp4"], [])
+        else:
+            invoker.services.videos.delete("racy.mp4")
+
+    def cleanup():
+        cleanup_started.set()
+        return _run(service, ALICE, _owner("alice"))[1]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        deletion = executor.submit(delete_video)
+        try:
+            assert staging_paused.wait(10)
+            clearing = executor.submit(cleanup)
+            assert cleanup_started.wait(10)
+            # Without serialization, cleanup removes the thumbnail after stage_delete's
+            # exists() check, making its replace() fail and roll the MP4 back as an orphan.
+            with pytest.raises(TimeoutError):
+                clearing.result(timeout=0.5)
+        finally:
+            resume_staging.set()
+        deletion.result(timeout=10)
+        completed = clearing.result(timeout=10)
+    assert completed.progress.deleted_videos == 0
+    with pytest.raises(VideoRecordNotFoundException):
+        invoker.services.video_records.get("racy.mp4")
+    assert not video_path.exists()
+    assert not thumbnail_path.exists()
+    assert not list(video_path.parent.glob(".delete_*"))

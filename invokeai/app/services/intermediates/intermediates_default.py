@@ -6,8 +6,9 @@ re-applies the policy on the deleting transaction, so a target that became activ
 durable since the preview is kept. Operation receipts and unresolved targets persist; a restart
 makes interrupted work retryable.
 
-Lock order, for anyone adding a caller: image mutation lock (image service) → database lock. The
-queue and document writers take only the database lock, so no cycle is possible.
+Lock order, for anyone adding a caller: image mutation lock or video deletion lock → database
+lock. Image and video deletion never hold each other's locks; queue and document writers take
+only the database lock.
 """
 
 import json

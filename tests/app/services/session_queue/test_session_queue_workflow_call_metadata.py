@@ -540,6 +540,29 @@ def test_concurrent_workflow_call_child_completions_preserve_both_siblings(
     }
 
 
+@pytest.mark.parametrize("limited", [False, True])
+def test_history_pruning_retains_children_until_their_root_ends(session_queue, limited):
+    root, _, child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=2)
+    children = session_queue.enqueue_workflow_call_children(
+        session_queue.get_queue_item(root), [(session, None) for session in child_sessions]
+    )
+    session_queue.complete_queue_item(children[0].item_id)
+    old = _insert_queue_item(session_queue, session=GraphExecutionState(graph=Graph()), status="completed")
+
+    def prune():
+        if limited:
+            return session_queue._prune_terminal_to_limit("default", keep=0)
+        return session_queue.prune("default", user_id="user-1").deleted
+
+    assert prune() == 1
+    with pytest.raises(SessionQueueItemNotFoundError):
+        session_queue.get_queue_item(old)
+    assert session_queue.get_queue_item(children[0].item_id).status == "completed"
+
+    session_queue.cancel_queue_item(root)
+    assert prune() == 3
+
+
 def test_enqueue_workflow_call_child_rejects_full_pending_queue(session_queue: SqliteSessionQueue) -> None:
     parent_graph = Graph()
     parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
