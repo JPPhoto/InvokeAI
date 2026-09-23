@@ -141,6 +141,7 @@ from invokeai.backend.model_manager.configs.qwen3_encoder import (
 from invokeai.backend.model_manager.configs.qwen3_vl_encoder import (
     Qwen3VLEncoder_Checkpoint_Config,
     Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config,
+    Qwen3VLEncoder_GGUF_Config,
     Qwen3VLEncoder_Qwen3VLEncoder_Config,
 )
 from invokeai.backend.model_manager.configs.qwen_vl_encoder import (
@@ -504,6 +505,13 @@ AnyModelConfig = Annotated[
         # the 4B shape so neither can claim the other's files.
         Annotated[Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config, Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config.get_tag()],
         Annotated[Qwen3VLEncoder_Checkpoint_Config, Qwen3VLEncoder_Checkpoint_Config.get_tag()],
+        # Kept mutually exclusive with Qwen3Encoder_GGUF_Config by an architecture-metadata check on
+        # both sides, NOT by position in this list: identification iterates `Config_Base.CONFIG_CLASSES`
+        # (a set) and `matches_sort_key` puts both encoders in the same bucket, so a double match would
+        # be resolved by arbitrary set-iteration order. The check is load-bearing because llama.cpp
+        # keeps the visual tower in a separate mmproj file -- a Qwen3-VL GGUF has none to probe for and
+        # satisfies the text-only Qwen3 GGUF heuristic in full.
+        Annotated[Qwen3VLEncoder_GGUF_Config, Qwen3VLEncoder_GGUF_Config.get_tag()],
         Annotated[Qwen3VLEncoder_Qwen3VLEncoder_Config, Qwen3VLEncoder_Qwen3VLEncoder_Config.get_tag()],
         # Qwen3 Encoder
         Annotated[Qwen3Encoder_Qwen3Encoder_Config, Qwen3Encoder_Qwen3Encoder_Config.get_tag()],
