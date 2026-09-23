@@ -6,6 +6,7 @@ import type { CanvasUtilityGraphResult } from '@workbench/canvas-operations/cont
 import type { GenerationCompositeHost } from '@workbench/canvas-operations/generationComposite';
 import type { BackendGraphContract } from '@workbench/graphContracts';
 
+import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import { createCanvasEngine as createCanvasEngineCore } from '@workbench/canvas-engine/engine';
 import { canvasApplicationPort } from '@workbench/canvas-operations/applicationPort';
 import { createBoundedCompositeDedupeCache } from '@workbench/canvas-operations/compositeForGeneration';
@@ -19,6 +20,8 @@ export interface CanvasEngineOptions extends Omit<
   CoreCanvasEngineOptions,
   'uploadImage' | 'uploadIntermediateImage' | 'getMainModelBase'
 > {
+  /** Waits for the owning project identity to be acknowledged by the server before uploading. */
+  ensureProjectOnServer(): Promise<void>;
   getMainModelBase?: () => string | null;
   selectObjectDeps?: {
     uploadIntermediate(blob: Blob, signal?: AbortSignal): Promise<{ height: number; imageName: string; width: number }>;
@@ -44,13 +47,27 @@ export type CanvasEngine = CoreCanvasEngineImplementation;
 
 /** Application composition root: owns SAM/filter sessions, queues, uploads, and their core capability adapters. */
 export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine => {
-  const { filterDeps, selectObjectDeps, ...coreOptions } = options;
+  const { ensureProjectOnServer, filterDeps, selectObjectDeps, ...coreOptions } = options;
+  const owner = captureAccountScope();
+  const uploadLifetime = new AbortController();
+  const uploadImage: typeof canvasApplicationPort.uploadImage = async (blob, uploadOptions) => {
+    assertAccountScopeCurrent(owner);
+    const signal = AbortSignal.any([
+      owner.signal,
+      uploadLifetime.signal,
+      ...(uploadOptions?.signal ? [uploadOptions.signal] : []),
+    ]);
+    signal.throwIfAborted();
+    await ensureProjectOnServer();
+    assertAccountScopeCurrent(owner);
+    signal.throwIfAborted();
+    return canvasApplicationPort.uploadImage(blob, { ...uploadOptions, projectId: options.projectId, signal });
+  };
   const composition = createCanvasEngineCore({
     ...coreOptions,
     getMainModelBase: options.getMainModelBase,
-    uploadImage: (blob) => canvasApplicationPort.uploadImage(blob, { projectId: options.projectId }),
-    uploadIntermediateImage: (blob) =>
-      canvasApplicationPort.uploadImage(blob, { isIntermediate: true, projectId: options.projectId }),
+    uploadImage: (blob) => uploadImage(blob),
+    uploadIntermediateImage: (blob) => uploadImage(blob, { isIntermediate: true }),
   });
   const { applicationHost: host } = composition;
   const core = composition.engine;
@@ -118,9 +135,8 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
       if (signal?.aborted) {
         throw new DOMException('Select Object upload was aborted.', 'AbortError');
       }
-      const uploaded = await canvasApplicationPort.uploadImage(blob, {
+      const uploaded = await uploadImage(blob, {
         isIntermediate: true,
-        projectId: options.projectId,
         signal,
       });
       if (signal?.aborted) {
@@ -168,7 +184,7 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
     stores,
     uploadIntermediate: async (blob, signal) => {
       const uploaded = await (filterDeps?.uploadIntermediate(blob, signal) ??
-        canvasApplicationPort.uploadImage(blob, { isIntermediate: true, projectId: options.projectId, signal }));
+        uploadImage(blob, { isIntermediate: true, signal }));
       return { imageName: uploaded.imageName };
     },
   });
@@ -248,9 +264,8 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
       if (signal?.aborted) {
         throw new DOMException('Canvas upload aborted', 'AbortError');
       }
-      const uploaded = await canvasApplicationPort.uploadImage(blob, {
+      const uploaded = await uploadImage(blob, {
         isIntermediate: true,
-        projectId: options.projectId,
         signal,
       });
       if (signal?.aborted) {
@@ -281,6 +296,7 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
       return;
     }
     disposed = true;
+    uploadLifetime.abort();
     host.setSamInputHandler(null);
     host.setEscapeHandler(null);
     unsubscribeToolChanges();

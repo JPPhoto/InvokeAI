@@ -47,6 +47,7 @@ const createFakeDeps = (): EngineDeps => {
   const listeners = new Set<() => void>();
   return {
     backend: createTestStubRasterBackend(),
+    ensureProjectOnServer: () => Promise.resolve(),
     imageResolver: () => Promise.resolve(new Blob()),
     mutationPort: {
       commitEdit: () => undefined,
@@ -399,6 +400,7 @@ describe('createEngineRegistry', () => {
     const deps: EngineDeps = {
       backend: createTestStubRasterBackend(),
       bitmapStore,
+      ensureProjectOnServer: () => Promise.resolve(),
       imageResolver: () => Promise.resolve(new Blob()),
       mutationPort,
       reportError: vi.fn(),

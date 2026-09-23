@@ -7,7 +7,12 @@ import { createCanvasProjectMutationPort } from '@workbench/canvasProjectMutatio
 import { publishLayerPanelSelection, readLayerPanelState } from '@workbench/layerPanelState';
 import { resolveDefaultControlModelForBase } from '@workbench/widgets/layers/controlModelOptions';
 import { getSelectedModelBase } from '@workbench/widgets/layers/selectedModel';
-import { useActiveProjectId, useWorkbenchCommands, useWorkbenchInternalStore } from '@workbench/WorkbenchContext';
+import {
+  useActiveProjectId,
+  useWorkbenchCommands,
+  useWorkbenchInternalStore,
+  useWorkbenchPersistenceService,
+} from '@workbench/WorkbenchContext';
 import { useMemo, useSyncExternalStore } from 'react';
 
 import type { EngineDeps } from './engineRegistry';
@@ -62,11 +67,22 @@ export const createCanvasEngineResource = (projectId: string, deps: EngineDeps):
 export const useCanvasEngine = (): CanvasEngineHandle | null => {
   const fonts = useFontRuntime();
   const store = useWorkbenchInternalStore();
+  const persistence = useWorkbenchPersistenceService();
   const { notifications } = useWorkbenchCommands();
   const projectId = useActiveProjectId();
   const resource = useMemo(
     () =>
       createCanvasEngineResource(projectId, {
+        ensureProjectOnServer: async () => {
+          const project = store.getState().projects.find((candidate) => candidate.id === projectId);
+          if (!project) {
+            throw new DOMException('The canvas project is no longer open.', 'AbortError');
+          }
+          await persistence.ensureProjectOnServer(project);
+          if (!store.getState().projects.some((candidate) => candidate.id === projectId)) {
+            throw new DOMException('The canvas project is no longer open.', 'AbortError');
+          }
+        },
         getDefaultControlModel: (base) => resolveDefaultControlModelForBase(getModelsSnapshot().models, base),
         getMainModelBase: () => {
           const project = store.getState().projects.find((candidate) => candidate.id === projectId);
@@ -83,7 +99,7 @@ export const useCanvasEngine = (): CanvasEngineHandle | null => {
         mutationPort: createCanvasProjectMutationPort(store, projectId),
         reportError: notifications.reportError,
       }),
-    [fonts, notifications.reportError, projectId, store]
+    [fonts, notifications.reportError, persistence, projectId, store]
   );
 
   return useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot);

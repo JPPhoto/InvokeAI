@@ -173,6 +173,73 @@ beforeEach(() => {
 });
 
 describe('durable project persistence', () => {
+  it('awaits one acknowledged creation for concurrent uploads without saving later edits', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    let acknowledge!: (record: ProjectRecordDTO) => void;
+    const created = new Promise<ProjectRecordDTO>((resolve) => {
+      acknowledge = resolve;
+    });
+    vi.mocked(api.createProject).mockReturnValueOnce(created);
+    const first = service.ensureProjectOnServer(project);
+    const second = service.ensureProjectOnServer(project);
+    const ready = vi.fn();
+    void first.then(ready);
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+    expect(ready).not.toHaveBeenCalled();
+
+    acknowledge(toRecord(project));
+    await Promise.all([first, second]);
+    await service.ensureProjectOnServer({ ...project, name: 'Unsaved later edit' });
+    expect(api.createProject).toHaveBeenCalledOnce();
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(ready).toHaveBeenCalledOnce();
+  });
+
+  it('fences an upload when its project is deleted while creation is pending', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    let acknowledge!: (record: ProjectRecordDTO) => void;
+    vi.mocked(api.createProject).mockReturnValueOnce(
+      new Promise((resolve) => {
+        acknowledge = resolve;
+      })
+    );
+    const pending = service.ensureProjectOnServer(project);
+    const rejected = expect(pending).rejects.toMatchObject({ reason: 'superseded' });
+    await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+    service.markProjectDeleted(project.id);
+    acknowledge(toRecord(project));
+    await rejected;
+  });
+
+  it('requires a successful acknowledgement after an initial project creation failure', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    vi.mocked(api.createProject).mockRejectedValueOnce(new Error('offline'));
+
+    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'unsynced' });
+    await service.ensureProjectOnServer(project);
+    expect(api.createProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects deleted projects and expired accounts even after their creation was acknowledged', async () => {
+    const api = createApi();
+    const project = createDraftProject([]);
+    const service = createService(captureAccountScope(), api);
+    await service.ensureProjectOnServer(project);
+    service.markProjectDeleted(project.id);
+    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'superseded' });
+    service.unmarkProjectDeleted(project.id);
+    accountLifecycle.activate('another-account');
+    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ name: 'AccountScopeExpiredError' });
+    expect(api.createProject).toHaveBeenCalledOnce();
+    expect(api.updateProject).not.toHaveBeenCalled();
+  });
+
   it('activates a requested new project and restores it after saving and reloading', async () => {
     const owner = captureAccountScope();
     const api = createApi();

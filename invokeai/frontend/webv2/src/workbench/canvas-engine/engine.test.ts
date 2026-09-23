@@ -117,7 +117,11 @@ const createTestMutationPort = (store: EngineStore, projectId: string): CanvasPr
   };
 };
 
-type TestCanvasEngineOptions = Omit<CanvasEngineOptions, 'getMainModelBase' | 'mutationPort' | 'reportError'> & {
+type TestCanvasEngineOptions = Omit<
+  CanvasEngineOptions,
+  'ensureProjectOnServer' | 'getMainModelBase' | 'mutationPort' | 'reportError'
+> & {
+  ensureProjectOnServer?: () => Promise<void>;
   getMainModelBase?: () => string | null;
   mutationPort?: CanvasProjectMutationPort;
   reportError?: CanvasEngineOptions['reportError'];
@@ -133,6 +137,7 @@ const createCanvasEngine = ({
   ...options
 }: TestCanvasEngineOptions): CanvasEngine =>
   createApplicationCanvasEngine({
+    ensureProjectOnServer: () => Promise.resolve(),
     ...options,
     getMainModelBase:
       getMainModelBase ?? (() => canvasApplicationPort.getSelectedModelBase(store.getState(), projectId)),

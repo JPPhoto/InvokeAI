@@ -64,6 +64,7 @@ import {
   PROJECT_DOCUMENT_MAX_BYTES,
   serializeProjectDocumentV2Json,
 } from './projectDocument';
+import { assertProjectFlushed, ProjectFlushError } from './projectFlush';
 import { deserializeProjectDocument, deserializeProjectRecord } from './projectHydration';
 import { acquireProjectMutationLock } from './projectLifecycleLocks';
 import { fetchSessionBlobStrict, serializeSessionBlob, SESSION_STATE_KEY } from './session';
@@ -370,6 +371,7 @@ export interface DurableSyncedWorkbenchPersistence {
     updatedAt: number
   ): Promise<void>;
   deleteProjectOnServer(projectId: string): Promise<void>;
+  ensureProjectOnServer(project: Project): Promise<void>;
   flushProjectToServer(project: Project): Promise<ProjectPushOutcome>;
   getProjectDraftDocument(projectId: string): Promise<string | null>;
   getRecoverableDraftDocument(projectId: string, editorSessionId: string): Promise<string | null>;
@@ -1867,6 +1869,26 @@ export const createDurableSyncedWorkbenchPersistence = (
           }
           throw error;
         }
+      }),
+    ensureProjectOnServer: (project) =>
+      enqueue(async () => {
+        const assertProjectIdentityCurrent = () => {
+          assertNotCleared();
+          assertOwner();
+          if (deletedProjectIds.has(project.id) || retargetedProjects.has(project.id)) {
+            throw new ProjectFlushError('superseded');
+          }
+          if (conflicts.get(project.id)?.kind === 'deleted') {
+            throw new ProjectFlushError('conflicted');
+          }
+        };
+        assertProjectIdentityCurrent();
+        // Upload provenance only needs the project's acknowledged identity. Subsequent edits
+        // remain with autosave, avoiding a document serialization/write per paint upload.
+        if (!syncEntries.has(project.id)) {
+          assertProjectFlushed(await pushProject(project));
+        }
+        assertProjectIdentityCurrent();
       }),
     flushProjectToServer: (project) => {
       if (isTerminallyCleared) {
