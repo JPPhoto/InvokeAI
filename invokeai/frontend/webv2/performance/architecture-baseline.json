@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 895804,
+        "brotliBytes": 896474,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 894617,
+        "gzipBytes": 895268,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2128478,
+        "initialRawBytes": 2130239,
         "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 89515,
+        "ownedRawBytes": 90438,
         "requestCount": 37,
         "scriptRequestCount": 21,
         "sourceOwners": [
@@ -155,6 +155,8 @@
           "source:src/features/identity/ui/UserManagement.tsx",
           "source:src/features/identity/ui/UsersPage.tsx",
           "source:src/features/identity/ui/useIdentityNotify.ts",
+          "source:src/features/intermediates/data/focus.ts",
+          "source:src/features/intermediates/index.ts",
           "source:src/features/models/core/baseIdentity.ts",
           "source:src/features/models/data/api.ts",
           "source:src/features/models/data/apiKeys.ts",
@@ -324,15 +326,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1233253,
+        "brotliBytes": 1236046,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1227029,
+        "gzipBytes": 1229608,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3164374,
+        "initialRawBytes": 3171535,
         "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 141887,
+        "ownedRawBytes": 141890,
         "requestCount": 86,
         "scriptRequestCount": 70,
         "sourceOwners": [
@@ -582,6 +584,9 @@
           "source:src/features/identity/ui/UserManagement.tsx",
           "source:src/features/identity/ui/UsersPage.tsx",
           "source:src/features/identity/ui/useIdentityNotify.ts",
+          "source:src/features/intermediates/data/focus.ts",
+          "source:src/features/intermediates/index.ts",
+          "source:src/features/intermediates/settingsContribution.ts",
           "source:src/features/models/core/baseIdentity.ts",
           "source:src/features/models/data/api.ts",
           "source:src/features/models/data/apiKeys.ts",
@@ -1044,7 +1049,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-22",
+  "capturedAt": "2026-09-23",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
@@ -1083,6 +1088,7 @@
       "_ag-psd",
       "src/app/WorkbenchApp.tsx",
       "src/features/gallery/ui/launchpad/RecentOutputs.tsx",
+      "src/features/intermediates/ui/IntermediatesManager.tsx",
       "src/features/models/ui/ModelManagerView.tsx",
       "src/features/models/ui/launchpad/ModelsNotice.tsx",
       "src/features/nodes/ui/NodeManagerView.tsx",

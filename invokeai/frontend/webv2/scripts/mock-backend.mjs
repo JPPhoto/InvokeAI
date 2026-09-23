@@ -93,6 +93,9 @@ const createState = (profile) => {
     openApiDocument: clone(fixture.openApiDocument),
     profile,
     projects: new Map(fixture.projects.map((project) => [project.project_id, clone(project)])),
+    intermediates: fixture.intermediates.map(clone),
+    intermediatesOperations: new Map(),
+    intermediatesPreviews: new Map(),
     queueItems: new Map(fixture.queueItems.map((item) => [item.item_id, clone(item)])),
     videos: new Map(fixture.videos.map((video) => [video.video_name, clone(video)])),
     workflows: new Map(fixture.workflows.map((workflow) => [workflow.workflow_id, clone(workflow)])),
@@ -1061,6 +1064,183 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
 
       if (method === 'GET' && (path === '/api/v1/wildcards' || path === '/api/v1/wildcards/')) {
         return json(200, []);
+      }
+
+      if (method === 'GET' && path === '/api/v1/intermediates/summary') {
+        const search = (url.searchParams.get('search') ?? '').trim().toLowerCase();
+        const sort = url.searchParams.get('sort') ?? 'reclaimable_bytes';
+        const descending = (url.searchParams.get('order') ?? 'desc') === 'desc';
+        const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0));
+        const limit = Math.max(1, Number(url.searchParams.get('limit') ?? 50));
+        const rows = state.intermediates
+          .filter((row) => !search || (row.project_name ?? '').toLowerCase().includes(search))
+          .sort((left, right) =>
+            sort === 'project_name'
+              ? (left.project_name ?? '').localeCompare(right.project_name ?? '') * (descending ? -1 : 1)
+              : (right.reclaimable_bytes - left.reclaimable_bytes) * (descending ? 1 : -1)
+          );
+        const totals = rows.reduce(
+          (acc, row) => ({
+            rows: acc.rows + 1,
+            safe_images: acc.safe_images + row.images.safe,
+            safe_videos: acc.safe_videos + row.videos.safe,
+            in_use_images: acc.in_use_images + row.images.referenced + row.images.active + row.images.recent,
+            in_use_videos: acc.in_use_videos + row.videos.referenced + row.videos.active + row.videos.recent,
+            reclaimable_bytes: acc.reclaimable_bytes + row.reclaimable_bytes,
+            unknown_size_count: acc.unknown_size_count + row.unknown_size_count,
+          }),
+          {
+            rows: 0,
+            safe_images: 0,
+            safe_videos: 0,
+            in_use_images: 0,
+            in_use_videos: 0,
+            reclaimable_bytes: 0,
+            unknown_size_count: 0,
+          }
+        );
+        return json(200, {
+          items: rows.slice(offset, offset + limit),
+          total: rows.length,
+          offset,
+          limit,
+          totals,
+          recent_grace_seconds: 1800,
+          measuring: false,
+          can_manage_everyone: true,
+        });
+      }
+
+      if (method === 'POST' && path === '/api/v1/intermediates/previews') {
+        const requested = await readJsonBody(request);
+        const previewId = `preview-${state.intermediatesPreviews.size + 1}`;
+        const targets =
+          requested?.scope?.kind === 'selection'
+            ? state.intermediates.filter((row) =>
+                requested.scope.targets.some(
+                  (target) => target.user_id === row.user_id && (target.project_id ?? null) === row.project_id
+                )
+              )
+            : state.intermediates;
+        const force = requested?.mode === 'force';
+        const impact = targets.reduce(
+          (acc, row) => ({
+            delete_images: acc.delete_images + row.images.safe + (force ? row.images.referenced : 0),
+            delete_videos: acc.delete_videos + row.videos.safe + (force ? row.videos.referenced : 0),
+            keep_referenced_images: acc.keep_referenced_images + (force ? 0 : row.images.referenced),
+            keep_referenced_videos: acc.keep_referenced_videos + (force ? 0 : row.videos.referenced),
+            keep_active_images: acc.keep_active_images + row.images.active,
+            keep_active_videos: acc.keep_active_videos + row.videos.active,
+            keep_recent_images: acc.keep_recent_images + row.images.recent,
+            keep_recent_videos: acc.keep_recent_videos + row.videos.recent,
+            reclaimable_bytes: acc.reclaimable_bytes + row.reclaimable_bytes + (force ? row.referenced_bytes : 0),
+            unknown_size_count: acc.unknown_size_count + row.unknown_size_count,
+          }),
+          {
+            delete_images: 0,
+            delete_videos: 0,
+            keep_referenced_images: 0,
+            keep_referenced_videos: 0,
+            keep_active_images: 0,
+            keep_active_videos: 0,
+            keep_recent_images: 0,
+            keep_recent_videos: 0,
+            reclaimable_bytes: 0,
+            unknown_size_count: 0,
+          }
+        );
+        const preview = {
+          preview_id: previewId,
+          mode: requested?.mode ?? 'safe',
+          scope: {
+            kind: requested?.scope?.kind ?? 'owner',
+            targets: requested?.scope?.targets ?? [],
+            user_id: requested?.scope?.user_id ?? null,
+          },
+          created_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 600_000).toISOString(),
+          target_rows: targets.length,
+          impact,
+          affected_documents: force
+            ? targets
+                .filter((row) => row.images.referenced + row.videos.referenced > 0)
+                .map((row) => ({
+                  kind: 'project',
+                  user_id: row.user_id,
+                  owner_id: row.project_id ?? 'unassigned',
+                  name: row.project_name,
+                  references: row.images.referenced + row.videos.referenced,
+                }))
+            : [],
+          affected_documents_hidden: 0,
+        };
+        state.intermediatesPreviews.set(previewId, { preview, targets });
+        return json(201, preview);
+      }
+
+      if (method === 'POST' && path === '/api/v1/intermediates/operations') {
+        const requested = await readJsonBody(request);
+        const frozen = state.intermediatesPreviews.get(requested?.preview_id);
+        if (!frozen) {
+          return json(404, { detail: 'Preview expired or unknown; request a new one' });
+        }
+        state.intermediatesPreviews.delete(requested.preview_id);
+        const operationId = `operation-${state.intermediatesOperations.size + 1}`;
+        const { impact } = frozen.preview;
+        const operation = {
+          operation_id: operationId,
+          user_id: 'fixture-user',
+          mode: frozen.preview.mode,
+          scope: frozen.preview.scope,
+          status: 'completed',
+          created_at: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          error: null,
+          target_images: impact.delete_images,
+          target_videos: impact.delete_videos,
+          progress: {
+            processed_images: impact.delete_images,
+            processed_videos: impact.delete_videos,
+            deleted_images: impact.delete_images,
+            deleted_videos: impact.delete_videos,
+            retained_images: 0,
+            retained_videos: 0,
+            failed_images: 0,
+            failed_videos: 0,
+            reclaimed_bytes: impact.reclaimable_bytes,
+            unknown_size_count: impact.unknown_size_count,
+            pending_disk_cleanup: 0,
+            unresolved_images: 0,
+            unresolved_videos: 0,
+          },
+          retried_from_operation_id: null,
+          retried_by_operation_id: null,
+        };
+        for (const row of frozen.targets) {
+          row.images = {
+            ...row.images,
+            safe: 0,
+            referenced: frozen.preview.mode === 'force' ? 0 : row.images.referenced,
+          };
+          row.videos = {
+            ...row.videos,
+            safe: 0,
+            referenced: frozen.preview.mode === 'force' ? 0 : row.videos.referenced,
+          };
+          row.reclaimable_bytes = 0;
+          row.unknown_size_count = 0;
+        }
+        state.intermediatesOperations.set(operationId, operation);
+        return json(202, operation);
+      }
+
+      {
+        const operationMatch = /^\/api\/v1\/intermediates\/operations\/([^/]+)$/.exec(path);
+        if (method === 'GET' && operationMatch) {
+          const operation = state.intermediatesOperations.get(decodeURIComponent(operationMatch[1]));
+          return operation ? json(200, operation) : json(404, { detail: 'Not found' });
+        }
       }
 
       if (method === 'GET' && path === '/api/v1/fonts') {
