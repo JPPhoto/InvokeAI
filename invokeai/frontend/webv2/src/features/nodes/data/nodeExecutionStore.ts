@@ -11,11 +11,8 @@ import { createKeyedTransientStore } from '@platform/state/externalStore';
 import { browserNodesDataPort } from './transport';
 
 /**
- * Ephemeral per-node execution state, keyed by the invocation's source node id
- * (the workflow editor's node id). Like the queue-item progress store, this is
- * high-frequency transient data that deliberately lives outside the workbench
- * reducer; the editor's nodes subscribe per id and only re-render when their
- * own node's state moves.
+ * Keep transient execution state outside the workbench reducer; subscribe per source node ID to isolate frequent
+ * renders.
  */
 
 export type NodeExecutionStatus = 'running' | 'completed' | 'failed';

@@ -32,11 +32,15 @@ import {
 } from '@features/queue/data/progressImageStore';
 import { queueItemProgressStore, type QueueItemProgressSink } from '@features/queue/data/progressStore';
 import { mapWithConcurrency } from '@platform/core/concurrency';
+import { createLogger } from '@platform/logging/logger';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
 
 const GALLERY_REFRESH_COALESCE_MS = 400;
 const SAFETY_SWEEP_INTERVAL_MS = 30_000;
+/** Node-level detail supports the terminal queue-item failure the history owner records. */
+const coordinatorLogger = createLogger({ area: 'coordinator', namespace: 'queue' });
+
 const TERMINAL_EVENT_BUFFER_LIMIT = 256;
 const NODE_EVENT_BUFFER_ITEM_LIMIT = 64;
 const NODE_EVENT_BUFFER_EVENTS_PER_ITEM = 512;
@@ -45,9 +49,8 @@ const BACKEND_READ_CONCURRENCY = 16;
 const FRAME_GATES_PER_WAIT_LIMIT = 64;
 
 /**
- * Queue's view of model-load activity derived from socket events. The
- * production adapter is Models' modelLoadActivitySink, injected by the App
- * composition root (see app/QueueRuntimeAdapter); tests inject a double.
+ * App injects Models' model-load activity sink so Queue can report socket-derived activity without importing its
+ * owner.
  */
 export interface QueueModelLoadPort {
   completed(payload: unknown): void;
@@ -143,21 +146,15 @@ export interface QueueCoordinator {
   connect(): void;
   detachRun(localQueueItemId: string): void;
   dispose(): void;
-  /**
-   * Match persisted pending/running queue items against the live backend queue
-   * so a reload neither double-submits nor orphans work. Adopted and resumed
-   * items are tracked and can be awaited with `waitForResults`.
-   */
+  /** Reconcile persisted work with backend items to avoid duplicate submission or orphaned runs after reload. */
   reconcile(items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>>;
   /** Enqueue a generate batch and track its backend items for event-driven settlement. */
   submitGenerate(localQueueItemId: string, request: QueueEnqueueGenerateRequest): Promise<QueueEnqueueResult>;
   /** Enqueue a compiled workflow graph and track its backend items the same way. */
   submitWorkflow(localQueueItemId: string, request: QueueEnqueueWorkflowRequest): Promise<QueueEnqueueResult>;
   /**
-   * Resolve once every backend item of the run reaches a terminal status —
-   * driven by socket events, with a slow safety sweep as the only polling.
-   * Resolves with the result images, throws on failure, and throws
-   * `QueueItemCancelledError` on backend-side cancellation.
+   * Await every backend item's terminal state via sockets and safety sweeps; return images or throw
+   * failure/cancellation.
    */
   waitForResults(
     localQueueItemId: string,
@@ -375,10 +372,7 @@ export const createQueueCoordinator = (
     }
   };
 
-  /**
-   * The store follows whichever item most recently produced a live event; the backend may run items
-   * in any order, so only a replayed event from before the current item's takeover is a straggler.
-   */
+  /** Backend order may vary; reject only replayed events predating the current item's takeover. */
   const isStaleNodeEvent = (nodeEvent: NodeEvent): boolean =>
     nodeExecutionRootItemId !== null &&
     getTrackedBackendItemId(nodeEvent.event) !== nodeExecutionRootItemId &&
@@ -435,6 +429,17 @@ export const createQueueCoordinator = (
         if (backendItemId !== nodeEvent.event.item_id) {
           return;
         }
+        coordinatorLogger.debug({
+          context: {
+            errorMessage: nodeEvent.event.error_message,
+            errorType: nodeEvent.event.error_type,
+            itemId: nodeEvent.event.item_id,
+            nodeId: nodeEvent.event.invocation_source_id,
+            sessionId: nodeEvent.event.session_id,
+          },
+          message: `Invocation failed: ${nodeEvent.event.error_type}`,
+          name: 'queue.invocation-error',
+        });
         nodeExecution.failed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
     }
@@ -553,17 +558,14 @@ export const createQueueCoordinator = (
     }
 
     if (outcome.status === 'completed') {
-      // Held before routing starts: the finished image swaps in over this frame
-      // once the browser has decoded it, and the batch's next slot shows it
-      // until a frame of its own arrives.
+      // Hold the frame before routing so decoded results and the next frameless slot can replace it without
+      // blanking.
       progressImage.hold(progressTarget);
       const routingPromise = callbacks.onBackendItemComplete?.(wait.localQueueItemId, backendItemId);
 
       if (routingPromise) {
-        // The slot stays followed until routing lands. Released on the terminal
-        // event, Preview fell out of live-follow two HTTP round trips before the
-        // finished image could be selected, and showed the previous selection
-        // in between.
+        // Keep following until routing lands; terminal events precede finished-image selection by network round
+        // trips.
         activeProgressTarget.settle(progressTarget);
         void Promise.resolve(routingPromise)
           .finally(releaseProgressSlot)
@@ -641,11 +643,8 @@ export const createQueueCoordinator = (
   };
 
   /**
-   * Slow safety net for events lost to disconnects; runs on reconnect, on the
-   * tab becoming visible, and on a long interval. A request made while one is in
-   * flight runs again afterwards rather than being dropped: the visibility sweep
-   * often fires while the network is still coming back and the reconnect sweep
-   * a second later is the one that can actually reach the backend.
+   * Sweep on reconnect, visibility, and a slow interval. Requests during an active sweep guarantee a trailing pass
+   * after network recovery.
    */
   const sweep = async (): Promise<void> => {
     if (!isActive() || waits.size === 0) {
@@ -689,12 +688,8 @@ export const createQueueCoordinator = (
   };
 
   /**
-   * Ask the backend for the latest preview frame of every running item and feed
-   * each through the socket handler, where the revision gate drops anything the
-   * live stream already delivered. Covers the frames lost while a hidden tab's
-   * socket was down, and the frames a reloaded page never saw. Best effort: the
-   * backend also replays them on `subscribe_queue`, and a failure here only means
-   * waiting for the next step.
+   * Fetch current previews through the revision-gated live handler. Snapshot failure is nonfatal; replay or the
+   * next step can recover.
    */
   const refreshProgressPreviews = async (): Promise<void> => {
     if (!isActive() || waits.size === 0 || !backend.readProgressPreviews) {
@@ -867,15 +862,8 @@ export const createQueueCoordinator = (
   };
 
   /**
-   * React to the shared socket's connection lifecycle. The Platform hub owns
-   * transport mechanics only; this Queue coordinator clears its transient
-   * per-node and model-load state and, on (re)connect, schedules a gallery
-   * refresh and missed-event sweep.
-   *
-   * The followed slot and its last frame deliberately survive a drop: the run
-   * continues on the backend and the sweep reconciles its durable outcome, so
-   * wiping them only ever produced a blank card — until the next event if the
-   * run was still going, or for good if it finished while disconnected.
+   * Clear transient node/model-load state on connection changes and reconcile on reconnect. Preserve followed
+   * slots/frames because backend runs continue offline.
    */
   const handleConnectionChange = (status: BackendConnectionStatus): void => {
     if (!isActive()) {
@@ -934,10 +922,7 @@ export const createQueueCoordinator = (
     // has already connected still triggers the initial clear + sweep.
     detachers.push(backend.onConnectionChange(handleConnectionChange));
 
-    // A hidden tab's socket is often dropped by the server (its pings are
-    // timer-throttled) and socket.io reconnects on its own backoff once the tab
-    // is back. The outcome is on the backend already, so sweep on the
-    // visibility edge itself rather than waiting for the reconnect edge.
+    // Sweep when the tab becomes visible instead of waiting for socket reconnect backoff.
     if (typeof document !== 'undefined') {
       const visibilityDocument = document;
       const handleVisibilityChange = (): void => {
@@ -981,10 +966,8 @@ export const createQueueCoordinator = (
       sweepTimer = null;
     }
 
-    // A disposed coordinator can never observe another event, so pending
-    // waits settle as canceled (raw, no completion/cancel side effects) —
-    // otherwise `waitForResults` awaiters hang forever. The backend run
-    // itself continues; a later `reconcile` re-adopts it.
+    // Dispose settles local waiters as cancelled without backend side effects; later coordinators can re-adopt
+    // continuing runs.
     for (const wait of waits.values()) {
       wait.settle({ status: 'canceled' });
     }
@@ -1095,8 +1078,7 @@ export const createQueueCoordinator = (
       );
     }
 
-    // A reloaded page has no frame for a run it just re-adopted; the socket only
-    // brings the next step's.
+    // Fetch a preview for re-adopted runs rather than waiting for the next socket step.
     void refreshProgressPreviews();
 
     return outcomes;

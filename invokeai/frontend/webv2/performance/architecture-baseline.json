@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 890518,
+        "brotliBytes": 896132,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 889340,
+        "gzipBytes": 894900,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2113859,
-        "largestAssetRawBytes": 778932,
+        "initialRawBytes": 2129357,
+        "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 88441,
+        "ownedRawBytes": 90376,
         "requestCount": 37,
         "scriptRequestCount": 21,
         "sourceOwners": [
@@ -127,6 +127,7 @@
           "source:src/app/SocketHubRuntime.tsx",
           "source:src/app/ThemeController.tsx",
           "source:src/app/accountLifecycle.ts",
+          "source:src/app/loggingRuntime.ts",
           "source:src/app/main.tsx",
           "source:src/app/router.tsx",
           "source:src/assets/SplashImage.webp",
@@ -185,6 +186,9 @@
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
+          "source:src/platform/logging/contracts.ts",
+          "source:src/platform/logging/logger.ts",
+          "source:src/platform/logging/normalize.ts",
           "source:src/platform/performance/semanticReady.ts",
           "source:src/platform/pwa/registerServiceWorker.ts",
           "source:src/platform/query/client.ts",
@@ -256,6 +260,7 @@
           "source:src/workbench/canvasSchemaVersion.ts",
           "source:src/workbench/components/WorkbenchSplashScreen.tsx",
           "source:src/workbench/deferredResource.ts",
+          "source:src/workbench/diagnostics/loggingPreferences.ts",
           "source:src/workbench/hotkeys/catalog.ts",
           "source:src/workbench/hotkeys/keys.ts",
           "source:src/workbench/hotkeys/modalLayer.ts",
@@ -287,6 +292,7 @@
           "source:src/workbench/launchpad/projects/projectPins.ts",
           "source:src/workbench/launchpad/projects/projectsMetrics.ts",
           "source:src/workbench/launchpad/projects/useProjectCardActions.ts",
+          "source:src/workbench/launchpad/startEntries.ts",
           "source:src/workbench/palette/LaunchpadCommandPalette.tsx",
           "source:src/workbench/palette/PaletteButton.tsx",
           "source:src/workbench/palette/paletteStore.ts",
@@ -319,15 +325,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1223651,
+        "brotliBytes": 1235108,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1217495,
+        "gzipBytes": 1228719,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3133681,
-        "largestAssetRawBytes": 778932,
+        "initialRawBytes": 3169745,
+        "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 141137,
+        "ownedRawBytes": 141887,
         "requestCount": 86,
         "scriptRequestCount": 70,
         "sourceOwners": [
@@ -463,6 +469,7 @@
           "source:src/app/WorkbenchApp.tsx",
           "source:src/app/WorkflowUiAdapter.tsx",
           "source:src/app/accountLifecycle.ts",
+          "source:src/app/loggingRuntime.ts",
           "source:src/app/main.tsx",
           "source:src/app/router.tsx",
           "source:src/app/workbenchPorts.tsx",
@@ -686,6 +693,9 @@
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
+          "source:src/platform/logging/contracts.ts",
+          "source:src/platform/logging/logger.ts",
+          "source:src/platform/logging/normalize.ts",
           "source:src/platform/performance/semanticReady.ts",
           "source:src/platform/pwa/registerServiceWorker.ts",
           "source:src/platform/query/client.ts",
@@ -810,7 +820,7 @@
           "source:src/workbench/controlAdapters.ts",
           "source:src/workbench/controlLayerChecks.ts",
           "source:src/workbench/deferredResource.ts",
-          "source:src/workbench/diagnostics/logger.ts",
+          "source:src/workbench/diagnostics/loggingPreferences.ts",
           "source:src/workbench/extensions/contributionSource.ts",
           "source:src/workbench/extensions/extensionRegistry.ts",
           "source:src/workbench/floatingWindows.ts",
@@ -860,6 +870,7 @@
           "source:src/workbench/launchpad/projects/projectPins.ts",
           "source:src/workbench/launchpad/projects/projectsMetrics.ts",
           "source:src/workbench/launchpad/projects/useProjectCardActions.ts",
+          "source:src/workbench/launchpad/startEntries.ts",
           "source:src/workbench/layerPanelState.ts",
           "source:src/workbench/layoutContracts.ts",
           "source:src/workbench/layoutPresetActivation.ts",
@@ -932,6 +943,7 @@
           "source:src/workbench/shell/CenterArea.tsx",
           "source:src/workbench/shell/DocumentTitleProgress.tsx",
           "source:src/workbench/shell/Panels.tsx",
+          "source:src/workbench/shell/PasteMediaRuntime.tsx",
           "source:src/workbench/shell/ProjectConflictBanner.tsx",
           "source:src/workbench/shell/QueueRecoveryBanner.tsx",
           "source:src/workbench/shell/StatusBar.tsx",
@@ -1034,7 +1046,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-22",
+  "capturedAt": "2026-09-23",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",
@@ -1079,7 +1091,9 @@
       "src/features/queue/ui/launchpad/QueueStatusBand.tsx",
       "src/workbench/launchpad/home/livePanels.ts"
     ],
-    "editorForbiddenInitialChunkNames": ["ag-psd"],
+    "editorForbiddenInitialChunkNames": [
+      "ag-psd"
+    ],
     "inactiveWidgetGateOwner": "deepen-widget-registry-loading"
   }
 }
