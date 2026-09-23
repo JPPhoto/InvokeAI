@@ -134,7 +134,9 @@ export const getLayerWorkflowInputs = (
       continue;
     }
 
-    for (const field of sortInputFields(Object.values(template.inputs))) {
+    for (const field of sortInputFields(
+      Object.values({ ...template.inputs, ...candidate.data.dynamicInputTemplates })
+    )) {
       if (!isSingleImageField(field) || connectedInputs.has(`${candidate.id}:${field.name}`)) {
         continue;
       }
@@ -197,11 +199,7 @@ const allocateNodeId = (graph: WorkflowBackendGraph, base: string): string => {
   return `${base}-${suffix}`;
 };
 
-/**
- * Builds a throwaway backend graph that feeds one workflow image input and
- * captures one workflow image output. The editable workflow document is never
- * mutated.
- */
+/** Compile a temporary input/output capture graph without mutating the editable document. */
 export const buildLayerWorkflowGraph = (options: BuildLayerWorkflowGraphOptions): BuiltLayerWorkflowGraph => {
   const { document, imageName, input, output, templatesSnapshot } = options;
 
@@ -238,7 +236,10 @@ export const buildLayerWorkflowGraph = (options: BuildLayerWorkflowGraphOptions)
   const inputNode = cloned.nodes.find(
     (candidate): candidate is WorkflowInvocationNode => candidate.id === input.nodeId && isInvocationNode(candidate)
   );
-  const inputTemplate = inputNode ? templates[inputNode.data.type]?.inputs[input.fieldName] : undefined;
+  const inputTemplate = inputNode
+    ? (inputNode.data.dynamicInputTemplates?.[input.fieldName] ??
+      templates[inputNode.data.type]?.inputs[input.fieldName])
+    : undefined;
 
   if (!inputNode || !inputTemplate) {
     throw new Error('The selected workflow input binding is no longer available.');

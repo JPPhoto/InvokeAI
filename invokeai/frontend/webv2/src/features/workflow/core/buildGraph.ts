@@ -11,6 +11,7 @@ import type {
   WorkflowSeedFieldAdvance,
 } from './types';
 
+import { CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX } from './callSavedWorkflow';
 import { createWorkflowId } from './document';
 import { getWorkflowFieldInvalidReason, isDirectInputField } from './fields';
 import {
@@ -24,10 +25,8 @@ import { isInvocationNode } from './types';
 import { hasAnyCycle } from './validation';
 
 /**
- * Compiles the project graph document into the immutable, queue-facing
- * `GraphContract`. Ported from the legacy `buildNodesGraph`, with connector
- * resolution and without batch handling (batch/generator nodes are rejected by
- * readiness until batching lands).
+ * Compile documents to immutable queue GraphContract with connector resolution; readiness rejects unsupported
+ * batch/generator nodes.
  */
 
 /** Client-resolved batch/generator nodes from the legacy editor; executing them server-side is meaningless. */
@@ -55,12 +54,13 @@ const isEmptyValue = (value: unknown): boolean =>
 const getNodeDisplayName = (node: WorkflowInvocationNode, templates: InvocationTemplates): string =>
   node.data.label || templates[node.data.type]?.title || node.data.type;
 
-/**
- * Translates a board field value to the backend shape: `auto` and `none`
- * sentinels are omitted so the backend applies its default board behavior.
- */
+const getNodeInputTemplates = (
+  node: WorkflowInvocationNode,
+  template: InvocationTemplates[string]
+): FieldInputTemplate[] => Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates });
+
 const toBoardGraphValue = (value: unknown): unknown => {
-  if (value === 'auto' || value === 'none' || isEmptyValue(value)) {
+  if (isEmptyValue(value) || value === 'auto' || value === 'none') {
     return undefined;
   }
 
@@ -118,7 +118,26 @@ export const getProjectGraphReadiness = (
       continue;
     }
 
-    for (const inputTemplate of Object.values(template.inputs)) {
+    if (node.data.type === 'call_saved_workflow') {
+      const workflowId = node.data.inputs.workflow_id?.value;
+
+      if (typeof workflowId !== 'string' || workflowId.trim() === '') {
+        reasons.push('Call Saved Workflow requires a saved workflow.');
+        continue;
+      }
+
+      if (node.data.callSavedWorkflowStatus === 'loading' || node.data.callSavedWorkflowStatus === undefined) {
+        reasons.push('Call Saved Workflow inputs are still loading.');
+        continue;
+      }
+
+      if (node.data.callSavedWorkflowStatus === 'error') {
+        reasons.push('The selected saved workflow is unavailable or incompatible.');
+        continue;
+      }
+    }
+
+    for (const inputTemplate of getNodeInputTemplates(node, template)) {
       if (connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
         continue;
       }
@@ -171,9 +190,13 @@ export const getProjectGraphReadiness = (
   return { canInvoke: reasons.length === 0, reasons };
 };
 
-const toGraphInputValue = (inputTemplate: FieldInputTemplate, value: unknown): unknown => {
+const toGraphInputValue = (
+  inputTemplate: FieldInputTemplate,
+  value: unknown,
+  options: { preserveBoardSentinel?: boolean } = {}
+): unknown => {
   if (inputTemplate.type.name === 'BoardField') {
-    return toBoardGraphValue(value);
+    return options.preserveBoardSentinel ? value : toBoardGraphValue(value);
   }
 
   return value;
@@ -204,18 +227,32 @@ export const compileProjectGraph = (
       use_cache: node.data.useCache,
     };
 
+    const workflowInputs: Record<string, unknown> = {};
+
     for (const instance of Object.values(node.data.inputs)) {
-      const inputTemplate = template.inputs[instance.name];
+      const inputTemplate = node.data.dynamicInputTemplates?.[instance.name] ?? template.inputs[instance.name];
 
       if (!inputTemplate || instance.value === undefined) {
         continue;
       }
 
-      const value = toGraphInputValue(inputTemplate, instance.value);
+      const isSavedWorkflowInput =
+        node.data.type === 'call_saved_workflow' && instance.name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX);
+      const value = toGraphInputValue(inputTemplate, instance.value, {
+        preserveBoardSentinel: isSavedWorkflowInput,
+      });
 
       if (value !== undefined) {
-        graphNode[instance.name] = value;
+        if (isSavedWorkflowInput) {
+          workflowInputs[instance.name] = value;
+        } else {
+          graphNode[instance.name] = value;
+        }
       }
+    }
+
+    if (node.data.type === 'call_saved_workflow') {
+      graphNode.workflow_inputs = workflowInputs;
     }
 
     backendGraph.nodes[node.id] = graphNode as WorkflowBackendGraph['nodes'][string];
@@ -246,7 +283,18 @@ export const compileProjectGraph = (
     const targetNode = backendGraph.nodes[edge.destination.node_id];
 
     if (targetNode) {
-      delete targetNode[edge.destination.field];
+      if (
+        targetNode.type === 'call_saved_workflow' &&
+        edge.destination.field.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX)
+      ) {
+        const workflowInputs = targetNode.workflow_inputs;
+
+        if (workflowInputs && typeof workflowInputs === 'object') {
+          delete (workflowInputs as Record<string, unknown>)[edge.destination.field];
+        }
+      } else {
+        delete targetNode[edge.destination.field];
+      }
     }
   }
 
@@ -275,14 +323,8 @@ export const compileProjectGraph = (
 };
 
 /**
- * The inputs that carry a seed mode: the scalar integer a node declares as `seed`
- * over the full seed range. Read from the template alone, so an editable label
- * cannot turn an ordinary integer into a seed, and a provider's own-range `seed`
- * keeps its plain control instead of wrapping at a bound it never had.
- *
- * Seed policy lives here rather than in `fields.ts` because it is the one place
- * the workflow core depends on the platform seed arithmetic at runtime: the
- * shared field/document helpers stay in the lighter utility chunk every overlay loads.
+ * Seed modes require a template-declared scalar seed with the full range. Keep seed arithmetic here so shared
+ * field utilities remain lightweight.
  */
 export const isSeedInputField = (template: FieldInputTemplate): boolean =>
   template.name === 'seed' &&
@@ -291,10 +333,10 @@ export const isSeedInputField = (template: FieldInputTemplate): boolean =>
   // The modes walk and wrap over 0…SEED_MAX in steps of one, so the template has to
   // accept every value on that walk; a tighter range or step keeps its plain control.
   template.maximum === SEED_MAX &&
-  (template.minimum === null || template.minimum <= 0) &&
-  template.exclusiveMinimum === null &&
-  template.exclusiveMaximum === null &&
-  (template.multipleOf === null || template.multipleOf === 1) &&
+  ((template.minimum ?? null) === null || (template.minimum ?? 0) <= 0) &&
+  (template.exclusiveMinimum ?? null) === null &&
+  (template.exclusiveMaximum ?? null) === null &&
+  ((template.multipleOf ?? null) === null || template.multipleOf === 1) &&
   isDirectInputField(template);
 
 export const getWorkflowFieldSeedMode = (instance: Pick<WorkflowFieldInstance, 'seedMode'> | undefined): SeedMode =>
@@ -316,12 +358,8 @@ export interface WorkflowSeedPlan {
 }
 
 /**
- * Decides every seed input's start for a submission of `batchCount` runs. Seeds
- * vary per queued run, not per iteration of a loop inside a run. A random input
- * draws its start here and the runs step consecutively from it, like Generate's
- * random mode, while the entered seed stays in reserve; a stepping input counts
- * from the authored seed and reports where the field goes afterwards. Expansion
- * into per-run values happens at send time from these starts, never redrawing.
+ * Choose seed starts once per submission and expand runs deterministically at send time. Random preserves the
+ * entered seed; stepping reports the next authored value.
  */
 export const planWorkflowSeeds = (
   document: ProjectGraphState,
@@ -341,7 +379,7 @@ export const planWorkflowSeeds = (
       continue;
     }
 
-    for (const inputTemplate of Object.values(template.inputs)) {
+    for (const inputTemplate of Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates })) {
       if (!isSeedInputField(inputTemplate) || connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
         continue;
       }

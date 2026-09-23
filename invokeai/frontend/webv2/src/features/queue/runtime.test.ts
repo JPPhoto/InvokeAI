@@ -166,6 +166,7 @@ describe('queue runtime', () => {
         batchCount: 3,
         graph: { edges: [], id: 'backend-graph', nodes: { noise: { id: 'noise', seed: 7, type: 'noise' } } },
         kind: 'workflow',
+        workflow: { edges: [], name: 'Call-only workflow', nodes: [], version: '1.0.0' },
         ...(seeds === undefined ? {} : { seeds: seeds as never }),
       };
       queueItem.snapshot.sourceId = 'workflow';
@@ -176,7 +177,11 @@ describe('queue runtime', () => {
 
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed]))).toMatchObject({
       kind: 'workflow',
-      request: { batchCount: 3, seeds: [seed] },
+      request: {
+        batchCount: 3,
+        seeds: [seed],
+        workflow: { name: 'Call-only workflow' },
+      },
     });
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(undefined))).toMatchObject({
       kind: 'workflow',
@@ -1967,8 +1972,7 @@ describe('queue runtime video board routing', () => {
       getItem: vi.fn(),
       getResultImages: options.getResultImages ?? vi.fn().mockResolvedValue([]),
       getResultVideoNames: options.getResultVideoNames,
-      // The backend already accepted and completed this run before "reload": reconcile
-      // adopts it and settles immediately, driving both settlement paths without sockets.
+      // Reconcile an already-completed backend run to exercise both settlement paths without sockets.
       listItems: vi.fn().mockResolvedValue([
         {
           batchId: 'backend-batch',
@@ -2105,9 +2109,7 @@ describe('queue runtime video board routing', () => {
   });
 
   it('never routes an input image echoed into the results (first-frame keyframe)', async () => {
-    // The i2v workflow's `image` primitive echoes the uploaded keyframe into
-    // session.results as a non-intermediate output; only the generated image may
-    // reach the board or the recorded results.
+    // Exclude echoed i2v keyframes from result recording and board attachment.
     const { commands, destinations, runtime } = createHarness({
       getResultImages: vi.fn().mockResolvedValue([resultImage('keyframe.png'), resultImage('generated.png')]),
       getResultVideoNames: vi.fn().mockResolvedValue([]),

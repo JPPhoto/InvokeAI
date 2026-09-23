@@ -891,7 +891,11 @@ class TestProvenanceRoundTrip:
 
     def test_saved_provenance_survives_being_read_back(self, disk_storage: DiskImageFileStorage):
         metadata = '{"positive_prompt": "a cat"}'
-        workflow = '{"name": "Fixture workflow", "nodes": []}'
+        workflow = (
+            '{"name": "Fixture workflow", "author": "", "description": "", "version": "1.0.0", '
+            '"contact": "", "tags": "", "notes": "", "exposedFields": [], '
+            '"meta": {"category": "user", "version": "3.0.0"}, "nodes": [], "edges": [], "form": null}'
+        )
         graph = '{"nodes": {}, "edges": []}'
 
         disk_storage.save(
@@ -920,6 +924,7 @@ class TestProvenanceRoundTrip:
             assert reopened.info["invokeai_graph"] == graph
 
         assert extracted.invokeai_metadata == metadata
+        assert extracted.invokeai_workflow == workflow
         assert extracted.invokeai_graph == graph
 
     def test_an_image_saved_without_provenance_extracts_none(self, disk_storage: DiskImageFileStorage):

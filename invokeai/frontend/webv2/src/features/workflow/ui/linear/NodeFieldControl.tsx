@@ -8,6 +8,7 @@ import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldIn
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import {
   cloneWorkflowFieldDefault,
+  getEffectiveWorkflowFieldDescription,
   getRandomWorkflowFieldValue,
   getResolvedWorkflowEdges,
   getWorkflowFieldInvalidReason,
@@ -20,18 +21,15 @@ import { DicesIcon, RotateCcwIcon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * One exposed node field, shared by the Linear UI's view mode and the form
- * builder: label (optionally editable), optional description, and the live
- * input — or a note when the field is driven by a graph connection.
- */
 /** Resolves a form element's node, field instance, and input template against the document. */
 export const useNodeFieldBinding = (element: NodeFieldFormElement, projectGraph: ProjectGraphState) => {
   const templates = useInvocationTemplatesSelector((snapshot) => snapshot.templates);
   const { fieldName, nodeId } = element.data.fieldIdentifier;
   const node = projectGraph.nodes.find((candidate) => candidate.id === nodeId);
   const invocationNode = node && isInvocationNode(node) ? node : null;
-  const template = invocationNode ? templates[invocationNode.data.type]?.inputs[fieldName] : undefined;
+  const template = invocationNode
+    ? (invocationNode.data.dynamicInputTemplates?.[fieldName] ?? templates[invocationNode.data.type]?.inputs[fieldName])
+    : undefined;
   const instance = invocationNode?.data.inputs[fieldName];
   const nodeContext = invocationNode
     ? invocationNode.data.label || templates[invocationNode.data.type]?.title || invocationNode.data.type
@@ -56,16 +54,14 @@ export const NodeFieldControl = ({
     element,
     projectGraph
   );
-  // While the label input is focused it edits a draft seeded from the
-  // *displayed* label, so an unset override starts from the template title
-  // instead of an empty box.
+  // Seed focused label drafts from displayed text, including template fallback.
   const [draftLabel, setDraftLabel] = useState<string | null>(null);
 
   const isConnected = getResolvedWorkflowEdges(projectGraph.nodes, projectGraph.edges).some(
     (edge) => edge.target === nodeId && edge.targetHandle === fieldName
   );
   const label = instance?.label || template?.title || '';
-  const description = instance?.description || template?.description;
+  const description = getEffectiveWorkflowFieldDescription(instance, template);
   const invalidReason = template
     ? getWorkflowFieldInvalidReason({ isConnected, template, value: instance?.value })
     : null;
