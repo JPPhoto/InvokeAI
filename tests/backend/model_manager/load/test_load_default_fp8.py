@@ -183,7 +183,7 @@ def test_wrap_forward_restores_storage_dtype_on_exception():
     for p in module.parameters(recurse=False):
         p.data = p.data.to(storage_dtype)
 
-    ModelLoader._wrap_forward_with_fp8_cast(module, storage_dtype, compute_dtype)
+    ModelLoader._wrap_forward_with_fp8_cast(module, compute_dtype)
 
     # Sanity: params start in storage dtype.
     assert module.weight.dtype == storage_dtype
@@ -218,12 +218,89 @@ def test_wrap_forward_casts_to_compute_then_back_on_success():
     for p in module.parameters(recurse=False):
         p.data = p.data.to(storage_dtype)
 
-    ModelLoader._wrap_forward_with_fp8_cast(module, storage_dtype, compute_dtype)
+    ModelLoader._wrap_forward_with_fp8_cast(module, compute_dtype)
 
     module(torch.zeros(4, dtype=compute_dtype))
 
     assert seen_dtypes == [compute_dtype]
     assert module.weight.dtype == storage_dtype
+
+
+@pytest.mark.skipif(not _fp8_supported(), reason="torch.float8_e4m3fn not available")
+def test_the_forward_puts_the_stored_weights_back_rather_than_re_quantizing():
+    """The exit must restore the same tensors, or the cache's RAM copy is orphaned.
+
+    `CachedModelWithPartialLoad` snapshots `model.state_dict()` at `put()` and charges the RAM
+    budget from it. A post-hook that re-derived the storage dtype with `.to()` allocated new
+    storage, so from the first forward on, every CPU-resident param pointed at a private copy
+    while that snapshot pinned the original: both live, 2 bytes per element against a budget that
+    still said 1, for as long as the weights stayed in RAM.
+    """
+    model = torch.nn.Sequential(*[torch.nn.Linear(64, 64, bias=False) for _ in range(4)]).to(torch.bfloat16)
+    ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+    cached = model.state_dict()
+
+    model(torch.randn(1, 64, dtype=torch.bfloat16))
+
+    for name, snapshot in cached.items():
+        param = model.get_parameter(name)
+        assert param.dtype is torch.float8_e4m3fn, name
+        assert param.data_ptr() == snapshot.data_ptr(), f"{name}: the RAM snapshot now pins a second copy"
+
+
+@pytest.mark.skipif(not _fp8_supported(), reason="torch.float8_e4m3fn not available")
+def test_a_doubly_wrapped_module_still_ends_with_the_weights_stored():
+    """Only the outermost hook pair may restore, which is what the depth counter is for.
+
+    `_apply_fp8_to_nn_module` carries no idempotency guard of its own — the marker check lives in
+    its caller — so a second pass over the same tree registers a second hook pair. Without the
+    counter the inner pre-hook records the *widened* weight as the stored one and the module stays
+    in compute dtype for good: fp8 storage silently off, and the cache under-counting it by half.
+    """
+    model = torch.nn.Sequential(torch.nn.Linear(8, 8, bias=False)).to(torch.bfloat16)
+    ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+    cached = model.state_dict()
+    ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+    assert len(model[0]._forward_pre_hooks) == 2, "the premise is a module wrapped twice"
+
+    model(torch.randn(1, 8, dtype=torch.bfloat16))
+
+    assert model[0].weight.dtype is torch.float8_e4m3fn
+    assert model[0].weight.data_ptr() == cached["0.weight"].data_ptr()
+
+
+@pytest.mark.skipif(not _fp8_supported(), reason="torch.float8_e4m3fn not available")
+def test_a_widening_that_runs_out_of_memory_leaves_the_weights_stored():
+    """The widening is the likeliest allocation here to fail, and it must not strand the module.
+
+    It asks for twice the param's storage on a device the cache deliberately drives to its ceiling.
+    `always_call=True` runs the post-hook when it raises, so the record of what the params held has
+    to be in place before the first cast — otherwise the already-widened ones stay widened, and the
+    next forward records *those* as the stored ones, which makes it permanent.
+    """
+    module = torch.nn.Linear(8, 8).to(torch.bfloat16)
+    for p in module.parameters(recurse=False):
+        p.data = p.data.to(torch.float8_e4m3fn)
+    cached = {name: p.data for name, p in module.named_parameters()}
+    ModelLoader._wrap_forward_with_fp8_cast(module, torch.bfloat16)
+
+    real_to = torch.Tensor.to
+    calls = {"n": 0}
+
+    def failing_to(self, *args, **kwargs):
+        # Fail on the second widening, so one param is already widened when it raises.
+        if args and args[0] is torch.bfloat16:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise torch.OutOfMemoryError("probe")
+        return real_to(self, *args, **kwargs)
+
+    with patch.object(torch.Tensor, "to", failing_to), pytest.raises(torch.OutOfMemoryError):
+        module(torch.randn(1, 8, dtype=torch.bfloat16))
+
+    for name, param in module.named_parameters():
+        assert param.dtype is torch.float8_e4m3fn, name
+        assert param.data_ptr() == cached[name].data_ptr(), f"{name}: restored a copy, not the stored tensor"
 
 
 def test_apply_fp8_to_nn_module_uses_wrapper():
@@ -233,7 +310,7 @@ def test_apply_fp8_to_nn_module_uses_wrapper():
     module = torch.nn.Linear(4, 4)
     with patch.object(ModelLoader, "_wrap_forward_with_fp8_cast") as mock_wrap:
         ModelLoader._apply_fp8_to_nn_module(module, torch.float16, torch.float32)
-    mock_wrap.assert_called_once_with(module, torch.float16, torch.float32)
+    mock_wrap.assert_called_once_with(module, torch.float32)
 
 
 def test_apply_fp8_to_nn_module_skips_norm_modules():
@@ -508,7 +585,7 @@ def test_wrap_forward_reaches_custom_linear_after_apply_custom_layers():
     parent = Parent()
     original_linear = parent.child
 
-    ModelLoader._wrap_forward_with_fp8_cast(original_linear, torch.float16, torch.float32)
+    ModelLoader._wrap_forward_with_fp8_cast(original_linear, torch.float32)
 
     apply_custom_layers_to_model(parent)
     new_child = parent.child

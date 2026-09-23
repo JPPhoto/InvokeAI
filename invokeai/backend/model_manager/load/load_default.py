@@ -146,6 +146,17 @@ _FP8_SUPPORTED_PYTORCH_LAYERS: tuple[type[torch.nn.Module], ...] = (
     torch.nn.Embedding,
 )
 
+# Where a hooked module parks the params as stored while its forward runs on widened copies. Lives
+# in the module's `__dict__`, which `wrap_custom_layer` shares with the `Custom*` instance it swaps
+# in, so the pair survives `apply_custom_layers_to_model`. Not a buffer: `state_dict()` must not see it.
+#
+# It is only ever live inside a single `__call__`, and that is what keeps it safe: everything that
+# copies or rebinds a module's params — `_build_meta_shell`, `apply_custom_layers_to_model`,
+# partial load/unload, eviction — runs outside any forward on the same model. Worth preserving if
+# that ordering is ever changed: a *live* stash reaching `_build_meta_shell` would be deep-copied
+# as a real tensor, materializing the weight inside a shell whose whole point is to hold no data.
+_FP8_STORED_WEIGHTS_ATTR = "_invokeai_fp8_stored_weights"
+
 # Module-path regexes (matched against `named_modules()` dotted paths) for precision-sensitive
 # layers that should never be cast to FP8. Mirrors diffusers' `DEFAULT_SKIP_MODULES_PATTERN`
 # — without these, FLUX RMSNorm.scale and similar tiny learned scalars get crushed to FP8 and
@@ -652,7 +663,7 @@ class ModelLoader(ModelLoaderBase):
             for param in params:
                 param.data = param.data.to(storage_dtype)
 
-            ModelLoader._wrap_forward_with_fp8_cast(module, storage_dtype, compute_dtype)
+            ModelLoader._wrap_forward_with_fp8_cast(module, compute_dtype)
 
     @staticmethod
     def _restore_compute_dtype(module: torch.nn.Module, compute_dtype: torch.dtype) -> None:
@@ -670,11 +681,26 @@ class ModelLoader(ModelLoaderBase):
                 param.data = param.data.to(compute_dtype)
 
     @staticmethod
-    def _wrap_forward_with_fp8_cast(
-        module: torch.nn.Module, storage_dtype: torch.dtype, compute_dtype: torch.dtype
-    ) -> None:
-        """Register pre/post forward hooks that cast params to compute dtype on entry and back
-        to storage dtype on exit.
+    def _wrap_forward_with_fp8_cast(module: torch.nn.Module, compute_dtype: torch.dtype) -> None:
+        """Register pre/post forward hooks that widen params to compute dtype on entry and put the
+        stored ones back on exit.
+
+        The exit puts back the *same tensors*, rather than re-quantizing to the storage dtype. Both
+        end with a param of the storage dtype, and the difference is the whole point:
+
+        - `.to(storage_dtype)` allocates new storage. `CachedModelWithPartialLoad` keeps
+          `_cpu_state_dict = model.state_dict()` (the `keep_ram_copy_of_weights` default), so after
+          the first forward the param pointed at a private copy while that RAM copy pinned the
+          original — both live, 2 bytes per element for every param still CPU-resident, against a
+          budget snapshotted at `put()` that still said 1. It healed only when the model moved to
+          VRAM or was evicted, so it lasted a whole generation, and multi-GPU multiplied it: the
+          `SharedCpuWeightsStore` canonical tensor stayed pinned while each device detached its own.
+        - Putting the stored tensor back also skips the fp8 round trip entirely. Only the widening
+          cast remains, one per forward instead of two, and the exit allocates nothing at all.
+
+        The cost is that the stored tensor stays alive for the duration of the forward, so the module
+        in flight holds storage + compute dtype at once rather than just compute. That is one module
+        at a time and bounded by the largest layer.
 
         We use hooks (rather than overriding `module.forward`) for two reasons:
 
@@ -696,12 +722,33 @@ class ModelLoader(ModelLoaderBase):
         """
 
         def pre_hook(mod: torch.nn.Module, _args: object) -> None:
-            for p in mod.parameters(recurse=False):
-                p.data = p.data.to(compute_dtype)
+            state = getattr(mod, _FP8_STORED_WEIGHTS_ATTR, None)
+            if state is not None:
+                # Already inside a forward on this module. The outermost call owns the restore;
+                # widening again would stash the *widened* tensor as if it were the stored one.
+                state["depth"] += 1
+                return
+            stored = [(p, p.data) for p in mod.parameters(recurse=False)]
+            # Installed *before* the widening, not after. The widening asks for twice the param's
+            # storage on a device the cache deliberately drives to its ceiling, so it is the most
+            # likely allocation here to raise; `always_call=True` then runs the post-hook, and if
+            # the record were not in place yet it would find nothing to put back and leave the
+            # already-widened params in compute dtype — permanently, because the next forward would
+            # record *those* as the stored ones.
+            setattr(mod, _FP8_STORED_WEIGHTS_ATTR, {"depth": 1, "stored": stored})
+            for p, data in stored:
+                p.data = data.to(compute_dtype)
 
         def post_hook(mod: torch.nn.Module, _args: object, _output: object) -> None:
-            for p in mod.parameters(recurse=False):
-                p.data = p.data.to(storage_dtype)
+            state = getattr(mod, _FP8_STORED_WEIGHTS_ATTR, None)
+            if state is None:
+                return
+            state["depth"] -= 1
+            if state["depth"] > 0:
+                return
+            setattr(mod, _FP8_STORED_WEIGHTS_ATTR, None)
+            for p, data in state["stored"]:
+                p.data = data
 
         module.register_forward_pre_hook(pre_hook)
         module.register_forward_hook(post_hook, always_call=True)
