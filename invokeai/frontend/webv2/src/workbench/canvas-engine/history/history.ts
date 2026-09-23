@@ -4,34 +4,25 @@
  * recording and `push` is a no-op, avoiding recursive history.
  */
 
+import { collectRestorableAssetRefs } from '@workbench/projects/projectAssets';
+
 /** Max number of undo entries retained before the oldest is evicted. */
 export const HISTORY_MAX_ENTRIES = 64;
 
 /** Max total bytes retained across the undo + redo stacks before the oldest is evicted (256 MB). */
 export const HISTORY_BYTE_BUDGET = 256 * 1024 * 1024;
 
+export interface HeldAssetRefs {
+  readonly images: readonly string[];
+  readonly videos: readonly string[];
+}
+
+/** For entries that restore pixels or selection state only. */
+export const NO_HELD_ASSET_REFS: HeldAssetRefs = { images: [], videos: [] };
+
 /** Media names captured by an undo entry, including sources no longer in the live document. */
-export const collectHistoryMediaRefs = (...values: unknown[]): { images: string[]; videos: string[] } => {
-  const images = new Set<string>();
-  const videos = new Set<string>();
-  const pending: unknown[] = [...values];
-  while (pending.length > 0) {
-    const value = pending.pop();
-    if (typeof value !== 'object' || value === null) {
-      continue;
-    }
-    for (const [key, child] of Object.entries(value)) {
-      if (typeof child === 'string' && child.length > 0 && child.length <= 255) {
-        if (key === 'imageName' || key === 'image_name') {
-          images.add(child);
-        } else if (key === 'video_name') {
-          videos.add(child);
-        }
-      } else if (typeof child === 'object' && child !== null) {
-        pending.push(child);
-      }
-    }
-  }
+export const collectHistoryMediaRefs = (...values: unknown[]): HeldAssetRefs => {
+  const { images, videos } = collectRestorableAssetRefs(...values);
   return { images: [...images], videos: [...videos] };
 };
 
@@ -41,8 +32,11 @@ export interface HistoryEntry {
   readonly label: string;
   /** Approximate retained size in bytes (e.g. before+after ImageData byteLength). */
   readonly bytes: number;
-  /** Media names this entry can restore after they leave the current document. */
-  readonly heldAssetRefs?: { readonly images: readonly string[]; readonly videos: readonly string[] };
+  /**
+   * Media names this entry can restore after they leave the current document; cleanup keeps them while the entry is
+   * on either stack.
+   */
+  readonly heldAssetRefs: HeldAssetRefs;
   /**
    * Opts into failure-atomic replay. When true, History moves this entry only
    * after `undo`/`redo` returns successfully, so a preparation failure remains
@@ -178,8 +172,8 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     const images = new Set<string>();
     const videos = new Set<string>();
     for (const entry of [...undoStack, ...redoStack]) {
-      entry.heldAssetRefs?.images.forEach((name) => images.add(name));
-      entry.heldAssetRefs?.videos.forEach((name) => videos.add(name));
+      entry.heldAssetRefs.images.forEach((name) => images.add(name));
+      entry.heldAssetRefs.videos.forEach((name) => videos.add(name));
     }
     return { images: [...images], videos: [...videos] };
   };

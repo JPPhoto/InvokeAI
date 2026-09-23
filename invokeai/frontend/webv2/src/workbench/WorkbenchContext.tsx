@@ -3,11 +3,10 @@ import type { Project } from '@workbench/projectContracts';
 import type { ProjectSettings } from '@workbench/settings/contracts';
 import type { WidgetInstanceId, WidgetTypeId } from '@workbench/widgetContracts';
 
-import { createUuid } from '@platform/browser/randomUuid';
+import { startIntermediatesHoldLease } from '@features/intermediates/holdLease';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { captureAccountScope, type AccountScope } from '@platform/state/accountLifecycle';
+import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { shallowEqual as selectorShallowEqual, useExternalStoreSelector } from '@platform/state/selectors';
-import { apiFetch } from '@platform/transport/http';
 import { createContext, use, useEffect, useSyncExternalStore, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -19,7 +18,7 @@ import { createExtensionRegistry, type ExtensionRegistry } from './extensions/ex
 import { clearLayerPanelStates } from './layerPanelState';
 import { createWorkbenchPersistenceRuntime } from './persistenceRuntime';
 import { createOpenProjectBroker } from './projects/openProjectBroker';
-import { collectHeldAssetRefs, partitionHeldAssetNames } from './projects/projectAssets';
+import { createOpenProjectsHeldMediaReader } from './projects/projectAssets';
 import { describeRefusedProjects } from './projects/projectLoadRefusal';
 import {
   createSyncedWorkbenchPersistence,
@@ -47,203 +46,11 @@ const getNullSnapshot = (): null => null;
 
 export const shallowEqual = selectorShallowEqual;
 
-type GetCanvasHeldAssetRefs = (
-  projectId: string
-) => { images: readonly string[]; videos: readonly string[] } | undefined;
-
-/** An open editor keeps its unsaved and undo media protected while the tab is alive. */
-export const startBrowserIntermediateHold = (
-  store: WorkbenchInternalStore,
-  owner: AccountScope,
-  getCanvasHeldAssetRefs: GetCanvasHeldAssetRefs
-): (() => void) => {
-  const leaseId = createUuid();
-  let disposed = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let inFlight = false;
-  let pending = false;
-  let pendingRefresh = false;
-  const leaseSignatures: [string[], string[]] = [[], []];
-  let activeSlot: 0 | 1 | null = null;
-  let lastProjects = store.getSnapshot().projects;
-  // Project snapshots are immutable; reuse each open project's scan until its object changes.
-  const projectRefs = new Map<string, { project: Project; refs: ReturnType<typeof collectHeldAssetRefs> }>();
-
-  const releaseSlot = async (slot: 0 | 1, from = 0): Promise<void> => {
-    const signatures = leaseSignatures[slot];
-    for (let index = from; index < signatures.length; index += 1) {
-      if (!signatures[index] || disposed || owner.signal.aborted) {
-        continue;
-      }
-      try {
-        await apiFetch(`/api/v1/intermediates/holds/${encodeURIComponent(`${leaseId}-${slot}-${index}`)}`, {
-          method: 'DELETE',
-          signal: owner.signal,
-        });
-        signatures[index] = '';
-      } catch {
-        // Keep the signature so a later send can retry releasing this lease.
-      }
-    }
-    while (signatures.at(-1) === '') {
-      signatures.pop();
-    }
-  };
-
-  const putBatch = async (
-    slot: 0 | 1,
-    index: number,
-    batch: { images: string[]; videos: string[] }
-  ): Promise<boolean> => {
-    if (disposed || owner.signal.aborted) {
-      return false;
-    }
-    try {
-      await apiFetch(`/api/v1/intermediates/holds/${encodeURIComponent(`${leaseId}-${slot}-${index}`)}`, {
-        body: JSON.stringify(batch),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'PUT',
-        signal: owner.signal,
-      });
-      leaseSignatures[slot][index] = JSON.stringify([batch.images, batch.videos]);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  const send = async (refresh = false): Promise<void> => {
-    if (disposed || owner.signal.aborted) {
-      return;
-    }
-    if (inFlight) {
-      pending = true;
-      pendingRefresh ||= refresh;
-      return;
-    }
-    inFlight = true;
-    try {
-      do {
-        pending = false;
-        const projects = store.getSnapshot().projects;
-        const refs = { images: new Set<string>(), videos: new Set<string>() };
-        const openProjectIds = new Set<string>();
-        for (const project of projects) {
-          openProjectIds.add(project.id);
-          const cached = projectRefs.get(project.id);
-          const projectAssets = cached?.project === project ? cached.refs : collectHeldAssetRefs([project]);
-          if (cached?.project !== project) {
-            projectRefs.set(project.id, { project, refs: projectAssets });
-          }
-          projectAssets.images.forEach((name) => refs.images.add(name));
-          projectAssets.videos.forEach((name) => refs.videos.add(name));
-          const retained = getCanvasHeldAssetRefs(project.id);
-          retained?.images.forEach((name) => refs.images.add(name));
-          retained?.videos.forEach((name) => refs.videos.add(name));
-        }
-        for (const projectId of projectRefs.keys()) {
-          if (!openProjectIds.has(projectId)) {
-            projectRefs.delete(projectId);
-          }
-        }
-        const images = [...refs.images].sort();
-        const videos = [...refs.videos].sort();
-        const mustRefresh = refresh || pendingRefresh;
-        refresh = false;
-        pendingRefresh = false;
-        if (!images.length && !videos.length) {
-          await releaseSlot(0);
-          await releaseSlot(1);
-          activeSlot = null;
-          continue;
-        }
-        const batches = partitionHeldAssetNames(images, videos);
-        const signatures = batches.map((batch) => JSON.stringify([batch.images, batch.videos]));
-        const current = activeSlot === null ? null : leaseSignatures[activeSlot];
-        let trimActive = false;
-        if (
-          current &&
-          current.length === signatures.length &&
-          signatures.every((value, index) => value === current[index])
-        ) {
-          if (mustRefresh) {
-            for (let index = 0; index < batches.length; index += 1) {
-              await putBatch(activeSlot!, index, batches[index]!);
-            }
-          }
-          trimActive = true;
-        } else {
-          // Stage all replacement batches under the other lease set. Old names stay protected
-          // even when sorting moves them across the per-request batch boundary.
-          const nextSlot: 0 | 1 = activeSlot === 0 ? 1 : 0;
-          let staged = true;
-          for (let index = 0; index < batches.length; index += 1) {
-            staged = (await putBatch(nextSlot, index, batches[index]!)) && staged;
-          }
-          if (staged && !disposed && !owner.signal.aborted) {
-            const oldSlot = activeSlot;
-            activeSlot = nextSlot;
-            trimActive = true;
-            if (oldSlot !== null) {
-              await releaseSlot(oldSlot);
-            }
-          }
-        }
-        if (activeSlot !== null) {
-          if (trimActive) {
-            await releaseSlot(activeSlot, batches.length);
-          }
-          await releaseSlot(activeSlot === 0 ? 1 : 0);
-        }
-        if (disposed || owner.signal.aborted) {
-          break;
-        }
-      } while (pending);
-    } finally {
-      inFlight = false;
-    }
-  };
-  const schedule = (): void => {
-    const projects = store.getSnapshot().projects;
-    if (projects === lastProjects) {
-      return;
-    }
-    lastProjects = projects;
-    if (timer !== null) {
-      clearTimeout(timer);
-    }
-    timer = setTimeout(() => {
-      timer = null;
-      void send();
-    }, 250);
-  };
-  const unsubscribe = store.subscribe(schedule);
-  const heartbeat = setInterval(() => void send(true), 5 * 60_000);
-  const onVisible = (): void => {
-    if (document.visibilityState === 'visible') {
-      void send(true);
-    }
-  };
-  document.addEventListener('visibilitychange', onVisible);
-  void send();
-  return () => {
-    disposed = true;
-    unsubscribe();
-    clearInterval(heartbeat);
-    document.removeEventListener('visibilitychange', onVisible);
-    if (timer !== null) {
-      clearTimeout(timer);
-    }
-  };
-};
-
 export const WorkbenchProvider = ({
   children,
-  getCanvasHeldAssetRefs,
   loadOptions,
 }: {
   children: ReactNode;
-  getCanvasHeldAssetRefs: GetCanvasHeldAssetRefs;
   /** Boot-time session options (deep-linked project, fresh draft). Read once at mount. */
   loadOptions?: WorkbenchLoadOptions;
 }) => {
@@ -329,7 +136,20 @@ export const WorkbenchProvider = ({
     });
 
     persistenceRuntime.start();
-    const releaseIntermediateHold = startBrowserIntermediateHold(store, owner, getCanvasHeldAssetRefs);
+    const releaseIntermediateHold = startIntermediatesHoldLease({
+      owner,
+      read: createOpenProjectsHeldMediaReader(() => store.getSnapshot().projects),
+      subscribe: (onChange) => {
+        let projects = store.getSnapshot().projects;
+        return store.subscribe(() => {
+          const next = store.getSnapshot().projects;
+          if (next !== projects) {
+            projects = next;
+            onChange();
+          }
+        });
+      },
+    });
 
     return () => {
       releaseIntermediateHold();

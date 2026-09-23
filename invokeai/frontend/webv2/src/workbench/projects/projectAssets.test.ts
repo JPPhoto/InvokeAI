@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   collectHeldAssetRefs,
   collectLiveAssetRefs,
-  partitionHeldAssetNames,
+  createOpenProjectsHeldMediaReader,
   remapAssetRefs,
   selectCoverImageName,
   stripInstallationState,
@@ -50,15 +50,21 @@ it('holds media from unsaved editor state and undo history', () => {
   expect(refs.videos).toEqual(new Set(['undo.mp4']));
 });
 
-it('partitions a long editor hold without dropping names or exceeding either API limit', () => {
-  const images = Array.from({ length: 50_001 }, (_, index) => `image-${index}`);
-  const videos = ['first.mp4', 'second.mp4'];
-  const batches = partitionHeldAssetNames(images, videos);
+it('holds names Canvas undo retains after the project stops naming them, and drops closed projects', () => {
+  let projects = [{ canvas: { imageName: 'second.png' }, id: 'project-1', video: { videoName: 'clip.mp4' } }];
+  let undo = ['first.png'];
+  const read = createOpenProjectsHeldMediaReader(
+    () => projects,
+    () => ({ images: undo, videos: [] })
+  );
 
-  expect(batches).toHaveLength(2);
-  expect(batches.every((batch) => batch.images.length <= 50_000 && batch.videos.length <= 50_000)).toBe(true);
-  expect(batches.flatMap((batch) => batch.images)).toEqual(images);
-  expect(batches.flatMap((batch) => batch.videos)).toEqual(videos);
+  const held = read();
+  expect(new Set(held.images)).toEqual(new Set(['first.png', 'second.png']));
+  expect(held.videos).toEqual(['clip.mp4']);
+
+  undo = [];
+  projects = [];
+  expect(read()).toEqual({ images: [], videos: [] });
 });
 
 const projectDocument = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({

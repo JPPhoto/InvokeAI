@@ -6,7 +6,6 @@ import { useSearch } from '@tanstack/react-router';
 import { preloadBootWidgets } from '@workbench/bootWidgetPreload';
 import { WorkbenchHotkeyRuntime } from '@workbench/hotkeys/WorkbenchHotkeyRuntime';
 import { WorkbenchCommandPalette } from '@workbench/palette/WorkbenchCommandPalette';
-import { getCanvasHeldAssetRefs } from '@workbench/projects/projectAssets';
 import { WorkbenchShell } from '@workbench/shell';
 import { WidgetHosts } from '@workbench/widget-frame/WidgetHosts';
 import { getWidgetById, getWidgetsForRegion } from '@workbench/widgetRegistry';
@@ -38,7 +37,7 @@ export const WorkbenchApp = () => {
   useMountEffect(preloadBootWidgets);
 
   return (
-    <WorkbenchProvider getCanvasHeldAssetRefs={getCanvasHeldAssetRefs} loadOptions={loadOptions}>
+    <WorkbenchProvider loadOptions={loadOptions}>
       <WorkbenchWidgetRegistryProvider getWidgetById={getWidgetById} getWidgetsForRegion={getWidgetsForRegion}>
         <BootWidgetHintController />
         <GenerateWidgetSyncRuntime />

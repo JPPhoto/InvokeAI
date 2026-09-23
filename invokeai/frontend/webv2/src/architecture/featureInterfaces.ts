@@ -31,7 +31,7 @@ export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[
     'widget',
   ],
   identity: [],
-  intermediates: ['settingsContribution'],
+  intermediates: ['holdLease', 'settingsContribution'],
   models: ['launchpad', 'react'],
   nodes: [],
   queue: ['contracts', 'devices', 'launchpad', 'menu', 'queries', 'react', 'reveal', 'utility', 'widget'],
