@@ -7,9 +7,13 @@ import torch
 from invokeai.app.invocations.fields import TensorField
 from invokeai.app.invocations.model import LoRAField, ModelIdentifierField, Qwen3VLEncoderField
 from invokeai.app.invocations.text_encoder.krea2_text_encoder import Krea2TextEncoderInvocation
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, SubModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType
 from invokeai.backend.patches.lora_conversions.krea2_lora_constants import KREA2_LORA_QWEN3VL_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+
+# These fakes stand in for a dense safetensors encoder, so LoRA is applied directly. The sidecar
+# decision for a quantized one is covered in test_text_encoders_with_packed_layers.py.
+_ENCODER_CONFIG = SimpleNamespace(format=ModelFormat.Checkpoint)
 
 
 class _Tokenizer:
@@ -42,9 +46,14 @@ class _TokenizerInfo:
 
 
 class _TextEncoderInfo:
+    # `model` and `compute_device` are read before the lock, to size the dequant transient the node
+    # reserves for a packed encoder.
+    model = _TextEncoder()
+    compute_device = torch.device("cpu")
+
     @contextmanager
-    def model_on_device(self):
-        yield ({}, _TextEncoder())
+    def model_on_device(self, working_mem_bytes=None):
+        yield ({}, self.model)
 
 
 def _identifier(key: str, model_type: ModelType, base: BaseModelType = BaseModelType.Any) -> ModelIdentifierField:
@@ -92,7 +101,8 @@ def _context(lora_model, lora_infos: list | None = None) -> SimpleNamespace:
         return _TextEncoderInfo()
 
     return SimpleNamespace(
-        models=SimpleNamespace(load=load), util=SimpleNamespace(signal_progress=lambda _message: None)
+        models=SimpleNamespace(load=load, get_config=lambda _identifier: _ENCODER_CONFIG),
+        util=SimpleNamespace(signal_progress=lambda _message: None),
     )
 
 
@@ -192,8 +202,11 @@ def test_encode_preserves_suffix_for_a_prompt_that_overflows_truncation(monkeypa
     encoder = _CapturingEncoder()
 
     class _CapturingEncoderInfo:
+        model = encoder
+        compute_device = torch.device("cpu")
+
         @contextmanager
-        def model_on_device(self):
+        def model_on_device(self, working_mem_bytes=None):
             yield ({}, encoder)
 
     class _TruncatingTokenizerInfo:
@@ -209,7 +222,8 @@ def test_encode_preserves_suffix_for_a_prompt_that_overflows_truncation(monkeypa
         return _CapturingEncoderInfo()
 
     context = SimpleNamespace(
-        models=SimpleNamespace(load=load), util=SimpleNamespace(signal_progress=lambda _message: None)
+        models=SimpleNamespace(load=load, get_config=lambda _identifier: _ENCODER_CONFIG),
+        util=SimpleNamespace(signal_progress=lambda _message: None),
     )
 
     monkeypatch.setattr(
@@ -290,8 +304,11 @@ def test_encode_uses_reference_fixed_length_layout_and_position_ids(monkeypatch)
     encoder = _ReferenceLayoutEncoder()
 
     class _ReferenceLayoutEncoderInfo:
+        model = encoder
+        compute_device = torch.device("cpu")
+
         @contextmanager
-        def model_on_device(self):
+        def model_on_device(self, working_mem_bytes=None):
             yield ({}, encoder)
 
     encoder_id = _identifier("encoder", ModelType.Qwen3VLEncoder)
@@ -308,7 +325,8 @@ def test_encode_uses_reference_fixed_length_layout_and_position_ids(monkeypatch)
         return _ReferenceLayoutEncoderInfo()
 
     context = SimpleNamespace(
-        models=SimpleNamespace(load=load), util=SimpleNamespace(signal_progress=lambda _message: None)
+        models=SimpleNamespace(load=load, get_config=lambda _identifier: _ENCODER_CONFIG),
+        util=SimpleNamespace(signal_progress=lambda _message: None),
     )
 
     monkeypatch.setattr(
