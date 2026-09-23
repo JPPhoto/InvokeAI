@@ -746,7 +746,11 @@ export const createQueueCoordinator = (
       return;
     }
 
-    clearFrameGate(event.item_id);
+    // Root settlement clears its own wait's gates. Only child item statuses
+    // need the cross-wait lookup to remove their per-child preview gate.
+    if (!waits.has(event.item_id)) {
+      clearFrameGate(event.item_id);
+    }
 
     if (!isTrackedEvent(event)) {
       bufferTerminalOutcome(event.item_id, toTerminalOutcome(event.status, event.error_message, event.error_type));

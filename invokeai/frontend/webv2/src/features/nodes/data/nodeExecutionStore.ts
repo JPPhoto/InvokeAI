@@ -4,7 +4,7 @@ import type {
   NodeInvocationStartedEvent,
 } from '@features/nodes/core/executionContracts';
 
-import { getOutputImageNames } from '@platform/core/outputImages';
+import { getFirstOutputImageName } from '@platform/core/outputImages';
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createKeyedTransientStore } from '@platform/state/externalStore';
 
@@ -45,7 +45,7 @@ export const nodeExecutionStore = {
     return stateByNodeId.subscribeKey(nodeId, listener);
   },
   completed(event: NodeInvocationCompleteEvent): void {
-    const imageName = getOutputImageNames(event.result)[0];
+    const imageName = getFirstOutputImageName(event.result);
 
     stateByNodeId.set(event.invocation_source_id, {
       error: null,

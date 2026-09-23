@@ -68,9 +68,6 @@ class InvocationContextData:
     """The invocation that is being executed."""
     source_invocation_id: str
     """The ID of the invocation from which the currently executing invocation was prepared."""
-    workflow_json: str | None = None
-    """Cached workflow JSON used by repeated image/video saves in this invocation context."""
-    workflow_json_loaded: bool = False
     execution_frame: tuple[int, ...] = ()
     """The active prepared execution node's loop iteration path."""
     execution_state_id: str | None = None
@@ -93,16 +90,16 @@ class InvocationContextInterface:
         self._data = data
 
     def _get_workflow_json(self) -> str | None:
-        if not self._data.workflow_json_loaded:
-            queue_item = self._data.queue_item
+        queue_item = self._data.queue_item
+        if not queue_item._workflow_json_loaded:
             if queue_item.workflow is not None:
-                self._data.workflow_json = queue_item.workflow.model_dump_json()
+                queue_item._workflow_json_snapshot = queue_item.workflow.model_dump_json()
             elif queue_item.root_item_id is not None:
-                self._data.workflow_json = self._services.session_queue.get_queue_item_workflow_json(
+                queue_item._workflow_json_snapshot = self._services.session_queue.get_queue_item_workflow_json(
                     queue_item.root_item_id
                 )
-            self._data.workflow_json_loaded = True
-        return self._data.workflow_json
+            queue_item._workflow_json_loaded = True
+        return queue_item._workflow_json_snapshot
 
 
 def _build_execution_effects(data: InvocationContextData) -> ExecutionEffectsRecorder:

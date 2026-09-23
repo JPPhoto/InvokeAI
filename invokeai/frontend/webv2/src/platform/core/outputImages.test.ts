@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getOutputImageNames } from './outputImages';
+import { addOutputImageNames, getFirstOutputImageName, getOutputImageNames } from './outputImages';
 
 describe('getOutputImageNames', () => {
   it('reads direct images, collections, and workflow-return values independent of names', () => {
@@ -53,5 +53,39 @@ describe('getOutputImageNames', () => {
         },
       })
     ).toEqual(['collection.png', 'image.png', 'values.png']);
+  });
+
+  it('adds names into a caller-owned set without changing their order', () => {
+    const names = new Set(['existing.png']);
+
+    addOutputImageNames(
+      {
+        type: 'workflow_return_output',
+        values: {
+          First: { image_name: 'first.png' },
+          Duplicate: { image_name: 'first.png' },
+          Second: { image_name: 'second.png' },
+        },
+      },
+      names
+    );
+
+    expect([...names]).toEqual(['existing.png', 'first.png', 'second.png']);
+  });
+
+  it('stops after the first image when only a thumbnail is needed', () => {
+    let secondImageVisited = false;
+    const collection = [
+      { image_name: 'first.png' },
+      {
+        get image_name() {
+          secondImageVisited = true;
+          return 'second.png';
+        },
+      },
+    ];
+
+    expect(getFirstOutputImageName({ type: 'image_collection_output', collection })).toBe('first.png');
+    expect(secondImageVisited).toBe(false);
   });
 });

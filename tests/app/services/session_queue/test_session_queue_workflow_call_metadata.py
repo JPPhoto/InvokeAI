@@ -296,7 +296,7 @@ def test_status_transition_reuses_loaded_queue_item(
 
 
 def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
-    session_queue: SqliteSessionQueue, mock_invoker: Invoker, tmp_path: Path
+    session_queue: SqliteSessionQueue, mock_invoker: Invoker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     parent_graph = Graph()
     parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
@@ -365,21 +365,36 @@ def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
     image_files.start(mock_invoker)
     mock_invoker.services.images.start(mock_invoker)
 
-    images = ImagesInterface(
-        mock_invoker.services,
-        InvocationContextData(
-            queue_item=child_queue_item,
-            invocation=MagicMock(is_intermediate=False, id="image-node"),
-            source_invocation_id="image-node",
-        ),
-        MagicMock(),
-    )
-    dto = images.save(Image.new("RGB", (4, 4)))
-
     workflow_json = _workflow_without_id().model_dump_json()
-    with Image.open(image_files.get_path(dto.image_name)) as saved:
-        assert saved.info["invokeai_workflow"] == workflow_json
-    assert mock_invoker.services.images.get_workflow(dto.image_name) == workflow_json
+    workflow_lookup_count = 0
+    original_workflow_lookup = session_queue.get_queue_item_workflow_json
+
+    def count_workflow_lookups(item_id: int) -> str | None:
+        nonlocal workflow_lookup_count
+        workflow_lookup_count += 1
+        return original_workflow_lookup(item_id)
+
+    monkeypatch.setattr(session_queue, "get_queue_item_workflow_json", count_workflow_lookups)
+
+    image_names = []
+    for index in range(3):
+        images = ImagesInterface(
+            mock_invoker.services,
+            InvocationContextData(
+                queue_item=child_queue_item,
+                invocation=MagicMock(is_intermediate=False, id=f"image-node-{index}"),
+                source_invocation_id=f"image-node-{index}",
+            ),
+            MagicMock(),
+        )
+        dto = images.save(Image.new("RGB", (4, 4)))
+        image_names.append(dto.image_name)
+
+    assert workflow_lookup_count == 1
+    for image_name in image_names:
+        with Image.open(image_files.get_path(image_name)) as saved:
+            assert saved.info["invokeai_workflow"] == workflow_json
+        assert mock_invoker.services.images.get_workflow(image_name) == workflow_json
 
 
 def test_enqueue_workflow_call_child_rejects_canceled_stale_parent(

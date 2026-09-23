@@ -14,7 +14,7 @@ import {
   sanitizeBatchCount,
 } from '@features/queue/core/promptBatch';
 import { mapWithConcurrency } from '@platform/core/concurrency';
-import { getOutputImageNames } from '@platform/core/outputImages';
+import { addOutputImageNames } from '@platform/core/outputImages';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 import { absolutizeApiUrl, ApiError, apiFetch, apiFetchJson } from '@platform/transport/http';
@@ -153,7 +153,11 @@ const getResultImageNames = (queueItem: QueueServerItemDTO, options?: QueueResul
         .map(([, result]) => result)
     : Object.values(results);
 
-  return [...new Set(resultValues.flatMap(getOutputImageNames))];
+  const imageNames = new Set<string>();
+  for (const result of resultValues) {
+    addOutputImageNames(result, imageNames);
+  }
+  return [...imageNames];
 };
 
 const getResultImage = async (
