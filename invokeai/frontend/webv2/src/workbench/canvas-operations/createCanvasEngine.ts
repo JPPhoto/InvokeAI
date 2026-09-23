@@ -48,8 +48,9 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
   const composition = createCanvasEngineCore({
     ...coreOptions,
     getMainModelBase: options.getMainModelBase,
-    uploadImage: (blob) => canvasApplicationPort.uploadImage(blob),
-    uploadIntermediateImage: (blob) => canvasApplicationPort.uploadImage(blob, { isIntermediate: true }),
+    uploadImage: (blob) => canvasApplicationPort.uploadImage(blob, { projectId: options.projectId }),
+    uploadIntermediateImage: (blob) =>
+      canvasApplicationPort.uploadImage(blob, { isIntermediate: true, projectId: options.projectId }),
   });
   const { applicationHost: host } = composition;
   const core = composition.engine;
@@ -117,7 +118,11 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
       if (signal?.aborted) {
         throw new DOMException('Select Object upload was aborted.', 'AbortError');
       }
-      const uploaded = await canvasApplicationPort.uploadImage(blob, { isIntermediate: true, signal });
+      const uploaded = await canvasApplicationPort.uploadImage(blob, {
+        isIntermediate: true,
+        projectId: options.projectId,
+        signal,
+      });
       if (signal?.aborted) {
         throw new DOMException('Select Object upload was aborted.', 'AbortError');
       }
@@ -163,7 +168,7 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
     stores,
     uploadIntermediate: async (blob, signal) => {
       const uploaded = await (filterDeps?.uploadIntermediate(blob, signal) ??
-        canvasApplicationPort.uploadImage(blob, { isIntermediate: true, signal }));
+        canvasApplicationPort.uploadImage(blob, { isIntermediate: true, projectId: options.projectId, signal }));
       return { imageName: uploaded.imageName };
     },
   });
@@ -243,7 +248,11 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
       if (signal?.aborted) {
         throw new DOMException('Canvas upload aborted', 'AbortError');
       }
-      const uploaded = await canvasApplicationPort.uploadImage(blob, { isIntermediate: true, signal });
+      const uploaded = await canvasApplicationPort.uploadImage(blob, {
+        isIntermediate: true,
+        projectId: options.projectId,
+        signal,
+      });
       if (signal?.aborted) {
         throw new DOMException('Canvas upload aborted', 'AbortError');
       }
