@@ -1,6 +1,6 @@
 import type { GalleryItemKey } from '@features/gallery/contracts';
 import type { ImageMapPoint } from '@workbench/image-map/api';
-import type { ClusterAnnotation } from '@workbench/image-map/imageMapTraces';
+import type { ClusterAnnotation, PointAppearance } from '@workbench/image-map/imageMapTraces';
 import type { AxisRanges } from '@workbench/image-map/imageMapViewport';
 import type { HoverCluster, HoverPreview } from '@workbench/widgets/image-map/MapHoverCard';
 import type { PlotlyHTMLElement } from 'plotly.js';
@@ -14,17 +14,24 @@ import {
   toGalleryItemKey,
 } from '@features/gallery/contracts';
 import { attachWheelZoom } from '@workbench/image-map/attachWheelZoom';
-import { collectClusterSelection } from '@workbench/image-map/clusterSelection';
+import { collectClusterSelection, formatClusterSize } from '@workbench/image-map/clusterSelection';
 import { imageMapStore } from '@workbench/image-map/imageMapStore';
 import {
+  ALL_POINTS_TRACE,
   buildAllPointsTraces,
   buildClusterAnnotations,
+  buildClusterSelectionTraces,
   buildCurrentImageTrace,
   buildHighlightedPointsTrace,
   buildMapLayout,
+  CLUSTER_SELECTION_IMAGES_TRACE,
+  CLUSTER_SELECTION_VIDEOS_TRACE,
   CURRENT_IMAGE_TRACE,
   declutterAnnotations,
+  getTraceAppearance,
   HIGHLIGHTED_POINTS_TRACE,
+  toBaseAppearanceRestyle,
+  toClusterSelectionRestyle,
   toHighlightRestyle,
 } from '@workbench/image-map/imageMapTraces';
 import {
@@ -146,8 +153,8 @@ const ImageMapPlot = ({
     (values) => getPersistedSelectedGalleryItemKeys(values),
     shallowEqual
   );
-  // With a cluster filter active in the gallery, the whole cluster stays
-  // highlighted on the map — the gallery is showing exactly these images.
+  // With a cluster filter active in the gallery, the whole cluster stays lit
+  // on a dimmed map — the gallery is showing exactly these images.
   const clusterQueryItemKeys = useWidgetValuesSelector(
     'gallery',
     (values) => {
@@ -157,9 +164,10 @@ const ImageMapPlot = ({
     },
     shallowEqual
   );
-  const selectedKeys = useMemo(
-    () => new Set([...selectedItemKeys, ...(clusterQueryItemKeys ?? [])]),
-    [clusterQueryItemKeys, selectedItemKeys]
+  const selectedKeys = useMemo(() => new Set(selectedItemKeys), [selectedItemKeys]);
+  const clusterKeys = useMemo(
+    () => (clusterQueryItemKeys ? new Set(clusterQueryItemKeys) : null),
+    [clusterQueryItemKeys]
   );
   const { selectCluster, selectItem: selectMapItem } = useMapSelection();
   // Bumped after every scene rebuild so the overlay effects (marker,
@@ -194,6 +202,12 @@ const ImageMapPlot = ({
   // is view-dependent (see applyDeclutteredAnnotations), so the source list
   // lives in a ref the relayout listener can re-filter without re-rendering.
   const fullAnnotationsRef = useRef<ClusterAnnotation[]>([]);
+  // The base traces' own looks for the scene on screen, so dimming can be
+  // undone exactly; replaced with every rebuild, which also resets the dim.
+  const baseAppearancesRef = useRef<PointAppearance[]>([]);
+  // Whether the base traces on screen are currently dimmed. A rebuild draws
+  // them undimmed, so it resets this too.
+  const baseDimmedRef = useRef(false);
   const appliedAnnotationsKeyRef = useRef<string | null>(null);
 
   // Zoomed far out, cluster labels pile onto the same few pixels; declutter
@@ -261,11 +275,17 @@ const ImageMapPlot = ({
     // that run straight after this one already see the new indices. Overlay traces (highlight, marker) start empty; the overlay
     // effects below restyle them, so a selection change never rebuilds the
     // scene.
+    const baseTraces = buildAllPointsTraces(points);
     const traces = [
-      ...buildAllPointsTraces(points),
+      ...baseTraces,
+      // Above the base points, below the hand-selection outline and the gold
+      // target, which both mark individual items within a lit cluster.
+      ...buildClusterSelectionTraces(points, new Set()),
       buildHighlightedPointsTrace(points, new Set()),
       buildCurrentImageTrace(),
     ];
+    baseAppearancesRef.current = baseTraces.map(getTraceAppearance);
+    baseDimmedRef.current = false;
     let disposed = false;
 
     // Feed the CURRENT view back into react so data refreshes never reset the
@@ -333,7 +353,8 @@ const ImageMapPlot = ({
             // still loading, or missing for this cluster). Only the primary
             // phrase is used — the alternates belong to the hover card, which
             // has room to show them.
-            const label = clusterLabelsRef.current?.[String(clicked.cluster)]?.label ?? `${clusterKeys.length} items`;
+            const label =
+              clusterLabelsRef.current?.[String(clicked.cluster)]?.label ?? formatClusterSize(clusterKeys.length);
 
             selectCluster(clicked.item, clusterKeys, label);
           } else {
@@ -407,7 +428,41 @@ const ImageMapPlot = ({
     };
   }, [applyDeclutteredAnnotations, points, selectCluster, selectMapItem]);
 
-  // Highlight overlay: the gallery's multi-selection, restyled in place.
+  // Cluster selection: the members redrawn at full colour over a dimmed map.
+  // Restyled in place like the other overlays; the base traces take one
+  // scalar per trace, so neither the click nor later zooms pay per point.
+  useEffect(() => {
+    const container = containerRef.current as PlotElement | null;
+
+    if (!container || points === null) {
+      return;
+    }
+
+    const imagesIndex = findTraceIndex(container, CLUSTER_SELECTION_IMAGES_TRACE);
+    const videosIndex = findTraceIndex(container, CLUSTER_SELECTION_VIDEOS_TRACE);
+
+    if (imagesIndex < 0 || videosIndex < 0) {
+      return;
+    }
+
+    const traces = buildClusterSelectionTraces(points, clusterKeys ?? new Set());
+    // A cluster none of whose members are on this map (all since deleted)
+    // lights nothing, so it must not grey everything out either.
+    const dimmed = traces.some((trace) => trace.x.length > 0);
+    const baseIndices = (container.data ?? []).flatMap((trace, index) =>
+      (trace as { name?: string }).name === ALL_POINTS_TRACE ? [index] : []
+    );
+
+    swallow(Plotly.restyle(container, toClusterSelectionRestyle(traces), [imagesIndex, videosIndex]));
+
+    // Restyling the base redraws every point, so only a change of state pays for it.
+    if (dimmed !== baseDimmedRef.current && baseIndices.length === baseAppearancesRef.current.length) {
+      baseDimmedRef.current = dimmed;
+      swallow(Plotly.restyle(container, toBaseAppearanceRestyle(baseAppearancesRef.current, dimmed), baseIndices));
+    }
+  }, [clusterKeys, plotRevision, points]);
+
+  // Highlight overlay: the gallery's hand-made multi-selection, restyled in place.
   useEffect(() => {
     const container = containerRef.current as PlotElement | null;
 

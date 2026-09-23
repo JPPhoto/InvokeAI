@@ -23,7 +23,15 @@ import { isIndexing } from '@workbench/image-map/indexProgress';
 import { useWidgetValuesSelector } from '@workbench/WorkbenchContext';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react';
 
+import { CLEAR_CLUSTER_SELECTION_LABEL, ClusterSelectionChip } from './ClusterSelectionChip';
 import { ImageIndexActivityBadge, ImageIndexProgressPanel } from './ImageIndexProgress';
+import { useClearClusterSelection } from './useSelectMapImage';
+
+const CLEAR_CLUSTER_SELECTION_COMMAND = 'image-map.clearClusterSelection';
+// In the center area the view selector floats over the content's top-left
+// corner; the shell publishes its height so overlays can start below it.
+const OVERLAY_COLUMN_TOP = 'calc(var(--chakra-spacing-2) + var(--wb-center-chrome-inset, 0px))';
+const MAP_SURFACE_FOCUS_STYLE = { outline: '2px solid {colors.accent.solid}', outlineOffset: '-2px' } as const;
 
 // Lazy so the plotly bundle (its own vite chunk, ~1.5MB) loads only when the
 // widget is actually shown.
@@ -62,10 +70,38 @@ const plotLoadingFallback = (
  * index, projected to 2D with UMAP and colored by cluster. Clicking a point
  * selects that image in the gallery (and so in Preview).
  */
-export const ImageMapWidgetView = (_props: WidgetViewProps) => {
+export const ImageMapWidgetView = ({ runtime }: WidgetViewProps) => {
   const { data, error, indexCounts, indexUpdatedAt, loadState, renderError } = imageMapStore.useSnapshot();
   const clickSelectsCluster = useWidgetValuesSelector('image-map', getImageMapClickSelectsCluster);
   const showClusterLabels = useWidgetValuesSelector('image-map', getImageMapShowClusterLabels);
+  const clearClusterSelection = useClearClusterSelection();
+
+  // Esc while the map owns focus, the keyboard path to the chip's clear. Also
+  // a palette command. The runtime stamps registrations with the active
+  // project and is rebuilt on a project switch without remounting this view,
+  // so registration follows it; the clear reads the selection when it fires.
+  const { commands: runtimeCommands, hotkeys: runtimeHotkeys } = runtime;
+
+  useEffect(() => {
+    const disposers = [
+      runtimeCommands.register({
+        handler: clearClusterSelection,
+        id: CLEAR_CLUSTER_SELECTION_COMMAND,
+        title: CLEAR_CLUSTER_SELECTION_LABEL,
+      }),
+      runtimeHotkeys.register({
+        allowInEditable: false,
+        commandId: CLEAR_CLUSTER_SELECTION_COMMAND,
+        defaultKeys: ['esc'],
+        id: CLEAR_CLUSTER_SELECTION_COMMAND,
+        title: CLEAR_CLUSTER_SELECTION_LABEL,
+      }),
+    ];
+
+    return () => {
+      disposers.forEach((dispose) => dispose());
+    };
+  }, [clearClusterSelection, runtimeCommands, runtimeHotkeys]);
 
   useEffect(() => {
     ensureImageMapLoaded();
@@ -107,11 +143,38 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
       // the only sign of an index run once there are points to draw: this
       // branch preempts the progress panel below, which is right — a usable
       // stale map beats a progress bar — but silently, which was not.
-      <Box h="full" position="relative" w="full">
+      // Focusable so a cleared selection can hand focus back to the map (the
+      // chip's button unmounts with it), which also keeps Esc and the map's
+      // other widget hotkeys in reach.
+      <Box
+        _focusVisible={MAP_SURFACE_FOCUS_STYLE}
+        data-image-map-surface=""
+        h="full"
+        outline="none"
+        position="relative"
+        tabIndex={-1}
+        w="full"
+      >
         <Suspense fallback={plotLoadingFallback}>
           <ImageMapPlot clickSelectsCluster={clickSelectsCluster} showClusterLabels={showClusterLabels} />
         </Suspense>
-        {isIndexing(indexCounts) ? <ImageIndexActivityBadge counts={indexCounts} updatedAt={indexUpdatedAt} /> : null}
+        {/* One corner, stacked: the selection first, since the user made it.
+            The column passes pointer events through, because the plot under
+            it is drag-panned and wheel-zoomed across its whole area; each
+            overlay takes its own back. */}
+        <Stack
+          align="flex-start"
+          gap="1.5"
+          insetStart="2"
+          maxW="calc(100% - 1rem)"
+          pointerEvents="none"
+          position="absolute"
+          top={OVERLAY_COLUMN_TOP}
+          zIndex="1"
+        >
+          <ClusterSelectionChip />
+          {isIndexing(indexCounts) ? <ImageIndexActivityBadge counts={indexCounts} updatedAt={indexUpdatedAt} /> : null}
+        </Stack>
       </Box>
     );
   }
