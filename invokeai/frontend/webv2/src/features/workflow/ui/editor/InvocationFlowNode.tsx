@@ -34,8 +34,10 @@ import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCo
 import { useWorkflowNodeExecutionState } from '@features/workflow/ui/WorkflowUiContext';
 import { setNodePreviewCollapsed, workflowUiStore } from '@features/workflow/ui/workflowUiStore';
 import {
+  CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   cloneWorkflowFieldDefault,
   formatOutputFieldValue,
+  getEffectiveWorkflowFieldDescription,
   getFieldTypeLabel,
   getOutputFieldNamesByScope,
   getOutputFieldRows,
@@ -65,6 +67,25 @@ const CONTENT_VISIBILITY_ZOOM = 0.4;
 /** True while the viewport is zoomed out far enough that field content is unreadable noise. */
 const useIsZoomedOut = (): boolean => useStore((state) => state.transform[2] < CONTENT_VISIBILITY_ZOOM);
 
+/** The node-level loading hint is only useful while a selected child signature is being fetched. */
+export const shouldShowCallSavedWorkflowLoadingHint = (node: WorkflowInvocationNode): boolean =>
+  node.data.type === 'call_saved_workflow' && node.data.callSavedWorkflowStatus === 'loading';
+
+/** A callable child can be valid without exposing any fields; explain the empty body instead of showing a blank node. */
+export const shouldShowCallSavedWorkflowNoExposedFieldsHint = (node: WorkflowInvocationNode): boolean => {
+  if (node.data.type !== 'call_saved_workflow' || node.data.callSavedWorkflowStatus !== 'ready') {
+    return false;
+  }
+
+  const workflowId = node.data.inputs.workflow_id?.value;
+  const hasSelectedWorkflow = typeof workflowId === 'string' && workflowId.trim() !== '';
+  const hasDynamicFields =
+    Object.keys(node.data.dynamicInputTemplates ?? {}).length > 0 ||
+    Object.keys(node.data.inputs).some((name) => name.startsWith(CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX));
+
+  return hasSelectedWorkflow && !hasDynamicFields;
+};
+
 /** Static placeholder bar standing in for text/controls at far zoom. No animation — there may be hundreds. */
 const SkeletonBar = ({ h = '2', w }: { h?: string; w?: string }) => <Box bg="bg.emphasized" h={h} rounded="sm" w={w} />;
 
@@ -84,6 +105,18 @@ const hasMissingRequiredInputs = (
 
 const getExecutionOutcome = (execution: NodeExecutionState | null): WorkflowNodeOutcome | null =>
   execution?.status === 'completed' || execution?.status === 'failed' ? execution.status : null;
+
+export const getNodeExecutionError = (
+  node: WorkflowInvocationNode,
+  error: string | null | undefined,
+  translate: (key: string, options: { error: string }) => string
+): string | null | undefined => {
+  if (!error || node.data.type !== 'call_saved_workflow') {
+    return error;
+  }
+
+  return translate('nodes.childWorkflowError', { error });
+};
 
 const NodeShell = ({
   hasMissingRequiredInput,
@@ -110,7 +143,13 @@ const NodeShell = ({
 };
 
 /** The header's completed/failed mark, named for screen readers and tooltipped with the failure. */
-const NodeOutcomeIcon = ({ execution }: { execution: NodeExecutionState | null }) => {
+const NodeOutcomeIcon = ({
+  execution,
+  node,
+}: {
+  execution: NodeExecutionState | null;
+  node: WorkflowInvocationNode;
+}) => {
   const { t } = useTranslation();
   const outcome = getExecutionOutcome(execution);
 
@@ -120,7 +159,7 @@ const NodeOutcomeIcon = ({ execution }: { execution: NodeExecutionState | null }
 
   return (
     <WorkflowNodeOutcomeIcon
-      error={execution?.error}
+      error={getNodeExecutionError(node, execution?.error, t)}
       label={outcome === 'completed' ? t('nodes.executionCompleted') : t('nodes.executionFailed')}
       outcome={outcome}
     />
@@ -184,8 +223,7 @@ const NodeTitle = ({ node, title }: { node: WorkflowInvocationNode; title: strin
       minW="0"
       text={title}
       title="Double-click to rename"
-      // Editing always starts from the displayed title: an unset label
-      // prefills with the template title rather than an empty input.
+      // Start editing from the displayed title, including the template fallback for unset labels.
       onDoubleClick={() => setDraftLabel(title)}
     />
   );
@@ -483,7 +521,7 @@ const InputFieldRow = ({
             positioning={{ placement: 'top-start' }}
             content={
               <InputFieldTooltip
-                description={instance?.description || template.description}
+                description={getEffectiveWorkflowFieldDescription(instance, template)}
                 isConnected={isConnected}
                 isExposed={isExposed}
                 label={label}
@@ -744,7 +782,7 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
       <Flex {...getWorkflowNodeHeaderProps()}>
         <MiddleTruncate fontSize="sm" fontWeight="700" minW="0" text={title} />
         <Box flex="1" />
-        <NodeOutcomeIcon execution={execution} />
+        <NodeOutcomeIcon execution={execution} node={node} />
       </Flex>
       {templateView ? (
         <CompactNodeBody inputCount={inputTemplates.length} outputCount={outputTemplates.length} />
@@ -764,6 +802,7 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
 };
 
 const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeType>) => {
+  const { t } = useTranslation();
   const { editGraph } = useProjectGraphCommands();
   const isZoomedOut = useIsZoomedOut();
   const node = data.documentNode;
@@ -795,7 +834,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   const outputRows = getOutputFieldRows(getOutputFieldNamesByScope(outputTemplates));
   const isOpen = node.data.isOpen;
   const isRunning = execution?.status === 'running';
-  const isMissingRequiredInput = hasMissingRequiredInputs(node, Object.values(template.inputs), connectedFieldNames);
+  const isMissingRequiredInput = hasMissingRequiredInputs(node, inputTemplates, connectedFieldNames);
   const isCompact = data.isCompact && !selected;
   const withFooter = !isZoomedOut && templateView.isExecutable && templateView.hasImageOutput;
   const withOutputPreview = Boolean(execution?.outputImageUrl);
@@ -825,7 +864,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
           <>
             <NodeTitle node={node} title={node.data.label || template.title} />
             <Box flex="1" />
-            <NodeOutcomeIcon execution={execution} />
+            <NodeOutcomeIcon execution={execution} node={node} />
             <NodeInfoIcon node={node} template={template} />
           </>
         )}
@@ -860,6 +899,15 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
               template={inputTemplate}
             />
           ))}
+          {shouldShowCallSavedWorkflowLoadingHint(node) ? (
+            <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
+              {t('nodes.savedWorkflowDetailLoading')}
+            </Text>
+          ) : shouldShowCallSavedWorkflowNoExposedFieldsHint(node) ? (
+            <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
+              {t('nodes.savedWorkflowNoExposedFields')}
+            </Text>
+          ) : null}
         </Box>
       ) : (
         <HiddenHandles inputTemplates={inputTemplates} outputTemplates={outputTemplates} />

@@ -19,9 +19,16 @@ const uploadVideoMock = vi.fn();
 const resolveItemMock = vi.fn();
 
 const pickerState = vi.hoisted(() => ({ accept: null as readonly string[] | null }));
+const workflowApiMock = vi.hoisted(() => ({ apiFetch: vi.fn(), apiFetchJson: vi.fn() }));
+const workflowCommandsMock = vi.hoisted(() => ({ editGraph: vi.fn() }));
 
-// The real picker needs the gallery data layer; the field's contract with it is
-// the accepted kinds it passes and the item it gets back.
+vi.mock('@platform/transport/http', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  apiFetch: workflowApiMock.apiFetch,
+  apiFetchJson: workflowApiMock.apiFetchJson,
+}));
+
+// Stub Gallery transport while asserting accepted kinds and returned items at the field boundary.
 vi.mock('@features/gallery/picker', () => ({
   GalleryPickerPopover: ({
     accept,
@@ -58,8 +65,7 @@ const modelSelectState = vi.hoisted(() => ({
   },
 }));
 
-// The real picker pulls in the whole model library; the widget's contract with it is the props it
-// passes (scope, exclusions, base filter) and the model it gets back.
+// Stub model-library UI while asserting picker filters, exclusions, and selected models.
 vi.mock('@features/models/react', () => ({
   ModelSelect: (props: NonNullable<typeof modelSelectState.props>) => {
     modelSelectState.props = props;
@@ -105,7 +111,7 @@ const projectSnapshot = {
 
 vi.mock('@features/workflow/ui/WorkflowUiContext', () => ({
   useWorkflowProjectSelector: (selector: (project: typeof projectSnapshot) => unknown) => selector(projectSnapshot),
-  useWorkflowUi: () => ({ project: { getSnapshot: () => projectSnapshot } }),
+  useWorkflowUi: () => ({ commands: workflowCommandsMock, project: { getSnapshot: () => projectSnapshot } }),
 }));
 
 const TEXTAREA_TEMPLATE = {
@@ -138,6 +144,20 @@ const FRAME_INDEX_TEMPLATE = {
   title: 'Frame Index',
   type: { cardinality: 'SINGLE', name: 'IntegerField' },
   uiComponent: 'video-frame-index',
+} as unknown as FieldInputTemplate;
+
+const SAVED_WORKFLOW_TEMPLATE = {
+  input: 'direct',
+  name: 'workflow_id',
+  title: 'Workflow',
+  type: { batch: false, cardinality: 'SINGLE', name: 'SavedWorkflowField' },
+} as unknown as FieldInputTemplate;
+
+const NUMERIC_ENUM_TEMPLATE = {
+  name: 'max_seq_len',
+  options: [256, 512],
+  title: 'Maximum sequence length',
+  type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
 } as unknown as FieldInputTemplate;
 
 const makeFrameNode = (videoValue: { video_name: string } | undefined) => ({
@@ -192,6 +212,9 @@ beforeEach(() => {
   uploadVideoMock.mockReset();
   resolveItemMock.mockReset();
   resolveItemMock.mockResolvedValue(SELECTED_GALLERY_VIDEO);
+  workflowApiMock.apiFetch.mockReset().mockResolvedValue(new Response());
+  workflowApiMock.apiFetchJson.mockReset();
+  workflowCommandsMock.editGraph.mockReset();
   // Module-level capture: without this the next test's wait is satisfied by the previous test's
   // props and asserts against a picker that is no longer mounted.
   modelSelectState.props = null;
@@ -230,9 +253,8 @@ const renderField = async (
 };
 
 /**
- * Real keystrokes, not a synthetic `input` event: the weight control is a zag-js number input that
- * ignores a value written straight onto the DOM node, and the defect being guarded against here is
- * specifically what happens between keystrokes.
+ * Use real keystrokes because the number-input state machine ignores direct DOM writes and the regression occurs
+ * between inputs.
  */
 const typeWeight = async (input: HTMLInputElement, keys: string) => {
   await act(async () => {
@@ -315,7 +337,208 @@ describe('WorkflowFieldInput textarea', () => {
   });
 });
 
+describe('WorkflowFieldInput typed enums', () => {
+  it.each([
+    { label: 'numeric', options: [256, 512], selected: 512, next: 256 },
+    { label: 'boolean', options: [false, true], selected: false, next: true },
+    { label: 'string', options: ['small', 'large'], selected: 'large', next: 'small' },
+  ])('shows the selected $label value and preserves its type when changed', async ({ options, selected, next }) => {
+    const onChange = vi.fn();
+    await renderField({ ...NUMERIC_ENUM_TEMPLATE, options }, selected, onChange);
+
+    const trigger = host.querySelector<HTMLElement>('[data-scope="select"][data-part="trigger"]');
+    expect(trigger?.textContent).toContain(String(selected));
+
+    if (!trigger) {
+      throw new Error('Numeric enum trigger not rendered');
+    }
+    await act(() => userEvent.click(trigger));
+
+    const option = Array.from(document.querySelectorAll<HTMLElement>('[data-scope="select"][data-part="item"]')).find(
+      (item) => item.textContent?.includes(String(next))
+    );
+    if (!option) {
+      throw new Error('Numeric enum option not rendered');
+    }
+    await act(() => userEvent.click(option));
+    expect(onChange).toHaveBeenCalledWith(next);
+  });
+});
+
+describe('WorkflowFieldInput saved workflows', () => {
+  it('retries a failed child when its already-selected workflow is picked again', async () => {
+    const selectedWorkflow = {
+      category: 'user',
+      call_saved_workflow_compatibility: { is_callable: true, message: null, reason: 'ok' },
+      description: '',
+      is_public: false,
+      name: 'Selected child',
+      workflow_id: 'selected-child',
+    };
+    workflowApiMock.apiFetchJson.mockImplementation((path: string) =>
+      path.includes('/i/')
+        ? Promise.reject(new Error('Temporary detail failure'))
+        : Promise.resolve({ items: [selectedWorkflow], page: 0, pages: 1, total: 1 })
+    );
+    const onChange = vi.fn();
+    await renderField(SAVED_WORKFLOW_TEMPLATE, 'selected-child', onChange, 'call-node');
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.value).toBe('Selected child')
+    );
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLButtonElement>('button[aria-label="common.retry"]')).not.toBeNull()
+    );
+
+    const input = host.querySelector<HTMLInputElement>('input[role="combobox"]');
+    if (!input) {
+      throw new Error('Saved workflow combobox not rendered');
+    }
+    await act(() => userEvent.click(input));
+    const selectedItem = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-scope="combobox"][data-part="item"]')
+    ).find((item) => item.textContent?.includes('Selected child'));
+    if (!selectedItem) {
+      throw new Error('Selected workflow option not rendered');
+    }
+    await act(() => userEvent.click(selectedItem));
+
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledWith({
+      nodeId: 'call-node',
+      type: 'retryCallSavedWorkflow',
+    });
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+
+    workflowCommandsMock.editGraph.mockClear();
+    const retryButton = host.querySelector<HTMLButtonElement>('button[aria-label="common.retry"]');
+    if (!retryButton) {
+      throw new Error('Saved workflow retry button not rendered');
+    }
+    await act(() => userEvent.click(retryButton));
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledOnce();
+
+    workflowCommandsMock.editGraph.mockClear();
+    await act(() => userEvent.click(input));
+    await act(() => userEvent.keyboard('{ArrowDown}{Enter}'));
+    expect(workflowCommandsMock.editGraph).toHaveBeenCalledOnce();
+  });
+
+  it('uses plural loading copy while the workflow list is loading', async () => {
+    workflowApiMock.apiFetchJson.mockImplementation(() => new Promise(() => {}));
+
+    await renderField(SAVED_WORKFLOW_TEMPLATE, '', vi.fn());
+
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.placeholder).toBe(
+        'nodes.savedWorkflowListLoading'
+      )
+    );
+  });
+
+  it('displays dynamic workflow names and marks incompatible workflows disabled', async () => {
+    const onChange = vi.fn();
+    workflowApiMock.apiFetchJson.mockImplementation((path: string) => {
+      if (path.includes('is_public=true')) {
+        return Promise.resolve({
+          items: [
+            {
+              category: 'user',
+              call_saved_workflow_compatibility: { is_callable: true, message: null, reason: 'ok' },
+              description: '',
+              is_public: true,
+              name: 'Shared Dynamic Workflow',
+              workflow_id: 'shared-workflow',
+            },
+          ],
+          page: 0,
+          pages: 1,
+          total: 1,
+        });
+      }
+
+      return Promise.resolve({
+        items: [
+          {
+            category: 'default',
+            call_saved_workflow_compatibility: {
+              is_callable: false,
+              message: 'Missing workflow return node',
+              reason: 'missing_workflow_return',
+            },
+            description: '',
+            is_public: true,
+            name: 'Unsupported Dynamic Workflow',
+            workflow_id: 'unsupported-workflow',
+          },
+        ],
+        page: 0,
+        pages: 1,
+        total: 1,
+      });
+    });
+
+    await renderField(SAVED_WORKFLOW_TEMPLATE, '', onChange);
+    await vi.waitFor(() => expect(workflowApiMock.apiFetchJson).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.placeholder).toBe(
+        'nodes.savedWorkflowSearch'
+      )
+    );
+    const input = host.querySelector<HTMLInputElement>('input[role="combobox"]');
+
+    if (!input) {
+      throw new Error('Saved workflow combobox not rendered');
+    }
+
+    await act(async () => {
+      await userEvent.click(input);
+    });
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Shared Dynamic Workflow');
+      expect(document.body.textContent).toContain('Unsupported Dynamic Workflow');
+    });
+
+    const unsupportedItem = Array.from(document.querySelectorAll('[data-scope="combobox"][data-part="item"]')).find(
+      (item) => item.textContent?.includes('Unsupported Dynamic Workflow')
+    );
+
+    expect(unsupportedItem?.hasAttribute('data-disabled')).toBe(true);
+
+    const sharedItem = Array.from(document.querySelectorAll('[data-scope="combobox"][data-part="item"]')).find((item) =>
+      item.textContent?.includes('Shared Dynamic Workflow')
+    );
+
+    if (!(sharedItem instanceof HTMLElement)) {
+      throw new Error('Shared workflow option not rendered');
+    }
+
+    await act(async () => {
+      await userEvent.click(sharedItem);
+    });
+
+    expect(onChange).toHaveBeenCalledWith('shared-workflow');
+  });
+});
+
 describe('WorkflowFieldInput media inputs', () => {
+  it('renders media controls when the host provides the workflow dnd context', async () => {
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <QueryClientProvider client={queryClient}>
+            <DndContext>
+              <WorkflowFieldInput template={VIDEO_TEMPLATE} value={undefined} onChange={vi.fn()} />
+            </DndContext>
+          </QueryClientProvider>
+        </ChakraProvider>
+      );
+    });
+
+    expect(host.textContent).not.toContain('Connection only');
+    expect(findButton('widgets.gallery.picker.chooseVideo').disabled).toBe(false);
+  });
+
   it('renders a direct-input widget for VideoField instead of falling back to connection-only', async () => {
     await renderField(VIDEO_TEMPLATE, undefined, vi.fn());
 
@@ -608,11 +831,7 @@ describe('WorkflowFieldInput media inputs', () => {
   });
 });
 
-/**
- * A parent that actually owns the value, the way the node editor does. The static `renderField`
- * harness never feeds a committed value back, which hides every defect that only shows up on the
- * re-render after a keystroke — the snap-back and the clamp-on-blur are exactly those.
- */
+/** Feed committed values back through an owning parent to expose keystroke rerenders and blur clamping. */
 const StatefulLoRAField = ({ initial, onCommit }: { initial: unknown; onCommit: (value: unknown) => void }) => {
   const [value, setValue] = useState(initial);
   const onChange = useCallback(
@@ -639,17 +858,23 @@ describe('WorkflowFieldInput LoRA collection', () => {
         </ChakraProvider>
       );
     });
-    await vi.waitFor(() => {
-      expect(modelSelectState.props).not.toBeNull();
-    });
+    await vi.waitFor(
+      () => {
+        expect(modelSelectState.props).not.toBeNull();
+      },
+      { timeout: 5_000 }
+    );
   };
 
   const renderLoras = async (value: unknown, onChange: (value: unknown) => void) => {
     await renderField(LORA_COLLECTION_TEMPLATE, value, onChange);
     // The picker is lazy; wait for Suspense to resolve it before asserting on the mounted widget.
-    await vi.waitFor(() => {
-      expect(modelSelectState.props).not.toBeNull();
-    });
+    await vi.waitFor(
+      () => {
+        expect(modelSelectState.props).not.toBeNull();
+      },
+      { timeout: 5_000 }
+    );
   };
 
   it('scopes the picker to the LoRAs the node can apply and hides the ones already added', async () => {
@@ -719,9 +944,7 @@ describe('WorkflowFieldInput LoRA collection', () => {
 
     const weight = host.querySelector<HTMLInputElement>('input')!;
 
-    // One keystroke at a time, because the defect lives between them: `<input type="number">`
-    // reports "" for a trailing ".", so the commit is dropped, the box is restored to "0", and the
-    // next keystroke lands as "05" = 5 — a 10x weight from a completely ordinary typing sequence.
+    // Test each keystroke so trailing-decimal drafts cannot reset to zero and turn 0.5 into 5.
     await typeWeight(weight, '0');
     await pressKey('.');
 
@@ -827,9 +1050,7 @@ describe('WorkflowFieldInput seed inputs', () => {
     await renderField(SEED_TEMPLATE, 4_294_967_295, onChange, undefined, { onSeedModeChange, seedMode: 'fixed' });
 
     expect(seedInput()?.disabled).toBe(false);
-    // Without i18n the label is the long key, which stands in for a long translation: the
-    // trigger stays bounded and truncates, its accessible name stays whole, and the number
-    // input keeps a usable width beside it.
+    // Use untranslated long keys to verify truncation preserves accessible names and number-input width.
     expect(modeTrigger()?.getAttribute('aria-label')).toBe('common.seedMode.label: common.seedMode.fixed');
     expect(modeTrigger()?.getBoundingClientRect().width).toBeLessThanOrEqual(144);
     expect((seedInput() as HTMLInputElement).scrollWidth).toBeLessThanOrEqual(

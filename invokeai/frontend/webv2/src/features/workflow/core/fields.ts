@@ -1,12 +1,14 @@
 import { SEED_MAX } from '@platform/core/seed';
 
-import type { FieldInputTemplate, FieldType } from './types';
+import type { FieldInputTemplate, FieldType, WorkflowFieldInstance } from './types';
 
-/**
- * Field-kind helpers shared by the node editor and the Linear UI panel:
- * which field types render direct-input controls, and how handles/edges are
- * tinted by type so connections stay readable.
- */
+export const getEffectiveWorkflowFieldDescription = (
+  instance: WorkflowFieldInstance | undefined,
+  template: FieldInputTemplate | undefined
+): string =>
+  instance?.descriptionOverride === true
+    ? (instance.description ?? '')
+    : instance?.description || template?.description || '';
 
 /** Field types with a direct-input widget. Everything else is connection-only. */
 const STATEFUL_FIELD_TYPE_NAMES = new Set([
@@ -17,11 +19,12 @@ const STATEFUL_FIELD_TYPE_NAMES = new Set([
   'FloatField',
   'ImageField',
   'IntegerField',
-  // The LoRA collection loaders take `LoRAField | list[LoRAField]`; the widget edits that list
-  // inline so a node can apply several LoRAs without a chain of Select LoRA / Collect nodes.
+  // Collection loaders accept scalar or list LoRA fields; edit lists inline without extra selector/collector
+  // nodes.
   'LoRAField',
   'ModelIdentifierField',
   'SchedulerField',
+  'SavedWorkflowField',
   'StringField',
   'VideoField',
 ]);
@@ -62,11 +65,18 @@ const countDecimals = (value: number): number => {
   return fraction.length;
 };
 
+const finiteNumberOrNull = (value: number | null | undefined): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
 /** A random value inside the template's bounds, snapped to its step; unbounded ends default to 0…SEED_MAX. */
 export const getRandomWorkflowFieldValue = (template: FieldInputTemplate, random = Math.random): number => {
   const isInteger = template.type.name === 'IntegerField';
-  const step = template.multipleOf ?? (isInteger ? 1 : 0);
-  const { exclusiveMaximum, exclusiveMinimum, maximum, minimum } = template;
+  const multipleOf = finiteNumberOrNull(template.multipleOf);
+  const step = multipleOf !== null && multipleOf > 0 ? multipleOf : isInteger ? 1 : 0;
+  const exclusiveMaximum = finiteNumberOrNull(template.exclusiveMaximum);
+  const exclusiveMinimum = finiteNumberOrNull(template.exclusiveMinimum);
+  const maximum = finiteNumberOrNull(template.maximum);
+  const minimum = finiteNumberOrNull(template.minimum);
 
   if (step <= 0) {
     const min = minimum ?? exclusiveMinimum ?? 0;
@@ -125,11 +135,7 @@ export interface LoraFieldCollectionEntry {
   weight: number;
 }
 
-/**
- * Every field of the identifier is required, because that is what the backend's own
- * `ModelIdentifierField` requires: a key-only entry renders as a nameless row and is rejected at
- * enqueue time with a 422 that names nothing useful, so it is better treated as unreadable here.
- */
+/** Require complete backend model identifiers; key-only entries cannot render meaningfully or enqueue successfully. */
 export const isLoraFieldCollectionEntry = (value: unknown): value is LoraFieldCollectionEntry => {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -145,13 +151,8 @@ export const isLoraFieldCollectionEntry = (value: unknown): value is LoraFieldCo
 };
 
 /**
- * The collection loaders accept `LoRAField | list[LoRAField]`, so a stored value may be a single
- * entry, a list, or absent. The widget always authors a list; normalizing on read keeps imported
- * workflows and hand-edited JSON rendering the same way.
- *
- * Items are returned as-is, including ones `isLoraFieldCollectionEntry` rejects. The widget writes
- * the list it is given straight back on the next edit, so discarding or blanking an unreadable item
- * here would let one click on an unrelated row silently destroy a hand-authored entry.
+ * Normalize absent/scalar/list values into lists without discarding unreadable entries, which subsequent edits
+ * must preserve.
  */
 export const toLoraFieldCollectionList = (value: unknown): unknown[] => {
   if (Array.isArray(value)) {
@@ -170,24 +171,31 @@ const isNumberFieldValueValid = (template: FieldInputTemplate, value: unknown): 
     return false;
   }
 
-  if (template.minimum !== null && value < template.minimum) {
+  const minimum = finiteNumberOrNull(template.minimum);
+  const maximum = finiteNumberOrNull(template.maximum);
+  const exclusiveMinimum = finiteNumberOrNull(template.exclusiveMinimum);
+  const exclusiveMaximum = finiteNumberOrNull(template.exclusiveMaximum);
+
+  if (minimum !== null && value < minimum) {
     return false;
   }
 
-  if (template.maximum !== null && value > template.maximum) {
+  if (maximum !== null && value > maximum) {
     return false;
   }
 
-  if (template.exclusiveMinimum !== null && value <= template.exclusiveMinimum) {
+  if (exclusiveMinimum !== null && value <= exclusiveMinimum) {
     return false;
   }
 
-  if (template.exclusiveMaximum !== null && value >= template.exclusiveMaximum) {
+  if (exclusiveMaximum !== null && value >= exclusiveMaximum) {
     return false;
   }
 
-  if (template.multipleOf !== null) {
-    const quotient = value / template.multipleOf;
+  const multipleOf = finiteNumberOrNull(template.multipleOf);
+
+  if (multipleOf !== null && multipleOf > 0) {
+    const quotient = value / multipleOf;
 
     if (Math.abs(quotient - Math.round(quotient)) > Number.EPSILON * 100) {
       return false;
@@ -213,6 +221,7 @@ const isColorValueValid = (value: unknown): boolean => {
 
 export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: unknown): boolean => {
   switch (template.type.name) {
+    case 'SavedWorkflowField':
     case 'StringField':
       // An empty string is a legitimate string value (e.g. a blank negative prompt).
       return typeof value === 'string';
@@ -222,7 +231,16 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
     case 'BooleanField':
       return typeof value === 'boolean';
     case 'EnumField':
-      return isNonEmptyString(value) && (template.options === null || template.options.includes(value));
+      if (value === undefined || value === null) {
+        return !template.required;
+      }
+
+      return (
+        (isNonEmptyString(value) ||
+          (typeof value === 'number' && Number.isFinite(value)) ||
+          typeof value === 'boolean') &&
+        (template.options === null || template.options.includes(value))
+      );
     case 'ModelIdentifierField':
       return hasNonEmptyStringProp(value, 'key');
     case 'LoRAField':
@@ -312,6 +330,7 @@ const FIELD_TYPE_COLORS: Record<string, string> = {
   LoRAField: '#e879f9',
   ModelIdentifierField: '#14b8a6',
   SchedulerField: '#3b82f6',
+  SavedWorkflowField: '#818cf8',
   StringField: '#facc15',
   UNetField: '#fca5a5',
   VAEField: '#2563eb',

@@ -7,6 +7,7 @@ import type {
   InvocationTemplatesSnapshot,
 } from '@features/workflow/core/types';
 
+import { createLogger } from '@platform/logging/logger';
 import {
   captureAccountScope,
   isAccountScopeCurrent,
@@ -17,12 +18,7 @@ import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 
 export type { InvocationTemplatesSnapshot } from '@features/workflow/core/types';
 
-/**
- * Invocation templates parsed from the backend OpenAPI schema. They are
- * session-lived, backend-owned data shared by every workflow surface, so they
- * live in an external store (the same pattern as the models library) rather
- * than in project state.
- */
+/** Share backend invocation templates in session-lived external state rather than project documents. */
 
 const EMPTY_INVOCATION_TEMPLATES: InvocationTemplatesSnapshot = { error: null, status: 'idle', templates: {} };
 const store = createExternalStore<InvocationTemplatesSnapshot>(EMPTY_INVOCATION_TEMPLATES);
@@ -63,11 +59,7 @@ const refToSchemaName = (ref: unknown): string | null => {
 
 const getRef = (schema: JsonObject): string | null => refToSchemaName(schema.$ref);
 
-/**
- * Derives the field type from an OpenAPI property schema. Ported from the
- * legacy `parseFieldType`; returns null instead of throwing so unparseable
- * fields are skipped rather than failing the whole template.
- */
+/** Return null for unparseable fields so one unsupported property cannot invalidate the whole template. */
 export const parseFieldType = (schema: unknown): FieldType | null => {
   if (!isJsonObject(schema)) {
     return null;
@@ -175,7 +167,29 @@ const getNumberOrNull = (value: unknown): number | null => (typeof value === 'nu
 const getStringArrayOrNull = (value: unknown): string[] | null =>
   Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null;
 
-const getDefaultValueForType = (type: FieldType, options: string[] | null): unknown => {
+const getEnumValues = (property: JsonObject): unknown[] | null => {
+  if (property.enum !== undefined) {
+    return Array.isArray(property.enum) ? property.enum : [];
+  }
+
+  if (property.const !== undefined) {
+    return [property.const];
+  }
+
+  if (Array.isArray(property.anyOf)) {
+    const variants = property.anyOf.filter(
+      (variant): variant is JsonObject => isJsonObject(variant) && variant.type !== 'null'
+    );
+
+    if (variants.length === 1) {
+      return getEnumValues(variants[0]);
+    }
+  }
+
+  return null;
+};
+
+const getDefaultValueForType = (type: FieldType, options: unknown[] | null): unknown => {
   if (type.cardinality === 'COLLECTION') {
     return undefined;
   }
@@ -201,12 +215,17 @@ const buildInputTemplate = (
   type: FieldType,
   fieldKind: FieldInputTemplate['fieldKind']
 ): FieldInputTemplate => {
-  const enumValues = Array.isArray(property.enum)
-    ? property.enum
-    : property.const !== undefined
-      ? [property.const]
-      : null;
-  const options = enumValues ? enumValues.filter((value): value is string => typeof value === 'string') : null;
+  const enumValues = getEnumValues(property);
+  const options = enumValues
+    ? enumValues.every(
+        (value) =>
+          typeof value === 'string' ||
+          (typeof value === 'number' && Number.isFinite(value)) ||
+          typeof value === 'boolean'
+      )
+      ? enumValues
+      : []
+    : null;
   const input = property.input === 'connection' || property.input === 'direct' ? property.input : 'any';
   const uiChoiceLabels = isJsonObject(property.ui_choice_labels)
     ? Object.fromEntries(
@@ -217,7 +236,12 @@ const buildInputTemplate = (
     : null;
 
   return {
-    default: property.default ?? getDefaultValueForType(type, options),
+    default:
+      type.name === 'EnumField' && property.default === null && property.orig_required !== true
+        ? undefined
+        : property.default !== undefined && property.default !== null
+          ? property.default
+          : getDefaultValueForType(type, options),
     description: typeof property.description === 'string' ? property.description : '',
     exclusiveMaximum: getNumberOrNull(property.exclusiveMaximum),
     exclusiveMinimum: getNumberOrNull(property.exclusiveMinimum),
@@ -281,23 +305,8 @@ const parseInvocationSchema = (schema: JsonObject, schemas: JsonObject): Invocat
       continue;
     }
 
-    // `internal` covers exactly two properties across the whole schema: `metadata` and
-    // `board`. Both are real inputs and both must be here.
-    //
-    // `metadata`: a workflow that wires a Core Metadata node into a save node needs that
-    // handle to exist, or the edge is invisible in the editor and dropped on re-save.
-    //
-    // `board`: seven bundled workflows expose it as a linear-UI field. The
-    // exposedFields -> form migration does not check that a field has a template, and
-    // NodeFieldControl renders "This field no longer exists in the project graph." when it
-    // does not — so excluding `board` puts a red error in those workflows' Linear tab. It is
-    // also in v6's templates, which reports a missing-field error for any node instance that
-    // lacks it. Note the value is not fully honoured yet: the queue runtime re-homes results
-    // onto the active gallery board after a run, and `toBoardGraphValue` reads 'auto' as "no
-    // board" where v6 reads it as "the auto-add board".
-    //
-    // The node-level attributes (`id`, `type`, `use_cache`, `is_intermediate`) are
-    // `node_attribute`, so they stay excluded here as well as by RESERVED_INPUT_FIELD_NAMES.
+    // Retain internal metadata/board inputs for edges and Linear controls. Exclude node attributes; queue routing
+    // still determines final result boards.
     const isInternal = rawProperty.field_kind === 'internal';
 
     if (rawProperty.field_kind !== 'input' && !isInternal) {
@@ -418,6 +427,11 @@ export const refreshInvocationTemplates = async (): Promise<void> => {
       return;
     }
 
+    createLogger({ area: 'templates', namespace: 'workflows' }).error({
+      error,
+      message: 'Failed to load node definitions',
+      name: 'workflows.templates-load-failed',
+    });
     store.patchSnapshot({
       error: getApiErrorMessage(error, 'Failed to load node definitions from the backend.'),
       status: 'error',
