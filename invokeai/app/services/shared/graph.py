@@ -56,8 +56,22 @@ from invokeai.app.invocations.loops import (
     LoopState,
 )
 from invokeai.app.services.shared import graph_if_dependencies, graph_if_runtime
-from invokeai.app.services.shared.execution_effects import ContinuationEffect
+from invokeai.app.services.shared.execution_effects import (
+    AddEdgeEffect,
+    AwaitEffect,
+    CloseStreamEffect,
+    ContinuationEffect,
+    EmitEffect,
+    ExecutionEffect,
+    FailEffect,
+    RemoveEdgeEffect,
+    SetValueEffect,
+    SpawnExecutionEffect,
+)
 from invokeai.app.services.shared.execution_effects import ExecutionRef as EffectExecutionRef
+from invokeai.app.services.shared.execution_effects import (
+    ExecutionToken as EffectExecutionToken,
+)
 from invokeai.app.services.shared.execution_engine.child import (
     ChildDependencyRecord,
     ChildDependencyUpdate,
@@ -239,6 +253,7 @@ class _GraphExecutionStateRuntime:
         "execution_effects_persisted",
         "legacy_execution_snapshot",
         "legacy_snapshot_loaded",
+        "fresh_flat_if_activation",
     )
 
     def __init__(self) -> None:
@@ -280,6 +295,7 @@ class _GraphExecutionStateRuntime:
         self.execution_effects_persisted = False
         self.legacy_execution_snapshot = True
         self.legacy_snapshot_loaded = False
+        self.fresh_flat_if_activation: Optional[bool] = None
 
 
 class GraphExecutionState(BaseModel):
@@ -387,6 +403,8 @@ class GraphExecutionState(BaseModel):
         copied = super().model_copy(update=update, deep=deep)
         if not deep:
             copied.__pydantic_private__["_runtime_state"] = copy.copy(self.__pydantic_private__["_runtime_state"])
+        if update is not None and "graph" in update:
+            copied._invalidate_source_graph_cache()
         return copied
 
     def __copy__(self) -> "GraphExecutionState":
@@ -579,7 +597,10 @@ class GraphExecutionState(BaseModel):
         return graph_if_dependencies._get_fresh_if_nodes(self)
 
     def _can_use_fresh_flat_if_activation(self) -> bool:
-        return graph_if_dependencies._can_use_fresh_flat_if_activation(self)
+        runtime = self.__pydantic_private__["_runtime_state"]
+        if runtime.fresh_flat_if_activation is None:
+            runtime.fresh_flat_if_activation = graph_if_dependencies._can_use_fresh_flat_if_activation(self)
+        return runtime.fresh_flat_if_activation
 
     def _can_use_fresh_mixed_if_iterate_collect(self) -> bool:
         return graph_if_dependencies._can_use_fresh_mixed_if_iterate_collect(self)
@@ -707,6 +728,7 @@ class GraphExecutionState(BaseModel):
     def _invalidate_source_graph_cache(self) -> None:
         runtime = self.__pydantic_private__["_runtime_state"]
         runtime.source_graph_flat = None
+        runtime.fresh_flat_if_activation = None
         runtime.for_source_by_return_id = None
         runtime.if_branch_sources_cache = {}
         runtime.if_activation_dependencies_by_source = {}
@@ -1548,14 +1570,31 @@ class GraphExecutionState(BaseModel):
         """Mirror generic stream effects into the private stream registry."""
 
         for effect in effects:
-            effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            effect_kind = (
+                effect.kind
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "kind", "effect_type", "type")
+            )
             if effect_kind not in {"emit", "close_stream"}:
                 continue
-            token = self._value_from_object(effect, "token")
-            port = self._value_from_object(token, "field", "port", "output", "output_name")
+            token = (
+                effect.token
+                if isinstance(effect, (EmitEffect, CloseStreamEffect))
+                else self._value_from_object(effect, "token")
+            )
+            port = (
+                token.field
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(token, "field", "port", "output", "output_name")
+            )
             if not isinstance(port, str):
                 continue
-            if self._value_from_object(token, "token_kind") == "activation":
+            token_kind = (
+                token.token_kind
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(token, "token_kind")
+            ) or "data"
+            if token_kind == "activation":
                 continue
             stream_id = f"{self.id}:effect:{execution_ref.reference_id}:{port}"
             stream_owner_id = execution_ref.exec_node_id
@@ -1587,7 +1626,11 @@ class GraphExecutionState(BaseModel):
                         lambda stream=stream, snapshot=snapshot: stream._restore(*snapshot),
                     )
 
-            sequence = self._value_from_object(token, "sequence")
+            sequence = (
+                token.sequence
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(token, "sequence")
+            )
             if sequence is None:
                 sequence = stream.next_sequence
             if effect_kind == "close_stream":
@@ -1597,11 +1640,13 @@ class GraphExecutionState(BaseModel):
                     raise ValueError("conflicting close sequence for stream")
                 stream.close(sequence=sequence)
                 continue
-            if self._value_from_object(token, "token_kind") == "stream_end":
+            if token_kind == "stream_end":
                 continue
-            value = self._value_from_object(effect, "value")
+            value = effect.value if isinstance(effect, EmitEffect) else self._value_from_object(effect, "value")
             if value is None:
-                value = self._value_from_object(token, "value")
+                value = (
+                    token.value if isinstance(token, EffectExecutionToken) else self._value_from_object(token, "value")
+                )
             event = (
                 StreamData.model_construct(kind="data", sequence=sequence, value=value)
                 if trusted
@@ -1673,11 +1718,23 @@ class GraphExecutionState(BaseModel):
 
         node = self.execution_graph.get_node(execution_ref.exec_node_id)
         for effect in effects:
-            if self._value_from_object(effect, "kind", "effect_type", "type") != "continuation":
+            effect_kind = (
+                effect.kind
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "kind", "effect_type", "type")
+            )
+            if effect_kind != "continuation":
                 continue
 
-            operation = self._value_from_object(effect, "operation")
-            payload = self._normalize_continuation_payload(self._value_from_object(effect, "payload"))
+            operation = (
+                effect.operation
+                if isinstance(effect, ContinuationEffect)
+                else self._value_from_object(effect, "operation")
+            )
+            effect_payload = (
+                effect.payload if isinstance(effect, ContinuationEffect) else self._value_from_object(effect, "payload")
+            )
+            payload = self._normalize_continuation_payload(effect_payload)
             if isinstance(node, ForInvocation) and operation == "start":
                 expected_payload = self._prepared_for_continuation_payload(node)
                 if self._continuation_payload_key(payload) != self._continuation_payload_key(expected_payload):
@@ -2186,6 +2243,15 @@ class GraphExecutionState(BaseModel):
                 if name in value:
                     return value[name]
             return None
+        if isinstance(value, BaseModel):
+            fields = value.__dict__
+            extras = value.__pydantic_extra__ or {}
+            for name in names:
+                if name in fields:
+                    return fields[name]
+                if name in extras:
+                    return extras[name]
+            return next((getattr(value, name) for name in names if hasattr(type(value), name)), None)
         for name in names:
             if hasattr(value, name):
                 return getattr(value, name)
@@ -2198,6 +2264,15 @@ class GraphExecutionState(BaseModel):
                 execution_ref.reference_id,
                 execution_ref.exec_node_id,
             }
+        if isinstance(owner, EffectExecutionRef):
+            owner_id = owner.node_id
+            owner_state_id = owner.state_id
+            return owner_id in {execution_ref.reference_id, execution_ref.exec_node_id} and owner_state_id in {
+                None,
+                execution_ref.state_id,
+            }
+        if isinstance(owner, EffectExecutionToken):
+            return owner.node_id == execution_ref.exec_node_id
         if isinstance(owner, BaseModel):
             owner = owner.model_dump(mode="python", warnings=False)
         if isinstance(owner, dict):
@@ -2255,6 +2330,13 @@ class GraphExecutionState(BaseModel):
             raise ValueError(f"{owner_name} belongs to another workflow-call depth")
 
     def _validate_execution_token(self, token: Any, execution_ref: ExecutionReference) -> None:
+        if isinstance(token, EffectExecutionToken):
+            if token.node_id not in ("", execution_ref.exec_node_id):
+                raise ValueError("Execution token is not owned by execution reference")
+            if token.frame and token.frame != execution_ref.frame.iteration_path:
+                raise ValueError("Execution token belongs to another execution frame")
+            return
+
         token_node_id = self._value_from_object(
             token,
             "node_id",
@@ -2373,70 +2455,125 @@ class GraphExecutionState(BaseModel):
                     _JSON_SERIALIZER.dump_python(effect, mode="json", warnings="error")
                 except (PydanticSerializationError, TypeError, ValueError) as exc:
                     raise ValueError("Execution effect must be JSON-serializable") from exc
-            effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            effect_kind = (
+                effect.kind
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "kind", "effect_type", "type")
+            )
             if effect_kind in {"spawn_execution", "await", "fail"}:
                 lifecycle_effect_kinds.add(effect_kind)
-                lifecycle_owner = self._value_from_object(effect, "execution_ref", "execution_reference")
+                lifecycle_owner = (
+                    effect.execution_ref
+                    if isinstance(effect, ExecutionEffect)
+                    else self._value_from_object(effect, "execution_ref", "execution_reference")
+                )
                 if lifecycle_owner is not None:
-                    owner_reference_id = self._value_from_object(lifecycle_owner, "reference_id", "id")
+                    if isinstance(lifecycle_owner, EffectExecutionRef):
+                        owner_reference_id = None
+                        owner_state_id = lifecycle_owner.state_id
+                        owner_frame = lifecycle_owner.frame
+                        owner_frame_id = lifecycle_owner.frame_id
+                        owner_depth = lifecycle_owner.workflow_call_depth
+                    else:
+                        owner_reference_id = self._value_from_object(lifecycle_owner, "reference_id", "id")
+                        owner_state_id = self._value_from_object(lifecycle_owner, "state_id", "session_id")
+                        owner_frame = self._value_from_object(lifecycle_owner, "frame", "frame_path")
+                        owner_frame_id = self._value_from_object(lifecycle_owner, "frame_id")
+                        owner_depth = self._value_from_object(
+                            lifecycle_owner, "workflow_call_depth", "call_depth", "depth"
+                        )
                     if owner_reference_id not in (None, "", execution_ref.reference_id):
                         raise ValueError("Lifecycle effect belongs to another execution reference")
-                    owner_state_id = self._value_from_object(lifecycle_owner, "state_id", "session_id")
                     if owner_state_id not in (None, "", execution_ref.state_id):
                         raise ValueError("Lifecycle effect belongs to another graph execution state")
                     self._validate_execution_frame(
-                        self._value_from_object(lifecycle_owner, "frame", "frame_path"),
+                        owner_frame,
                         execution_ref,
                         "Lifecycle effect",
                     )
-                    owner_frame_id = self._value_from_object(lifecycle_owner, "frame_id")
                     if owner_frame_id not in (None, "", execution_ref.frame.frame_id):
                         raise ValueError("Lifecycle effect belongs to another execution frame")
-                    owner_depth = self._value_from_object(lifecycle_owner, "workflow_call_depth", "call_depth", "depth")
                     if owner_depth not in (None, execution_ref.frame.workflow_call_depth):
                         raise ValueError("Lifecycle effect belongs to another workflow-call depth")
                 if effect_kind == "spawn_execution":
-                    child_execution_id = self._value_from_object(effect, "child_execution_id", "child_id")
+                    child_execution_id = (
+                        effect.child_execution_id
+                        if isinstance(effect, SpawnExecutionEffect)
+                        else self._value_from_object(effect, "child_execution_id", "child_id")
+                    )
                     if not isinstance(child_execution_id, str) or not child_execution_id.strip():
                         raise ValueError("Spawn effect requires a child execution identity")
                     if child_execution_id in spawned_child_ids:
                         raise ValueError("Spawn effect repeats a child execution identity")
                     spawned_child_ids.add(child_execution_id)
-                    parent = self._value_from_object(effect, "parent")
+                    parent = (
+                        effect.parent
+                        if isinstance(effect, SpawnExecutionEffect)
+                        else self._value_from_object(effect, "parent")
+                    )
                     if parent is None or not self._same_execution_owner(parent, execution_ref):
                         raise ValueError("Spawn effect parent is not owned by execution reference")
                     self._validate_execution_frame(
-                        self._value_from_object(parent, "frame", "frame_path"),
+                        parent.frame
+                        if isinstance(parent, EffectExecutionRef)
+                        else self._value_from_object(parent, "frame", "frame_path"),
                         execution_ref,
                         "Spawn effect parent",
                     )
                 elif effect_kind == "await":
-                    dependency = self._value_from_object(effect, "dependency")
-                    child_execution_id = self._value_from_object(
-                        dependency,
-                        "execution_node_id",
-                        "exec_node_id",
-                        "node_id",
-                        "child_execution_id",
-                        "execution_id",
+                    dependency = (
+                        effect.dependency
+                        if isinstance(effect, AwaitEffect)
+                        else self._value_from_object(effect, "dependency")
+                    )
+                    child_execution_id = (
+                        dependency.node_id
+                        if isinstance(dependency, EffectExecutionRef)
+                        else self._value_from_object(
+                            dependency,
+                            "execution_node_id",
+                            "exec_node_id",
+                            "node_id",
+                            "child_execution_id",
+                            "execution_id",
+                        )
                     )
                     if not isinstance(child_execution_id, str) or not child_execution_id.strip():
                         raise ValueError("Await effect requires a child execution identity")
                     awaited_child_ids.append(child_execution_id)
                 elif effect_kind == "fail":
-                    message = self._value_from_object(effect, "message")
+                    message = (
+                        effect.message if isinstance(effect, FailEffect) else self._value_from_object(effect, "message")
+                    )
                     if not isinstance(message, str):
                         raise ValueError("Fail effect requires an error message")
 
-            token = self._value_from_object(effect, "token")
-            token_port = self._value_from_object(token, "field", "port", "output", "output_name")
-            preliminary_port = self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
+            if isinstance(effect, (EmitEffect, CloseStreamEffect)):
+                token = effect.token
+            elif isinstance(effect, ExecutionEffect):
+                token = None
+            else:
+                token = self._value_from_object(effect, "token")
+            token_port = (
+                token.field
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(token, "field", "port", "output", "output_name")
+            )
+            preliminary_port = (
+                token_port
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
+            )
             if preliminary_port is None:
                 preliminary_port = token_port
             if isinstance(preliminary_port, str) and preliminary_port in _RESERVED_EFFECT_PORTS:
                 raise ValueError(f"Execution effect references reserved output port '{preliminary_port}'")
             if effect_kind == "close_stream":
-                token_kind = self._value_from_object(token, "token_kind")
+                token_kind = (
+                    token.token_kind
+                    if isinstance(token, EffectExecutionToken)
+                    else self._value_from_object(token, "token_kind")
+                )
                 if token is None or token_port in (None, LOOP_LINKAGE_FIELD):
                     raise ValueError("Close-stream effect requires a data output token")
                 if token_kind != "stream_end":
@@ -2444,11 +2581,30 @@ class GraphExecutionState(BaseModel):
             elif effect_kind == "emit":
                 if token is None or token_port in (None, LOOP_LINKAGE_FIELD):
                     raise ValueError("Emit effect requires a data output token")
-                if self._value_from_object(token, "token_kind") == "stream_end":
+                token_kind = (
+                    token.token_kind
+                    if isinstance(token, EffectExecutionToken)
+                    else self._value_from_object(token, "token_kind")
+                )
+                if token_kind == "stream_end":
                     raise ValueError("Emit effect cannot use a stream_end token")
             elif effect_kind == "continuation":
-                continuation_kind = self._value_from_object(effect, "continuation_kind")
-                operation = self._value_from_object(effect, "operation")
+                if isinstance(effect, ContinuationEffect):
+                    continuation_kind = effect.continuation_kind
+                    operation = effect.operation
+                    continuation_owner = effect.execution_ref
+                    continuation_payload = effect.payload
+                else:
+                    continuation_kind = self._value_from_object(effect, "continuation_kind")
+                    operation = self._value_from_object(effect, "operation")
+                    continuation_owner = self._value_from_object(
+                        effect,
+                        "execution_ref",
+                        "execution_reference",
+                        "owner_ref",
+                        "owner",
+                    )
+                    continuation_payload = self._value_from_object(effect, "payload")
                 expected_operation = "start" if isinstance(node, ForInvocation) else "complete"
                 if not isinstance(node, (ForInvocation, ForReturnInvocation)):
                     raise ValueError("Continuation effects are only supported by For control-flow nodes")
@@ -2459,25 +2615,24 @@ class GraphExecutionState(BaseModel):
                         f"{type(node).__name__} continuation effect must use operation '{expected_operation}'"
                     )
                 continuation_operations.add(operation)
-                continuation_owner = self._value_from_object(
-                    effect,
-                    "execution_ref",
-                    "execution_reference",
-                    "owner_ref",
-                    "owner",
-                )
-                continuation_state_id = self._value_from_object(continuation_owner, "state_id", "session_id")
-                continuation_frame_path = self._value_from_object(
-                    continuation_owner, "frame", "frame_path", "iteration_path"
-                )
+                if isinstance(continuation_owner, EffectExecutionRef):
+                    continuation_state_id = continuation_owner.state_id
+                    continuation_frame_path = continuation_owner.frame
+                    continuation_frame_id = continuation_owner.frame_id
+                    continuation_depth = continuation_owner.workflow_call_depth
+                else:
+                    continuation_state_id = self._value_from_object(continuation_owner, "state_id", "session_id")
+                    continuation_frame_path = self._value_from_object(
+                        continuation_owner, "frame", "frame_path", "iteration_path"
+                    )
+                    continuation_frame_id = self._value_from_object(continuation_owner, "frame_id")
+                    continuation_depth = self._value_from_object(
+                        continuation_owner, "workflow_call_depth", "call_depth", "depth"
+                    )
                 if continuation_state_id not in (None, "", execution_ref.state_id):
                     raise ValueError("Continuation effect belongs to another graph execution state")
-                continuation_frame_id = self._value_from_object(continuation_owner, "frame_id")
                 if continuation_frame_id not in (None, "", execution_ref.frame.frame_id):
                     raise ValueError("Continuation effect belongs to another execution frame")
-                continuation_depth = self._value_from_object(
-                    continuation_owner, "workflow_call_depth", "call_depth", "depth"
-                )
                 if continuation_depth not in (None, execution_ref.frame.workflow_call_depth):
                     raise ValueError("Continuation effect belongs to another workflow-call depth")
                 if continuation_state_id in (None, ""):
@@ -2494,7 +2649,6 @@ class GraphExecutionState(BaseModel):
                     "Continuation effect",
                 )
                 continuation_key = (operation, continuation_kind)
-                continuation_payload = self._value_from_object(effect, "payload")
                 serialized_payload = self._continuation_payload_key(continuation_payload)
                 if continuation_key in continuation_payloads:
                     if continuation_payloads[continuation_key] != serialized_payload:
@@ -2505,20 +2659,34 @@ class GraphExecutionState(BaseModel):
                 else:
                     continuation_payloads[continuation_key] = serialized_payload
 
-            owner = self._value_from_object(
-                effect,
-                "execution_ref",
-                "execution_reference",
-                "owner_ref",
-                "owner",
-                "parent",
-                "dependency",
-                "owner_node_id",
-                "source_node_id",
-                "node_id",
-            )
-            if owner is None:
-                owner = self._value_from_object(effect, "target", "source", "token")
+            if isinstance(effect, ExecutionEffect):
+                owner = effect.execution_ref
+                if owner is None:
+                    if isinstance(effect, SpawnExecutionEffect):
+                        owner = effect.parent
+                    elif isinstance(effect, AwaitEffect):
+                        owner = effect.dependency
+                    elif isinstance(effect, SetValueEffect):
+                        owner = effect.target
+                    elif isinstance(effect, (AddEdgeEffect, RemoveEdgeEffect)):
+                        owner = effect.source
+                    elif isinstance(effect, (EmitEffect, CloseStreamEffect)):
+                        owner = effect.token
+            else:
+                owner = self._value_from_object(
+                    effect,
+                    "execution_ref",
+                    "execution_reference",
+                    "owner_ref",
+                    "owner",
+                    "parent",
+                    "dependency",
+                    "owner_node_id",
+                    "source_node_id",
+                    "node_id",
+                )
+                if owner is None:
+                    owner = self._value_from_object(effect, "target", "source", "token")
             if owner is None or not self._same_execution_owner(owner, execution_ref):
                 raise ValueError("Execution effect is not owned by execution reference")
             if effect_kind is not None and (
@@ -2527,36 +2695,90 @@ class GraphExecutionState(BaseModel):
             ):
                 raise ValueError(f"Unsupported execution effect kind: {effect_kind}")
 
-            effect_state_id = self._value_from_object(effect, "state_id", "session_id")
+            effect_state_id = (
+                None
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "state_id", "session_id")
+            )
             if effect_state_id is not None and effect_state_id != execution_ref.state_id:
                 raise ValueError("Execution effect belongs to another graph execution state")
-            self._validate_execution_frame(self._value_from_object(effect, "frame"), execution_ref)
+            effect_frame = None if isinstance(effect, ExecutionEffect) else self._value_from_object(effect, "frame")
+            self._validate_execution_frame(effect_frame, execution_ref)
 
-            source_ref = self._value_from_object(effect, "source", "target", "token")
+            if isinstance(effect, (AddEdgeEffect, RemoveEdgeEffect)):
+                source_ref = effect.source
+            elif isinstance(effect, SetValueEffect):
+                source_ref = effect.target
+            elif isinstance(effect, (EmitEffect, CloseStreamEffect)):
+                source_ref = effect.token
+            elif isinstance(effect, ExecutionEffect):
+                source_ref = None
+            else:
+                source_ref = self._value_from_object(effect, "source", "target", "token")
             if token is not None:
                 self._validate_execution_token(token, execution_ref)
-            destination_ref = self._value_from_object(effect, "destination")
-            source_port = self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
+            destination_ref = (
+                effect.destination
+                if isinstance(effect, (AddEdgeEffect, RemoveEdgeEffect))
+                else None
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "destination")
+            )
+            source_port = (
+                self._value_from_object(effect, "source_port", "output_port", "source_field", "port")
+                if not isinstance(effect, ExecutionEffect)
+                else None
+            )
             if source_port is None:
-                source_port = self._value_from_object(source_ref, "field", "port", "output", "output_name")
-            destination_port = self._value_from_object(effect, "destination_port", "input_port", "destination_field")
+                source_port = (
+                    source_ref.field
+                    if isinstance(source_ref, (EffectExecutionRef, EffectExecutionToken))
+                    else self._value_from_object(source_ref, "field", "port", "output", "output_name")
+                )
+            destination_port = (
+                self._value_from_object(effect, "destination_port", "input_port", "destination_field")
+                if not isinstance(effect, ExecutionEffect)
+                else None
+            )
             if destination_port is None:
-                destination_port = self._value_from_object(destination_ref, "field", "port", "input", "input_name")
-            effect_type = self._value_from_object(effect, "edge_type", "connection_type", "kind")
+                destination_port = (
+                    destination_ref.field
+                    if isinstance(destination_ref, EffectExecutionRef)
+                    else self._value_from_object(destination_ref, "field", "port", "input", "input_name")
+                )
+            effect_type = (
+                effect.kind
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "edge_type", "connection_type", "kind")
+            )
             is_loop_linkage = effect_type == "loop_linkage" or source_port == LOOP_LINKAGE_FIELD
             if source_port is not None:
                 if not isinstance(source_port, str):
                     raise ValueError("Execution effect output port must be a string")
                 if source_port in _RESERVED_EFFECT_PORTS:
                     raise ValueError(f"Execution effect references reserved output port '{source_port}'")
-                is_activation = effect_kind == "emit" and self._value_from_object(token, "token_kind") == "activation"
+                is_activation = (
+                    effect_kind == "emit"
+                    and (
+                        token.token_kind
+                        if isinstance(token, EffectExecutionToken)
+                        else self._value_from_object(token, "token_kind")
+                    )
+                    == "activation"
+                )
                 if is_activation:
                     activation_fields = getattr(type(node), "execution_activation_fields", frozenset())
                     if source_port not in activation_fields:
                         raise ValueError(f"Execution effect references unknown activation port '{source_port}'")
-                    activation_value = self._value_from_object(effect, "value")
+                    activation_value = effect.value if isinstance(effect, EmitEffect) else None
+                    if not isinstance(effect, ExecutionEffect):
+                        activation_value = self._value_from_object(effect, "value")
                     if activation_value is None:
-                        activation_value = self._value_from_object(token, "value")
+                        activation_value = (
+                            token.value
+                            if isinstance(token, EffectExecutionToken)
+                            else self._value_from_object(token, "value")
+                        )
                     if activation_value != source_port:
                         raise ValueError(
                             f"Execution effect activation value '{activation_value}' does not match port '{source_port}'"
@@ -2581,12 +2803,18 @@ class GraphExecutionState(BaseModel):
                 elif source_port == LOOP_LINKAGE_FIELD:
                     raise ValueError("Association edge cannot be stored as data effect")
             if destination_port is not None:
-                destination_node_id = self._value_from_object(
-                    effect, "destination_node_id", "target_node_id", "consumer_node_id"
+                destination_node_id = (
+                    None
+                    if isinstance(effect, ExecutionEffect)
+                    else self._value_from_object(effect, "destination_node_id", "target_node_id", "consumer_node_id")
                 )
                 if destination_node_id is None:
-                    destination_node_id = self._value_from_object(
-                        destination_ref, "exec_node_id", "prepared_node_id", "node_id", "invocation_id"
+                    destination_node_id = (
+                        destination_ref.node_id
+                        if isinstance(destination_ref, EffectExecutionRef)
+                        else self._value_from_object(
+                            destination_ref, "exec_node_id", "prepared_node_id", "node_id", "invocation_id"
+                        )
                     )
                 if destination_node_id is None:
                     raise ValueError("Execution effect destination port has no destination node")
@@ -2644,10 +2872,17 @@ class GraphExecutionState(BaseModel):
         seen_continuations: set[tuple[str, str]] = set()
         unique_effects: list[Any] = []
         for effect in effects:
-            if self._value_from_object(effect, "kind", "effect_type", "type") == "continuation":
+            if isinstance(effect, ContinuationEffect) or (
+                not isinstance(effect, ExecutionEffect)
+                and self._value_from_object(effect, "kind", "effect_type", "type") == "continuation"
+            ):
                 continuation_key = (
-                    self._value_from_object(effect, "operation"),
-                    self._value_from_object(effect, "continuation_kind"),
+                    (effect.operation, effect.continuation_kind)
+                    if isinstance(effect, ContinuationEffect)
+                    else (
+                        self._value_from_object(effect, "operation"),
+                        self._value_from_object(effect, "continuation_kind"),
+                    )
                 )
                 if continuation_key in seen_continuations:
                     continue
@@ -2673,25 +2908,57 @@ class GraphExecutionState(BaseModel):
                 value=getattr(output, port),
             )
         for effect in effects:
-            effect_kind = self._value_from_object(effect, "kind", "effect_type", "type")
+            effect_kind = (
+                effect.kind
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "kind", "effect_type", "type")
+            )
             if effect_kind not in {"emit", "close_stream"}:
                 continue
-            token = self._value_from_object(effect, "token")
-            port = self._value_from_object(token, "field", "port", "output", "output_name")
-            if port is None:
-                continue
+            token = (
+                effect.token
+                if isinstance(effect, (EmitEffect, CloseStreamEffect))
+                else self._value_from_object(effect, "token")
+            )
+            port = (
+                token.field
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(token, "field", "port", "output", "output_name")
+            )
             if not isinstance(port, str):
                 raise ValueError("Execution effect output port must be a string")
             if port in _RESERVED_EFFECT_PORTS:
                 raise ValueError(f"Execution effect references reserved output port '{port}'")
-            token_node_id = self._value_from_object(token, "node_id", "invocation_id", "source_node_id")
+            token_node_id = (
+                token.node_id
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(
+                    token, "node_id", "invocation_id", "source_node_id", "owner_node_id", "exec_node_id"
+                )
+            )
             if token_node_id != execution_ref.exec_node_id:
                 raise ValueError("Execution token is not owned by execution reference")
-            token_value = self._value_from_object(effect, "value")
+            token_value = (
+                effect.value
+                if isinstance(effect, EmitEffect)
+                else None
+                if isinstance(effect, ExecutionEffect)
+                else self._value_from_object(effect, "value")
+            )
             if token_value is None:
-                token_value = self._value_from_object(token, "value")
-            token_kind = self._value_from_object(token, "token_kind") or "data"
-            sequence = self._value_from_object(token, "sequence")
+                token_value = (
+                    token.value if isinstance(token, EffectExecutionToken) else self._value_from_object(token, "value")
+                )
+            token_kind = (
+                token.token_kind
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(token, "token_kind")
+            ) or "data"
+            sequence = (
+                token.sequence
+                if isinstance(token, EffectExecutionToken)
+                else self._value_from_object(token, "sequence")
+            )
             if effect_kind == "close_stream":
                 token_id_base = (
                     f"{execution_ref.reference_id}:{port}:stream_end:{sequence if sequence is not None else 'effect'}"
@@ -2721,11 +2988,18 @@ class GraphExecutionState(BaseModel):
 
     @classmethod
     def _lifecycle_effect_kinds(cls, effects: Iterable[Any]) -> set[str]:
+        lifecycle_kinds = {"spawn_execution", "await", "fail"}
         return {
             effect_kind
             for effect in effects
-            if (effect_kind := cls._value_from_object(effect, "kind", "effect_type", "type"))
-            in {"spawn_execution", "await", "fail"}
+            if (
+                effect_kind := (
+                    effect.kind
+                    if isinstance(effect, ExecutionEffect)
+                    else cls._value_from_object(effect, "kind", "effect_type", "type")
+                )
+            )
+            in lifecycle_kinds
         }
 
     @classmethod
@@ -2789,13 +3063,19 @@ class GraphExecutionState(BaseModel):
             effect_values = list(batch_values if batch_values is not None else effects)
         if pending_resume and effects is not None and list(persisted_effects) != effect_values:
             raise ValueError("Pending lifecycle effects do not match resumed execution")
+        submitted_effect_values = effect_values
         effect_values = self._validate_effects(
             ref,
             effect_values,
             effect_count,
             require_continuation=require_continuation,
         )
-        persisted_effects = copydeep(effect_values)
+        # Keep compatibility callers' raw effect records in the durable ledger. Runtime operations use the
+        # normalized models returned above; snapshot loading normalizes persisted records once at its boundary.
+        persisted_effect_values = submitted_effect_values
+        if len(effect_values) != len(submitted_effect_values):
+            persisted_effect_values = effect_values
+        persisted_effects = copydeep(persisted_effect_values)
 
         # All validation above is side-effect free. Preserve complete() as the scheduler compatibility boundary,
         # but make the scheduler transition and ledger update one atomic operation. The journal records only
@@ -2806,13 +3086,22 @@ class GraphExecutionState(BaseModel):
             lifecycle_effect_kinds = self._lifecycle_effect_kinds(effect_values)
             if lifecycle_effect_kinds and not pending_resume:
                 self._tx_set_mapping(self.execution_refs, ref.exec_node_id, ref)
-                self._tx_set_mapping(self.execution_effects, ref.reference_id, effect_values)
+                self._tx_set_mapping(self.execution_effects, ref.reference_id, persisted_effects)
                 self._update_pending_lifecycle_execution(ref.exec_node_id, effect_values)
                 if "fail" in lifecycle_effect_kinds:
                     failure = next(
-                        str(self._value_from_object(effect, "message"))
+                        str(
+                            effect.message
+                            if isinstance(effect, FailEffect)
+                            else self._value_from_object(effect, "message")
+                        )
                         for effect in effect_values
-                        if self._value_from_object(effect, "kind", "effect_type", "type") == "fail"
+                        if (
+                            effect.kind
+                            if isinstance(effect, ExecutionEffect)
+                            else self._value_from_object(effect, "kind", "effect_type", "type")
+                        )
+                        == "fail"
                     )
                     self._tx_set_mapping(self.errors, ref.exec_node_id, failure)
                 return []
@@ -3163,6 +3452,7 @@ class GraphExecutionState(BaseModel):
         self._prepared_for_index = None
         self._final_prepared_for_index = None
         self._prepared_for_index_by_exec = {}
+        self.__pydantic_private__["_runtime_state"].fresh_flat_if_activation = None
 
     def _rehydrate_prepared_exec_metadata(self) -> None:
         registry = self._prepared_registry()
@@ -3275,9 +3565,11 @@ class GraphExecutionState(BaseModel):
 
     def _rehydrate_execution_refs(self) -> None:
         for exec_node_id in self.prepared_source_mapping:
-            self._get_iteration_path(exec_node_id)
             existing = self.execution_refs.get(exec_node_id)
-            expected = self._expected_execution_ref(exec_node_id)
+            expected = self._expected_execution_ref(
+                exec_node_id,
+                effect_count=existing.effect_count if existing is not None else None,
+            )
             if existing is not None:
                 if (
                     existing.reference_id not in ("", expected.reference_id)
@@ -3287,8 +3579,7 @@ class GraphExecutionState(BaseModel):
                     or existing.frame != expected.frame
                 ):
                     raise ValueError("Persisted execution reference does not belong to this execution frame")
-            effect_count = existing.effect_count if existing is not None else None
-            self.execution_refs[exec_node_id] = self._expected_execution_ref(exec_node_id, effect_count=effect_count)
+            self.execution_refs[exec_node_id] = expected
 
     def _synthesize_legacy_execution_effects(self) -> None:
         """Upgrade completed legacy For results with the v1 continuation records needed for the next dump."""

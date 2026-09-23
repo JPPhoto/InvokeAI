@@ -1,6 +1,6 @@
 """Compatibility helpers for persisted internal execution-state snapshots."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any, Final
 
 from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
@@ -145,8 +145,7 @@ def dump_execution_state(state: GraphExecutionState) -> dict[str, Any]:
 
     The marker stays alongside the existing state fields so rolling deployments
     and diagnostic tools that still deserialize the legacy raw shape continue
-    to work. The loader also accepts the temporary envelope form used by early
-    migration experiments.
+    to work.
     """
     snapshot = state.model_dump(mode="json", warnings=False, exclude_none=True)
     _append_runtime_fields(snapshot, state)
@@ -158,64 +157,30 @@ def dump_execution_state(state: GraphExecutionState) -> dict[str, Any]:
     return snapshot
 
 
-def _migrate_legacy_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Convert the original unmarked raw snapshot into the current payload shape."""
-
-    return dict(payload)
-
-
-def _migrate_v1_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Carry the full v1 payload forward; v2 changes only the dump projection."""
-
-    return dict(payload)
-
-
-def _migrate_v2_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate the compact v2 payload boundary before a future migration is added."""
-
-    return dict(payload)
-
-
-def _normalize_persisted_effects_in_snapshot(
-    payload: Mapping[str, Any], *, normalize_effects: bool = True
-) -> dict[str, Any]:
-    """Normalize current effect ledgers before GraphExecutionState rehydrates runtime state."""
+def _normalize_persisted_effects_in_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize effect ledgers before GraphExecutionState rehydrates runtime state."""
     normalized = dict(payload)
-    if normalize_effects and "execution_effects" in normalized:
+    if "execution_effects" in normalized:
         normalized["execution_effects"] = normalize_persisted_execution_effects(normalized["execution_effects"])
 
     child_snapshot = normalized.get("waiting_workflow_call_child_session")
     if isinstance(child_snapshot, Mapping):
-        normalized["waiting_workflow_call_child_session"] = _normalize_persisted_effects_in_snapshot(
-            child_snapshot, normalize_effects=normalize_effects
-        )
+        normalized["waiting_workflow_call_child_session"] = _normalize_persisted_effects_in_snapshot(child_snapshot)
     return normalized
 
 
-# Each key is the source version. A future version bump must add its v2 -> v3
-# converter here before changing CURRENT_EXECUTION_STATE_VERSION.
-_SNAPSHOT_MIGRATIONS: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
-    LEGACY_EXECUTION_STATE_VERSION: _migrate_legacy_snapshot,
-    1: _migrate_v1_snapshot,
-    CURRENT_EXECUTION_STATE_VERSION: _migrate_v2_snapshot,
-}
-
-
 def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
-    """Load a versioned snapshot or a legacy unwrapped execution state."""
+    """Load a flat versioned snapshot, a legacy snapshot, or a supported version/state envelope."""
     if not isinstance(snapshot, Mapping):
         raise TypeError("Execution state snapshot must be a mapping")
 
-    if "version" not in snapshot and "execution_state_version" not in snapshot:
-        version = LEGACY_EXECUTION_STATE_VERSION
-        payload = snapshot
-    elif "version" in snapshot:
+    if "version" in snapshot:
         version = snapshot["version"]
         payload = snapshot.get("state")
         if not isinstance(payload, Mapping):
             raise ValueError("Versioned execution state snapshot must contain a mapping in 'state'")
     else:
-        version = snapshot["execution_state_version"]
+        version = snapshot.get("execution_state_version", LEGACY_EXECUTION_STATE_VERSION)
         payload = dict(snapshot)
         payload.pop("execution_state_version", None)
 
@@ -226,27 +191,12 @@ def load_execution_state(snapshot: Mapping[str, Any]) -> GraphExecutionState:
             f"Execution state snapshot version {version} is newer than supported version "
             f"{CURRENT_EXECUTION_STATE_VERSION}"
         )
-    migrated_payload = payload
-    legacy_execution_snapshot = version == LEGACY_EXECUTION_STATE_VERSION
-    execution_effects_persisted = "execution_effects" in migrated_payload and not legacy_execution_snapshot
-    while version < CURRENT_EXECUTION_STATE_VERSION:
-        migrate = _SNAPSHOT_MIGRATIONS.get(version)
-        if migrate is None:
-            raise UnsupportedExecutionStateVersionError(
-                f"Execution state snapshot version {version} has no migration to {CURRENT_EXECUTION_STATE_VERSION}"
-            )
-        migrated_payload = migrate(migrated_payload)
-        version += 1
+    if version < LEGACY_EXECUTION_STATE_VERSION:
+        raise UnsupportedExecutionStateVersionError(f"Execution state snapshot version {version} is unsupported")
 
-    migrate = _SNAPSHOT_MIGRATIONS.get(version)
-    if migrate is None:
-        raise UnsupportedExecutionStateVersionError(
-            f"Execution state snapshot version {version} is unsupported; current version is "
-            f"{CURRENT_EXECUTION_STATE_VERSION}"
-        )
-    normalized_payload = _normalize_persisted_effects_in_snapshot(
-        migrate(migrated_payload), normalize_effects=not legacy_execution_snapshot
-    )
+    legacy_execution_snapshot = version == LEGACY_EXECUTION_STATE_VERSION
+    execution_effects_persisted = "execution_effects" in payload and not legacy_execution_snapshot
+    normalized_payload = _normalize_persisted_effects_in_snapshot(payload)
     return GraphExecutionState.model_validate(
         normalized_payload,
         strict=False,

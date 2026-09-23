@@ -270,26 +270,6 @@ class DefaultSessionRunner(SessionRunnerBase):
                 workflow_authorizer = None
                 authorized_workflow_record = None
                 if isinstance(invocation, CallSavedWorkflowInvocation):
-                    if not hasattr(queue_item.session, "build_child_execution_capability"):
-                        data = InvocationContextData(
-                            invocation=invocation,
-                            source_invocation_id=queue_item.session.prepared_source_mapping[invocation.id],
-                            queue_item=queue_item,
-                            execution_frame=execution_ref.frame.iteration_path,
-                            execution_state_id=execution_ref.state_id,
-                            execution_frame_id=execution_ref.frame.frame_id,
-                            execution_workflow_call_depth=execution_ref.frame.workflow_call_depth,
-                        )
-                        context = build_invocation_context(
-                            data=data,
-                            services=self._services,
-                            is_canceled=self._is_canceled,
-                        )
-                        workflow_record = invocation.validate_selected_workflow(context)
-                        self.workflow_call_coordinator.begin_workflow_call_boundary(
-                            invocation, queue_item, workflow_record
-                        )
-                        return
                     child_capability = queue_item.session.build_child_execution_capability(
                         execution_ref,
                         authorization_context={"user_id": queue_item.user_id},

@@ -13,7 +13,6 @@ from copy import deepcopy
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import (
-    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -78,20 +77,12 @@ class ExecutionFrame(_InternalModel):
     depth remain part of the scope key.
     """
 
-    state_id: str = Field(
-        validation_alias=AliasChoices("state_id", "execution_id", "owner_id"),
-        description="Owning graph execution state identifier.",
-    )
+    state_id: str = Field(description="Owning graph execution state identifier.")
     frame_id: str = Field(description="Stable identifier for this frame.")
-    iteration_path: tuple[FramePart, ...] = Field(
-        default_factory=tuple,
-        validation_alias=AliasChoices("iteration_path", "path", "frame_path"),
-        description="Nested iteration coordinates.",
-    )
+    iteration_path: tuple[FramePart, ...] = Field(default_factory=tuple, description="Nested iteration coordinates.")
     workflow_call_depth: int = Field(
         default=0,
         ge=0,
-        validation_alias=AliasChoices("workflow_call_depth", "call_depth", "depth"),
         description="Nested workflow-call depth.",
     )
 
@@ -146,14 +137,10 @@ class ActivationGate(_InternalModel):
     """
 
     gate_id: str = Field(min_length=1, description="Stable gate identifier.")
-    owner_id: str = Field(
-        validation_alias=AliasChoices("owner_id", "owner"),
-        description="Node or runtime owner of this gate.",
-    )
+    owner_id: str = Field(description="Node or runtime owner of this gate.")
     frame: ExecutionFrame
     branches: tuple[str, ...] = Field(
         min_length=1,
-        validation_alias=AliasChoices("branches", "branch_ids"),
         description="Allowed branch identifiers.",
     )
     status: ActivationStatus = "pending"
@@ -240,10 +227,7 @@ class ActivationGate(_InternalModel):
 class StreamData(_InternalModel, Generic[T]):
     """One ordered stream data item; ``None`` is a valid value."""
 
-    kind: Literal["data"] = Field(
-        default="data",
-        validation_alias=AliasChoices("kind", "token_kind", "type"),
-    )
+    kind: Literal["data"] = "data"
     sequence: int = Field(ge=0)
     value: T
 
@@ -256,10 +240,7 @@ class StreamData(_InternalModel, Generic[T]):
 class StreamEnd(_InternalModel):
     """End marker at sequence equal to number of data items."""
 
-    kind: Literal["stream_end"] = Field(
-        default="stream_end",
-        validation_alias=AliasChoices("kind", "token_kind", "type"),
-    )
+    kind: Literal["stream_end"] = "stream_end"
     sequence: int = Field(default=0, ge=0)
 
 
@@ -275,10 +256,7 @@ class StreamBuffer(_InternalModel, Generic[T]):
     """
 
     stream_id: str = Field(min_length=1)
-    owner_id: str = Field(
-        validation_alias=AliasChoices("owner_id", "owner"),
-        description="Node or runtime owner of this stream.",
-    )
+    owner_id: str = Field(description="Node or runtime owner of this stream.")
     frame: ExecutionFrame
     events: list[StreamData[T] | StreamEnd] = Field(default_factory=list)
     next_sequence: int = Field(default=0, ge=0)
@@ -359,10 +337,14 @@ class StreamBuffer(_InternalModel, Generic[T]):
             return event
         if isinstance(event, dict):
             kind = event.get("kind", event.get("token_kind", event.get("type")))
+            if any(name in event and event[name] != kind for name in ("kind", "token_kind", "type")):
+                raise ValueError("conflicting stream event kinds")
+            canonical_event = {name: value for name, value in event.items() if name not in {"token_kind", "type"}}
+            canonical_event["kind"] = kind
             if kind == "data":
-                return cast(StreamData[T], self._data_model().model_validate(event))
+                return cast(StreamData[T], self._data_model().model_validate(canonical_event))
             if kind == "stream_end":
-                return StreamEnd.model_validate(event)
+                return StreamEnd.model_validate(canonical_event)
             raise ValueError("stream event kind must be data or stream_end")
         if event not in ("data", "stream_end"):
             raise ValueError("stream event kind must be data or stream_end")
@@ -440,14 +422,8 @@ ContinuationStatus = Literal["pending", "waiting", "running", "completed", "fail
 class ContinuationRecord(_InternalModel, Generic[T]):
     """Generic owner/frame continuation with a small durable state machine."""
 
-    continuation_id: str = Field(
-        validation_alias=AliasChoices("continuation_id", "id"),
-        description="Stable continuation identifier.",
-    )
-    owner_id: str = Field(
-        validation_alias=AliasChoices("owner_id", "owner"),
-        description="Node or runtime owner of this continuation.",
-    )
+    continuation_id: str = Field(description="Stable continuation identifier.")
+    owner_id: str = Field(description="Node or runtime owner of this continuation.")
     frame: ExecutionFrame
     kind: str = Field(min_length=1)
     status: ContinuationStatus = "pending"

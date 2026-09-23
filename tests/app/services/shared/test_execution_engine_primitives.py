@@ -83,6 +83,31 @@ def test_stream_buffer_accepts_empty_stream() -> None:
     assert buffer.expected_sequence == 0
 
 
+@pytest.mark.parametrize("discriminator", ["token_kind", "type"])
+def test_stream_buffer_normalizes_legacy_event_discriminator_before_validation(discriminator: str) -> None:
+    buffer = StreamBuffer[int](stream_id="stream", owner_id="iterate", frame=_frame())
+
+    assert buffer.accept({discriminator: "data", "sequence": 0, "value": 7}) is True
+    assert buffer.values == (7,)
+
+
+def test_stream_buffer_accepts_legacy_type_stream_end_event() -> None:
+    buffer = StreamBuffer[int](stream_id="stream", owner_id="iterate", frame=_frame())
+
+    assert buffer.accept({"type": "stream_end", "sequence": 0}) is True
+    assert buffer.closed
+
+
+def test_stream_buffer_rejects_conflicting_event_discriminator_aliases_without_mutation() -> None:
+    buffer = StreamBuffer[int](stream_id="stream", owner_id="iterate", frame=_frame())
+
+    with pytest.raises(ValueError, match="conflicting stream event kinds"):
+        buffer.accept({"kind": "data", "type": "stream_end", "sequence": 0, "value": 7})
+
+    assert buffer.values == ()
+    assert not buffer.closed
+
+
 def test_stream_buffer_preserves_order_and_none_values() -> None:
     buffer = StreamBuffer[int | None](stream_id="stream", owner_id="iterate", frame=_frame((1,)))
 
@@ -98,7 +123,11 @@ def test_stream_buffer_preserves_order_and_none_values() -> None:
 @pytest.mark.parametrize("value", [[], {}, {"nested": []}, None])
 def test_stream_data_keeps_json_values_by_reference(value: Any) -> None:
     event = StreamData(sequence=0, value=value)
+    buffer = StreamBuffer[Any](stream_id="stream", owner_id="iterate", frame=_frame())
+    buffer.accept(event)
+
     assert event.value is value
+    assert buffer.events[0].value is value
 
 
 def test_stream_buffer_rejects_conflicting_duplicate_and_out_of_order_events() -> None:

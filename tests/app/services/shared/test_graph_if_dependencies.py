@@ -232,7 +232,10 @@ def test_leaf_import_does_not_import_graph() -> None:
 
 
 def test_graph_methods_delegate_to_leaf_functions(monkeypatch: pytest.MonkeyPatch) -> None:
-    state = object()
+    class State:
+        __pydantic_private__ = {"_runtime_state": type("Runtime", (), {"fresh_flat_if_activation": None})()}
+
+    state = State()
     marker = object()
     monkeypatch.setattr(graph_if_dependencies, "_get_fresh_if_nodes", lambda actual_state: (actual_state, marker))
     monkeypatch.setattr(graph_if_dependencies, "_can_use_fresh_flat_if_activation", lambda actual_state: marker)
@@ -259,6 +262,45 @@ def test_graph_methods_delegate_to_leaf_functions(monkeypatch: pytest.MonkeyPatc
         "source",
         (2,),
     )
+
+
+def test_fresh_flat_if_eligibility_is_cached_per_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def can_use_fresh_flat_if_activation(_state: GraphExecutionState) -> bool:
+        nonlocal calls
+        calls += 1
+        return True
+
+    monkeypatch.setattr(graph_if_dependencies, "_can_use_fresh_flat_if_activation", can_use_fresh_flat_if_activation)
+    state = GraphExecutionState(graph=_flat_if_graph())
+
+    assert state._can_use_fresh_flat_if_activation()
+    assert state._can_use_fresh_flat_if_activation()
+    assert calls == 1
+
+    copied_state = state.model_copy(update={"graph": Graph()})
+    assert copied_state._can_use_fresh_flat_if_activation()
+    assert calls == 2
+
+
+def test_fresh_flat_if_eligibility_is_invalidated_when_graph_changes() -> None:
+    state = GraphExecutionState(graph=_flat_if_graph())
+
+    assert state._can_use_fresh_flat_if_activation()
+
+    state.add_node(CallSavedWorkflowInvocation(id="call"))
+
+    assert not state._can_use_fresh_flat_if_activation()
+
+
+def test_replacing_graph_invalidates_source_graph_and_if_eligibility_caches() -> None:
+    state = GraphExecutionState(graph=_flat_if_graph())
+    assert state._can_use_fresh_flat_if_activation()
+
+    copied_state = state.model_copy(update={"graph": _indirectly_connected_if_graph()})
+
+    assert not copied_state._can_use_fresh_flat_if_activation()
 
 
 def test_flat_and_nested_dependencies_preserve_values_and_order() -> None:

@@ -31,6 +31,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
     SessionQueueItemNotFoundError,
 )
 from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
+from invokeai.app.services.shared.execution_engine.child import ChildExecutionCapability
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, WorkflowCallFrame
 from invokeai.app.services.workflow_records.workflow_records_common import WorkflowCategory
 from tests.dangerously_run_function_in_subprocess import dangerously_run_function_in_subprocess
@@ -1214,19 +1215,31 @@ class _WorkflowCallBoundarySession:
 
     def begin_waiting_on_workflow_call(self, frame: WorkflowCallFrame) -> None:
         self.waiting = frame
+        self.waiting_workflow_call_execution = SimpleNamespace(
+            id="workflow-call-1",
+            depth=frame.depth,
+            expected_child_count=1,
+            child_item_ids=[],
+        )
 
     def create_child_workflow_execution_state(self, graph: Graph, frame: WorkflowCallFrame):
         return GraphExecutionState(graph=graph, workflow_call_stack=[frame])
 
     def attach_waiting_workflow_call_child_session(self, child_session: GraphExecutionState) -> None:
         self.waiting_workflow_call_execution = SimpleNamespace(
-            id="workflow-call-1", depth=1, expected_child_count=1, child_item_ids=[]
+            id=self.waiting_workflow_call_execution.id,
+            depth=1,
+            expected_child_count=1,
+            child_item_ids=[],
         )
         self.waiting_workflow_call_child_session = child_session
 
     def attach_waiting_workflow_call_child_sessions(self, child_sessions: list[GraphExecutionState]) -> None:
         self.waiting_workflow_call_execution = SimpleNamespace(
-            id="workflow-call-1", depth=1, expected_child_count=len(child_sessions), child_item_ids=[]
+            id=self.waiting_workflow_call_execution.id,
+            depth=1,
+            expected_child_count=len(child_sessions),
+            child_item_ids=[],
         )
         self.waiting_workflow_call_child_session = child_sessions[0] if len(child_sessions) == 1 else None
 
@@ -1246,6 +1259,27 @@ class _WorkflowCallBoundarySession:
 
     def get_execution_ref(self, node_id: str, *, effect_count: int | None = None):
         return _test_execution_ref(node_id, effect_count)
+
+    def apply(self, execution_ref: Any, output: Any, effects: Any = None, **kwargs: Any) -> list[Any]:
+        return []
+
+    def build_child_execution_capability(
+        self,
+        execution_ref: Any,
+        *,
+        authorization_context: dict[str, Any] | None = None,
+        max_children: int = 1,
+    ) -> ChildExecutionCapability:
+        return ChildExecutionCapability(
+            parent_execution_id=execution_ref.exec_node_id,
+            parent_frame=execution_ref.frame.iteration_path,
+            parent_reference_id=execution_ref.reference_id,
+            authorization_context=authorization_context,
+            depth=execution_ref.frame.workflow_call_depth,
+            max_depth=64,
+            max_children=max_children,
+            capacity=max_children,
+        )
 
     def is_waiting_on_workflow_call(self) -> bool:
         return self.waiting is not None
@@ -1434,14 +1468,9 @@ def test_run_node_enters_waiting_state_without_executing_child_inline(monkeypatc
         },
     )()
 
-    monkeypatch.setattr(
-        CallSavedWorkflowInvocation,
-        "invoke_internal",
-        lambda self, context, services: (_ for _ in ()).throw(AssertionError("invoke_internal should not be called")),
-    )
-
     runner.run_node(invocation=invocation, queue_item=queue_item)
 
+    assert events.errors == [], events.errors
     assert len(session.frames) == 1
     assert session.waiting == session.frames[0]
     assert session.frames[0].prepared_call_node_id == invocation.id
@@ -1450,7 +1479,6 @@ def test_run_node_enters_waiting_state_without_executing_child_inline(monkeypatc
     assert session.completed == []
     assert len(events.started) == 1
     assert events.completed == []
-    assert events.errors == []
 
 
 def test_run_node_persists_saved_workflow_lifecycle_effects_before_queue_dispatch(

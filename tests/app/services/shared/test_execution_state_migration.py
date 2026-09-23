@@ -7,6 +7,7 @@ from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvoca
 from invokeai.app.invocations.collections import RangeInvocation
 from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import IntegerCollectionOutput
+from invokeai.app.services.session_queue.session_queue_common import get_session
 from invokeai.app.services.shared.execution_effects import (
     AwaitEffect,
     EmitEffect,
@@ -17,6 +18,7 @@ from invokeai.app.services.shared.execution_effects import (
 )
 from invokeai.app.services.shared.execution_state_migration import (
     CURRENT_EXECUTION_STATE_VERSION,
+    LEGACY_EXECUTION_STATE_VERSION,
     UnsupportedExecutionStateVersionError,
     dump_execution_state,
     load_execution_state,
@@ -79,21 +81,24 @@ def test_dumps_and_loads_versioned_execution_state_envelope() -> None:
     assert restored_snapshot == expected
 
 
-def test_loads_temporary_versioned_envelope() -> None:
+def test_loads_versioned_envelope_for_queue_compatibility() -> None:
     state = _make_state()
     raw = dump_execution_state(state)
     raw.pop("execution_state_version")
 
-    restored = load_execution_state({"version": CURRENT_EXECUTION_STATE_VERSION, "state": raw})
+    envelope = {"version": CURRENT_EXECUTION_STATE_VERSION, "state": raw}
+    restored = load_execution_state(envelope)
+    restored_from_queue = get_session({"session": json.dumps(envelope)})
 
     assert restored.id == state.id
+    assert restored_from_queue.id == state.id
 
 
-def test_migrates_explicit_legacy_version() -> None:
+def test_loads_explicit_legacy_versioned_envelope() -> None:
     state = _make_state()
     raw = state.model_dump(mode="json", warnings=False, exclude_none=True)
 
-    restored = load_execution_state({"version": 0, "state": raw})
+    restored = load_execution_state({"version": LEGACY_EXECUTION_STATE_VERSION, "state": raw})
 
     assert restored.model_dump(mode="json", warnings=False, exclude_none=True) == raw
 
@@ -150,7 +155,7 @@ def test_load_normalizes_supported_effect_kind_alias_to_typed_model() -> None:
     assert loaded_effect.kind == "emit"
 
 
-def test_load_preserves_supported_legacy_effect_aliases() -> None:
+def test_load_normalizes_legacy_effect_alias_to_typed_model() -> None:
     snapshot = _snapshot_with_persisted_effect(
         {
             "kind": "emit",
@@ -165,7 +170,8 @@ def test_load_preserves_supported_legacy_effect_aliases() -> None:
 
     restored = load_execution_state(snapshot)
 
-    assert restored.execution_effects[reference_id][0]["effect_type"] == "emit"
+    assert isinstance(restored.execution_effects[reference_id][0], EmitEffect)
+    assert restored.execution_effects[reference_id][0].kind == "emit"
 
 
 @pytest.mark.parametrize(
