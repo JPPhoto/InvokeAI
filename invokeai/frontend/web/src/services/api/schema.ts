@@ -37806,8 +37806,8 @@ export type components = {
          *
          *     Distinguished from the text-only ``Qwen3Encoder`` checkpoint (Z-Image) by the presence of the
          *     Qwen3-VL visual tower. Neither the config nor the tokenizer is bundled in a single-file
-         *     checkpoint; both are pulled from HuggingFace by the loader, from the repo the recorded variant
-         *     names.
+         *     checkpoint; the loader supplies both from the copies vendored in ``invokeai.backend.qwen3_vl``,
+         *     selecting the config by the recorded variant.
          */
         Qwen3VLEncoder_Checkpoint_Config: {
             /**
@@ -38826,8 +38826,9 @@ export type components = {
          *     and the visual tower into one file (typically with FP8 + per-tensor
          *     `weight_scale` ComfyUI quantization).
          *
-         *     The matching tokenizer + processor are pulled from HuggingFace
-         *     (`Qwen/Qwen2.5-VL-7B-Instruct`) on first use and cached for offline use.
+         *     The tokenizer, architecture config and image preprocessor config all ship with InvokeAI
+         *     (vendored from the Apache-2.0 `Qwen/Qwen2.5-VL-7B-Instruct` release), so this encoder loads
+         *     without network access.
          */
         QwenVLEncoder_Checkpoint_Config: {
             /**
@@ -52384,7 +52385,7 @@ export interface operations {
     get_image_map_points: {
         parameters: {
             query?: {
-                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span. */
+                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`. */
                 eps?: number | null;
                 /** @description DBSCAN min_samples for clustering */
                 min_samples?: number;
@@ -52500,7 +52501,7 @@ export interface operations {
     get_image_map_cluster_labels: {
         parameters: {
             query?: {
-                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span. */
+                /** @description DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`. */
                 eps?: number | null;
                 /** @description DBSCAN min_samples for clustering */
                 min_samples?: number;
