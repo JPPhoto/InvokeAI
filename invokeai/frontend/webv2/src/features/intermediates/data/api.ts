@@ -33,10 +33,14 @@ interface ScopeTargetDTO {
   project_id: string | null;
 }
 
+/** One flat model on the wire; each kind reads the fields it needs and the rest stay empty. */
 interface ScopeDTO {
-  kind: 'selection' | 'owner' | 'everyone';
-  targets: ScopeTargetDTO[];
-  user_id: string | null;
+  kind: 'selection' | 'owner' | 'everyone' | 'matching';
+  targets?: ScopeTargetDTO[];
+  user_id?: string | null;
+  project_id?: string | null;
+  search?: string | null;
+  excluded?: ScopeTargetDTO[];
 }
 
 interface RowDTO extends ScopeTargetDTO {
@@ -100,7 +104,6 @@ interface PreviewDTO {
   created_at: string;
   expires_at: string;
   target_rows: number;
-  has_more_eligible: boolean;
   impact: ImpactDTO;
   affected_documents: AffectedDocumentDTO[];
   affected_documents_total: number;
@@ -118,8 +121,6 @@ interface ProgressDTO {
   reclaimed_bytes: number;
   unknown_size_count: number;
   pending_disk_cleanup: number;
-  unresolved_images: number;
-  unresolved_videos: number;
 }
 
 export interface IntermediatesOperationDTO {
@@ -135,8 +136,6 @@ export interface IntermediatesOperationDTO {
   target_images: number;
   target_videos: number;
   progress: ProgressDTO;
-  retried_from_operation_id: string | null;
-  retried_by_operation_id: string | null;
 }
 
 const mapCounts = (dto: KindCountsDTO): IntermediatesKindCounts => ({
@@ -149,6 +148,11 @@ const mapCounts = (dto: KindCountsDTO): IntermediatesKindCounts => ({
 const mapTarget = (dto: ScopeTargetDTO): IntermediatesScopeTarget => ({
   projectId: dto.project_id,
   userId: dto.user_id,
+});
+
+const toTargetDTO = (target: IntermediatesScopeTarget): ScopeTargetDTO => ({
+  project_id: target.projectId,
+  user_id: target.userId,
 });
 
 const mapRow = (dto: RowDTO): IntermediatesRow => ({
@@ -172,23 +176,45 @@ const mapScope = (dto: ScopeDTO): IntermediatesScope => {
   if (dto.kind === 'owner') {
     return { kind: 'owner', userId: dto.user_id ?? '' };
   }
+  if (dto.kind === 'matching') {
+    return {
+      excluded: (dto.excluded ?? []).map(mapTarget),
+      kind: 'matching',
+      projectId: dto.project_id ?? null,
+      search: dto.search ?? null,
+      userId: dto.user_id ?? null,
+    };
+  }
 
-  return { kind: 'selection', targets: dto.targets.map(mapTarget) };
+  return { kind: 'selection', targets: (dto.targets ?? []).map(mapTarget) };
 };
 
 const toScopeDTO = (scope: IntermediatesScope): ScopeDTO => {
-  if (scope.kind === 'everyone') {
-    return { kind: 'everyone', targets: [], user_id: null };
-  }
-  if (scope.kind === 'owner') {
-    return { kind: 'owner', targets: [], user_id: scope.userId };
-  }
-
-  return {
-    kind: 'selection',
-    targets: scope.targets.map((target) => ({ project_id: target.projectId, user_id: target.userId })),
+  const empty: Required<ScopeDTO> = {
+    excluded: [],
+    kind: scope.kind,
+    project_id: null,
+    search: null,
+    targets: [],
     user_id: null,
   };
+  if (scope.kind === 'owner') {
+    return { ...empty, user_id: scope.userId };
+  }
+  if (scope.kind === 'selection') {
+    return { ...empty, targets: scope.targets.map(toTargetDTO) };
+  }
+  if (scope.kind === 'matching') {
+    return {
+      ...empty,
+      excluded: scope.excluded.map(toTargetDTO),
+      project_id: scope.projectId,
+      search: scope.search,
+      user_id: scope.userId,
+    };
+  }
+
+  return empty;
 };
 
 const mapImpact = (dto: ImpactDTO): IntermediatesImpact => ({
@@ -226,8 +252,6 @@ const mapProgress = (dto: ProgressDTO): IntermediatesOperationProgress => ({
   retainedImages: dto.retained_images,
   retainedVideos: dto.retained_videos,
   unknownSizeCount: dto.unknown_size_count,
-  unresolvedImages: dto.unresolved_images,
-  unresolvedVideos: dto.unresolved_videos,
 });
 
 export const mapIntermediatesOperation = (dto: IntermediatesOperationDTO): IntermediatesOperation => ({
@@ -237,8 +261,6 @@ export const mapIntermediatesOperation = (dto: IntermediatesOperationDTO): Inter
   mode: dto.mode,
   operationId: dto.operation_id,
   progress: mapProgress(dto.progress),
-  retriedByOperationId: dto.retried_by_operation_id,
-  retriedFromOperationId: dto.retried_from_operation_id,
   scope: mapScope(dto.scope),
   startedAt: dto.started_at,
   status: dto.status,
@@ -259,8 +281,6 @@ const PROGRESS_KEYS = [
   'reclaimed_bytes',
   'unknown_size_count',
   'pending_disk_cleanup',
-  'unresolved_images',
-  'unresolved_videos',
 ] as const satisfies readonly (keyof ProgressDTO)[];
 const OPERATION_STATUSES = new Set<unknown>(['pending', 'running', 'completed', 'failed']);
 const CLEANUP_MODES = new Set<unknown>(['safe', 'force']);
@@ -268,16 +288,23 @@ const CLEANUP_MODES = new Set<unknown>(['safe', 'force']);
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 const isCount = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value);
 const isNullableString = (value: unknown): boolean => value === null || typeof value === 'string';
+const isTargetList = (value: unknown): boolean =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.every(
+      (target) => isRecord(target) && typeof target.user_id === 'string' && isNullableString(target.project_id)
+    ));
 
 const isScopeDTO = (value: unknown): value is ScopeDTO =>
   isRecord(value) &&
   (value.kind === 'everyone' ||
     (value.kind === 'owner' && isNullableString(value.user_id)) ||
-    (value.kind === 'selection' &&
-      Array.isArray(value.targets) &&
-      value.targets.every(
-        (target) => isRecord(target) && typeof target.user_id === 'string' && isNullableString(target.project_id)
-      )));
+    (value.kind === 'selection' && isTargetList(value.targets)) ||
+    (value.kind === 'matching' &&
+      [value.user_id, value.project_id, value.search].every(
+        (field) => field === undefined || isNullableString(field)
+      ) &&
+      isTargetList(value.excluded)));
 
 const isOperationDTO = (value: unknown): value is IntermediatesOperationDTO =>
   isRecord(value) &&
@@ -290,9 +317,7 @@ const isOperationDTO = (value: unknown): value is IntermediatesOperationDTO =>
   isCount(value.target_videos) &&
   isRecord(value.progress) &&
   PROGRESS_KEYS.every((key) => isCount((value.progress as Record<string, unknown>)[key])) &&
-  [value.created_at, value.started_at, value.completed_at, value.error].every(isNullableString) &&
-  isNullableString(value.retried_from_operation_id) &&
-  isNullableString(value.retried_by_operation_id);
+  [value.created_at, value.started_at, value.completed_at, value.error].every(isNullableString);
 
 /** Reads a socket event's operation, which arrives unvalidated; a malformed event yields null. */
 export const parseIntermediatesOperationEvent = (payload: unknown): IntermediatesOperation | null =>
@@ -375,25 +400,33 @@ export const createIntermediatesPreview = async (
     previewId: dto.preview_id,
     scope: mapScope(dto.scope),
     targetRows: dto.target_rows,
-    hasMoreEligible: dto.has_more_eligible,
   };
 };
 
 /** Long enough for a slow server to accept; short enough that a hung request cannot lock the confirmation. */
 const START_TIMEOUT_MS = 30_000;
 
-/** Rejects with a `TimeoutError` DOMException when the server does not answer in time. */
+/**
+ * Confirms a preview, which the server accepts once. Rejects with a `TimeoutError` DOMException when the server does
+ * not answer in time; the run may still have started, and `listIntermediatesOperations` finds it.
+ */
 export const startIntermediatesOperation = async (
-  request: { previewId: string; idempotencyKey: string },
+  request: { previewId: string },
   signal: AbortSignal
 ): Promise<IntermediatesOperation> =>
   mapIntermediatesOperation(
     await apiFetchJson<IntermediatesOperationDTO>(`${BASE}/operations`, {
-      body: JSON.stringify({ idempotency_key: request.idempotencyKey, preview_id: request.previewId }),
+      body: JSON.stringify({ preview_id: request.previewId }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
       signal: AbortSignal.any([signal, AbortSignal.timeout(START_TIMEOUT_MS)]),
     })
+  );
+
+/** The account's running and recently settled operations, newest first. */
+export const listIntermediatesOperations = async (signal?: AbortSignal): Promise<IntermediatesOperation[]> =>
+  (await apiFetchJson<{ items: IntermediatesOperationDTO[] }>(`${BASE}/operations`, { signal })).items.map(
+    mapIntermediatesOperation
   );
 
 export const getIntermediatesOperation = async (
@@ -402,17 +435,6 @@ export const getIntermediatesOperation = async (
 ): Promise<IntermediatesOperation> =>
   mapIntermediatesOperation(
     await apiFetchJson<IntermediatesOperationDTO>(`${BASE}/operations/${encodeURIComponent(operationId)}`, {
-      signal,
-    })
-  );
-
-export const retryIntermediatesOperation = async (
-  operationId: string,
-  signal?: AbortSignal
-): Promise<IntermediatesOperation> =>
-  mapIntermediatesOperation(
-    await apiFetchJson<IntermediatesOperationDTO>(`${BASE}/operations/${encodeURIComponent(operationId)}/retry`, {
-      method: 'POST',
       signal,
     })
   );

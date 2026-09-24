@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import type { HeldMediaNames } from './holdLease';
 
-import { MAX_HOLD_NAMES_PER_KIND, partitionHeldMediaNames, startIntermediatesHoldLease } from './holdLease';
+import { MAX_HOLD_NAMES_PER_KIND, startIntermediatesHoldLease } from './holdLease';
 
 vi.mock('@platform/transport/http', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -42,7 +42,7 @@ const calls = (method: string) =>
 
 const settle = () =>
   new Promise((resolve) => {
-    setTimeout(resolve, 20);
+    setTimeout(resolve, 400);
   });
 
 afterEach(() => {
@@ -50,18 +50,23 @@ afterEach(() => {
   fetchMock.mockResolvedValue(undefined as never);
 });
 
-it('partitions a long hold without dropping names or exceeding either API limit', () => {
-  const images = Array.from({ length: MAX_HOLD_NAMES_PER_KIND + 1 }, (_, index) => `image-${index}`);
-  const videos = ['first.mp4', 'second.mp4'];
-  const batches = partitionHeldMediaNames(images, videos);
-
-  expect(batches).toHaveLength(2);
-  expect(batches.every((batch) => batch.images.length <= 50_000 && batch.videos.length <= 50_000)).toBe(true);
-  expect(batches.flatMap((batch) => batch.images)).toEqual(images);
-  expect(batches.flatMap((batch) => batch.videos)).toEqual(videos);
+it('holds up to the per-kind limit of sorted unique names under one lease', async () => {
+  const images = Array.from({ length: MAX_HOLD_NAMES_PER_KIND + 1 }, (_, index) => `image-${index}`).reverse();
+  const lease = startWith({ images: [...images, 'image-0'], videos: ['second.mp4', 'first.mp4'] });
+  try {
+    await vi.waitFor(() => expect(calls('PUT')).toHaveLength(1));
+    const body = JSON.parse(String(calls('PUT')[0]!.init?.body)) as { images: string[]; videos: string[] };
+    expect(body.images).toHaveLength(MAX_HOLD_NAMES_PER_KIND);
+    expect(body.images).toEqual([...body.images].sort());
+    expect(body.videos).toEqual(['first.mp4', 'second.mp4']);
+    const leaseId = decodeURIComponent(calls('PUT')[0]!.url.split('/').at(-1)!);
+    expect(leaseId).toMatch(/^[A-Za-z0-9_-]+$/);
+  } finally {
+    lease.stop();
+  }
 });
 
-it('replaces current holds and releases names removed from the open editor', async () => {
+it('replaces the lease in place and releases it once nothing is held', async () => {
   const lease = startWith({ images: ['first.png'], videos: [] });
   try {
     await vi.waitFor(() =>
@@ -75,15 +80,37 @@ it('replaces current holds and releases names removed from the open editor', asy
         JSON.stringify({ images: ['second.png'], videos: [] })
       )
     );
-    await vi.waitFor(() => expect(calls('DELETE')).toHaveLength(1));
+    expect(new Set(calls('PUT').map(({ url }) => url)).size).toBe(1);
+    expect(calls('DELETE')).toHaveLength(0);
     lease.update({ images: [], videos: [] });
-    await vi.waitFor(() => expect(calls('DELETE')).toHaveLength(2));
+    await vi.waitFor(() => expect(calls('DELETE')).toHaveLength(1));
+    expect(calls('DELETE')[0]!.url).toBe(calls('PUT')[0]!.url);
   } finally {
     lease.stop();
   }
 });
 
-it('releases its leases with keepalive when disposed', async () => {
+it('releases a lease that lands after it was disposed', async () => {
+  let resolvePut!: () => void;
+  fetchMock.mockImplementationOnce(
+    () =>
+      new Promise<never>((resolve) => {
+        resolvePut = () => resolve(undefined as never);
+      })
+  );
+  const lease = startWith({ images: ['late.png'], videos: [] });
+  await vi.waitFor(() => expect(calls('PUT')).toHaveLength(1));
+
+  lease.stop();
+  expect(calls('DELETE')).toHaveLength(0);
+  resolvePut();
+
+  await vi.waitFor(() => expect(calls('DELETE')).toHaveLength(1));
+  expect(calls('DELETE')[0]!.url).toBe(calls('PUT')[0]!.url);
+  expect(calls('DELETE')[0]!.init).toMatchObject({ keepalive: true });
+});
+
+it('releases its lease with keepalive when disposed', async () => {
   const lease = startWith({ images: ['held.png'], videos: ['held.mp4'] });
   await vi.waitFor(() => expect(calls('PUT')).toHaveLength(1));
   const leaseUrl = calls('PUT')[0]!.url;
@@ -148,42 +175,24 @@ it('refreshes an unchanged hold on becoming visible only after missing a heartbe
   }
 });
 
-it('keeps old batches held until every replacement batch is installed', async () => {
-  const imageNames = Array.from({ length: 50_001 }, (_, index) => `b${index.toString().padStart(5, '0')}.png`);
-  const boundaryName = imageNames[49_999]!;
-  const held = new Map<string, string[]>();
-  let started = false;
-  let exposed = false;
-  let failSecondStagedBatch = true;
-  fetchMock.mockImplementation((url, options) => {
-    if (started && options?.method === 'PUT' && String(url).endsWith('.1-1') && failSecondStagedBatch) {
-      failSecondStagedBatch = false;
-      throw new Error('temporary network failure');
-    }
-    if (options?.method === 'PUT') {
-      held.set(String(url), (JSON.parse(String(options.body)) as { images: string[] }).images);
-    } else if (options?.method === 'DELETE') {
-      held.delete(String(url));
-    }
-    if (started) {
-      exposed ||= ![...held.values()].some((names) => names.includes(boundaryName));
-    }
-    return Promise.resolve(undefined as never);
-  });
-  const lease = startWith({ images: imageNames, videos: [] });
+it('skips unchanged sets and sends again after a failed send', async () => {
+  const lease = startWith({ images: ['b.png', 'a.png'], videos: [] });
   try {
-    await vi.waitFor(() => expect(held.size).toBe(2));
-    const initialLeases = [...held.keys()];
-    started = true;
-    lease.update({ images: ['a.png', ...imageNames], videos: [] });
-    await vi.waitFor(() => expect(failSecondStagedBatch).toBe(false));
-    expect(initialLeases.every((leaseUrl) => held.has(leaseUrl))).toBe(true);
-    lease.update({ images: ['a.png', ...imageNames], videos: [] });
-    await vi.waitFor(() => expect(initialLeases.every((leaseUrl) => !held.has(leaseUrl))).toBe(true));
-    expect(exposed).toBe(false);
-    // The server caps distinct holders per account, grouping every `<holder>.<part>` id under its holder.
-    const holders = new Set(calls('PUT').map(({ url }) => decodeURIComponent(url.split('/').at(-1)!).split('.')[0]));
-    expect(holders.size).toBe(1);
+    await vi.waitFor(() => expect(calls('PUT')).toHaveLength(1));
+    lease.update({ images: ['a.png', 'b.png'], videos: [] });
+    await settle();
+    expect(calls('PUT')).toHaveLength(1);
+
+    fetchMock.mockRejectedValueOnce(new Error('temporary network failure'));
+    lease.update({ images: ['a.png', 'b.png', 'c.png'], videos: [] });
+    await vi.waitFor(() => expect(calls('PUT')).toHaveLength(2));
+    await settle();
+    // The server still holds the previous lease; the next foreground return sends the new set again.
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(calls('PUT')).toHaveLength(3));
+    expect(calls('PUT')[2]!.init?.body).toBe(JSON.stringify({ images: ['a.png', 'b.png', 'c.png'], videos: [] }));
+    expect(new Set(calls('PUT').map(({ url }) => url)).size).toBe(1);
+    expect(calls('DELETE')).toHaveLength(0);
   } finally {
     lease.stop();
   }

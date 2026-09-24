@@ -21,14 +21,11 @@ import { isRowSelected, resolveScope } from '@features/intermediates/core/select
 import { isOperationSettled } from '@features/intermediates/core/types';
 import { consumeIntermediatesFocus, peekIntermediatesFocus } from '@features/intermediates/data/focus';
 import { intermediatesKeys } from '@features/intermediates/data/keys';
-import {
-  INTERMEDIATES_MAX_ROWS,
-  INTERMEDIATES_PAGE_SIZE,
-  intermediatesSummaryQueryOptions,
-} from '@features/intermediates/data/queries';
+import { activeOperationStore, reconcileIntermediatesOperations } from '@features/intermediates/data/operationStore';
+import { INTERMEDIATES_PAGE_SIZE, intermediatesSummaryQueryOptions } from '@features/intermediates/data/queries';
 import { formatBytes } from '@platform/i18n/languages';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { getApiErrorMessage } from '@platform/transport/http';
+import { ApiError, getApiErrorMessage } from '@platform/transport/http';
 import { Button, IconButton } from '@platform/ui/Button';
 import { EmptyState } from '@platform/ui/EmptyState';
 import { RemovableTag } from '@platform/ui/RemovableTag';
@@ -102,11 +99,20 @@ export const IntermediatesManager = ({
   const searchRef = useRef<HTMLInputElement | null>(null);
   const operationRegionRef = useRef<HTMLDivElement | null>(null);
   const operation = useFollowedOperation({ fallbackFocusRef: searchRef });
+  // Operations live in server memory; after a restart the server no longer knows this one, and asking again cannot help.
+  const isLookupGone =
+    operation.query.isError && operation.query.error instanceof ApiError && operation.query.error.status === 404;
+  const lookupError = !operation.query.isError
+    ? null
+    : isLookupGone
+      ? t('intermediates.operation.lookupGone')
+      : getApiErrorMessage(operation.query.error, t('intermediates.operation.lookupFailed'));
   // The live region stays mounted and starts empty; screen readers skip text that arrives with its region.
   const announcement = getOperationAnnouncement(
     operation.operationId ? (operation.query.data ?? null) : null,
     operation.operationId !== null && operation.query.isPending,
-    t
+    t,
+    operation.operationId ? lookupError : null
   );
   const [announced, setAnnounced] = useState({ source: announcement, text: '' });
   if (announced.source !== announcement) {
@@ -137,7 +143,6 @@ export const IntermediatesManager = ({
   const rows = query.data?.items ?? EMPTY_ROWS;
   const totals = query.data?.totals;
   const hasSearch = querySearch.trim().length > 0;
-  const hasSubsetFilter = hasSearch || projectFilter !== null;
   // Rows disappearing (a cleanup, a narrower search) can leave the offset past the end; step back to a valid page.
   if (query.data && !query.isPlaceholderData && offset > 0 && offset >= query.data.total) {
     setOffset(
@@ -146,7 +151,6 @@ export const IntermediatesManager = ({
   }
   const selection = useIntermediatesSelection({
     initialProjectId: focus?.projectId ?? null,
-    params,
     rows,
     summary: query.data,
   });
@@ -195,7 +199,12 @@ export const IntermediatesManager = ({
   const handleRefresh = useCallback(() => {
     const request = ++refreshRequestRef.current;
     setIsRefreshing(true);
-    void queryClient.invalidateQueries({ queryKey: intermediatesKeys.all }).finally(() => {
+    // A refresh also asks whether a run this tab does not know about is in progress (a start whose answer was lost).
+    const catchUp =
+      activeOperationStore.getSnapshot().operationId === null
+        ? reconcileIntermediatesOperations(queryClient).catch(() => undefined)
+        : Promise.resolve();
+    void Promise.all([queryClient.invalidateQueries({ queryKey: intermediatesKeys.all }), catchUp]).finally(() => {
       if (refreshRequestRef.current === request) {
         setIsRefreshing(false);
       }
@@ -250,11 +259,6 @@ export const IntermediatesManager = ({
           </IconButton>
         </Tooltip>
       </HStack>
-      {operation.recoveryError ? (
-        <Text color="fg.error" fontSize="xs" role="alert">
-          {operation.recoveryError}
-        </Text>
-      ) : null}
       <HStack flexWrap="wrap" gap="2">
         <InputGroup flex="1 1 16rem" minW="0" startElement={SEARCH_ICON}>
           <Input
@@ -301,18 +305,17 @@ export const IntermediatesManager = ({
         >
           <OperationPanel
             isLoading={operation.query.isPending}
+            isLookupRetryable={!isLookupGone}
             isRefetching={operation.query.isFetching}
-            lookupError={
-              operation.query.isError
-                ? getApiErrorMessage(operation.query.error, t('intermediates.operation.lookupFailed'))
-                : null
-            }
+            lookupError={lookupError}
             onRefetch={() => void operation.query.refetch()}
-            isRetrying={operation.isRetrying}
             operation={operation.query.data ?? null}
-            retryError={operation.retryError}
             onDismiss={operation.dismiss}
-            onRetry={() => void operation.retry()}
+            onRunAgain={(trigger) => {
+              if (followed) {
+                dialog.open(followed.scope, trigger, followed.mode);
+              }
+            }}
           />
         </Box>
       ) : null}
@@ -339,22 +342,20 @@ export const IntermediatesManager = ({
           <Text color="fg.muted" flex="1" fontSize="2xs" id={deleteReasonId} minW="0" textAlign="end" truncate>
             {isOperationActive && selection.hasSelection
               ? t('intermediates.list.deleteWaiting')
-              : selection.estimateState && selectionSummary === null
-                ? t(`intermediates.selection.${selection.estimateState}`, { count: INTERMEDIATES_MAX_ROWS })
-                : selection.hasSelection && selectionSummary
-                  ? t('intermediates.selection.estimate', {
-                      count: selectionSummary.rows,
-                      images: t('intermediates.counts.images', { count: selectionSummary.safeImages }),
-                      size: formatSummarySize(selectionSummary.reclaimableBytes, selectionSummary.unknownSizeCount, t),
-                      videos: t('intermediates.counts.videos', { count: selectionSummary.safeVideos }),
+              : selection.hasSelection
+                ? t('intermediates.selection.estimate', {
+                    count: selectionSummary.rows,
+                    images: t('intermediates.counts.images', { count: selectionSummary.safeImages }),
+                    size: formatSummarySize(selectionSummary.reclaimableBytes, selectionSummary.unknownSizeCount, t),
+                    videos: t('intermediates.counts.videos', { count: selectionSummary.safeVideos }),
+                  })
+                : totals
+                  ? t('intermediates.selection.available', {
+                      images: t('intermediates.counts.images', { count: totals.safeImages }),
+                      size: formatSummarySize(totals.reclaimableBytes, totals.unknownSizeCount, t),
+                      videos: t('intermediates.counts.videos', { count: totals.safeVideos }),
                     })
-                  : totals
-                    ? t('intermediates.selection.available', {
-                        images: t('intermediates.counts.images', { count: totals.safeImages }),
-                        size: formatSummarySize(totals.reclaimableBytes, totals.unknownSizeCount, t),
-                        videos: t('intermediates.counts.videos', { count: totals.safeVideos }),
-                      })
-                    : ''}
+                  : ''}
           </Text>
           {query.data?.measuring ? (
             <Tooltip content={t('intermediates.stats.measuringNote')}>
@@ -373,10 +374,13 @@ export const IntermediatesManager = ({
               if (isDeleteUnavailable) {
                 return;
               }
-              operation.clearRetryError();
               dialog.open(
-                resolveScope({ hasSubsetFilter, ownerId, selection: selection.effectiveSelection }),
-                params,
+                resolveScope({
+                  ownerId,
+                  projectId: projectFilter,
+                  search: querySearch,
+                  selection: selection.effectiveSelection,
+                }),
                 event.currentTarget
               );
             }}

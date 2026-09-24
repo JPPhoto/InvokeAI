@@ -22,8 +22,6 @@ const AFFECTED_DOCUMENT_LABELS = {
 
 export interface ClearDialogState {
   mode: IntermediatesCleanupMode;
-  /** Minted with each preview and reused for every Confirm of it, so a lost response replays the same operation. */
-  idempotencyKey: string;
   /** Null until the server preview arrives; a confirmation is only ever offered for a fresh preview. */
   preview: IntermediatesPreview | null;
   previewError: string | null;
@@ -191,7 +189,9 @@ export const ClearDialog = ({
   );
   const handleExitComplete = useCallback(() => {
     setConfirmation({ acknowledged: false, previewId: '', typed: '' });
-  }, []);
+    // The library's deferred focus return is not reliable once the content has unmounted; land it ourselves.
+    getFinalFocus()?.focus({ preventScroll: true });
+  }, [getFinalFocus]);
 
   return (
     <Dialog.Root
@@ -244,14 +244,6 @@ export const ClearDialog = ({
                     )}
                   </Box>
                 </Dialog.Description>
-                {preview?.hasMoreEligible ? (
-                  <Alert.Root size="sm" status="info" variant="surface">
-                    <Alert.Indicator />
-                    <Alert.Content>
-                      <Alert.Description>{t('intermediates.dialog.batchLimit')}</Alert.Description>
-                    </Alert.Content>
-                  </Alert.Root>
-                ) : null}
                 <Checkbox.Root
                   checked={isForce}
                   colorPalette="red"

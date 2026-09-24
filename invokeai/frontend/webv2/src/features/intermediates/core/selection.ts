@@ -5,12 +5,12 @@ import { getIntermediatesRowKey } from './types';
 /**
  * Row selection for the manager. `rows` keeps a snapshot of every picked row, so picks survive paging and can be
  * summarized and targeted without the page that showed them; `all-matching` stands for every row the current
- * filters match, including rows never loaded, minus explicit exclusions. It resolves against the server when a
- * preview is requested.
+ * filters match, including rows never loaded, minus the excluded rows, whose snapshots keep the estimate honest. The
+ * server resolves what "all matching" is when a preview is requested.
  */
 export type IntermediatesSelection =
   | { mode: 'rows'; rows: ReadonlyMap<string, IntermediatesRow> }
-  | { mode: 'all-matching'; excluded: ReadonlySet<string> };
+  | { mode: 'all-matching'; excluded: ReadonlyMap<string, IntermediatesRow> };
 
 export const EMPTY_SELECTION: IntermediatesSelection = { mode: 'rows', rows: new Map() };
 
@@ -29,11 +29,11 @@ export const toggleRowSelection = (
 ): IntermediatesSelection => {
   const key = getIntermediatesRowKey(row);
   if (selection.mode === 'all-matching') {
-    const excluded = new Set(selection.excluded);
+    const excluded = new Map(selection.excluded);
     if (excluded.has(key)) {
       excluded.delete(key);
     } else {
-      excluded.add(key);
+      excluded.set(key, row);
     }
     return { mode: 'all-matching', excluded };
   }
@@ -46,116 +46,90 @@ export const toggleRowSelection = (
   return { mode: 'rows', rows };
 };
 
-export const selectAllMatching = (): IntermediatesSelection => ({ mode: 'all-matching', excluded: new Set() });
+export const selectAllMatching = (): IntermediatesSelection => ({ mode: 'all-matching', excluded: new Map() });
 
 export interface SelectionSummary {
   rows: number;
   safeImages: number;
   safeVideos: number;
-  referencedImages: number;
-  referencedVideos: number;
   reclaimableBytes: number;
-  referencedBytes: number;
   unknownSizeCount: number;
 }
 
-/**
- * Sums the selection. Explicit picks are summed from their snapshots, whichever page showed them; "all matching"
- * uses the server's totals. With exclusions, a complete current matching snapshot is required: old excluded-row
- * snapshots cannot tell us whether those rows still exist or how their counts changed.
- */
-export const summarizeSelection = (
-  selection: IntermediatesSelection,
-  totals: { rows: number; safeImages: number; safeVideos: number; reclaimableBytes: number; unknownSizeCount: number },
-  matchingRows?: readonly IntermediatesRow[],
-  visibleRows: readonly IntermediatesRow[] = []
-): SelectionSummary | null => {
-  if (selection.mode === 'all-matching') {
-    if (selection.excluded.size > 0) {
-      return matchingRows
-        ? summarizeSelection(
-            {
-              mode: 'rows',
-              rows: new Map(
-                matchingRows
-                  .filter((row) => isRowSelected(selection, row))
-                  .map((row) => [getIntermediatesRowKey(row), row])
-              ),
-            },
-            totals
-          )
-        : null;
-    }
-    return {
-      referencedBytes: 0,
-      referencedImages: 0,
-      referencedVideos: 0,
-      reclaimableBytes: totals.reclaimableBytes,
-      rows: totals.rows,
-      safeImages: totals.safeImages,
-      safeVideos: totals.safeVideos,
-      unknownSizeCount: totals.unknownSizeCount,
-    };
-  }
+export type SelectionTotals = SelectionSummary;
 
-  const summary: SelectionSummary = {
-    referencedBytes: 0,
-    referencedImages: 0,
-    referencedVideos: 0,
-    reclaimableBytes: 0,
-    rows: 0,
-    safeImages: 0,
-    safeVideos: 0,
-    unknownSizeCount: 0,
-  };
-
-  const freshRows = new Map(visibleRows.map((row) => [getIntermediatesRowKey(row), row]));
-  for (const [key, snapshot] of selection.rows) {
-    const row = freshRows.get(key) ?? snapshot;
+const sumRows = (rows: Iterable<IntermediatesRow>): SelectionSummary => {
+  const summary: SelectionSummary = { reclaimableBytes: 0, rows: 0, safeImages: 0, safeVideos: 0, unknownSizeCount: 0 };
+  for (const row of rows) {
     summary.rows += 1;
     summary.safeImages += row.images.safe;
     summary.safeVideos += row.videos.safe;
-    summary.referencedImages += row.images.referenced;
-    summary.referencedVideos += row.videos.referenced;
     summary.reclaimableBytes += row.reclaimableBytes;
-    summary.referencedBytes += row.referencedBytes;
     summary.unknownSizeCount += row.unknownSizeCount;
   }
-
   return summary;
+};
+
+/**
+ * Sums the selection. Explicit picks are summed from their snapshots, whichever page showed them; "all matching"
+ * starts from the server's totals and subtracts the excluded rows, never going below what is visibly selected (an
+ * excluded row may have vanished off-page since its snapshot). A row on the current page is read fresh, since its
+ * snapshot may predate a cleanup; the server preview stays the authority for what a delete does.
+ */
+export const summarizeSelection = (
+  selection: IntermediatesSelection,
+  totals: SelectionTotals,
+  visibleRows: readonly IntermediatesRow[] = []
+): SelectionSummary => {
+  const freshRows = new Map(visibleRows.map((row) => [getIntermediatesRowKey(row), row]));
+  const fresh = (key: string, snapshot: IntermediatesRow): IntermediatesRow => freshRows.get(key) ?? snapshot;
+  if (selection.mode === 'rows') {
+    return sumRows([...selection.rows].map(([key, snapshot]) => fresh(key, snapshot)));
+  }
+  const excluded = sumRows([...selection.excluded].map(([key, snapshot]) => fresh(key, snapshot)));
+  const visible = sumRows(visibleRows.filter((row) => isRowSelected(selection, row)));
+  const remaining = (field: keyof SelectionSummary): number =>
+    Math.max(totals[field] - excluded[field], visible[field]);
+  return {
+    reclaimableBytes: remaining('reclaimableBytes'),
+    rows: remaining('rows'),
+    safeImages: remaining('safeImages'),
+    safeVideos: remaining('safeVideos'),
+    unknownSizeCount: remaining('unknownSizeCount'),
+  };
 };
 
 const toTarget = ({ projectId, userId }: IntermediatesScopeTarget): IntermediatesScopeTarget => ({ projectId, userId });
 
-/**
- * What a confirmation acts on before it reaches the server. `matching` is every row the current filters match minus
- * the exclusions; the cleanup scope cannot express filters, so it must be resolved against a complete matching read
- * with `resolveMatchingTargets` before a preview is requested.
- */
-export type IntermediatesScopeRequest = IntermediatesScope | { kind: 'matching'; excluded: ReadonlySet<string> };
-
-/**
- * Without a row filter or exclusions, "all matching" is exactly the owner filter (or everyone), which the server can
- * freeze without the client enumerating rows. Explicit picks become their targets.
- */
-export const resolveScope = (options: {
-  selection: IntermediatesSelection;
-  hasSubsetFilter: boolean;
+/** The summary filters a selection was made under; a `matching` scope carries them to the server. */
+export interface IntermediatesScopeFilters {
   ownerId: string | null;
-}): IntermediatesScopeRequest => {
-  const { hasSubsetFilter, ownerId, selection } = options;
+  projectId: string | null;
+  search: string;
+}
 
+/**
+ * What a confirmation acts on. Explicit picks become their targets. Without exclusions, a project filter or a
+ * search, "all matching" is exactly the owner filter (or everyone); otherwise the server resolves the filters.
+ */
+export const resolveScope = ({
+  ownerId,
+  projectId,
+  search,
+  selection,
+}: IntermediatesScopeFilters & { selection: IntermediatesSelection }): IntermediatesScope => {
   if (selection.mode === 'rows') {
     return { kind: 'selection', targets: [...selection.rows.values()].map(toTarget) };
   }
-  if (selection.excluded.size > 0 || hasSubsetFilter) {
-    return { kind: 'matching', excluded: selection.excluded };
+  const trimmed = search.trim();
+  if (selection.excluded.size === 0 && projectId === null && !trimmed) {
+    return ownerId === null ? { kind: 'everyone' } : { kind: 'owner', userId: ownerId };
   }
-  return ownerId === null ? { kind: 'everyone' } : { kind: 'owner', userId: ownerId };
+  return {
+    excluded: [...selection.excluded.values()].map(toTarget),
+    kind: 'matching',
+    projectId,
+    search: trimmed || null,
+    userId: ownerId,
+  };
 };
-
-/** The explicit targets of a `matching` request, given every row the filters match. */
-export const resolveMatchingTargets = (
-  excluded: ReadonlySet<string>,
-  matchingRows: readonly IntermediatesRow[]
-): IntermediatesScopeTarget[] => matchingRows.filter((row) => !excluded.has(getIntermediatesRowKey(row))).map(toTarget);

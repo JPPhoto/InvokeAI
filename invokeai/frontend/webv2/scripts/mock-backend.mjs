@@ -55,6 +55,21 @@ const INTERMEDIATES_CALLERS = new Set(['admin', 'user']);
 const createFaults = () => ({ capabilities: 'ok', intermediatesCaller: 'admin' });
 
 const MOCK_USER_ID = 'fixture-user';
+
+/** The intermediates rows a summary shows under its filters; a `matching` preview scope resolves the same way. */
+const matchingIntermediates = (rows, { isAdmin, ownerFilter, projectId, search }) => {
+  const needle = (search ?? '').toLowerCase();
+  return rows
+    .filter((row) => ownerFilter === null || row.user_id === ownerFilter)
+    .filter((row) => projectId === null || row.project_id === projectId)
+    .filter(
+      (row) =>
+        !needle ||
+        [row.project_name, ...(isAdmin ? [row.user_display_name, row.user_email] : [])].some((value) =>
+          (value ?? '').toLowerCase().includes(needle)
+        )
+    );
+};
 const MOCK_USER_TOKEN = 'mock-user-token';
 
 const mockNonAdminUser = () => ({
@@ -111,7 +126,6 @@ const createState = (profile) => {
     profile,
     projects: new Map(fixture.projects.map((project) => [project.project_id, clone(project)])),
     intermediates: fixture.intermediates.map(clone),
-    intermediatesIdempotency: new Map(),
     intermediatesOperations: new Map(),
     intermediatesPreviews: new Map(),
     queueItems: new Map(fixture.queueItems.map((item) => [item.item_id, clone(item)])),
@@ -1120,25 +1134,18 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           return json(403, { detail: 'Only administrators can inspect other accounts' });
         }
         const ownerFilter = isAdmin ? ownerId : MOCK_USER_ID;
-        const projectId = url.searchParams.get('project_id');
-        const search = (url.searchParams.get('search') ?? '').toLowerCase();
         const sort = url.searchParams.get('sort') ?? 'reclaimable_bytes';
         const descending = (url.searchParams.get('order') ?? 'desc') === 'desc';
         const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0));
         const limit = Math.max(1, Number(url.searchParams.get('limit') ?? 50));
-        const rows = state.intermediates
-          .filter((row) => ownerFilter === null || row.user_id === ownerFilter)
-          .filter((row) => projectId === null || row.project_id === projectId)
-          .filter(
-            (row) =>
-              !search ||
-              [row.project_name, ...(isAdmin ? [row.user_display_name, row.user_email] : [])].some((value) =>
-                (value ?? '').toLowerCase().includes(search)
-              )
-          )
-          .sort((left, right) =>
-            (left.project_name ?? '').toLowerCase().localeCompare((right.project_name ?? '').toLowerCase())
-          );
+        const rows = matchingIntermediates(state.intermediates, {
+          isAdmin,
+          ownerFilter,
+          projectId: url.searchParams.get('project_id'),
+          search: url.searchParams.get('search'),
+        }).sort((left, right) =>
+          (left.project_name ?? '').toLowerCase().localeCompare((right.project_name ?? '').toLowerCase())
+        );
         if (sort === 'reclaimable_bytes') {
           rows.sort((left, right) => (right.reclaimable_bytes - left.reclaimable_bytes) * (descending ? 1 : -1));
         } else if (descending) {
@@ -1196,6 +1203,12 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         if (scope.kind === 'selection' && !isAdmin && scope.targets.some((target) => target.user_id !== MOCK_USER_ID)) {
           return json(403, { detail: "Only administrators can clear another account's intermediates" });
         }
+        if (scope.kind === 'matching' && !isAdmin && scope.user_id && scope.user_id !== MOCK_USER_ID) {
+          return json(403, { detail: "Only administrators can delete another account's intermediates" });
+        }
+        if (scope.kind === 'matching' && (scope.excluded?.length ?? 0) > 1000) {
+          return json(422, { detail: 'Too many excluded rows' });
+        }
         const previewId = `preview-${state.intermediatesPreviews.size + 1}`;
         const targets =
           scope.kind === 'selection'
@@ -1206,7 +1219,23 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
               )
             : scope.kind === 'owner'
               ? state.intermediates.filter((row) => row.user_id === scope.user_id)
-              : state.intermediates;
+              : scope.kind === 'matching'
+                ? // Mirrors IntermediatesService._resolve_scope: the summary's filters minus the excluded rows.
+                  matchingIntermediates(state.intermediates, {
+                    isAdmin,
+                    ownerFilter: isAdmin ? (scope.user_id ?? null) : MOCK_USER_ID,
+                    projectId: scope.project_id ?? null,
+                    search: scope.search ?? null,
+                  }).filter(
+                    (row) =>
+                      !(scope.excluded ?? []).some(
+                        (target) => target.user_id === row.user_id && (target.project_id ?? null) === row.project_id
+                      )
+                  )
+                : state.intermediates;
+        if (scope.kind === 'matching' && targets.length === 0) {
+          return json(422, { detail: 'No rows match the filter' });
+        }
         const force = requested?.mode === 'force';
         const affectedDocuments = force
           ? targets
@@ -1247,13 +1276,19 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
             unknown_size_count: 0,
           }
         );
+        if (force && affectedDocuments.length > 10_000) {
+          return json(422, { detail: 'This force delete would break more than 10000 documents; narrow the scope' });
+        }
         const preview = {
           preview_id: previewId,
           mode: requested?.mode ?? 'safe',
           scope: {
-            kind: requested?.scope?.kind ?? 'owner',
-            targets: requested?.scope?.targets ?? [],
-            user_id: requested?.scope?.user_id ?? null,
+            kind: scope.kind ?? 'owner',
+            targets: scope.targets ?? [],
+            user_id: scope.user_id ?? null,
+            project_id: scope.project_id ?? null,
+            search: scope.search ?? null,
+            excluded: scope.excluded ?? [],
           },
           created_at: new Date().toISOString(),
           expires_at: new Date(Date.now() + 600_000).toISOString(),
@@ -1266,16 +1301,14 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         return json(201, preview);
       }
 
+      if (method === 'GET' && path === '/api/v1/intermediates/operations') {
+        // Newest first; the real server retains a handful of settled operations per account.
+        return json(200, { items: [...state.intermediatesOperations.values()].reverse().slice(0, 5) });
+      }
+
       if (method === 'POST' && path === '/api/v1/intermediates/operations') {
         const requested = await readJsonBody(request);
-        // Mirrors IntermediatesService.start_operation: a repeated key replays its operation, even once the
-        // single-use preview is gone.
-        const settled = state.intermediatesIdempotency.get(requested?.idempotency_key);
-        if (settled) {
-          return settled.previewId === requested.preview_id
-            ? json(202, state.intermediatesOperations.get(settled.operationId))
-            : json(409, { detail: 'Idempotency key was used for a different preview' });
-        }
+        // Mirrors IntermediatesService.start_operation: a preview is confirmed once.
         const frozen = state.intermediatesPreviews.get(requested?.preview_id);
         if (!frozen) {
           return json(404, { detail: 'Preview expired or unknown; request a new one' });
@@ -1307,11 +1340,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
             reclaimed_bytes: impact.reclaimable_bytes,
             unknown_size_count: impact.unknown_size_count,
             pending_disk_cleanup: 0,
-            unresolved_images: 0,
-            unresolved_videos: 0,
           },
-          retried_from_operation_id: null,
-          retried_by_operation_id: null,
         };
         for (const row of frozen.targets) {
           row.images = {
@@ -1328,12 +1357,6 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           row.unknown_size_count = 0;
         }
         state.intermediatesOperations.set(operationId, operation);
-        if (typeof requested.idempotency_key === 'string') {
-          state.intermediatesIdempotency.set(requested.idempotency_key, {
-            operationId,
-            previewId: requested.preview_id,
-          });
-        }
         return json(202, operation);
       }
 

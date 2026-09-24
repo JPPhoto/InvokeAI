@@ -4221,7 +4221,6 @@
       "title": "Delete intermediates?",
       "forceTitle": "Force delete intermediates?",
       "loadingPreview": "Checking what can be deleted…",
-      "batchLimit": "This preview includes up to 50,000 eligible items. More remain in this scope; run Delete again after this batch finishes.",
       "previewFailed": "Could not check what can be deleted.",
       "summary": "Delete {{images}} and {{videos}} from {{projects}}?",
       "reclaim": "Approximately {{size}} can be reclaimed.",
@@ -4250,14 +4249,14 @@
       "confirm": "Delete",
       "forceConfirm": "Force delete",
       "startFailed": "Could not start deleting intermediates.",
-      "startTimedOut": "The server did not answer in time, so the deletion may already be running. Selecting “{{action}}” again is safe: it resumes this same deletion rather than starting a second one.",
+      "startTimedOut": "The server did not answer in time, and no running deletion was found. Select “{{action}}” again to try once more.",
+      "startUnknown": "The server did not answer in time, and whether the deletion started could not be confirmed. Close this dialog and refresh the list; a running deletion appears above it.",
       "keptReasons": "{{reasons}}.",
       "keptReferenced": "{{items}} referenced by saved documents",
       "keptActive": "{{items}} used by queued or running work",
       "keptRecent": "{{items}} created recently",
       "forceToggle": "Also delete items that saved documents still reference (advanced)",
-      "previewExpired": "This check is no longer current. Check again before deleting.",
-      "tooManyRows": "More than {{count, number}} projects match. Narrow the search or clear the selection and choose projects."
+      "previewExpired": "This check is no longer current. Check again before deleting."
     },
     "operation": {
       "regionLabel": "Deletion status",
@@ -4275,10 +4274,10 @@
       "failed": "Failed",
       "pendingDisk": "Awaiting removal from disk",
       "reclaimed": "Reclaimed",
-      "retry": "Retry unresolved",
+      "runAgain": "Delete again",
       "dismiss": "Dismiss",
-      "retryFailed": "Could not retry the deletion.",
       "lookupFailed": "Could not load deletion status.",
+      "lookupGone": "The server no longer knows this deletion; it may have restarted. Refresh the list, then delete again if anything remains.",
       "pendingDiskNote": "Some files could not be removed yet. They are removed on the next server start and their space is not counted as reclaimed."
     },
     "empty": {
@@ -4319,9 +4318,6 @@
       "measuringNote": "Sizes are still being measured; figures grow as measurement finishes."
     },
     "selection": {
-      "checking": "Checking selection…",
-      "estimateFailed": "Could not estimate selection. Refresh to retry.",
-      "tooManyRows": "More than {{count, number}} matching projects. Narrow your search to review this selection.",
       "estimate": "{{count, number}} selected · {{images}}, {{videos}}, about {{size}}",
       "available": "{{images}}, {{videos}} unused · about {{size}} reclaimable"
     }

@@ -65,10 +65,21 @@ export interface IntermediatesSummary {
   canManageEveryone: boolean;
 }
 
+/** Every row the summary filters match minus `excluded`, resolved by the server so no page needs enumerating. */
+export interface IntermediatesMatchingScope {
+  kind: 'matching';
+  /** The owner filter; null is the caller's account, or every account for an administrator. */
+  userId: string | null;
+  projectId: string | null;
+  search: string | null;
+  excluded: IntermediatesScopeTarget[];
+}
+
 export type IntermediatesScope =
   | { kind: 'selection'; targets: IntermediatesScopeTarget[] }
   | { kind: 'owner'; userId: string }
-  | { kind: 'everyone' };
+  | { kind: 'everyone' }
+  | IntermediatesMatchingScope;
 
 export interface IntermediatesImpact {
   deleteImages: number;
@@ -107,8 +118,8 @@ export interface IntermediatesPreview {
   createdAt: string;
   expiresAt: string;
   targetRows: number;
-  hasMoreEligible: boolean;
   impact: IntermediatesImpact;
+  /** Confirming acknowledges these; a document saved after the preview keeps its media. */
   affectedDocuments: IntermediatesAffectedDocument[];
   /** Every affected document; the server lists only the first of them. */
   affectedDocumentsTotal: number;
@@ -127,25 +138,24 @@ export interface IntermediatesOperationProgress {
   /** Deleted items whose size was never measured; their bytes are not in `reclaimedBytes`. */
   unknownSizeCount: number;
   pendingDiskCleanup: number;
-  unresolvedImages: number;
-  unresolvedVideos: number;
 }
 
+/** A cleanup run. The server keeps it in memory only: a restart forgets it, and requesting the scope again is the retry. */
 export interface IntermediatesOperation {
   operationId: string;
   userId: string;
   mode: IntermediatesCleanupMode;
+  /** The scope as requested, so the same request can be made again. */
   scope: IntermediatesScope;
   status: IntermediatesOperationStatus;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
   error: string | null;
+  /** Deletions the preview expected. */
   targetImages: number;
   targetVideos: number;
   progress: IntermediatesOperationProgress;
-  retriedFromOperationId: string | null;
-  retriedByOperationId: string | null;
 }
 
 export const getIntermediatesRowKey = (target: IntermediatesScopeTarget): string =>
@@ -166,8 +176,7 @@ export const getOperationProcessed = (operation: IntermediatesOperation): number
 export const isOperationSettled = (operation: IntermediatesOperation): boolean =>
   operation.status === 'completed' || operation.status === 'failed';
 
-/** Only unresolved targets can be retried, once the operation has stopped and no retry has taken them over. */
-export const isOperationRetryable = (operation: IntermediatesOperation): boolean =>
+/** A stopped or partly failed run left work behind that requesting the same scope again picks up. */
+export const canRunOperationAgain = (operation: IntermediatesOperation): boolean =>
   isOperationSettled(operation) &&
-  operation.retriedByOperationId === null &&
-  operation.progress.unresolvedImages + operation.progress.unresolvedVideos > 0;
+  (operation.status === 'failed' || operation.progress.failedImages + operation.progress.failedVideos > 0);

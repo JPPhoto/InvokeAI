@@ -12,9 +12,6 @@ import { intermediatesKeys } from './keys';
 
 export const INTERMEDIATES_PAGE_SIZE = 50;
 
-/** The largest single request the API accepts; used to resolve "all matching" into explicit targets. */
-export const INTERMEDIATES_MAX_ROWS = 1000;
-
 const fenced = <T>(owner: AccountScope, request: (signal: AbortSignal) => Promise<T>, signal: AbortSignal) =>
   request(AbortSignal.any([signal, owner.signal])).then((result) => {
     assertAccountScopeCurrent(owner);

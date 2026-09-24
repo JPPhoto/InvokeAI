@@ -1,11 +1,12 @@
 import type { IntermediatesOperation } from '@features/intermediates/core/types';
 import type { TFunction } from 'i18next';
+/* eslint-disable react-perf/jsx-no-new-function-as-prop */
 
 import { Alert, HStack, Progress, Stack, Text } from '@chakra-ui/react';
 import {
+  canRunOperationAgain,
   getOperationProcessed,
   getOperationTotalTargets,
-  isOperationRetryable,
   isOperationSettled,
 } from '@features/intermediates/core/types';
 import { formatBytes, formatCount } from '@platform/i18n/languages';
@@ -17,10 +18,11 @@ export interface OperationPanelProps {
   isLoading: boolean;
   isRefetching: boolean;
   lookupError: string | null;
+  /** False once the server has said it no longer knows the operation: asking again cannot help. */
+  isLookupRetryable: boolean;
   onRefetch: () => void;
-  retryError: string | null;
-  isRetrying: boolean;
-  onRetry: () => void;
+  /** Requests the operation's scope again; the button that asked is the trigger focus returns to. */
+  onRunAgain: (trigger: HTMLElement) => void;
   onDismiss: () => void;
 }
 
@@ -44,8 +46,12 @@ const ANNOUNCED_PROGRESS_STEP = 25;
 export const getOperationAnnouncement = (
   operation: IntermediatesOperation | null,
   isLoading: boolean,
-  t: TFunction
+  t: TFunction,
+  lookupError: string | null = null
 ): string => {
+  if (lookupError) {
+    return lookupError;
+  }
   if (!operation) {
     return isLoading ? t('intermediates.operation.pending') : '';
   }
@@ -63,17 +69,16 @@ export const getOperationAnnouncement = (
   });
 };
 
-/** The active or most recent cleanup: progress while it runs, a breakdown once it stops, retry for what failed. */
+/** The active or most recent cleanup: progress while it runs, a breakdown once it stops, another run for what failed. */
 export const OperationPanel = ({
   isLoading,
+  isLookupRetryable,
   isRefetching,
   lookupError,
   onRefetch,
-  isRetrying,
   onDismiss,
-  onRetry,
+  onRunAgain,
   operation,
-  retryError,
 }: OperationPanelProps) => {
   const { t } = useTranslation();
 
@@ -85,9 +90,11 @@ export const OperationPanel = ({
           <Alert.Title>{t('intermediates.operation.lookupFailed')}</Alert.Title>
           <Alert.Description>{lookupError}</Alert.Description>
           <HStack gap="2" mt="2">
-            <Button loading={isRefetching} size="2xs" variant="outline" onClick={onRefetch}>
-              {t('common.retry')}
-            </Button>
+            {isLookupRetryable ? (
+              <Button loading={isRefetching} size="2xs" variant="outline" onClick={onRefetch}>
+                {t('common.retry')}
+              </Button>
+            ) : null}
             <Button size="2xs" variant="ghost" onClick={onDismiss}>
               {t('intermediates.operation.dismiss')}
             </Button>
@@ -169,16 +176,11 @@ export const OperationPanel = ({
                 {t('intermediates.operation.pendingDiskNote')}
               </Text>
             ) : null}
-            {retryError ? (
-              <Text color="fg.error" fontSize="xs" role="alert">
-                {retryError}
-              </Text>
-            ) : null}
             {settled ? (
               <HStack gap="2">
-                {isOperationRetryable(operation) ? (
-                  <Button loading={isRetrying} size="2xs" variant="outline" onClick={onRetry}>
-                    {t('intermediates.operation.retry')}
+                {canRunOperationAgain(operation) ? (
+                  <Button size="2xs" variant="outline" onClick={(event) => onRunAgain(event.currentTarget)}>
+                    {t('intermediates.operation.runAgain')}
                   </Button>
                 ) : null}
                 <Button size="2xs" variant="ghost" onClick={onDismiss}>

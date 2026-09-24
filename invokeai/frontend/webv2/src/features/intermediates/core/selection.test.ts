@@ -5,14 +5,12 @@ import type { IntermediatesRow } from './types';
 import {
   EMPTY_SELECTION,
   isRowSelected,
-  resolveMatchingTargets,
   resolveScope,
   selectAllMatching,
   summarizeSelection,
   toggleRowSelection,
   withRowSelected,
 } from './selection';
-import { getIntermediatesRowKey } from './types';
 
 const row = (projectId: string | null, overrides: Partial<IntermediatesRow> = {}): IntermediatesRow => ({
   coverImageName: null,
@@ -31,6 +29,7 @@ const row = (projectId: string | null, overrides: Partial<IntermediatesRow> = {}
 
 const page = [row('a'), row('b'), row(null)];
 const totals = { reclaimableBytes: 5_000, rows: 12, safeImages: 40, safeVideos: 4, unknownSizeCount: 2 };
+const noFilters = { ownerId: 'alice', projectId: null, search: '' };
 
 describe('row selection', () => {
   it('toggles rows', () => {
@@ -56,8 +55,8 @@ describe('row selection', () => {
     let selection = toggleRowSelection(EMPTY_SELECTION, firstPage[0]!);
     selection = toggleRowSelection(selection, secondPage[1]!);
 
-    expect(summarizeSelection(selection, totals)?.rows).toBe(2);
-    expect(resolveScope({ hasSubsetFilter: false, ownerId: 'alice', selection })).toEqual({
+    expect(summarizeSelection(selection, totals).rows).toBe(2);
+    expect(resolveScope({ ...noFilters, selection })).toEqual({
       kind: 'selection',
       targets: [
         { projectId: 'a', userId: 'alice' },
@@ -68,7 +67,7 @@ describe('row selection', () => {
 
   it('adds a row without disturbing an existing pick or an all-matching selection', () => {
     const picked = withRowSelected(withRowSelected(EMPTY_SELECTION, page[0]!), page[0]!);
-    expect(summarizeSelection(picked, totals)?.rows).toBe(1);
+    expect(summarizeSelection(picked, totals).rows).toBe(1);
     expect(withRowSelected(selectAllMatching(), page[1]!)).toEqual(selectAllMatching());
   });
 
@@ -77,26 +76,21 @@ describe('row selection', () => {
 
     expect(selection.mode).toBe('all-matching');
     expect(isRowSelected(selection, row('off-page'))).toBe(true);
-    expect(summarizeSelection(selection, totals)).toBeNull();
-    expect(summarizeSelection(selection, totals, [...page, row('off-page')])).toMatchObject({
-      rows: 3,
-      safeImages: 9,
-      safeVideos: 6,
-      reclaimableBytes: 300,
+    expect(summarizeSelection(selection, totals)).toEqual({
+      reclaimableBytes: 4_900,
+      rows: 11,
+      safeImages: 37,
+      safeVideos: 2,
+      unknownSizeCount: 2,
     });
     expect(toggleRowSelection(selection, page[1]!)).toEqual(selectAllMatching());
-    const request = resolveScope({ hasSubsetFilter: false, ownerId: 'alice', selection });
-    expect(request).toEqual({ kind: 'matching', excluded: new Set([getIntermediatesRowKey(page[1]!)]) });
-    expect(
-      resolveMatchingTargets(selection.mode === 'all-matching' ? selection.excluded : new Set(), [
-        ...page,
-        row('off-page'),
-      ])
-    ).toEqual([
-      { userId: 'alice', projectId: 'a' },
-      { userId: 'alice', projectId: null },
-      { userId: 'alice', projectId: 'off-page' },
-    ]);
+    expect(resolveScope({ ...noFilters, selection })).toEqual({
+      excluded: [{ projectId: 'b', userId: 'alice' }],
+      kind: 'matching',
+      projectId: null,
+      search: null,
+      userId: 'alice',
+    });
     expect(isRowSelected(selection, page[0]!)).toBe(true);
     expect(isRowSelected(selection, page[1]!)).toBe(false);
     expect(isRowSelected(selection, page[2]!)).toBe(true);
@@ -108,9 +102,6 @@ describe('selection summary', () => {
     const selection = toggleRowSelection(toggleRowSelection(EMPTY_SELECTION, page[0]!), page[2]!);
 
     expect(summarizeSelection(selection, totals)).toEqual({
-      referencedBytes: 20,
-      referencedImages: 2,
-      referencedVideos: 0,
       reclaimableBytes: 200,
       rows: 2,
       safeImages: 6,
@@ -120,40 +111,75 @@ describe('selection summary', () => {
   });
 
   it('uses the server totals for all matching rows, which may exceed the loaded page', () => {
-    expect(summarizeSelection(selectAllMatching(), totals)).toMatchObject({
-      reclaimableBytes: 5_000,
-      rows: 12,
-      safeImages: 40,
-      safeVideos: 4,
-      unknownSizeCount: 2,
+    expect(summarizeSelection(selectAllMatching(), totals)).toEqual(totals);
+  });
+
+  it('refreshes a snapshot from the visible page before counting it', () => {
+    const refreshed = row('b', { images: { active: 0, recent: 0, referenced: 1, safe: 5 }, reclaimableBytes: 1_000 });
+
+    const excluded = toggleRowSelection(selectAllMatching(), page[1]!);
+    expect(summarizeSelection(excluded, totals, [page[0]!, refreshed])).toMatchObject({
+      reclaimableBytes: 4_000,
+      rows: 11,
+      safeImages: 35,
+    });
+    const picked = toggleRowSelection(EMPTY_SELECTION, page[1]!);
+    expect(summarizeSelection(picked, totals, [refreshed])).toMatchObject({ reclaimableBytes: 1_000, safeImages: 5 });
+  });
+
+  it('never estimates all-matching below what is visibly selected when an excluded row has vanished', () => {
+    // Totals now cover one row; the excluded row is gone off-page, but its snapshot would cancel the survivor.
+    const survivor = row('c');
+    const selection = toggleRowSelection(selectAllMatching(), page[0]!);
+    const fewTotals = { reclaimableBytes: 100, rows: 1, safeImages: 3, safeVideos: 2, unknownSizeCount: 0 };
+
+    expect(summarizeSelection(selection, fewTotals, [survivor])).toEqual({
+      reclaimableBytes: 100,
+      rows: 1,
+      safeImages: 3,
+      safeVideos: 2,
+      unknownSizeCount: 0,
+    });
+    expect(summarizeSelection(selection, fewTotals, [])).toEqual({
+      reclaimableBytes: 0,
+      rows: 0,
+      safeImages: 0,
+      safeVideos: 0,
+      unknownSizeCount: 0,
     });
   });
 });
 
 describe('scope resolution', () => {
   it('turns all-matching without a filter into the owner or everyone scope', () => {
-    expect(resolveScope({ hasSubsetFilter: false, ownerId: 'alice', selection: selectAllMatching() })).toEqual({
+    expect(resolveScope({ ...noFilters, selection: selectAllMatching() })).toEqual({
       kind: 'owner',
       userId: 'alice',
     });
-    expect(resolveScope({ hasSubsetFilter: false, ownerId: null, selection: selectAllMatching() })).toEqual({
+    expect(resolveScope({ ...noFilters, ownerId: null, selection: selectAllMatching() })).toEqual({
       kind: 'everyone',
     });
   });
 
-  it('turns picks into explicit targets whichever page showed them', () => {
+  it('turns picks into explicit targets whichever page showed them, ignoring the filters', () => {
     const picks = toggleRowSelection(EMPTY_SELECTION, page[2]!);
 
-    expect(resolveScope({ hasSubsetFilter: true, ownerId: 'alice', selection: picks })).toEqual({
+    expect(resolveScope({ ownerId: 'alice', projectId: 'p', search: 'port', selection: picks })).toEqual({
       kind: 'selection',
       targets: [{ projectId: null, userId: 'alice' }],
     });
   });
 
-  it('leaves all-matching under a filter unresolved rather than narrowing it to the loaded page', () => {
-    expect(resolveScope({ hasSubsetFilter: true, ownerId: 'alice', selection: selectAllMatching() })).toEqual({
+  it('carries the filters of an all-matching selection in a matching scope', () => {
+    expect(
+      resolveScope({ ownerId: 'alice', projectId: null, search: ' port ', selection: selectAllMatching() })
+    ).toEqual({ excluded: [], kind: 'matching', projectId: null, search: 'port', userId: 'alice' });
+    expect(resolveScope({ ownerId: null, projectId: 'p', search: '', selection: selectAllMatching() })).toEqual({
+      excluded: [],
       kind: 'matching',
-      excluded: new Set(),
+      projectId: 'p',
+      search: null,
+      userId: null,
     });
   });
 });

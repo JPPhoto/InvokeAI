@@ -1,6 +1,7 @@
 import type { IntermediatesOperation } from '@features/intermediates/core/types';
 import type { QueryClient } from '@tanstack/react-query';
 
+import { isOperationSettled } from '@features/intermediates/core/types';
 import {
   captureAccountScope,
   isAccountScopeCurrent,
@@ -9,83 +10,24 @@ import {
 } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-import { getIntermediatesOperation, startIntermediatesOperation } from './api';
+import { listIntermediatesOperations } from './api';
 import { intermediatesKeys } from './keys';
 import { attachIntermediatesRealtime } from './realtime';
 
 /**
  * The operation the manager is following. Kept outside the component so closing Settings while a cleanup runs and
- * reopening it later shows the same operation, its result and its retry affordance.
+ * reopening it later shows the same operation and its result. The server, not this tab, remembers running work: a
+ * manager that opens with nothing followed asks it, so a reload picks a running cleanup back up.
  */
-export const activeOperationStore = createExternalStore<{
-  operationId: string | null;
-  /** Why replaying a start whose response was lost failed; cleared when the manager next opens. */
-  recoveryError: unknown;
-}>({ operationId: null, recoveryError: null });
-
-interface PendingStart {
-  previewId: string;
-  idempotencyKey: string;
-}
-
-/**
- * A Confirm whose response never arrived (a reload, a closed section, a timeout) is replayed once when the manager
- * next opens; its idempotency key makes the replay return the same operation. A start that settled with an error is
- * cleared, so only a fresh Confirm in the dialog can run it again.
- */
-interface Receipt {
-  operationId?: string;
-  pendingStart?: PendingStart;
-}
-
-// Keyed per account so a start fenced by sign-out can still be cleared under the account that made it.
-const receiptKey = (owner: AccountScope = captureAccountScope()): string => {
-  return `invokeai:webv2:intermediates-receipt:${owner.accountId ?? 'local'}${owner.storageSuffix}`;
-};
-
-const readReceipt = (owner?: AccountScope): Receipt => {
-  try {
-    return JSON.parse(sessionStorage.getItem(receiptKey(owner)) ?? '{}') as Receipt;
-  } catch {
-    return {};
-  }
-};
-
-const writeReceipt = (receipt: Receipt, owner?: AccountScope): void => {
-  try {
-    if (!receipt.operationId && !receipt.pendingStart) {
-      sessionStorage.removeItem(receiptKey(owner));
-    } else {
-      sessionStorage.setItem(receiptKey(owner), JSON.stringify(receipt));
-    }
-  } catch {
-    // A private-mode storage failure still leaves the in-memory operation visible this session.
-  }
-};
-
-export const recordPendingIntermediatesStart = (pendingStart: PendingStart): void => {
-  writeReceipt({ ...readReceipt(), pendingStart });
-};
-
-const isPendingStartCurrent = (pendingStart: PendingStart, owner?: AccountScope): boolean => {
-  const current = readReceipt(owner).pendingStart;
-  return current?.previewId === pendingStart.previewId && current.idempotencyKey === pendingStart.idempotencyKey;
-};
-
-/** `owner` defaults to the current account; pass the one that recorded the start once it may have signed out. */
-export const clearPendingIntermediatesStart = (owner?: AccountScope): void => {
-  const { operationId } = readReceipt(owner);
-  writeReceipt({ operationId }, owner);
-};
+export const activeOperationStore = createExternalStore<{ operationId: string | null }>({ operationId: null });
 
 registerAccountOwnedResource({
-  clear: () => activeOperationStore.setSnapshot({ operationId: null, recoveryError: null }),
+  clear: () => activeOperationStore.setSnapshot({ operationId: null }),
   name: 'intermediates-active-operation',
 });
 
 export const followIntermediatesOperation = (operationId: string | null): void => {
-  activeOperationStore.patchSnapshot({ operationId });
-  writeReceipt({ operationId: operationId ?? undefined });
+  activeOperationStore.setSnapshot({ operationId });
 };
 
 /** Follows an operation the server just returned, seeding its query so the panel needs no extra lookup. */
@@ -98,95 +40,75 @@ export const adoptIntermediatesOperation = (
   followIntermediatesOperation(operation.operationId);
 };
 
-/** Walks the retry chain to the operation that currently owns the unresolved targets. */
-export const findLatestIntermediatesRetry = async (
-  operationId: string,
-  signal: AbortSignal
-): Promise<IntermediatesOperation> => {
-  let operation = await getIntermediatesOperation(operationId, signal);
-  const visited = new Set<string>([operationId]);
-  while (operation.retriedByOperationId && !visited.has(operation.retriedByOperationId)) {
-    visited.add(operation.retriedByOperationId);
-    operation = await getIntermediatesOperation(operation.retriedByOperationId, signal);
+/** A fresh listing after a timed-out start must answer quickly or not at all; the dialog stays usable either way. */
+const FRESH_LISTING_TIMEOUT_MS = 10_000;
+
+// One listing per account at a time, so a remount (or StrictMode's replayed mount) shares a request; a sign-out and
+// back in gets a fresh one.
+const listings = new Map<string, Promise<IntermediatesOperation[]>>();
+
+const listOnce = (owner: AccountScope): Promise<IntermediatesOperation[]> => {
+  const key = `${owner.accountId ?? 'local'}\u0000${owner.epoch}`;
+  let listing = listings.get(key);
+  if (!listing) {
+    listing = listIntermediatesOperations(owner.signal).finally(() => listings.delete(key));
+    listings.set(key, listing);
   }
-  return operation;
-};
-
-let attachedManagers = 0;
-// Single-flight per account and receipt, so a remount (or StrictMode's replayed mount) never repeats the request.
-const reconciling = new Set<string>();
-
-const runOnce = (key: string, work: () => Promise<void>): void => {
-  if (reconciling.has(key)) {
-    return;
-  }
-  reconciling.add(key);
-  void work().finally(() => reconciling.delete(key));
-};
-
-const replayPendingStart = (queryClient: QueryClient, owner: AccountScope, pending: PendingStart): void => {
-  runOnce(`${receiptKey(owner)}\u0000start\u0000${pending.idempotencyKey}`, async () => {
-    try {
-      const operation = await startIntermediatesOperation(pending, owner.signal);
-      if (isAccountScopeCurrent(owner) && isPendingStartCurrent(pending)) {
-        adoptIntermediatesOperation(queryClient, owner, operation);
-      }
-    } catch (error) {
-      if (isPendingStartCurrent(pending, owner)) {
-        clearPendingIntermediatesStart(owner);
-        if (attachedManagers > 0 && isAccountScopeCurrent(owner)) {
-          activeOperationStore.patchSnapshot({ recoveryError: error });
-        }
-      }
-    }
-  });
-};
-
-const catchUpWithRetry = (queryClient: QueryClient, owner: AccountScope, followed: string): void => {
-  runOnce(`${receiptKey(owner)}\u0000retry\u0000${followed}`, async () => {
-    try {
-      const operation = await findLatestIntermediatesRetry(followed, owner.signal);
-      if (
-        isAccountScopeCurrent(owner) &&
-        activeOperationStore.getSnapshot().operationId === followed &&
-        operation.operationId !== followed
-      ) {
-        adoptIntermediatesOperation(queryClient, owner, operation);
-      }
-    } catch {
-      // The operation query reports lookup failures in the panel.
-    }
-  });
+  return listing;
 };
 
 /**
- * Registers an open manager: attaches realtime updates for its lifetime and reconciles the receipt, replaying a
- * Confirm whose response was lost or catching up with a retry started elsewhere.
+ * Asks the server for the account's operations and follows the newest unsettled one, unless the followed operation
+ * or the account changed meanwhile: a Confirm that lands while the listing is in flight is never overwritten by an
+ * older run. Returns what it adopted, or null when the server listed nothing running; rejects when it could not ask.
  */
-export const attachIntermediatesManager = (queryClient: QueryClient): (() => void) => {
-  if (attachedManagers === 0) {
-    activeOperationStore.patchSnapshot({ recoveryError: null });
+export const reconcileIntermediatesOperations = async (
+  queryClient: QueryClient,
+  owner: AccountScope = captureAccountScope(),
+  options: {
+    /**
+     * Ask again rather than join a listing already in flight: a listing begun before a Confirm cannot contain the
+     * run it started, and one that hangs must not hold the confirmation open. Bounded by its own timeout. The
+     * server's `created_at` of the confirmed preview: only a run created after it can be the one that Confirm
+     * started, since the server also lists earlier finished runs.
+     */
+    startedAfter?: string;
+  } = {}
+): Promise<IntermediatesOperation | null> => {
+  const followedAtStart = activeOperationStore.getSnapshot().operationId;
+  const { startedAfter } = options;
+  const operations =
+    startedAfter !== undefined
+      ? await listIntermediatesOperations(
+          AbortSignal.any([owner.signal, AbortSignal.timeout(FRESH_LISTING_TIMEOUT_MS)])
+        )
+      : await listOnce(owner);
+  // After a lost start the run counts even when it already finished; a catch-up on open only picks up work still
+  // running, so finished runs from before are not re-shown. Both timestamps are the server's, so they compare.
+  const candidate =
+    startedAfter !== undefined
+      ? (operations.find(
+          (operation) =>
+            operation.operationId !== followedAtStart && Date.parse(operation.createdAt) >= Date.parse(startedAfter)
+        ) ?? null)
+      : (operations.find((operation) => !isOperationSettled(operation)) ?? null);
+  if (
+    candidate === null ||
+    !isAccountScopeCurrent(owner) ||
+    activeOperationStore.getSnapshot().operationId !== followedAtStart
+  ) {
+    return null;
   }
-  attachedManagers += 1;
-  const detachRealtime = attachIntermediatesRealtime(queryClient);
-  const owner = captureAccountScope();
-  const receipt = readReceipt(owner);
-  if (typeof receipt.operationId === 'string' && receipt.operationId.length > 0) {
-    activeOperationStore.patchSnapshot({ operationId: receipt.operationId });
-  }
-  const followed = activeOperationStore.getSnapshot().operationId;
-  if (receipt.pendingStart) {
-    replayPendingStart(queryClient, owner, receipt.pendingStart);
-  } else if (followed) {
-    catchUpWithRetry(queryClient, owner, followed);
-  }
+  adoptIntermediatesOperation(queryClient, owner, candidate);
+  return candidate;
+};
 
-  let attached = true;
-  return () => {
-    if (attached) {
-      attached = false;
-      attachedManagers -= 1;
-      detachRealtime();
-    }
-  };
+/** Registers an open manager: realtime updates for its lifetime, and a catch-up when nothing is followed yet. */
+export const attachIntermediatesManager = (queryClient: QueryClient): (() => void) => {
+  const detachRealtime = attachIntermediatesRealtime(queryClient);
+  if (activeOperationStore.getSnapshot().operationId === null) {
+    // A failed catch-up is not an error the section shows; the next open or a Confirm asks again.
+    void reconcileIntermediatesOperations(queryClient).catch(() => undefined);
+  }
+  return detachRealtime;
 };
