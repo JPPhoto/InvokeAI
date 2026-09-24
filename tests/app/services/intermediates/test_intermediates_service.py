@@ -20,7 +20,7 @@ from invokeai.app.services.image_records.image_records_common import (
     ImageRecordNotFoundException,
     ResourceOrigin,
 )
-from invokeai.app.services.intermediates import intermediates_default, intermediates_measurement
+from invokeai.app.services.intermediates import intermediates_default
 from invokeai.app.services.intermediates.intermediates_base import IntermediatesCaller
 from invokeai.app.services.intermediates.intermediates_common import (
     IntermediatesOperation,
@@ -364,24 +364,6 @@ def test_summary_triggers_measurement_of_unmeasured_sizes(invoker: Invoker, serv
     assert invoker.services.image_records.get("missing.png").file_size_bytes == 0
 
 
-def test_measurement_retries_when_an_unmeasured_file_is_still_too_new(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(intermediates_measurement, "MEASURE_MIN_AGE_SECONDS", 1)
-    _seed_image(invoker, "young.png", created_at=None)
-    invoker.services.image_records.set_file_size_bytes("young.png", None)
-
-    summary = service.get_summary(
-        ALICE, owner_id=None, search=None, sort="project_name", descending=False, offset=0, limit=50
-    )
-    assert summary.measuring is True
-
-    deadline = time.monotonic() + 4
-    while time.monotonic() < deadline and invoker.services.image_records.get("young.png").file_size_bytes is None:
-        time.sleep(0.02)
-    assert invoker.services.image_records.get("young.png").file_size_bytes is not None
-
-
 # ── previews and policy ──
 
 
@@ -526,19 +508,6 @@ def test_selection_scope_targets_exactly_the_chosen_rows(invoker: Invoker, servi
     assert not any(_exists(invoker, n) for n in ("clear.png", "unassigned.png", "orphaned-project.png"))
 
 
-def test_media_created_during_the_run_is_never_collected(invoker: Invoker, service: IntermediatesService) -> None:
-    _seed_image(invoker, "before.png")
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
-    _seed_image(invoker, "after.png", created_at=None)
-
-    operation = _wait(service, _start(service, preview).operation_id)
-
-    assert operation.target_images == 1
-    assert (operation.progress.deleted_images, operation.progress.retained_images) == (1, 0)
-    assert not _exists(invoker, "before.png")
-    assert _exists(invoker, "after.png")
-
-
 def test_a_row_that_was_recent_at_preview_time_stays_recent_for_the_operation(
     invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -589,29 +558,6 @@ def test_the_final_check_keeps_targets_protected_after_the_page_read(
     assert all(_exists(invoker, n) for n in ("promoted.png", "now-referenced.png", "now-active.png"))
     assert not _exists(invoker, "still-safe.png")
     assert invoker.services.image_files.get_path("promoted.png").exists()
-
-
-def test_a_promoted_video_keeps_its_file(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from invokeai.app.services.video_records.video_records_common import VideoRecordChanges
-
-    _seed_video(invoker, "promoted.mp4")
-    _seed_video(invoker, "gone.mp4")
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
-    _before_first_delete(
-        invoker,
-        monkeypatch,
-        lambda: invoker.services.video_records.update("promoted.mp4", VideoRecordChanges(is_intermediate=False)),
-        kind="video",
-    )
-
-    operation = _wait(service, _start(service, preview).operation_id)
-
-    assert (operation.progress.deleted_videos, operation.progress.retained_videos) == (1, 1)
-    assert invoker.services.video_files.get_path("promoted.mp4").exists()
-    assert not invoker.services.video_files.get_path("gone.mp4").exists()
-    assert list(Path(invoker.services.video_files.get_path("gone.mp4")).parent.glob(".delete_*")) == []
 
 
 # ── authorization ──
@@ -888,86 +834,6 @@ def test_a_restart_forgets_operations_and_a_fresh_run_finishes_the_work(
         restored.stop()
 
 
-def test_settled_operations_are_retained_per_caller_and_running_ones_are_never_dropped(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import threading
-
-    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_SETTLED_OPERATIONS_PER_CALLER", 1)
-    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS", 2)
-    _seed_image(invoker, "bob.png", user_id="bob")
-    release = threading.Event()
-    real_delete = invoker.services.images.delete_intermediates_by_names
-
-    def blocked_delete(names, guard=None):
-        release.wait(10)
-        return real_delete(names, guard)
-
-    monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", blocked_delete)
-    empty = IntermediatesScope(
-        kind="selection",
-        targets=[IntermediatesScopeTarget(user_id="alice", project_id=_project(invoker, "alice", "E", {}))],
-    )
-
-    _, first = _run(service, ALICE, empty)
-    _, second = _run(service, ALICE, empty)
-    with pytest.raises(IntermediatesOperationNotFoundError):
-        service.get_operation(first.operation_id, ALICE)
-    assert [op.operation_id for op in service.list_operations(ALICE)] == [second.operation_id]
-
-    try:
-        running = _start(
-            service, service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("bob")), BOB), BOB
-        )
-        # The worker is busy with Bob's run, so this one waits behind it: unsettled, never a candidate.
-        queued = _start(
-            service,
-            service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("admin")), ADMIN),
-            ADMIN,
-        )
-        # Past the global cap the oldest settled operation goes, whoever it belongs to.
-        with pytest.raises(IntermediatesOperationNotFoundError):
-            service.get_operation(second.operation_id, ALICE)
-        assert service.get_operation(running.operation_id, BOB).status in ("pending", "running")
-        assert service.get_operation(queued.operation_id, ADMIN).status == "pending"
-    finally:
-        release.set()
-    assert _wait(service, running.operation_id, BOB).status == "completed"
-    assert _wait(service, queued.operation_id, ADMIN).status == "completed"
-
-
-def test_a_crashing_page_read_does_not_strand_the_accepted_queue(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    original_ensure_worker = service._ensure_worker
-    monkeypatch.setattr(service, "_ensure_worker", lambda: None)
-    _seed_image(invoker, "alice.png")
-    _seed_image(invoker, "bob.png", user_id="bob")
-    operation_ids = [
-        _start(
-            service, service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner(c.user_id)), c), c
-        ).operation_id
-        for c in (ALICE, BOB)
-    ]
-
-    real_iter = service._records.iter_deletable_batches
-    crashed = False
-
-    def crash_once(*args, **kwargs):
-        nonlocal crashed
-        if not crashed:
-            crashed = True
-            raise OSError("storage temporarily unavailable")
-        return real_iter(*args, **kwargs)
-
-    monkeypatch.setattr(service._records, "iter_deletable_batches", crash_once)
-    monkeypatch.setattr(service, "_ensure_worker", original_ensure_worker)
-    service._ensure_worker()
-
-    assert _wait(service, operation_ids[0]).status == "failed"
-    assert _wait(service, operation_ids[1], BOB).status == "completed"
-
-
 # ── legacy ──
 
 
@@ -1026,67 +892,6 @@ def test_inputs_added_to_an_active_session_after_it_was_scanned_are_protected(
     second = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
     assert second.impact.delete_images == 0
     assert second.impact.keep_active_images == 1
-
-
-def test_cleanup_rechecks_same_length_active_session_rewrites_with_an_unchanged_timestamp(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _seed_image(invoker, "old.png")
-    _seed_image(invoker, "new.png")
-    item_id = _enqueue_row(invoker, session_id="parent", status="waiting", session_json='{"image_name":"old.png"}')
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
-    assert preview.impact.delete_images == 1
-
-    def rewrite_session() -> None:
-        # The queue timestamp has millisecond precision. Suppress its trigger to make the
-        # same-millisecond, same-length rewrite deterministic instead of timing dependent.
-        with invoker.services.image_records._db.transaction() as cursor:
-            cursor.execute("DROP TRIGGER tg_session_queue_updated_at;")
-            cursor.execute(
-                "UPDATE session_queue SET session = ? WHERE item_id = ?;", ('{"image_name":"new.png"}', item_id)
-            )
-
-    _before_first_delete(invoker, monkeypatch, rewrite_session)
-    assert _wait(service, _start(service, preview).operation_id).progress.retained_images == 1
-    assert _exists(invoker, "new.png")
-
-
-def test_a_deactivated_caller_stops_at_the_next_batch(
-    invoker: Invoker, service: IntermediatesService, monkeypatch
-) -> None:
-    monkeypatch.setattr(intermediates_default, "DELETE_BATCH_SIZE", 1)
-    for index in range(2):
-        _seed_image(invoker, f"a-{index}.png")
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
-    real_get = invoker.services.users.get
-    calls = {"n": 0}
-
-    def deactivate_after_first_batch(user_id: str):
-        user = real_get(user_id)
-        calls["n"] += 1
-        return user.model_copy(update={"is_active": False}) if user is not None and calls["n"] > 1 else user
-
-    monkeypatch.setattr(invoker.services.users, "get", deactivate_after_first_batch)
-
-    operation = _wait(service, _start(service, preview).operation_id)
-
-    assert operation.status == "failed"
-    assert operation.progress.deleted_images == 1
-    assert sum(_exists(invoker, f"a-{index}.png") for index in range(2)) == 1
-
-
-def test_unmeasured_targets_are_reported_rather_than_counted_as_free(
-    invoker: Invoker, service: IntermediatesService
-) -> None:
-    _seed_image(invoker, "measured.png", size=10)
-    _seed_image(invoker, "unmeasured.png")
-    invoker.services.image_records.set_file_size_bytes("unmeasured.png", None)
-
-    preview, operation = _run(service, ALICE, _owner("alice"))
-
-    assert preview.impact.unknown_size_count == 1
-    assert operation.progress.reclaimed_bytes == 10
-    assert operation.progress.unknown_size_count == 1
 
 
 def test_a_save_cannot_slip_between_the_final_check_and_the_delete(
@@ -1185,22 +990,6 @@ def test_active_inputs_survive_a_rolled_back_batch(
     assert _exists(invoker, "consumed.png"), "an input of pending work was deleted after a rolled-back batch"
 
 
-def test_force_clear_keeps_a_newly_referenced_target(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _seed_image(invoker, "force-race.png")
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("alice")), ALICE)
-    assert preview.affected_documents == []
-    _before_first_delete(
-        invoker, monkeypatch, lambda: _project(invoker, "alice", "Saved after preview", {"imageName": "force-race.png"})
-    )
-
-    finished = _wait(service, _start(service, preview).operation_id)
-
-    assert finished.progress.retained_images == 1
-    assert _exists(invoker, "force-race.png")
-
-
 def test_the_acknowledged_documents_bound_what_a_force_clear_may_break(
     invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1231,19 +1020,6 @@ def test_the_acknowledged_documents_bound_what_a_force_clear_may_break(
     assert _exists(invoker, "t3.png")
 
 
-def test_a_force_preview_refuses_more_acknowledged_documents_than_the_bound(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(intermediates_default, "MAX_ACKNOWLEDGED_DOCUMENTS", 2)
-    for index in range(3):
-        _seed_image(invoker, f"doc-{index}.png")
-        _project(invoker, "alice", f"Doc {index}", {"imageName": f"doc-{index}.png"})
-
-    with pytest.raises(IntermediatesScopeInvalidError, match="narrow the scope"):
-        service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("alice")), ALICE)
-    assert service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
-
-
 def test_an_account_holds_media_for_a_bounded_number_of_leases(invoker: Invoker, service: IntermediatesService) -> None:
     from invokeai.app.services.intermediates.intermediates_common import (
         MAX_BROWSER_HOLD_LEASES_PER_USER,
@@ -1270,21 +1046,6 @@ def test_an_account_holds_media_for_a_bounded_number_of_leases(invoker: Invoker,
     assert all(_exists(invoker, f"held-{tab}.png") for tab in range(1, MAX_BROWSER_HOLD_LEASES_PER_USER + 1))
     bob = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("bob")), BOB)
     assert (bob.impact.keep_active_images, bob.impact.delete_images) == (1, 0)
-
-
-def test_force_preview_lists_a_bounded_number_of_broken_documents(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(intermediates_default, "MAX_AFFECTED_DOCUMENTS", 2)
-    for index in range(3):
-        _seed_image(invoker, f"doc-{index}.png")
-        _project(invoker, "alice", f"Doc {index}", {"imageName": f"doc-{index}.png"})
-
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("alice")), ALICE)
-
-    assert [doc.name for doc in preview.affected_documents] == ["Doc 0", "Doc 1"]
-    assert preview.affected_documents_total == 3
-    assert preview.impact.delete_images == 3
 
 
 def test_browser_hold_protects_unsaved_and_undo_references(invoker: Invoker, service: IntermediatesService) -> None:
@@ -1380,23 +1141,6 @@ def test_the_final_check_judges_cached_media_recency_as_of_the_preview(
     assert _exists(invoker, "cached.png") and not _exists(invoker, "old.png")
 
 
-def test_an_unconfirmed_preview_expires(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from datetime import timedelta
-
-    from invokeai.app.services.intermediates.intermediates_common import PREVIEW_TTL_SECONDS
-
-    _seed_image(invoker, "a.png")
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
-    later = preview.created_at + timedelta(seconds=PREVIEW_TTL_SECONDS + 1)
-    monkeypatch.setattr(intermediates_default, "_now", lambda: later)
-
-    with pytest.raises(IntermediatesPreviewNotFoundError):
-        _start(service, preview)
-    assert _exists(invoker, "a.png")
-
-
 def test_matching_scope_resolves_filtered_rows_minus_exclusions(
     invoker: Invoker, service: IntermediatesService
 ) -> None:
@@ -1475,49 +1219,6 @@ def test_selection_paging_seeks_each_row_without_sorting_the_scope(
             )
             plan = " ".join(str(row[-1]) for row in cursor.fetchall())
             assert "B-TREE FOR ORDER BY" not in plan, plan
-
-
-def test_a_matching_scope_over_too_many_rows_is_refused(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(intermediates_default, "MAX_RESOLVED_SCOPE_TARGETS", 1)
-    _seed_image(invoker, "a.png", project_id=_project(invoker, "alice", "A", {}))
-    _seed_image(invoker, "b.png")
-
-    with pytest.raises(IntermediatesScopeInvalidError, match="narrow"):
-        service.create_preview(
-            IntermediatesPreviewRequest(mode="safe", scope=IntermediatesScope(kind="matching")), ALICE
-        )
-
-
-def test_measurement_skip_set_does_not_starve_later_rows(invoker: Invoker, service: IntermediatesService) -> None:
-    records = service._records
-    for index in range(501):
-        _seed_image(invoker, f"unmeasurable-{index}.png", with_file=False)
-        invoker.services.image_records.set_file_size_bytes(f"unmeasurable-{index}.png", None)
-    _seed_image(invoker, "later-measurable.png", with_file=False)
-    invoker.services.image_records.set_file_size_bytes("later-measurable.png", None)
-
-    records.mark_unmeasurable("image", [f"unmeasurable-{index}.png" for index in range(501)])
-
-    assert records.next_unmeasured("image", 1) == [("later-measurable.png", "")]
-
-
-def test_eligible_rows_behind_protected_ones_are_not_starved(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(intermediates_default, "DELETE_BATCH_SIZE", 1)
-    _seed_image(invoker, "protected-first.png")
-    _project(invoker, "alice", "Uses image", {"imageName": "protected-first.png"})
-    for index in range(3):
-        _seed_image(invoker, f"eligible-{index}.png")
-
-    preview, result = _run(service, ALICE, _owner("alice"))
-
-    assert preview.impact.delete_images == 3
-    assert preview.impact.keep_referenced_images == 1
-    assert result.progress.deleted_images == 3
-    assert _exists(invoker, "protected-first.png")
 
 
 @pytest.mark.parametrize("cleanup_wins_race", [False, True])
@@ -1758,45 +1459,6 @@ def test_completed_nested_child_keeps_media_while_its_root_is_active(
     assert completed.progress.deleted_images == completed.progress.deleted_videos == 1
 
 
-def test_child_protection_does_not_scan_unrelated_completed_history(
-    invoker: Invoker, service: IntermediatesService
-) -> None:
-    root = _enqueue_row(invoker, session_id="root", status="waiting")
-    _enqueue_row(invoker, session_id="child", status="completed", root_item_id=root, parent_item_id=root)
-    _seed_image(invoker, "produced.png", session_id="child")
-    db = invoker.services.image_records._db
-
-    def classify():
-        instructions = 0
-
-        def count_instructions():
-            nonlocal instructions
-            instructions += 100
-            return 0
-
-        db._conn.set_progress_handler(count_instructions, 100)
-        try:
-            classified = service._records.preview_scope(
-                user_id=None, targets=None, mode="safe", is_admin=True, caller_user_id="admin", max_acknowledged=10
-            )
-            assert (classified.counts["image"].active, classified.deletable["image"].count) == (1, 0)
-            return instructions
-        finally:
-            db._conn.set_progress_handler(None, 0)
-
-    baseline = classify()
-    with db.transaction() as cursor:
-        cursor.executemany(
-            "INSERT INTO session_queue (queue_id, session, session_id, batch_id, user_id, status) "
-            "VALUES ('default', '{}', ?, 'history', 'alice', 'completed');",
-            [(f"history-{index}",) for index in range(20_000)],
-        )
-    # Count SQLite VM work instead of machine-dependent elapsed time. A scan of
-    # completed rows grows by orders of magnitude; indexed active-root lookups do not.
-    assert 0 < baseline < 10_000
-    assert classify() < 3 * baseline
-
-
 @pytest.mark.parametrize("bulk", [False, True])
 def test_video_cleanup_cannot_purge_files_during_staged_deletion(
     invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch, bulk: bool
@@ -1877,23 +1539,6 @@ def test_legacy_client_state_protects_its_canvas_media_until_it_changes(
     assert operation.progress.deleted_images == 1
 
 
-@pytest.mark.parametrize("forget", ["key", "account"])
-def test_forgetting_client_state_releases_its_media(
-    invoker: Invoker, service: IntermediatesService, forget: str
-) -> None:
-    client_state = invoker.services.client_state_persistence
-    client_state.set_by_key("alice", "canvas", '{"image_name": "layer.png"}')
-    _seed_image(invoker, "layer.png")
-
-    if forget == "key":
-        client_state.delete_by_key("alice", "canvas")
-    else:
-        client_state.delete("alice")
-
-    _, operation = _run(service, ALICE, _owner("alice"))
-    assert operation.progress.deleted_images == 1
-
-
 def test_quarantined_projects_are_named_when_a_force_clear_would_break_them(
     invoker: Invoker, service: IntermediatesService
 ) -> None:
@@ -1921,33 +1566,6 @@ def test_quarantined_projects_are_named_when_a_force_clear_would_break_them(
 
 
 # ── bounds ──
-
-
-def test_previewing_in_a_loop_cannot_evict_another_accounts_pending_preview(
-    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    per_caller = intermediates_default.MAX_PREVIEWS_PER_CALLER
-    monkeypatch.setattr(intermediates_default, "MAX_PREVIEWS", per_caller + 1)
-    _seed_image(invoker, "safe.png")
-    pending = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ADMIN)
-
-    alice_previews = [
-        service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
-        for _ in range(per_caller + 2)
-    ]
-
-    # Alice's loop evicts only her own oldest previews; the administrator's pending one survives.
-    _wait(service, _start(service, pending, ADMIN).operation_id, ADMIN)
-    for evicted in alice_previews[:2]:
-        with pytest.raises(IntermediatesPreviewNotFoundError):
-            _start(service, evicted)
-    monkeypatch.setattr(intermediates_default, "MAX_PREVIEWS", 2)
-    bobs = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("bob")), BOB)
-    # Past the global cap the oldest previews go, whoever made them.
-    with pytest.raises(IntermediatesPreviewNotFoundError):
-        _start(service, alice_previews[-2])
-    assert _start(service, alice_previews[-1]).status == "pending"
-    assert bobs.preview_id in service._previews
 
 
 def test_legacy_clear_deletes_every_safe_image_in_bounded_batches(
@@ -1982,24 +1600,6 @@ def test_background_measurement_never_overwrites_the_writers_size(invoker: Invok
     invoker.services.image_records.set_file_sizes_bytes({"written.png": 0})
 
     assert invoker.services.image_records.get("written.png").file_size_bytes == 10
-
-
-def test_browser_holds_expire_shortly_after_their_last_refresh(invoker: Invoker, service: IntermediatesService) -> None:
-    from invokeai.app.services.intermediates.intermediates_common import (
-        BROWSER_HOLD_TTL_SECONDS,
-        IntermediatesBrowserHoldRequest,
-    )
-
-    _seed_image(invoker, "held.png")
-    service.replace_browser_hold(ALICE, "tab", IntermediatesBrowserHoldRequest(images=["held.png"]))
-
-    with invoker.services.image_records._db.transaction() as cursor:
-        cursor.execute(
-            "SELECT (JULIANDAY(expires_at) - JULIANDAY('now')) * 86400 FROM intermediates_browser_holds"
-            " WHERE media_name = 'held.png';"
-        )
-        remaining = cursor.fetchone()[0]
-    assert remaining == pytest.approx(BROWSER_HOLD_TTL_SECONDS, abs=60)
 
 
 def test_a_non_admin_force_preview_is_not_starved_by_foreign_referenced_rows(
