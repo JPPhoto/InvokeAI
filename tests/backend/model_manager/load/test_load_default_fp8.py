@@ -13,6 +13,7 @@ Covers:
   so FLUX RMSNorm.scale and friends aren't crushed to FP8.
 """
 
+from contextlib import contextmanager
 from logging import getLogger
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -66,6 +67,22 @@ def _make_quantized_config(fmt: ModelFormat = ModelFormat.GGUFQuantized):
     return config
 
 
+_STORAGE_PROBE = "invokeai.backend.model_manager.load.load_default._device_supports_fp8_storage"
+
+
+@contextmanager
+def _device_holds_fp8():
+    """Answer the storage probe True.
+
+    For the tests that ask *which* models opt into fp8, or what the cast does to a model that did.
+    Neither question is about whether a device can hold float8, and the answer has to be supplied
+    because the probe is real now: the CUDA branch used to be answered True without asking, which is
+    why these tests used to pass on a runner with no driver. One that has none rightly fails it.
+    """
+    with patch(_STORAGE_PROBE, return_value=True):
+        yield
+
+
 @pytest.mark.parametrize(
     "config,submodel",
     [
@@ -87,21 +104,19 @@ def test_should_use_fp8_does_not_probe_the_device_for_excluded_models(config, su
     SYCL init on a thread that never generates.
     """
     loader = _make_loader("xpu")
-    probe_path = "invokeai.backend.model_manager.load.load_default._device_supports_fp8_storage"
-    with patch(probe_path) as mock_probe:
+    with patch(_STORAGE_PROBE) as mock_probe:
         assert loader._should_use_fp8(config, submodel) is False
     mock_probe.assert_not_called()
 
 
 def test_should_use_fp8_probes_the_device_when_fp8_is_requested():
     loader = _make_loader("xpu")
-    probe_path = "invokeai.backend.model_manager.load.load_default._device_supports_fp8_storage"
     config = _make_config(ModelType.Main, fp8=True)
-    with patch(probe_path, return_value=True) as mock_probe:
+    with patch(_STORAGE_PROBE, return_value=True) as mock_probe:
         assert loader._should_use_fp8(config, None) is True
     mock_probe.assert_called_once()
     # An unsupported device still vetoes, just without probing on every unrelated load.
-    with patch(probe_path, return_value=False):
+    with patch(_STORAGE_PROBE, return_value=False):
         assert loader._should_use_fp8(config, None) is False
 
 
@@ -123,7 +138,8 @@ def test_should_use_fp8_excludes_lora():
 
 def test_should_use_fp8_returns_true_for_main_with_fp8():
     loader = _make_loader(device="cuda")
-    assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True)) is True
+    with _device_holds_fp8():
+        assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True)) is True
 
 
 def test_should_use_fp8_returns_false_for_main_without_fp8():
@@ -148,10 +164,11 @@ def test_should_use_fp8_excludes_prompt_enhancer(submodel_type: SubModelType):
     """
     loader = _make_loader(device="cuda")
     config = _make_config(ModelType.Main, fp8=True, base=BaseModelType.ErnieImage)
-    assert loader._should_use_fp8(config, submodel_type) is False
-    # Sanity: the same config *does* opt the transformer in, so the assertion above is about the
-    # submodel exclusion and not about the config failing to enable fp8 at all.
-    assert loader._should_use_fp8(config, SubModelType.Transformer) is True
+    with _device_holds_fp8():
+        assert loader._should_use_fp8(config, submodel_type) is False
+        # Sanity: the same config *does* opt the transformer in, so the assertion above is about the
+        # submodel exclusion and not about the config failing to enable fp8 at all.
+        assert loader._should_use_fp8(config, SubModelType.Transformer) is True
 
 
 class _RaisingModule(torch.nn.Module):
@@ -554,7 +571,8 @@ def test_should_use_fp8_allows_z_image():
     dtype now comes from the model itself, so the exclusion is obsolete.
     """
     loader = _make_loader(device="cuda")
-    assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True, base=BaseModelType.ZImage)) is True
+    with _device_holds_fp8():
+        assert loader._should_use_fp8(_make_config(ModelType.Main, fp8=True, base=BaseModelType.ZImage)) is True
 
 
 def test_wrap_forward_reaches_custom_linear_after_apply_custom_layers():
@@ -895,7 +913,10 @@ class TestAlreadyFp8StorageGuard:
         loader = _make_loader("cuda")
         model = torch.nn.Sequential(torch.nn.Linear(16, 32))
 
-        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=True):
+        with (
+            _device_holds_fp8(),
+            patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=True),
+        ):
             loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
 
         assert model[0].weight.dtype is torch.float8_e4m3fn
@@ -913,7 +934,10 @@ class TestAlreadyFp8StorageGuard:
         loader = _make_loader("cuda")
         model = torch.nn.Sequential(torch.nn.Linear(16, 32))
 
-        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=False):
+        with (
+            _device_holds_fp8(),
+            patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=False),
+        ):
             loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
 
         assert model[0].weight.dtype is torch.float8_e4m3fn
