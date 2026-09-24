@@ -967,9 +967,10 @@ class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEnco
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model)
             # No `skip_patterns` here on purpose: this model declares none, and the storage pass below
             # applies `_FP8_DEFAULT_SKIP_PATTERNS` itself. Those two lists used to have to not intersect
-            # on a 2-D Linear -- such a weight would arrive fp8 from the state dict, be skipped by the
-            # cast pass, and forward on raw fp8 codes. `_apply_fp8_to_nn_module` now restores the compute
-            # dtype on the modules it skips, so the two lists are independent again.
+            # on a layer class with no fp8-capable wrapper -- a `pos_embed` or a `patch_embed.proj`
+            # would arrive fp8 from the state dict, be skipped by the cast pass, and then raise on the
+            # first forward. `_apply_fp8_to_nn_module` now restores the compute dtype on the modules it
+            # skips, so the two lists are independent again.
             cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model)
 
         load_state_dict_ignoring_extras(
@@ -996,7 +997,7 @@ class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEnco
             # `set_fp8_compute_dtype`, without which `get_model_compute_dtype` falls back to scanning
             # for a non-fp8 float parameter -- which happens to work only because the embedding is
             # excluded here and stays bf16. And it installs the backstop that restores the compute
-            # dtype on Linears its skip list and the default one both name, which is the documented
+            # dtype on the modules its skip list and the default one both name, which is the documented
             # guard against those two lists ever overlapping. Two exclusions:
             #
             #  - anything carrying a `weight_scale`: those keep their scale and go through
