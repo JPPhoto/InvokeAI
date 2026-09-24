@@ -32,20 +32,25 @@ import {
 } from '@features/queue/data/progressImageStore';
 import { queueItemProgressStore, type QueueItemProgressSink } from '@features/queue/data/progressStore';
 import { mapWithConcurrency } from '@platform/core/concurrency';
+import { createLogger } from '@platform/logging/logger';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
 
 const GALLERY_REFRESH_COALESCE_MS = 400;
 const SAFETY_SWEEP_INTERVAL_MS = 30_000;
+/** Node-level detail supports the terminal queue-item failure the history owner records. */
+const coordinatorLogger = createLogger({ area: 'coordinator', namespace: 'queue' });
+
 const TERMINAL_EVENT_BUFFER_LIMIT = 256;
 const NODE_EVENT_BUFFER_ITEM_LIMIT = 64;
 const NODE_EVENT_BUFFER_EVENTS_PER_ITEM = 512;
+const PROGRESS_EVENT_BUFFER_ITEM_LIMIT = 64;
 const BACKEND_READ_CONCURRENCY = 16;
+const FRAME_GATES_PER_WAIT_LIMIT = 64;
 
 /**
- * Queue's view of model-load activity derived from socket events. The
- * production adapter is Models' modelLoadActivitySink, injected by the App
- * composition root (see app/QueueRuntimeAdapter); tests inject a double.
+ * App injects Models' model-load activity sink so Queue can report socket-derived activity without importing its
+ * owner.
  */
 export interface QueueModelLoadPort {
   completed(payload: unknown): void;
@@ -58,7 +63,7 @@ export interface QueueNodeExecutionPort {
   completed(event: InvocationCompleteEvent): void;
   failed(event: InvocationErrorEvent): void;
   progress(nodeId: string, percentage: number | null, message: string): void;
-  settleRunning(nodeIds: Iterable<string>, outcome: 'completed' | 'failed' | 'canceled'): void;
+  settleRunning(nodeIds: Iterable<string>, outcome: 'completed' | 'failed' | 'canceled', error?: string): void;
   started(event: InvocationStartedEvent): void;
 }
 
@@ -141,21 +146,15 @@ export interface QueueCoordinator {
   connect(): void;
   detachRun(localQueueItemId: string): void;
   dispose(): void;
-  /**
-   * Match persisted pending/running queue items against the live backend queue
-   * so a reload neither double-submits nor orphans work. Adopted and resumed
-   * items are tracked and can be awaited with `waitForResults`.
-   */
+  /** Reconcile persisted work with backend items to avoid duplicate submission or orphaned runs after reload. */
   reconcile(items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>>;
   /** Enqueue a generate batch and track its backend items for event-driven settlement. */
   submitGenerate(localQueueItemId: string, request: QueueEnqueueGenerateRequest): Promise<QueueEnqueueResult>;
   /** Enqueue a compiled workflow graph and track its backend items the same way. */
   submitWorkflow(localQueueItemId: string, request: QueueEnqueueWorkflowRequest): Promise<QueueEnqueueResult>;
   /**
-   * Resolve once every backend item of the run reaches a terminal status —
-   * driven by socket events, with a slow safety sweep as the only polling.
-   * Resolves with the result images, throws on failure, and throws
-   * `QueueItemCancelledError` on backend-side cancellation.
+   * Await every backend item's terminal state via sockets and safety sweeps; return images or throw
+   * failure/cancellation.
    */
   waitForResults(
     localQueueItemId: string,
@@ -181,6 +180,7 @@ interface RunProgressState {
 }
 
 interface WaitState {
+  frameGates: Map<number, { revision: number | null; sessionId: string }>;
   localQueueItemId: string;
   settle: (outcome: TerminalOutcome) => void;
 }
@@ -228,6 +228,13 @@ export const createQueueCoordinator = (
   const runs = new Map<string, RunState>();
   const runProgress = new Map<string, RunProgressState>();
   const waits = new Map<number, WaitState>();
+  const clearFrameGate = (itemId: number): void => {
+    for (const wait of waits.values()) {
+      if (wait.frameGates.delete(itemId)) {
+        return;
+      }
+    }
+  };
   /**
    * Terminal events that arrived for items nobody tracks yet. Closes the race
    * where a very fast generation finishes between `enqueue_batch` resolving
@@ -240,21 +247,34 @@ export const createQueueCoordinator = (
    * is still resolving.
    */
   const pendingNodeEvents = new Map<number, NodeEvent[]>();
+  /** Latest preview for items whose enqueue response has not registered them yet. */
+  const pendingProgressEvents = new Map<number, InvocationProgressEvent>();
   /** Nodes each backend item has driven; settled with the item's terminal outcome. */
   const nodeIdsByBackendItem = new Map<number, Set<string>>();
-  /** The backend item whose node events the execution store currently reflects, and the receipt sequence it took over at. */
-  let nodeExecutionItemId: number | null = null;
-  let nodeExecutionItemSequence = 0;
+  /** The root backend item whose node events the execution store currently reflects. */
+  let nodeExecutionRootItemId: number | null = null;
+  let nodeExecutionRootItemSequence = 0;
   let nodeEventSequence = 0;
-  /** Enqueue requests awaiting a response; node events are only buffered while one is in flight. */
+  /** Enqueue requests awaiting a response; early node events and previews are buffered while one is in flight. */
   let inFlightSubmissions = 0;
   const latestStatusSequences = new Map<number, number>();
-  /**
-   * Per backend item, the session and revision of the last accepted preview
-   * frame. Socket delivery is ordered, so this only bites when a second source
-   * — the reconnect snapshot the backend is to grow — races the live stream.
-   */
-  const latestFrameGates = new Map<number, { revision: number | null; sessionId: string }>();
+  const getTrackedBackendItemId = (event: { item_id: number; root_item_id?: number | null }): number =>
+    event.root_item_id ?? event.item_id;
+
+  const getNodeSourceId = (event: { invocation_source_id: string; workflow_call_parent_source_id?: string | null }) =>
+    event.workflow_call_parent_source_id ?? event.invocation_source_id;
+
+  const routeNodeEvent = <T extends NodeEvent['event']>(
+    event: T,
+    backendItemId: number,
+    invocationSourceId: string
+  ): T => {
+    if (backendItemId === event.item_id && invocationSourceId === event.invocation_source_id) {
+      return event;
+    }
+
+    return { ...event, invocation_source_id: invocationSourceId, item_id: backendItemId } as T;
+  };
 
   const detachers: Array<() => void> = [];
   let isAttached = false;
@@ -337,30 +357,31 @@ export const createQueueCoordinator = (
     return { itemIndex: itemIndex === -1 ? 1 : itemIndex + 1, queueItemId: localQueueItemId };
   };
 
-  const settleNodes = (backendItemId: number, outcome: TerminalOutcome['status']): void => {
+  const settleNodes = (backendItemId: number, outcome: TerminalOutcome): void => {
     const nodeIds = nodeIdsByBackendItem.get(backendItemId);
 
     nodeIdsByBackendItem.delete(backendItemId);
 
     // A late settle for an item the store no longer reflects must not touch the current run's nodes.
-    if (nodeIds && isActive() && nodeExecutionItemId === backendItemId) {
-      nodeExecution.settleRunning(nodeIds, outcome);
+    if (nodeIds && isActive() && nodeExecutionRootItemId === backendItemId) {
+      if (outcome.status === 'failed') {
+        nodeExecution.settleRunning(nodeIds, outcome.status, outcome.error);
+      } else {
+        nodeExecution.settleRunning(nodeIds, outcome.status);
+      }
     }
   };
 
-  /**
-   * The store follows whichever item most recently produced a live event; the backend may run items
-   * in any order, so only a replayed event from before the current item's takeover is a straggler.
-   */
+  /** Backend order may vary; reject only replayed events predating the current item's takeover. */
   const isStaleNodeEvent = (nodeEvent: NodeEvent): boolean =>
-    nodeExecutionItemId !== null &&
-    nodeEvent.event.item_id !== nodeExecutionItemId &&
-    nodeEvent.sequence < nodeExecutionItemSequence;
+    nodeExecutionRootItemId !== null &&
+    getTrackedBackendItemId(nodeEvent.event) !== nodeExecutionRootItemId &&
+    nodeEvent.sequence < nodeExecutionRootItemSequence;
 
   const trackNodeForItem = (backendItemId: number, nodeId: string, sequence: number): void => {
-    if (nodeExecutionItemId !== backendItemId) {
-      nodeExecutionItemId = backendItemId;
-      nodeExecutionItemSequence = sequence;
+    if (nodeExecutionRootItemId !== backendItemId) {
+      nodeExecutionRootItemId = backendItemId;
+      nodeExecutionRootItemSequence = sequence;
       nodeExecution.clearAll();
     }
 
@@ -378,28 +399,54 @@ export const createQueueCoordinator = (
       return;
     }
 
-    trackNodeForItem(nodeEvent.event.item_id, nodeEvent.event.invocation_source_id, nodeEvent.sequence);
+    const backendItemId = getTrackedBackendItemId(nodeEvent.event);
+    const invocationSourceId = getNodeSourceId(nodeEvent.event);
+
+    trackNodeForItem(backendItemId, invocationSourceId, nodeEvent.sequence);
 
     switch (nodeEvent.kind) {
       case 'started': {
-        const wait = waits.get(nodeEvent.event.item_id);
+        const routedEvent = routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId);
+        const wait = waits.get(backendItemId);
         if (wait) {
-          activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, nodeEvent.event.item_id));
+          activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, backendItemId));
         }
-        nodeExecution.started(nodeEvent.event);
+        nodeExecution.started(routedEvent);
         return;
       }
       case 'completed':
-        nodeExecution.completed(nodeEvent.event);
+        // A called workflow's child lifecycle is represented by the visible
+        // Call Saved Workflow node. Only the root invocation may settle that
+        // node or replace its latest output.
+        waits.get(backendItemId)?.frameGates.delete(nodeEvent.event.item_id);
+        if (backendItemId !== nodeEvent.event.item_id) {
+          return;
+        }
+        nodeExecution.completed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
       case 'failed':
-        nodeExecution.failed(nodeEvent.event);
+        waits.get(backendItemId)?.frameGates.delete(nodeEvent.event.item_id);
+        if (backendItemId !== nodeEvent.event.item_id) {
+          return;
+        }
+        coordinatorLogger.debug({
+          context: {
+            errorMessage: nodeEvent.event.error_message,
+            errorType: nodeEvent.event.error_type,
+            itemId: nodeEvent.event.item_id,
+            nodeId: nodeEvent.event.invocation_source_id,
+            sessionId: nodeEvent.event.session_id,
+          },
+          message: `Invocation failed: ${nodeEvent.event.error_type}`,
+          name: 'queue.invocation-error',
+        });
+        nodeExecution.failed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
     }
   };
 
   const bufferNodeEvent = (nodeEvent: NodeEvent): void => {
-    const itemId = nodeEvent.event.item_id;
+    const itemId = getTrackedBackendItemId(nodeEvent.event);
     const events = pendingNodeEvents.get(itemId) ?? [];
 
     if (events.length >= NODE_EVENT_BUFFER_EVENTS_PER_ITEM) {
@@ -417,6 +464,23 @@ export const createQueueCoordinator = (
       }
 
       pendingNodeEvents.delete(oldestId);
+    }
+  };
+
+  const bufferProgressEvent = (event: InvocationProgressEvent): void => {
+    const backendItemId = getTrackedBackendItemId(event);
+
+    pendingProgressEvents.delete(backendItemId);
+    pendingProgressEvents.set(backendItemId, event);
+
+    while (pendingProgressEvents.size > PROGRESS_EVENT_BUFFER_ITEM_LIMIT) {
+      const oldestId = pendingProgressEvents.keys().next().value;
+
+      if (oldestId === undefined) {
+        break;
+      }
+
+      pendingProgressEvents.delete(oldestId);
     }
   };
 
@@ -442,7 +506,7 @@ export const createQueueCoordinator = (
     }
   };
 
-  /** Runs an enqueue call while buffering node events that may land before its response registers the items. */
+  /** Runs an enqueue call while buffering events that may land before its response registers the items. */
   const withSubmissionInFlight = async <T>(submit: () => Promise<T>): Promise<T> => {
     inFlightSubmissions += 1;
 
@@ -453,6 +517,7 @@ export const createQueueCoordinator = (
 
       if (inFlightSubmissions === 0) {
         pendingNodeEvents.clear();
+        pendingProgressEvents.clear();
       }
     }
   };
@@ -465,9 +530,9 @@ export const createQueueCoordinator = (
       return;
     }
 
+    wait.frameGates.clear();
     waits.delete(backendItemId);
-    latestFrameGates.delete(backendItemId);
-    settleNodes(backendItemId, outcome.status);
+    settleNodes(backendItemId, outcome);
     const progressTarget = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     const releaseProgressSlot = (): void => {
       if (isActive()) {
@@ -493,17 +558,14 @@ export const createQueueCoordinator = (
     }
 
     if (outcome.status === 'completed') {
-      // Held before routing starts: the finished image swaps in over this frame
-      // once the browser has decoded it, and the batch's next slot shows it
-      // until a frame of its own arrives.
+      // Hold the frame before routing so decoded results and the next frameless slot can replace it without
+      // blanking.
       progressImage.hold(progressTarget);
       const routingPromise = callbacks.onBackendItemComplete?.(wait.localQueueItemId, backendItemId);
 
       if (routingPromise) {
-        // The slot stays followed until routing lands. Released on the terminal
-        // event, Preview fell out of live-follow two HTTP round trips before the
-        // finished image could be selected, and showed the previous selection
-        // in between.
+        // Keep following until routing lands; terminal events precede finished-image selection by network round
+        // trips.
         activeProgressTarget.settle(progressTarget);
         void Promise.resolve(routingPromise)
           .finally(releaseProgressSlot)
@@ -537,7 +599,8 @@ export const createQueueCoordinator = (
     }
   };
 
-  const isTrackedEvent = (event: { item_id: number }): boolean => waits.has(event.item_id);
+  const isTrackedEvent = (event: { item_id: number; root_item_id?: number | null }): boolean =>
+    waits.has(getTrackedBackendItemId(event));
 
   const trackBackendItem = (localQueueItemId: string, backendItemId: number): Promise<TerminalOutcome> => {
     const bufferedOutcome = recentTerminalOutcomes.get(backendItemId);
@@ -545,14 +608,16 @@ export const createQueueCoordinator = (
     if (bufferedOutcome) {
       replayNodeEvents(backendItemId);
       recentTerminalOutcomes.delete(backendItemId);
-      settleNodes(backendItemId, bufferedOutcome.status);
+      pendingProgressEvents.delete(backendItemId);
+      settleNodes(backendItemId, bufferedOutcome);
 
       return Promise.resolve(bufferedOutcome);
     }
 
     return new Promise<TerminalOutcome>((settle) => {
-      waits.set(backendItemId, { localQueueItemId, settle });
+      waits.set(backendItemId, { frameGates: new Map(), localQueueItemId, settle });
       replayNodeEvents(backendItemId);
+      replayProgressEvent(backendItemId);
     });
   };
 
@@ -578,11 +643,8 @@ export const createQueueCoordinator = (
   };
 
   /**
-   * Slow safety net for events lost to disconnects; runs on reconnect, on the
-   * tab becoming visible, and on a long interval. A request made while one is in
-   * flight runs again afterwards rather than being dropped: the visibility sweep
-   * often fires while the network is still coming back and the reconnect sweep
-   * a second later is the one that can actually reach the backend.
+   * Sweep on reconnect, visibility, and a slow interval. Requests during an active sweep guarantee a trailing pass
+   * after network recovery.
    */
   const sweep = async (): Promise<void> => {
     if (!isActive() || waits.size === 0) {
@@ -626,12 +688,8 @@ export const createQueueCoordinator = (
   };
 
   /**
-   * Ask the backend for the latest preview frame of every running item and feed
-   * each through the socket handler, where the revision gate drops anything the
-   * live stream already delivered. Covers the frames lost while a hidden tab's
-   * socket was down, and the frames a reloaded page never saw. Best effort: the
-   * backend also replays them on `subscribe_queue`, and a failure here only means
-   * waiting for the next step.
+   * Fetch current previews through the revision-gated live handler. Snapshot failure is nonfatal; replay or the
+   * next step can recover.
    */
   const refreshProgressPreviews = async (): Promise<void> => {
     if (!isActive() || waits.size === 0 || !backend.readProgressPreviews) {
@@ -682,10 +740,16 @@ export const createQueueCoordinator = (
         if (wait) {
           activeProgressTarget.clear(getProgressImageTarget(wait.localQueueItemId, event.item_id));
         }
-        latestFrameGates.delete(event.item_id);
+        wait?.frameGates.clear();
       }
 
       return;
+    }
+
+    // Root settlement clears its own wait's gates. Only child item statuses
+    // need the cross-wait lookup to remove their per-child preview gate.
+    if (!waits.has(event.item_id)) {
+      clearFrameGate(event.item_id);
     }
 
     if (!isTrackedEvent(event)) {
@@ -718,8 +782,13 @@ export const createQueueCoordinator = (
    * starts over.
    */
   const isStaleFrame = (event: InvocationProgressEvent): boolean => {
+    const wait = waits.get(getTrackedBackendItemId(event));
+    if (!wait) {
+      return false;
+    }
+
     const revision = event.revision ?? null;
-    const gate = latestFrameGates.get(event.item_id);
+    const gate = wait.frameGates.get(event.item_id);
 
     if (
       gate &&
@@ -731,7 +800,15 @@ export const createQueueCoordinator = (
       return true;
     }
 
-    latestFrameGates.set(event.item_id, { revision, sessionId: event.session_id });
+    wait.frameGates.delete(event.item_id);
+    wait.frameGates.set(event.item_id, { revision, sessionId: event.session_id });
+    while (wait.frameGates.size > FRAME_GATES_PER_WAIT_LIMIT) {
+      const oldestItemId = wait.frameGates.keys().next().value;
+      if (oldestItemId === undefined) {
+        break;
+      }
+      wait.frameGates.delete(oldestItemId);
+    }
 
     return false;
   };
@@ -741,9 +818,13 @@ export const createQueueCoordinator = (
       return;
     }
 
-    const wait = waits.get(event.item_id);
+    const backendItemId = getTrackedBackendItemId(event);
+    const wait = waits.get(backendItemId);
 
     if (!wait) {
+      if (inFlightSubmissions > 0) {
+        bufferProgressEvent(event);
+      }
       return;
     }
 
@@ -751,10 +832,11 @@ export const createQueueCoordinator = (
       return;
     }
 
-    trackNodeForItem(event.item_id, event.invocation_source_id, ++nodeEventSequence);
-    nodeExecution.progress(event.invocation_source_id, event.percentage, event.message);
+    const invocationSourceId = getNodeSourceId(event);
+    trackNodeForItem(backendItemId, invocationSourceId, ++nodeEventSequence);
+    nodeExecution.progress(invocationSourceId, event.percentage, event.message);
 
-    const target = getProgressImageTarget(wait.localQueueItemId, event.item_id);
+    const target = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     activeProgressTarget.set(target);
 
     if (event.image?.dataURL) {
@@ -764,7 +846,7 @@ export const createQueueCoordinator = (
     const state = runProgress.get(wait.localQueueItemId);
 
     if (state) {
-      state.activeBackendItemId = event.item_id;
+      state.activeBackendItemId = backendItemId;
       state.message = event.message;
       state.percentage = event.percentage;
       publishRunProgress(wait.localQueueItemId);
@@ -773,16 +855,19 @@ export const createQueueCoordinator = (
     }
   };
 
+  const replayProgressEvent = (backendItemId: number): void => {
+    const event = pendingProgressEvents.get(backendItemId);
+
+    pendingProgressEvents.delete(backendItemId);
+
+    if (event) {
+      handleProgress(event);
+    }
+  };
+
   /**
-   * React to the shared socket's connection lifecycle. The Platform hub owns
-   * transport mechanics only; this Queue coordinator clears its transient
-   * per-node and model-load state and, on (re)connect, schedules a gallery
-   * refresh and missed-event sweep.
-   *
-   * The followed slot and its last frame deliberately survive a drop: the run
-   * continues on the backend and the sweep reconciles its durable outcome, so
-   * wiping them only ever produced a blank card — until the next event if the
-   * run was still going, or for good if it finished while disconnected.
+   * Clear transient node/model-load state on connection changes and reconcile on reconnect. Preserve followed
+   * slots/frames because backend runs continue offline.
    */
   const handleConnectionChange = (status: BackendConnectionStatus): void => {
     if (!isActive()) {
@@ -791,9 +876,10 @@ export const createQueueCoordinator = (
 
     progress.clearAll?.();
     nodeExecution.clearAll();
-    nodeExecutionItemId = null;
-    nodeExecutionItemSequence = 0;
+    nodeExecutionRootItemId = null;
+    nodeExecutionRootItemSequence = 0;
     pendingNodeEvents.clear();
+    // Keep previews received before enqueue adoption; the HTTP response may still be in flight.
     nodeIdsByBackendItem.clear();
     modelLoads.reset();
 
@@ -840,10 +926,7 @@ export const createQueueCoordinator = (
     // has already connected still triggers the initial clear + sweep.
     detachers.push(backend.onConnectionChange(handleConnectionChange));
 
-    // A hidden tab's socket is often dropped by the server (its pings are
-    // timer-throttled) and socket.io reconnects on its own backoff once the tab
-    // is back. The outcome is on the backend already, so sweep on the
-    // visibility edge itself rather than waiting for the reconnect edge.
+    // Sweep when the tab becomes visible instead of waiting for socket reconnect backoff.
     if (typeof document !== 'undefined') {
       const visibilityDocument = document;
       const handleVisibilityChange = (): void => {
@@ -887,10 +970,8 @@ export const createQueueCoordinator = (
       sweepTimer = null;
     }
 
-    // A disposed coordinator can never observe another event, so pending
-    // waits settle as canceled (raw, no completion/cancel side effects) —
-    // otherwise `waitForResults` awaiters hang forever. The backend run
-    // itself continues; a later `reconcile` re-adopts it.
+    // Dispose settles local waiters as cancelled without backend side effects; later coordinators can re-adopt
+    // continuing runs.
     for (const wait of waits.values()) {
       wait.settle({ status: 'canceled' });
     }
@@ -899,8 +980,8 @@ export const createQueueCoordinator = (
     runs.clear();
     runProgress.clear();
     recentTerminalOutcomes.clear();
+    pendingProgressEvents.clear();
     latestStatusSequences.clear();
-    latestFrameGates.clear();
   };
 
   const reconcile = async (items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>> => {
@@ -1001,8 +1082,7 @@ export const createQueueCoordinator = (
       );
     }
 
-    // A reloaded page has no frame for a run it just re-adopted; the socket only
-    // brings the next step's.
+    // Fetch a preview for re-adopted runs rather than waiting for the next socket step.
     void refreshProgressPreviews();
 
     return outcomes;
@@ -1124,8 +1204,8 @@ export const createQueueCoordinator = (
       const wait = waits.get(backendItemId);
       if (wait?.localQueueItemId === localQueueItemId) {
         waits.delete(backendItemId);
-        latestFrameGates.delete(backendItemId);
-        settleNodes(backendItemId, 'canceled');
+        wait.frameGates.clear();
+        settleNodes(backendItemId, { status: 'canceled' });
         wait.settle({ status: 'canceled' });
       }
     }

@@ -1636,6 +1636,9 @@
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
                     },
                     {
@@ -2088,6 +2091,9 @@
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
                     },
                     {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+                    },
+                    {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
                     },
                     {
@@ -2538,6 +2544,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -3035,6 +3044,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -3559,6 +3571,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -4937,6 +4952,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                     },
                     {
                       "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -6901,10 +6919,10 @@
                   "type": "null"
                 }
               ],
-              "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span.",
+              "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`.",
               "title": "Eps"
             },
-            "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span."
+            "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`."
           },
           {
             "name": "min_samples",
@@ -7193,10 +7211,10 @@
                   "type": "null"
                 }
               ],
-              "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span.",
+              "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`.",
               "title": "Eps"
             },
-            "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution. Clamped server-side relative to the projection's coordinate span."
+            "description": "DBSCAN eps for clustering. Defaults to an adaptive value derived from the projection's k-distance distribution; that default is clamped relative to the coordinate span, a supplied value is not. Either way it is reduced if needed to keep DBSCAN's neighbourhoods inside a memory budget, and the value actually used is returned as `cluster_eps`."
           },
           {
             "name": "min_samples",
@@ -17537,6 +17555,9 @@
             "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
           },
           {
+            "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+          },
+          {
             "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
           },
           {
@@ -17974,7 +17995,7 @@
           "guidance_min": {
             "type": "number",
             "title": "Guidance Min",
-            "description": "Lowest guidance value the denoise node accepts; a smaller one fails at enqueue."
+            "description": "Lowest guidance value the slider offers: 1.0, which is no guidance, or the denoise node's own floor where that is higher."
           },
           "guidance_max": {
             "anyOf": [
@@ -49913,6 +49934,45 @@
             "title": "Invocation Source Id",
             "type": "string"
           },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
+          },
           "result": {
             "description": "The result of the invocation",
             "oneOf": [
@@ -50345,6 +50405,9 @@
           "session_id",
           "invocation",
           "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id",
           "result"
         ],
         "title": "InvocationCompleteEvent",
@@ -51447,6 +51510,45 @@
             "title": "Invocation Source Id",
             "type": "string"
           },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
+          },
           "error_type": {
             "description": "The error type",
             "title": "Error Type",
@@ -51474,6 +51576,9 @@
           "session_id",
           "invocation",
           "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id",
           "error_type",
           "error_message",
           "error_traceback"
@@ -53953,6 +54058,45 @@
             "title": "Invocation Source Id",
             "type": "string"
           },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
+          },
           "message": {
             "description": "A message to display",
             "title": "Message",
@@ -54023,6 +54167,9 @@
           "session_id",
           "invocation",
           "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id",
           "message",
           "percentage",
           "image",
@@ -55128,6 +55275,45 @@
             "description": "The ID of the prepared invocation's source node",
             "title": "Invocation Source Id",
             "type": "string"
+          },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
           }
         },
         "required": [
@@ -55140,7 +55326,10 @@
           "user_id",
           "session_id",
           "invocation",
-          "invocation_source_id"
+          "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id"
         ],
         "title": "InvocationStartedEvent",
         "type": "object"
@@ -80197,6 +80386,9 @@
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
               },
               {
+                "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
               },
               {
@@ -80895,6 +81087,9 @@
                     "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
                   },
                   {
+                    "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+                  },
+                  {
                     "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
                   },
                   {
@@ -81478,6 +81673,9 @@
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
               },
               {
+                "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
+              },
+              {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
               },
               {
@@ -81915,6 +82113,9 @@
               },
               {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+              },
+              {
+                "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
               },
               {
                 "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -82834,6 +83035,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/Qwen3VLEncoder_Checkpoint_Config"
+                },
+                {
+                  "$ref": "#/components/schemas/Qwen3VLEncoder_GGUF_Config"
                 },
                 {
                   "$ref": "#/components/schemas/Qwen3VLEncoder_Qwen3VLEncoder_Config"
@@ -85688,6 +85892,42 @@
             "title": "Invocation Source Id",
             "description": "The ID of the prepared invocation's source node"
           },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Item Id",
+            "description": "The parent queue item id when this item is a called-workflow child"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Item Id",
+            "description": "The root queue item id for this called-workflow chain, if any"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Call Parent Source Id",
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event"
+          },
           "revision": {
             "anyOf": [
               {
@@ -87519,7 +87759,7 @@
           "cpu_only"
         ],
         "title": "Qwen3VLEncoder_Checkpoint_Config",
-        "description": "Configuration for a single-file Qwen3-VL text encoder checkpoint (ComfyUI ``qwen3vl_4b_*`` /\n``qwen3vl_8b_*``).\n\nDistinguished from the text-only ``Qwen3Encoder`` checkpoint (Z-Image) by the presence of the\nQwen3-VL visual tower. Neither the config nor the tokenizer is bundled in a single-file\ncheckpoint; both are pulled from HuggingFace by the loader, from the repo the recorded variant\nnames."
+        "description": "Configuration for a single-file Qwen3-VL text encoder checkpoint (ComfyUI ``qwen3vl_4b_*`` /\n``qwen3vl_8b_*``).\n\nDistinguished from the text-only ``Qwen3Encoder`` checkpoint (Z-Image) by the presence of the\nQwen3-VL visual tower. Neither the config nor the tokenizer is bundled in a single-file\ncheckpoint; the loader supplies both from the copies vendored in ``invokeai.backend.qwen3_vl``,\nselecting the config by the recorded variant."
       },
       "Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config": {
         "properties": {
@@ -87656,6 +87896,160 @@
         ],
         "title": "Qwen3VLEncoder_Checkpoint_MiniMaxH3_Config",
         "description": "Configuration for MiniMax H3's truncated Qwen3-VL-32B conditioning encoder single files\n(Comfy-Org ``qwen3vl_32b_minimax_h3_*.safetensors`` and mirrors).\n\nThese are NOT complete Qwen3-VL-32B checkpoints: the language stack is truncated to the 50\nlayers H3 conditions on (the file's ``minimax_h3_te`` metadata records the contract:\n\"unnormalized_hidden_after_layer_50\"), the final norm and LM head are omitted, and the\nbf16/int8-convrot repacks quantize only the 50 language layers (vision tower stays bf16).\n\nIdentified primarily by the explicit ``minimax_h3_te`` safetensors metadata; a structural\nfallback covers metadata-stripped re-uploads. ``Qwen3VLEncoder_Checkpoint_Config`` accepts only\nthe two widths it can build (2560 and 4096), so neither config can claim the other's files.\n\nThe nvfp4 repacks share this layout and are accepted here, but the loader rejects their\nquantization format early (header-only check) with a clear error - mirroring how the H3\ntransformer checkpoint config treats fp8_scaled files."
+      },
+      "Qwen3VLEncoder_GGUF_Config": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "A unique key for this model."
+          },
+          "hash": {
+            "type": "string",
+            "title": "Hash",
+            "description": "The hash of the model file(s)."
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Path to the model on the filesystem. Relative paths are relative to the Invoke root directory."
+          },
+          "file_size": {
+            "type": "integer",
+            "title": "File Size",
+            "description": "The size of the model in bytes."
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name of the model."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Model description"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "The original source of the model (path, URL or repo_id)."
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/ModelSourceType",
+            "description": "The type of source"
+          },
+          "source_api_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Api Response",
+            "description": "The original API response from the source, as stringified JSON."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional URL for the model (e.g. download page or model page)."
+          },
+          "cover_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Image",
+            "description": "Url for image to preview model"
+          },
+          "config_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Path",
+            "description": "Path to the config for this model, if any."
+          },
+          "base": {
+            "type": "string",
+            "const": "any",
+            "title": "Base",
+            "default": "any"
+          },
+          "type": {
+            "type": "string",
+            "const": "qwen3_vl_encoder",
+            "title": "Type",
+            "default": "qwen3_vl_encoder"
+          },
+          "format": {
+            "type": "string",
+            "const": "gguf_quantized",
+            "title": "Format",
+            "default": "gguf_quantized"
+          },
+          "variant": {
+            "$ref": "#/components/schemas/Qwen3VLVariantType",
+            "description": "Which Qwen3-VL encoder this is. The consuming architecture is fixed: Krea-2 needs the 4B, Ideogram 4 the 8B, and the two are not interchangeable."
+          },
+          "cpu_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Only",
+            "description": "Whether this model should run on CPU only"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "hash",
+          "path",
+          "file_size",
+          "name",
+          "description",
+          "source",
+          "source_type",
+          "source_api_response",
+          "source_url",
+          "cover_image",
+          "config_path",
+          "base",
+          "type",
+          "format",
+          "variant",
+          "cpu_only"
+        ],
+        "title": "Qwen3VLEncoder_GGUF_Config",
+        "description": "Configuration for a single-file GGUF Qwen3-VL encoder (llama.cpp, e.g.\n``Qwen3VL-4B-Instruct-Q4_K_M.gguf``).\n\nllama.cpp splits Qwen3-VL across two files: the language tower -- all Krea-2 and Ideogram 4\ncondition on -- and a companion ``mmproj-*.gguf`` holding the visual tower. Only the language\ntower is accepted here; the ``mmproj`` file is turned away with its own reason.\n\nIdentified by the ``general.architecture`` metadata, which is the only honest discriminator: a\nQwen3-VL language tower is structurally indistinguishable from a text-only Qwen3 of the same\nsize (both 36 layers at hidden 2560 for the 4B), so a shape probe would accept a stock Qwen3\nGGUF as a Krea-2 encoder. That file loads without error and produces silently wrong\nconditioning, which is precisely the failure identification exists to prevent."
       },
       "Qwen3VLEncoder_Qwen3VLEncoder_Config": {
         "properties": {
@@ -89230,7 +89624,7 @@
           "format"
         ],
         "title": "QwenVLEncoder_Checkpoint_Config",
-        "description": "Configuration for single-file Qwen2.5-VL encoder checkpoints (safetensors).\n\nThis matches ComfyUI-style consolidated single-file encoders such as\n`qwen_2.5_vl_7b_fp8_scaled.safetensors`, which bundle the language model\nand the visual tower into one file (typically with FP8 + per-tensor\n`weight_scale` ComfyUI quantization).\n\nThe matching tokenizer + processor are pulled from HuggingFace\n(`Qwen/Qwen2.5-VL-7B-Instruct`) on first use and cached for offline use."
+        "description": "Configuration for single-file Qwen2.5-VL encoder checkpoints (safetensors).\n\nThis matches ComfyUI-style consolidated single-file encoders such as\n`qwen_2.5_vl_7b_fp8_scaled.safetensors`, which bundle the language model\nand the visual tower into one file (typically with FP8 + per-tensor\n`weight_scale` ComfyUI quantization).\n\nThe tokenizer, architecture config and image preprocessor config all ship with InvokeAI\n(vendored from the Apache-2.0 `Qwen/Qwen2.5-VL-7B-Instruct` release), so this encoder loads\nwithout network access."
       },
       "QwenVLEncoder_Diffusers_Config": {
         "properties": {

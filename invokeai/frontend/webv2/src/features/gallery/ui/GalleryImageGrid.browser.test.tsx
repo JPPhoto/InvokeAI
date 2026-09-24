@@ -1,5 +1,6 @@
 /* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/contracts';
+import type { ImageIndexAvailability } from '@features/gallery/data/backend';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 import type { QueueProgressSession } from '@features/queue/contracts';
 import type { StreamingImageSource } from '@platform/ui/streaming-image/streamingImageSource';
@@ -48,6 +49,8 @@ const mocks = vi.hoisted(() => ({
   itemProgress: null as { percentage: number; message: string } | null,
   progressFrame: null as { dataUrl: string; width: number; height: number } | null,
   fetchNames: vi.fn(),
+  getItemLabel: vi.fn<GalleryUiAdapter['getItemLabel']>(),
+  indexAvailability: { modelName: null, state: 'disabled' } as ImageIndexAvailability,
   measure: vi.fn(),
   scrollToIndex: vi.fn(),
   setPage: vi.fn(),
@@ -63,6 +66,10 @@ const getNamesKey = (filter: unknown) => ['test-gallery-item-names', JSON.string
 
 vi.mock('@features/gallery/data/queries', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  imageIndexAvailabilityOptions: () => ({
+    queryFn: () => mocks.indexAvailability,
+    queryKey: ['test-image-index-availability'],
+  }),
   galleryItemNamesOptions: (filter: unknown) => ({
     queryFn: () => mocks.fetchNames(filter),
     queryKey: getNamesKey(filter),
@@ -369,6 +376,7 @@ const createAdapter = (
     },
     galleryValues: {},
     generateValues: {},
+    getItemLabel: mocks.getItemLabel,
     liveFollowEnabled,
     progressSessions,
     pinnedProgressSessionId,
@@ -526,16 +534,15 @@ const pointer = (type: string, target: EventTarget, clientX: number, clientY: nu
 };
 
 beforeEach(() => {
-  // The reveal channel is a module singleton, so a request from a previous
-  // test would otherwise be adopted by the next mount (grids deliberately
-  // honor a request that predates them). Drain it with one that can never
-  // match an item here.
+  // Drain singleton reveal intent with an unmatchable request so later tests cannot adopt it.
   requestGalleryItemReveal('image:__drained__');
   accountLifecycle.activate('grid-user');
   vi.clearAllMocks();
   registeredCommands.clear();
   currentGallery = createGallery();
   mocks.itemProgress = null;
+  mocks.indexAvailability = { modelName: null, state: 'disabled' };
+  mocks.getItemLabel.mockReset();
   currentProgressSessions = [];
   currentLiveFollowEnabled = false;
   currentPinnedSessionId = null;
@@ -653,8 +660,6 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(getComputedStyle(pinned).borderBottomWidth).toBe('1px');
     expect(listingTop() - pinned.getBoundingClientRect().bottom).toBeCloseTo(GALLERY_PINNED_FOOTER_PX - 1, 0);
 
-    // The disclosure is a persisted setting, so collapsing goes through the
-    // owner and comes back as the next render's settings.
     await click(getButton('Collapse starred items'));
     expect(actionMocks.updateSettings).toHaveBeenCalledExactlyOnceWith({ starredSectionCollapsed: true });
     await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
@@ -1025,6 +1030,89 @@ describe('GalleryImageGrid mixed item cells', () => {
   });
 });
 
+describe('GalleryImageGrid image-map labels', () => {
+  const getTile = (name: string): HTMLElement => {
+    const tile = getButton(`Select ${name} for preview`).parentElement;
+
+    if (!tile) {
+      throw new Error(`Expected tile for ${name}`);
+    }
+
+    return tile;
+  };
+  const findBadge = (tile: HTMLElement, text: string) =>
+    Array.from(tile.querySelectorAll<HTMLElement>('.gallery-thumb-overlay')).find(
+      (element) => element.textContent === text
+    );
+  const opacityOf = (element: HTMLElement | undefined) => (element ? getComputedStyle(element).opacity : null);
+
+  // Seeded so a reveal right after mount does not race the availability fetch.
+  const setIndexAvailability = (availability: ImageIndexAvailability) => {
+    mocks.indexAvailability = availability;
+    queryClient?.setQueryData(['test-image-index-availability'], availability);
+  };
+
+  beforeEach(() => setIndexAvailability({ modelName: null, state: 'ready' }));
+
+  it('reveals the hovered item label in step with its dimensions and star', async () => {
+    mocks.getItemLabel.mockImplementation((item) => Promise.resolve(item.name === 'a.png' ? 'sunset' : 'forest'));
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png'), createItem('image', 'b.png')] }));
+
+    // Nothing is requested for tiles that were only rendered.
+    expect(mocks.getItemLabel).not.toHaveBeenCalled();
+
+    const tile = getTile('a.png');
+    await userEvent.hover(tile);
+
+    expect(mocks.getItemLabel).toHaveBeenCalledWith({ kind: 'image', name: 'a.png' });
+    const dimensions = findBadge(tile, '128x96');
+    const star = tile.querySelector<HTMLElement>('button[aria-label="Star a.png"]') ?? undefined;
+    await vi.waitFor(() =>
+      expect([findBadge(tile, 'sunset'), dimensions, star].map(opacityOf)).toEqual(['1', '1', '1'])
+    );
+
+    await userEvent.hover(getTile('b.png'));
+
+    await vi.waitFor(() =>
+      expect([findBadge(tile, 'sunset'), dimensions, star].map(opacityOf)).toEqual(['0', '0', '0'])
+    );
+    await vi.waitFor(() => expect(opacityOf(findBadge(getTile('b.png'), 'forest'))).toBe('1'));
+  });
+
+  it('reveals the label for keyboard focus as well as hover', async () => {
+    mocks.getItemLabel.mockResolvedValue('sunset');
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await interact(() => getButton('Select a.png for preview').focus());
+
+    await vi.waitFor(() => expect(opacityOf(findBadge(getTile('a.png'), 'sunset'))).toBe('1'));
+  });
+
+  it('adds nothing for an unlabeled item', async () => {
+    mocks.getItemLabel.mockResolvedValue(null);
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await userEvent.hover(getTile('a.png'));
+    await vi.waitFor(() => expect(mocks.getItemLabel).toHaveBeenCalled());
+    await interact(noop);
+
+    // Dimensions and star only.
+    expect(getTile('a.png').querySelectorAll('.gallery-thumb-overlay')).toHaveLength(2);
+  });
+
+  it('never asks for labels while the image index is not ready', async () => {
+    setIndexAvailability({ modelName: 'clip', state: 'model_missing' });
+    mocks.getItemLabel.mockResolvedValue('sunset');
+    await renderGallery(createGallery({ items: [createItem('image', 'a.png')] }));
+
+    await userEvent.hover(getTile('a.png'));
+    await interact(noop);
+
+    expect(mocks.getItemLabel).not.toHaveBeenCalled();
+    expect(findBadge(getTile('a.png'), 'sunset')).toBeUndefined();
+  });
+});
+
 describe('GalleryImageGrid range selection', () => {
   const orderedRefs: GalleryItemRef[] = [
     { kind: 'image', name: 'first.png' },
@@ -1152,15 +1240,11 @@ describe('GalleryImageGrid upload drop zone', () => {
 
     const accept = host?.querySelector<HTMLInputElement>('input[type="file"]')?.accept.split(',');
 
-    // The gallery once offered video/mp4 alone, so the OS picker greyed out every clip
-    // and audio file the server ingests. Parity with the video panel's reference upload.
+    // Picker acceptance must include the video and audio formats supported by reference uploads.
     expect(accept).toEqual(expect.arrayContaining(['image/png', 'video/*', 'audio/*', '.mov', '.mkv', '.mp3', '.wav']));
   });
 
-  // Not a fix for the accept-list bug -- the drop path never consulted `accept` and already
-  // forwarded every format. This pins that: the handler must stay a pass-through, because
-  // filtering here by the picker's list would re-hide exactly what the picker just stopped
-  // hiding, and the classifier downstream is the single place that decides.
+  // Drops bypass the accept list; downstream classification alone decides media kind.
   it('hands a dropped audio file to the upload action', async () => {
     await renderGallery(createGallery({ items: [] }));
 
@@ -1211,9 +1295,8 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('never scrolls on selection changes alone', async () => {
-    // The selection also changes when a finished generation auto-selects its
-    // image; scrolling on that would yank the grid out from under a browsing
-    // user. Only the explicit reveal channel may scroll.
+    // Only explicit reveal intent may scroll; generation-driven selection must preserve the user's browsing
+    // position.
     const gallery = createGallery();
 
     await renderGallery(gallery);
@@ -1254,10 +1337,7 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('honors a reveal requested before this grid mounted, while its item is still selected', async () => {
-    // The gallery is frequently opened (or swapped between its stacked and
-    // wide layouts, which remounts the grid) in response to the very reveal
-    // that is outstanding, so a grid must not ignore a request just because
-    // it arrived before the mount.
+    // A grid mounted by a reveal must honor the request that preceded its mount.
     await interact(() => requestGalleryItemReveal('image:last.png'));
     expect(mocks.scrollToIndex).not.toHaveBeenCalled();
 
@@ -1416,15 +1496,12 @@ describe('GalleryImageGrid virtualization', () => {
 
     await renderGallery(gallery);
 
-    // Collapsing starred keeps the visible range identical, so without an
-    // explicit measure() the virtualizer would keep serving the expanded
-    // offsets — the new rows would paint below a stale starred-sized hole.
+    // Collapsing starred requires measurement even if visible indices stay unchanged, or stale offsets leave a
+    // gap.
     mocks.measure.mockClear();
     await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
     expect(mocks.measure).toHaveBeenCalled();
 
-    // Swapping the item list (e.g. the media/assets view switch) is the same
-    // structural change arriving through props.
     mocks.measure.mockClear();
     await renderGallery(createGallery({ items: [createItem('image', 'other.png')] }));
     expect(mocks.measure).toHaveBeenCalled();
@@ -1446,9 +1523,7 @@ describe('GalleryImageGrid virtualization', () => {
     );
     await vi.waitFor(() => expect(actionMocks.loadMore).toHaveBeenCalled());
 
-    // Columns follow the measured viewport width now, so pinning a row count
-    // would just re-encode the harness width. The invariant that matters is
-    // that the rows the virtualizer is asked for cover every cell exactly once.
+    // Assert every cell is covered once; measured viewport width determines row count.
     const renderedRows = host?.querySelectorAll('[role="list"] [role="presentation"]').length ?? 0;
     const renderedCells = host?.querySelectorAll('[role="listitem"]').length ?? 0;
 

@@ -624,8 +624,7 @@ describe('queueCoordinator', () => {
   });
 
   it('keeps the followed slot and its last frame across a connection drop', async () => {
-    // The run continues on the backend; the sweep reconciles its outcome. Wiping
-    // the frame here only ever produced a blank card until the next event.
+    // Keep the frame while disconnected; the backend continues and reconciliation finds its outcome.
     harness.coordinator.connect();
     await harness.coordinator.submitGenerate('local-1', generateRequest);
     harness.socket.fire('invocation_progress', {
@@ -642,8 +641,7 @@ describe('queueCoordinator', () => {
   });
 
   it('sweeps outstanding items when the tab becomes visible again', async () => {
-    // A hidden tab's socket is dropped by the server and socket.io reconnects on
-    // its own backoff; the visibility edge itself reconciles the outcome first.
+    // Visibility must reconcile immediately without waiting for socket reconnect backoff.
     const listeners = new Map<string, () => void>();
 
     vi.stubGlobal('document', {
@@ -884,8 +882,7 @@ describe('queueCoordinator', () => {
     expect(harness.callbacks.onBackendItemComplete).toHaveBeenCalledWith('local-1', 1);
     // Held before routing started, so the finished image can swap in over it.
     expect(harness.progressImage.hold).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
-    // The slot stays followed (settling) rather than dropping Preview back onto
-    // the previous selection while the finished image is still two round trips away.
+    // Follow settling slots until finished-image routing completes instead of reverting to the old selection.
     expect(harness.activeProgressTarget.settle).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
     expect(harness.activeProgressTarget.clear).not.toHaveBeenCalled();
     expect(harness.progressImage.clear).not.toHaveBeenCalled();
@@ -1011,6 +1008,149 @@ describe('queueCoordinator', () => {
     await expect(harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z')).resolves.toHaveLength(1);
   });
 
+  it('replays a child preview received before the enqueue response', async () => {
+    const acceptance = deferred<QueueEnqueueResult>();
+
+    harness.api.enqueueWorkflow.mockReturnValue(acceptance.promise);
+    harness.coordinator.connect();
+    const submission = harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_progress', {
+      ...createStatusEvent({ item_id: 2 }),
+      image: { dataURL: 'data:image/png;base64:child', height: 32, width: 64 },
+      invocation_source_id: 'child-node',
+      message: 'Child sampling',
+      percentage: 0.5,
+      revision: 1,
+      root_item_id: 1,
+      session_id: 'child-session',
+      workflow_call_parent_source_id: 'call-node',
+    });
+
+    expect(harness.progressImage.set).not.toHaveBeenCalled();
+
+    acceptance.resolve({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    await submission;
+
+    expect(harness.progressImage.set).toHaveBeenCalledWith(
+      { dataUrl: 'data:image/png;base64:child', height: 32, width: 64 },
+      { itemIndex: 1, queueItemId: 'local-1' }
+    );
+  });
+
+  it('routes child invocation events to the parent call node', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_started', {
+      ...createStatusEvent({ item_id: 2 }),
+      invocation_source_id: 'child-node',
+      root_item_id: 1,
+      workflow_call_parent_source_id: 'call-node',
+    });
+
+    expect(harness.nodeExecution.started).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invocation_source_id: 'call-node',
+        item_id: 1,
+      })
+    );
+  });
+
+  it('does not let child terminal events settle the visible call node', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    const child = {
+      ...createStatusEvent({ item_id: 2 }),
+      invocation_source_id: 'child-node',
+      root_item_id: 1,
+      workflow_call_parent_source_id: 'call-node',
+    };
+    harness.socket.fire('invocation_complete', { ...child, result: { type: 'integer_output', value: 1 } });
+    harness.socket.fire('invocation_error', { ...child, error_message: 'child failed', error_type: 'ValueError' });
+
+    expect(harness.nodeExecution.completed).not.toHaveBeenCalled();
+    expect(harness.nodeExecution.failed).not.toHaveBeenCalled();
+    expect(harness.nodeExecution.settleRunning).not.toHaveBeenCalled();
+  });
+
+  it('routes child preview frames to the parent call node and root progress slot', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_progress', {
+      ...createStatusEvent({ item_id: 2 }),
+      image: { dataURL: 'data:image/png;base64,child', height: 32, width: 64 },
+      invocation_source_id: 'child-node',
+      message: 'Child sampling',
+      percentage: 0.5,
+      root_item_id: 1,
+      workflow_call_parent_source_id: 'call-node',
+    });
+
+    expect(harness.nodeExecution.progress).toHaveBeenCalledWith('call-node', 0.5, 'Child sampling');
+    expect(harness.progressImage.set).toHaveBeenCalledWith(
+      { dataUrl: 'data:image/png;base64,child', height: 32, width: 64 },
+      { itemIndex: 1, queueItemId: 'local-1' }
+    );
+  });
+
+  it('allows a child preview revision again after the child reaches terminal status', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    const childFrame = {
+      ...createStatusEvent({ item_id: 2 }),
+      image: { dataURL: 'data:image/png;base64,child', height: 32, width: 64 },
+      invocation_source_id: 'child-node',
+      message: 'Child sampling',
+      percentage: 0.5,
+      revision: 1,
+      root_item_id: 1,
+      session_id: 'child-session',
+      workflow_call_parent_source_id: 'call-node',
+    };
+
+    harness.socket.fire('invocation_progress', childFrame);
+    harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 2, status: 'completed' }));
+    harness.socket.fire('invocation_progress', childFrame);
+
+    expect(harness.progressImage.set).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds preview gates when child terminal events are missed', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    const frame = (item_id: number) => ({
+      ...createStatusEvent({ item_id }),
+      image: { dataURL: `data:image/png;base64,child-${item_id}`, height: 32, width: 64 },
+      invocation_source_id: 'child-node',
+      message: 'Child sampling',
+      percentage: 0.5,
+      revision: 1,
+      root_item_id: 1,
+      session_id: `child-session-${item_id}`,
+      workflow_call_parent_source_id: 'call-node',
+    });
+
+    for (let itemId = 2; itemId <= 1026; itemId += 1) {
+      harness.socket.fire('invocation_progress', frame(itemId));
+    }
+
+    // Item 2's gate was evicted by the bounded fallback, so a missed terminal
+    // event cannot leave it permanently stale if the id is reused.
+    harness.socket.fire('invocation_progress', frame(2));
+
+    expect(harness.progressImage.set).toHaveBeenCalledTimes(1026);
+  });
+
   it('does not buffer node events while no enqueue request is in flight', async () => {
     harness.api.enqueueWorkflow.mockResolvedValueOnce({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
     harness.coordinator.connect();
@@ -1101,13 +1241,61 @@ describe('queueCoordinator', () => {
       createStatusEvent({ error_message: 'boom', item_id: 1, status: 'failed' })
     );
 
-    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'failed');
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'failed', 'boom');
 
     harness.socket.fire('invocation_started', { ...createStatusEvent({ item_id: 2 }), invocation_source_id: 'node-1' });
     expect(harness.nodeExecution.clearAll).toHaveBeenCalledTimes(2);
 
     harness.coordinator.detachRun('local-2');
     expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(new Set(['node-1']), 'canceled');
+  });
+
+  it('preserves a root failure when queue status precedes the root invocation error', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_started', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'call-node',
+    });
+    harness.socket.fire(
+      'queue_item_status_changed',
+      createStatusEvent({ error_message: 'Workflow failed', item_id: 1, status: 'failed' })
+    );
+
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(
+      new Set(['call-node']),
+      'failed',
+      'Workflow failed'
+    );
+  });
+
+  it('settles the root node after child activity when the root queue status arrives first', async () => {
+    harness.api.enqueueWorkflow.mockResolvedValue({ batchId: 'batch-1', enqueued: 1, itemIds: [1], requested: 1 });
+    harness.coordinator.connect();
+    await harness.coordinator.submitWorkflow('local-1', workflowRequest);
+
+    harness.socket.fire('invocation_started', {
+      ...createStatusEvent({ item_id: 1 }),
+      invocation_source_id: 'call-node',
+    });
+    harness.socket.fire('invocation_started', {
+      ...createStatusEvent({ item_id: 2 }),
+      invocation_source_id: 'child-node',
+      root_item_id: 1,
+      workflow_call_parent_source_id: 'call-node',
+    });
+    harness.socket.fire(
+      'queue_item_status_changed',
+      createStatusEvent({ error_message: 'Child workflow failed', item_id: 1, status: 'failed' })
+    );
+
+    expect(harness.nodeExecution.settleRunning).toHaveBeenLastCalledWith(
+      new Set(['call-node']),
+      'failed',
+      'Child workflow failed'
+    );
   });
 
   it('ignores untracked queue events before mutating local execution state', () => {
@@ -1160,8 +1348,6 @@ describe('queueCoordinator', () => {
 
     await harness.coordinator.submitGenerate('local-1', generateRequest);
 
-    // No slot is executing yet, so no active index is published — queued
-    // items must never present as live.
     expect(harness.progressEntries.get('local-1')).toEqual({
       activeItemIndex: undefined,
       completedItemCount: 0,
@@ -1188,8 +1374,7 @@ describe('queueCoordinator', () => {
 
     harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1 }));
 
-    // Between slots the item is idle again: completion is tracked, but no
-    // active index until the next progress event arrives.
+    // Clear active slot index between items while preserving completion tracking.
     expect(harness.progressEntries.get('local-1')).toEqual({
       activeItemIndex: undefined,
       completedItemCount: 1,
@@ -1417,14 +1602,8 @@ describe('queueCoordinator', () => {
       expect(harness.api.listItems).not.toHaveBeenCalled();
     });
 
-    // Review fix (Task 38, finding 3): the prior "Risk-4" coverage only asserted
-    // the parse primitive (`parseQueueItemOrigin(utilityOrigin) === null`) in
-    // isolation. This drives the REAL `reconcile` path with a completed,
-    // result-carrying `webv2:util:<uuid>`-origin backend item mixed into a live
-    // `listItems` response, proving the coordinator itself — not just the
-    // helper it calls — never adopts it into a project queue item (which is the
-    // only way a utility item's images could ever reach `routeQueueItemResults`
-    // and land in canvas staging or the gallery).
+    // Exercise real reconciliation with a completed utility item to prove it cannot enter project adoption or
+    // result routing.
     it('never adopts a completed, result-carrying utility-origin item into a project queue item', async () => {
       harness.api.listItems.mockResolvedValue([
         createQueueBackendItem({
@@ -1437,10 +1616,7 @@ describe('queueCoordinator', () => {
 
       const outcomes = await harness.coordinator.reconcile([{ id: 'local-1', status: 'pending' }]);
 
-      // The utility item parses to no local queue item id, so it can never be
-      // bucketed under 'local-1' by origin: the pending project item finds no
-      // backend trace of its own and is asked to enqueue fresh — never
-      // "adopted" with the utility item's id, and never routed anywhere.
+      // Utility origins cannot satisfy a pending project's backend trace; enqueue that project item fresh.
       expect(outcomes.get('local-1')).toEqual({ kind: 'enqueue' });
       expect(harness.api.getResultImages).not.toHaveBeenCalled();
       expect(harness.api.getItem).not.toHaveBeenCalledWith(99);
@@ -1453,8 +1629,6 @@ describe('queueCoordinator', () => {
     await harness.coordinator.submitGenerate('local-1', generateRequest);
     const resultsPromise = harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z');
 
-    // The completion event was lost to a disconnect; the reconnect sweep
-    // re-checks every outstanding item.
     harness.api.getItem.mockResolvedValue(createQueueBackendItem({ id: 1, status: 'completed' }));
     harness.socket.fire('connect', undefined);
 
