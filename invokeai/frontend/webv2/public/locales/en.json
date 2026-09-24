@@ -2599,6 +2599,7 @@
       "sideBySide": "Side by Side",
       "slider": "Slider",
       "hover": "Hover",
+      "imageTags": "Image tags:",
       "hoverComparisonAriaLabel": "Reveal comparison image on hover, focus, or touch",
       "sourceRun": "Source run {{id}}",
       "videoDuration": "Duration {{duration}}",
