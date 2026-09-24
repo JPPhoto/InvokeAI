@@ -1853,7 +1853,7 @@ export type paths = {
         put?: never;
         /**
          * Create Intermediates Preview
-         * @description Freezes the targets a cleanup would act on and reports its impact. Previews expire unused.
+         * @description Reports what a cleanup would delete and keep, and fixes the instant its recency is judged at. Previews expire unused.
          */
         post: operations["create_intermediates_preview"];
         delete?: never;
@@ -1869,11 +1869,15 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Intermediates Operations
+         * @description The caller's running and recently settled cleanups, newest first. Operations do not survive a server restart.
+         */
+        get: operations["list_intermediates_operations"];
         put?: never;
         /**
          * Start Intermediates Operation
-         * @description Starts the cleanup a preview described. Repeating a request with its idempotency key returns the same operation.
+         * @description Starts the cleanup a preview described. A preview is confirmed at most once; list operations to find a run whose response was lost.
          */
         post: operations["start_intermediates_operation"];
         delete?: never;
@@ -1893,26 +1897,6 @@ export type paths = {
         get: operations["get_intermediates_operation"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/intermediates/operations/{operation_id}/retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Retry Intermediates Operation
-         * @description Retries exactly the targets a finished operation left unresolved, as a new operation.
-         */
-        post: operations["retry_intermediates_operation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20754,7 +20738,11 @@ export type components = {
              */
             recent?: number;
         };
-        /** IntermediatesOperation */
+        /**
+         * IntermediatesOperation
+         * @description A cleanup run. Operations live in server memory: a restart forgets them, and the live policy
+         *     is the retry, so a new preview and confirmation picks up whatever an interrupted run left.
+         */
         IntermediatesOperation: {
             /** Operation Id */
             operation_id: string;
@@ -20768,6 +20756,7 @@ export type components = {
              * @enum {string}
              */
             mode: "safe" | "force";
+            /** @description The scope as requested, so a client can request it again */
             scope: components["schemas"]["IntermediatesScope"];
             /**
              * Status
@@ -20790,22 +20779,15 @@ export type components = {
             error?: string | null;
             /**
              * Target Images
-             * @description Frozen image targets
+             * @description Image deletions the preview expected. The scope is paged live, so rows that became deletable since the preview are collected too and the deleted count may exceed this
              */
             target_images: number;
             /**
              * Target Videos
-             * @description Frozen video targets
+             * @description Video deletions the preview expected; see `target_images`
              */
             target_videos: number;
             progress: components["schemas"]["IntermediatesOperationProgress"];
-            /** Retried From Operation Id */
-            retried_from_operation_id?: string | null;
-            /**
-             * Retried By Operation Id
-             * @description The retry that took over this operation's unresolved targets, if any
-             */
-            retried_by_operation_id?: string | null;
         };
         /**
          * IntermediatesOperationChangedEvent
@@ -20827,6 +20809,14 @@ export type components = {
             user_id: string;
             /** @description The operation's current state */
             operation: components["schemas"]["IntermediatesOperation"];
+        };
+        /** IntermediatesOperationList */
+        IntermediatesOperationList: {
+            /**
+             * Items
+             * @description The caller's retained operations, newest first
+             */
+            items: components["schemas"]["IntermediatesOperation"][];
         };
         /** IntermediatesOperationProgress */
         IntermediatesOperationProgress: {
@@ -20863,7 +20853,7 @@ export type components = {
             retained_videos?: number;
             /**
              * Failed Images
-             * @description Targets whose deletion raised; retryable
+             * @description Targets whose deletion raised; a new cleanup picks them up
              * @default 0
              */
             failed_images?: number;
@@ -20890,28 +20880,14 @@ export type components = {
              * @default 0
              */
             pending_disk_cleanup?: number;
-            /**
-             * Unresolved Images
-             * @description Image targets that failed or were never attempted
-             * @default 0
-             */
-            unresolved_images?: number;
-            /**
-             * Unresolved Videos
-             * @description Video targets that failed or were never attempted
-             * @default 0
-             */
-            unresolved_videos?: number;
         };
         /** IntermediatesOperationRequest */
         IntermediatesOperationRequest: {
-            /** Preview Id */
-            preview_id: string;
             /**
-             * Idempotency Key
-             * @description Caller-owned retry key
+             * Preview Id
+             * @description A preview is confirmed at most once
              */
-            idempotency_key: string;
+            preview_id: string;
         };
         /** IntermediatesPreview */
         IntermediatesPreview: {
@@ -20938,16 +20914,10 @@ export type components = {
              * @description Rows the scope resolved to
              */
             target_rows: number;
-            /**
-             * Has More Eligible
-             * @description More eligible intermediates remain outside this bounded preview batch
-             * @default false
-             */
-            has_more_eligible?: boolean;
             impact: components["schemas"]["IntermediatesImpact"];
             /**
              * Affected Documents
-             * @description Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own. Bounded; see `affected_documents_total`
+             * @description Documents a force clear would break. Confirming acknowledges these documents: the operation deletes referenced targets only while every document naming them is acknowledged, so a document saved after the preview keeps its media. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own. Bounded; see `affected_documents_total`
              */
             affected_documents?: components["schemas"]["IntermediatesAffectedDocument"][];
             /**
@@ -21019,14 +20989,21 @@ export type components = {
              */
             unknown_size_count?: number;
         };
-        /** IntermediatesScope */
+        /**
+         * IntermediatesScope
+         * @description What a cleanup acts on.
+         *
+         *     `selection` names rows; `owner` names an account; `everyone` is every account (administrators);
+         *     `matching` is every row the summary filters match, minus `excluded`, resolved by the server so
+         *     a client never has to enumerate rows it has not loaded.
+         */
         IntermediatesScope: {
             /**
              * Kind
              * @description How the targets were chosen
              * @enum {string}
              */
-            kind: "selection" | "owner" | "everyone";
+            kind: "selection" | "owner" | "everyone" | "matching";
             /**
              * Targets
              * @description The selected rows; only read for a `selection` scope
@@ -21034,9 +21011,24 @@ export type components = {
             targets?: components["schemas"]["IntermediatesScopeTarget"][];
             /**
              * User Id
-             * @description The account whose rows are targeted by an `owner` scope
+             * @description The account an `owner` scope targets, or the owner filter of a `matching` scope (null: the caller's account, or every account for administrators)
              */
             user_id?: string | null;
+            /**
+             * Project Id
+             * @description `matching` only: the summary's project filter
+             */
+            project_id?: string | null;
+            /**
+             * Search
+             * @description `matching` only: the summary's search
+             */
+            search?: string | null;
+            /**
+             * Excluded
+             * @description `matching` only: matching rows to leave out
+             */
+            excluded?: components["schemas"]["IntermediatesScopeTarget"][];
         };
         /**
          * IntermediatesScopeTarget
@@ -53401,6 +53393,26 @@ export interface operations {
             };
         };
     };
+    list_intermediates_operations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntermediatesOperationList"];
+                };
+            };
+        };
+    };
     start_intermediates_operation: {
         parameters: {
             query?: never;
@@ -53447,37 +53459,6 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IntermediatesOperation"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    retry_intermediates_operation: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                operation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
                 headers: {
                     [name: string]: unknown;
                 };

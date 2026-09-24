@@ -70,7 +70,8 @@ class IntermediatesServiceBase(ABC):
         pass
 
     @abstractmethod
-    def retry_operation(self, operation_id: str, caller: IntermediatesCaller) -> IntermediatesOperation:
+    def list_operations(self, caller: IntermediatesCaller) -> list[IntermediatesOperation]:
+        """The caller's retained operations, newest first."""
         pass
 
     @abstractmethod

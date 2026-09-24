@@ -7661,7 +7661,7 @@
       "post": {
         "tags": ["intermediates"],
         "summary": "Create Intermediates Preview",
-        "description": "Freezes the targets a cleanup would act on and reports its impact. Previews expire unused.",
+        "description": "Reports what a cleanup would delete and keep, and fixes the instant its recency is judged at. Previews expire unused.",
         "operationId": "create_intermediates_preview",
         "requestBody": {
           "content": {
@@ -7704,10 +7704,33 @@
       }
     },
     "/api/v1/intermediates/operations": {
+      "get": {
+        "tags": ["intermediates"],
+        "summary": "List Intermediates Operations",
+        "description": "The caller's running and recently settled cleanups, newest first. Operations do not survive a server restart.",
+        "operationId": "list_intermediates_operations",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntermediatesOperationList"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
       "post": {
         "tags": ["intermediates"],
         "summary": "Start Intermediates Operation",
-        "description": "Starts the cleanup a preview described. Repeating a request with its idempotency key returns the same operation.",
+        "description": "Starts the cleanup a preview described. A preview is confirmed at most once; list operations to find a run whose response was lost.",
         "operationId": "start_intermediates_operation",
         "requestBody": {
           "content": {
@@ -7796,54 +7819,6 @@
         }
       }
     },
-    "/api/v1/intermediates/operations/{operation_id}/retry": {
-      "post": {
-        "tags": ["intermediates"],
-        "summary": "Retry Intermediates Operation",
-        "description": "Retries exactly the targets a finished operation left unresolved, as a new operation.",
-        "operationId": "retry_intermediates_operation",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "operation_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64,
-              "title": "Operation Id"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IntermediatesOperation"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/intermediates/holds/{lease_id}": {
       "put": {
         "tags": ["intermediates"],
@@ -7864,7 +7839,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_.-]+)?$",
+              "pattern": "^[A-Za-z0-9_-]+$",
               "title": "Lease Id"
             }
           }
@@ -7913,7 +7888,7 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 64,
-              "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_.-]+)?$",
+              "pattern": "^[A-Za-z0-9_-]+$",
               "title": "Lease Id"
             }
           }
@@ -49419,7 +49394,8 @@
             "title": "Mode"
           },
           "scope": {
-            "$ref": "#/components/schemas/IntermediatesScope"
+            "$ref": "#/components/schemas/IntermediatesScope",
+            "description": "The scope as requested, so a client can request it again"
           },
           "status": {
             "type": "string",
@@ -49470,38 +49446,15 @@
           "target_images": {
             "type": "integer",
             "title": "Target Images",
-            "description": "Frozen image targets"
+            "description": "Image deletions the preview expected. The scope is paged live, so rows that became deletable since the preview are collected too and the deleted count may exceed this"
           },
           "target_videos": {
             "type": "integer",
             "title": "Target Videos",
-            "description": "Frozen video targets"
+            "description": "Video deletions the preview expected; see `target_images`"
           },
           "progress": {
             "$ref": "#/components/schemas/IntermediatesOperationProgress"
-          },
-          "retried_from_operation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retried From Operation Id"
-          },
-          "retried_by_operation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retried By Operation Id",
-            "description": "The retry that took over this operation's unresolved targets, if any"
           }
         },
         "type": "object",
@@ -49516,7 +49469,8 @@
           "target_videos",
           "progress"
         ],
-        "title": "IntermediatesOperation"
+        "title": "IntermediatesOperation",
+        "description": "A cleanup run. Operations live in server memory: a restart forgets them, and the live policy\nis the retry, so a new preview and confirmation picks up whatever an interrupted run left."
       },
       "IntermediatesOperationChangedEvent": {
         "description": "Event model for intermediates_operation_changed.\n\nRouted to the confirming account's room and to admins: the operation's progress is that\naccount's business, and admins see every cleanup so open managers refresh their counts.",
@@ -49539,6 +49493,21 @@
         "required": ["timestamp", "user_id", "operation"],
         "title": "IntermediatesOperationChangedEvent",
         "type": "object"
+      },
+      "IntermediatesOperationList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IntermediatesOperation"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "The caller's retained operations, newest first"
+          }
+        },
+        "type": "object",
+        "required": ["items"],
+        "title": "IntermediatesOperationList"
       },
       "IntermediatesOperationProgress": {
         "properties": {
@@ -49576,7 +49545,7 @@
           "failed_images": {
             "type": "integer",
             "title": "Failed Images",
-            "description": "Targets whose deletion raised; retryable",
+            "description": "Targets whose deletion raised; a new cleanup picks them up",
             "default": 0
           },
           "failed_videos": {
@@ -49601,18 +49570,6 @@
             "title": "Pending Disk Cleanup",
             "description": "Deleted records whose files could not be purged yet; the journal retries at startup",
             "default": 0
-          },
-          "unresolved_images": {
-            "type": "integer",
-            "title": "Unresolved Images",
-            "description": "Image targets that failed or were never attempted",
-            "default": 0
-          },
-          "unresolved_videos": {
-            "type": "integer",
-            "title": "Unresolved Videos",
-            "description": "Video targets that failed or were never attempted",
-            "default": 0
           }
         },
         "type": "object",
@@ -49624,18 +49581,12 @@
             "type": "string",
             "maxLength": 64,
             "minLength": 1,
-            "title": "Preview Id"
-          },
-          "idempotency_key": {
-            "type": "string",
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Idempotency Key",
-            "description": "Caller-owned retry key"
+            "title": "Preview Id",
+            "description": "A preview is confirmed at most once"
           }
         },
         "type": "object",
-        "required": ["preview_id", "idempotency_key"],
+        "required": ["preview_id"],
         "title": "IntermediatesOperationRequest"
       },
       "IntermediatesPreview": {
@@ -49667,12 +49618,6 @@
             "title": "Target Rows",
             "description": "Rows the scope resolved to"
           },
-          "has_more_eligible": {
-            "type": "boolean",
-            "title": "Has More Eligible",
-            "description": "More eligible intermediates remain outside this bounded preview batch",
-            "default": false
-          },
           "impact": {
             "$ref": "#/components/schemas/IntermediatesImpact"
           },
@@ -49682,7 +49627,7 @@
             },
             "type": "array",
             "title": "Affected Documents",
-            "description": "Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own. Bounded; see `affected_documents_total`"
+            "description": "Documents a force clear would break. Confirming acknowledges these documents: the operation deletes referenced targets only while every document naming them is acknowledged, so a document saved after the preview keeps its media. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own. Bounded; see `affected_documents_total`"
           },
           "affected_documents_total": {
             "type": "integer",
@@ -49814,7 +49759,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": ["selection", "owner", "everyone"],
+            "enum": ["selection", "owner", "everyone", "matching"],
             "title": "Kind",
             "description": "How the targets were chosen"
           },
@@ -49839,12 +49784,49 @@
               }
             ],
             "title": "User Id",
-            "description": "The account whose rows are targeted by an `owner` scope"
+            "description": "The account an `owner` scope targets, or the owner filter of a `matching` scope (null: the caller's account, or every account for administrators)"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id",
+            "description": "`matching` only: the summary's project filter"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search",
+            "description": "`matching` only: the summary's search"
+          },
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/IntermediatesScopeTarget"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Excluded",
+            "description": "`matching` only: matching rows to leave out"
           }
         },
         "type": "object",
         "required": ["kind"],
-        "title": "IntermediatesScope"
+        "title": "IntermediatesScope",
+        "description": "What a cleanup acts on.\n\n`selection` names rows; `owner` names an account; `everyone` is every account (administrators);\n`matching` is every row the summary filters match, minus `excluded`, resolved by the server so\na client never has to enumerate rows it has not loaded."
       },
       "IntermediatesScopeTarget": {
         "properties": {

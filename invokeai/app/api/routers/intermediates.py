@@ -10,8 +10,8 @@ from invokeai.app.services.intermediates.intermediates_base import Intermediates
 from invokeai.app.services.intermediates.intermediates_common import (
     BROWSER_HOLD_LEASE_ID_PATTERN,
     IntermediatesBrowserHoldRequest,
-    IntermediatesIdempotencyConflictError,
     IntermediatesOperation,
+    IntermediatesOperationList,
     IntermediatesOperationNotFoundError,
     IntermediatesOperationRequest,
     IntermediatesPreview,
@@ -39,7 +39,7 @@ def _translate(error: Exception) -> HTTPException:
         return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error))
     if isinstance(error, (IntermediatesPreviewNotFoundError, IntermediatesOperationNotFoundError)):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error) or "Not found")
-    if isinstance(error, (IntermediatesIdempotencyConflictError, IntermediatesUnavailableError)):
+    if isinstance(error, IntermediatesUnavailableError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
     raise error
 
@@ -83,11 +83,21 @@ def create_intermediates_preview(
     current_user: CurrentUserOrDefault,
     request: IntermediatesPreviewRequest = Body(description="What to clear and how"),
 ) -> IntermediatesPreview:
-    """Freezes the targets a cleanup would act on and reports its impact. Previews expire unused."""
+    """Reports what a cleanup would delete and keep, and fixes the instant its recency is judged at. Previews expire unused."""
     try:
         return ApiDependencies.invoker.services.intermediates.create_preview(request, _caller(current_user))
-    except (IntermediatesScopeForbiddenError, IntermediatesScopeInvalidError, IntermediatesUnavailableError) as error:
+    except (IntermediatesScopeForbiddenError, IntermediatesScopeInvalidError) as error:
         raise _translate(error)
+
+
+@intermediates_router.get(
+    "/operations", operation_id="list_intermediates_operations", response_model=IntermediatesOperationList
+)
+def list_intermediates_operations(current_user: CurrentUserOrDefault) -> IntermediatesOperationList:
+    """The caller's running and recently settled cleanups, newest first. Operations do not survive a server restart."""
+    return IntermediatesOperationList(
+        items=ApiDependencies.invoker.services.intermediates.list_operations(_caller(current_user))
+    )
 
 
 @intermediates_router.post(
@@ -100,14 +110,10 @@ def start_intermediates_operation(
     current_user: CurrentUserOrDefault,
     request: IntermediatesOperationRequest = Body(description="The confirmed preview"),
 ) -> IntermediatesOperation:
-    """Starts the cleanup a preview described. Repeating a request with its idempotency key returns the same operation."""
+    """Starts the cleanup a preview described. A preview is confirmed at most once; list operations to find a run whose response was lost."""
     try:
         return ApiDependencies.invoker.services.intermediates.start_operation(request, _caller(current_user))
-    except (
-        IntermediatesPreviewNotFoundError,
-        IntermediatesIdempotencyConflictError,
-        IntermediatesUnavailableError,
-    ) as error:
+    except (IntermediatesPreviewNotFoundError, IntermediatesUnavailableError) as error:
         raise _translate(error)
 
 
@@ -121,27 +127,6 @@ def get_intermediates_operation(
     try:
         return ApiDependencies.invoker.services.intermediates.get_operation(operation_id, _caller(current_user))
     except IntermediatesOperationNotFoundError as error:
-        raise _translate(error)
-
-
-@intermediates_router.post(
-    "/operations/{operation_id}/retry",
-    operation_id="retry_intermediates_operation",
-    response_model=IntermediatesOperation,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def retry_intermediates_operation(
-    current_user: CurrentUserOrDefault,
-    operation_id: str = Path(min_length=1, max_length=64),
-) -> IntermediatesOperation:
-    """Retries exactly the targets a finished operation left unresolved, as a new operation."""
-    try:
-        return ApiDependencies.invoker.services.intermediates.retry_operation(operation_id, _caller(current_user))
-    except (
-        IntermediatesOperationNotFoundError,
-        IntermediatesScopeForbiddenError,
-        IntermediatesUnavailableError,
-    ) as error:
         raise _translate(error)
 
 

@@ -1,10 +1,12 @@
 """The intermediates cleanup engine.
 
-Previews freeze the exact targets a confirmation will act on; nothing created afterwards can join
-an operation. Operations run on one background worker in bounded batches, and every batch
-re-applies the policy on the deleting transaction, so a target that became active, referenced or
-durable since the preview is kept. Operation receipts and unresolved targets persist; a restart
-makes interrupted work retryable.
+A preview classifies its scope once and freezes the instant recency is judged at; a confirmation
+turns it into an operation that pages the same scope live, in bounded batches, on one background
+worker. Every batch re-applies the policy on the deleting transaction with the preview's recency
+cutoff, so nothing created after the preview is collected and a target that became active,
+referenced or durable since the preview is kept. Operations live in memory: a restart forgets
+them, and because the live scope is the retry, a new preview and confirmation finishes whatever an
+interrupted run left.
 
 Lock order, for anyone adding a caller: image mutation lock or video deletion lock → database
 lock. Image and video deletion never hold each other's locks; queue and document writers take
@@ -17,19 +19,18 @@ import threading
 import time
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Sequence, cast
 
 from invokeai.app.services.intermediates.intermediates_base import IntermediatesCaller, IntermediatesServiceBase
 from invokeai.app.services.intermediates.intermediates_common import (
+    MAX_ACKNOWLEDGED_DOCUMENTS,
     MAX_AFFECTED_DOCUMENTS,
     PREVIEW_TTL_SECONDS,
     RECENT_GRACE_SECONDS,
     IntermediatesAffectedDocument,
     IntermediatesBrowserHoldRequest,
-    IntermediatesCleanupMode,
-    IntermediatesIdempotencyConflictError,
     IntermediatesImpact,
     IntermediatesOperation,
     IntermediatesOperationNotFoundError,
@@ -42,7 +43,6 @@ from invokeai.app.services.intermediates.intermediates_common import (
     IntermediatesScope,
     IntermediatesScopeForbiddenError,
     IntermediatesScopeInvalidError,
-    IntermediatesScopeTarget,
     IntermediatesSummary,
     IntermediatesSummarySort,
     IntermediatesSummaryTotals,
@@ -52,30 +52,25 @@ from invokeai.app.services.intermediates.intermediates_measurement import Interm
 from invokeai.app.services.intermediates.intermediates_records_sqlite import (
     IntermediatesRecordsSqlite,
     MediaKind,
-    OperationReceipt,
-    OperationTarget,
     ReferenceOwner,
-    ReferenceOwners,
+    ScopeTarget,
 )
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard, IntermediateDeleteResult
 from invokeai.app.services.shared.media_references import MediaReferenceOwnerKind, MediaReferences
 
 DELETE_BATCH_SIZE = 200
-# Receipts and unresolved targets are budgeted per confirming account. Up to the global ceiling,
-# which bounds memory, one account's interrupted cleanups never block another's; past it, ten
-# accounts at their full budget refuse new cleanup for everyone until they retry.
-MAX_RETAINED_OPERATIONS_PER_CALLER = 50
-MAX_RETAINED_TARGETS_PER_CALLER = 100_000
-MAX_RETAINED_TARGETS = 1_000_000
-# Operations run one at a time; the per-account share keeps one account from filling the queue.
+# Operations run one at a time; one running cleanup per account keeps one account from filling
+# the queue, and the UI offers no second Delete while one runs anyway.
 MAX_ACTIVE_OPERATIONS = 8
-MAX_ACTIVE_OPERATIONS_PER_CALLER = 2
-MAX_OPERATION_TARGETS = 50_000
+MAX_ACTIVE_OPERATIONS_PER_CALLER = 1
+# Settled operations stay readable for a while so a reopened manager can show the last result.
+MAX_RETAINED_SETTLED_OPERATIONS_PER_CALLER = 5
+MAX_RETAINED_OPERATIONS = 200
 MAX_PREVIEWS = 200
 MAX_PREVIEWS_PER_CALLER = 4
-# Frozen (name, size) pairs held across every live preview; the heaviest caller gives up previews first.
-MAX_FROZEN_PREVIEW_TARGETS = 500_000
+# A `matching` scope resolves to explicit rows; past this many the filter is too wide to page.
+MAX_RESOLVED_SCOPE_TARGETS = 10_000
 PROGRESS_EVENT_INTERVAL_SECONDS = 1.0
 WORKER_STOP_TIMEOUT_SECONDS = 10.0
 
@@ -84,38 +79,34 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _own_references(references: ReferenceOwners, user_id: str) -> ReferenceOwners:
-    """Drops the confirmations of other accounts' documents, so the delete guard keeps their media."""
-    return {name: {owner for owner in owners if owner.user_id == user_id} for name, owners in references.items()}
+@dataclass(frozen=True)
+class _ResolvedScope:
+    """What a scope pages over: an owner (None: everyone) or explicit rows, and whose media it may touch."""
 
-
-@dataclass
-class _KindImpact:
-    delete: int = 0
-    keep_referenced: int = 0
-    keep_active: int = 0
-    keep_recent: int = 0
+    user_id: Optional[str]
+    # Plain tuples: a resolved scope may hold thousands of rows and outlives its preview.
+    targets: Optional[list[ScopeTarget]]
+    allowed_user_ids: Optional[frozenset[str]]
 
 
 @dataclass
 class _Preview:
     dto: IntermediatesPreview
     caller_user_id: str
-    # Frozen targets with the size known at preview time; sizes are what an operation reclaims.
-    targets: dict[MediaKind, list[tuple[str, Optional[int]]]]
-    allowed_user_ids: Optional[frozenset[str]]
-    confirmed_references: dict[MediaKind, ReferenceOwners]
+    scope: _ResolvedScope
+    # Recency is judged as of this instant for the whole operation the preview confirms.
+    recent_cutoff: str
+    # Force mode: the documents whose media the confirmer agreed to break.
+    acknowledged: frozenset[ReferenceOwner]
 
 
 @dataclass
 class _Operation:
     dto: IntermediatesOperation
     caller: IntermediatesCaller
-    targets: dict[MediaKind, list[tuple[str, Optional[int]]]]
-    allowed_user_ids: Optional[frozenset[str]]
-    confirmed_references: dict[MediaKind, ReferenceOwners] = field(default_factory=lambda: {"image": {}, "video": {}})
-    # Names whose deletion raised, or that were never attempted; a retry takes exactly these.
-    unresolved: dict[MediaKind, dict[str, Optional[int]]] = field(default_factory=lambda: {"image": {}, "video": {}})
+    scope: _ResolvedScope
+    recent_cutoff: str
+    acknowledged: frozenset[ReferenceOwner]
     last_progress_event_at: float = 0.0
 
 
@@ -126,9 +117,8 @@ class IntermediatesService(IntermediatesServiceBase):
         self._invoker: Optional[Invoker] = None
         self._lock = threading.Lock()
         self._previews: dict[str, _Preview] = {}
+        # Insertion order is age; retention drops the oldest settled operations first.
         self._operations: dict[str, _Operation] = {}
-        self._operation_order: list[str] = []
-        self._idempotency: dict[tuple[str, str], tuple[str, str]] = {}
         self._pending: "queue.Queue[str]" = queue.Queue()
         self._stop = threading.Event()
         self._measurer = IntermediatesSizeMeasurer(records, lambda: self._services, self._stop, self._logger)
@@ -140,33 +130,6 @@ class IntermediatesService(IntermediatesServiceBase):
         self._invoker = invoker
         self._stop.clear()
         self._measurer.reset()
-        stored_operations, failures = self._records.load_operations()
-        for operation_id, error in failures:
-            self._logger.warning(f"Skipping unreadable intermediates operation {operation_id}: {error}")
-        with self._lock:
-            for stored in stored_operations:
-                receipt = stored.receipt
-                dto = receipt.dto
-                operation = _Operation(
-                    dto=dto,
-                    caller=IntermediatesCaller(user_id=stored.user_id, is_admin=receipt.caller_is_admin),
-                    targets={"image": [], "video": []},
-                    allowed_user_ids=(
-                        frozenset(receipt.allowed_user_ids) if receipt.allowed_user_ids is not None else None
-                    ),
-                    confirmed_references=stored.confirmed_references,
-                    unresolved=stored.unresolved,
-                )
-                if dto.status in ("pending", "running"):
-                    dto.status = "failed"
-                    dto.error = "Server restarted before cleanup finished; retry the remaining targets"
-                    dto.completed_at = _now()
-                    self._records.save_operation(stored.user_id, self._receipt(operation))
-                self._operations[dto.operation_id] = operation
-                self._operation_order.append(dto.operation_id)
-                if stored.idempotency_key is not None and stored.preview_id is not None:
-                    self._idempotency[(stored.user_id, stored.idempotency_key)] = (stored.preview_id, dto.operation_id)
-            self._prune_operations_locked()
 
     def stop(self, invoker: Optional[Invoker] = None) -> None:
         self._stop.set()
@@ -221,36 +184,7 @@ class IntermediatesService(IntermediatesServiceBase):
         limit: int,
         project_id: Optional[str] = None,
     ) -> IntermediatesSummary:
-        owner_filter = self._resolve_owner_filter(caller, owner_id)
-        aggregated = self._records.summarize([owner_filter] if owner_filter is not None else None)
-        projects = self._records.get_projects(owner_filter)
-        users = self._services.users.get_many([user_id for user_id, _ in aggregated])
-
-        rows: list[IntermediatesRow] = []
-        for (user_id, row_project_id), kinds in aggregated.items():
-            user = users.get(user_id)
-            project = projects.get((user_id, row_project_id)) if row_project_id is not None else None
-            rows.append(
-                IntermediatesRow(
-                    user_id=user_id,
-                    project_id=row_project_id,
-                    user_display_name=user.display_name if user is not None else None,
-                    user_email=user.email if user is not None else None,
-                    project_name=project[0] if project is not None else None,
-                    cover_image_name=project[1] if project is not None else None,
-                    images=kinds["image"].counts,
-                    videos=kinds["video"].counts,
-                    reclaimable_bytes=kinds["image"].safe_bytes + kinds["video"].safe_bytes,
-                    referenced_bytes=kinds["image"].referenced_bytes + kinds["video"].referenced_bytes,
-                    unknown_size_count=kinds["image"].unknown_size_count + kinds["video"].unknown_size_count,
-                )
-            )
-
-        if project_id is not None:
-            rows = [row for row in rows if row.project_id == project_id]
-        if search:
-            needle = search.casefold()
-            rows = [row for row in rows if self._matches(row, needle, include_owner=caller.is_admin)]
+        rows = self._summary_rows(caller, owner_id=owner_id, project_id=project_id, search=search)
 
         rows.sort(key=lambda row: (row.project_name or "").casefold())
         if sort == "reclaimable_bytes":
@@ -283,6 +217,42 @@ class IntermediatesService(IntermediatesServiceBase):
             can_manage_everyone=caller.is_admin,
         )
 
+    def _summary_rows(
+        self, caller: IntermediatesCaller, *, owner_id: Optional[str], project_id: Optional[str], search: Optional[str]
+    ) -> list[IntermediatesRow]:
+        """Every (owner, project) row the caller may see under the given filters, unordered."""
+        owner_filter = self._resolve_owner_filter(caller, owner_id)
+        aggregated = self._records.summarize([owner_filter] if owner_filter is not None else None)
+        projects = self._records.get_projects(owner_filter)
+        users = self._services.users.get_many([user_id for user_id, _ in aggregated])
+
+        rows: list[IntermediatesRow] = []
+        for (user_id, row_project_id), kinds in aggregated.items():
+            user = users.get(user_id)
+            project = projects.get((user_id, row_project_id)) if row_project_id is not None else None
+            rows.append(
+                IntermediatesRow(
+                    user_id=user_id,
+                    project_id=row_project_id,
+                    user_display_name=user.display_name if user is not None else None,
+                    user_email=user.email if user is not None else None,
+                    project_name=project[0] if project is not None else None,
+                    cover_image_name=project[1] if project is not None else None,
+                    images=kinds["image"].counts,
+                    videos=kinds["video"].counts,
+                    reclaimable_bytes=kinds["image"].safe_bytes + kinds["video"].safe_bytes,
+                    referenced_bytes=kinds["image"].referenced_bytes + kinds["video"].referenced_bytes,
+                    unknown_size_count=kinds["image"].unknown_size_count + kinds["video"].unknown_size_count,
+                )
+            )
+
+        if project_id is not None:
+            rows = [row for row in rows if row.project_id == project_id]
+        if search:
+            needle = search.casefold()
+            rows = [row for row in rows if self._matches(row, needle, include_owner=caller.is_admin)]
+        return rows
+
     @staticmethod
     def _matches(row: IntermediatesRow, needle: str, *, include_owner: bool) -> bool:
         haystacks = [row.project_name or ""]
@@ -303,112 +273,100 @@ class IntermediatesService(IntermediatesServiceBase):
     # region previews
 
     def create_preview(self, request: IntermediatesPreviewRequest, caller: IntermediatesCaller) -> IntermediatesPreview:
-        scope = request.scope
-        allowed = self._authorize_scope(scope, caller)
-        selection: Optional[list[IntermediatesScopeTarget]] = None
-        if scope.kind == "selection":
-            # Duplicate rows would double-count; the order is irrelevant to the SQL.
-            selection = list({(t.user_id, t.project_id): t for t in scope.targets}.values())
-        classified = self._records.classify_scope(
-            user_id=scope.user_id if scope.kind == "owner" else None,
-            targets=selection,
+        scope = self._resolve_scope(request.scope, caller)
+        classified = self._records.preview_scope(
+            user_id=scope.user_id,
+            targets=scope.targets,
             mode=request.mode,
-            max_candidates=MAX_OPERATION_TARGETS,
+            is_admin=caller.is_admin,
+            caller_user_id=caller.user_id,
+            max_acknowledged=MAX_ACKNOWLEDGED_DOCUMENTS,
         )
+        if classified.acknowledged_overflow:
+            raise IntermediatesScopeInvalidError(
+                f"This force delete would break more than {MAX_ACKNOWLEDGED_DOCUMENTS} documents; narrow the scope"
+            )
 
-        impact = IntermediatesImpact()
-        kind_impacts: dict[MediaKind, _KindImpact] = {"image": _KindImpact(), "video": _KindImpact()}
-        # Force mode confirms the documents it breaks. Another account's document is never the
-        # caller's to break unless the caller administers the instance, so its media is kept.
-        confirmed_references: dict[MediaKind, ReferenceOwners] = {"image": {}, "video": {}}
-        targets: dict[MediaKind, list[tuple[str, Optional[int]]]] = {"image": [], "video": []}
-        for media_kind, kind_impact in kind_impacts.items():
-            counts = classified.counts[media_kind]
-            kind_impact.keep_active = counts.active
-            kind_impact.keep_recent = counts.recent
-            if request.mode == "safe":
-                kind_impact.keep_referenced = counts.referenced
-            owners = classified.reference_owners[media_kind]
-            for candidate in classified.candidates[media_kind]:
-                references = owners.get(candidate.name, set())
-                if candidate.classification == "referenced" and not (
-                    caller.is_admin or all(owner.user_id == caller.user_id for owner in references)
-                ):
-                    kind_impact.keep_referenced += 1
-                    continue
-                kind_impact.delete += 1
-                if candidate.file_size_bytes is None:
-                    impact.unknown_size_count += 1
-                else:
-                    impact.reclaimable_bytes += candidate.file_size_bytes
-                targets[media_kind].append((candidate.name, candidate.file_size_bytes))
-                if references:
-                    confirmed_references[media_kind][candidate.name] = references
-        images, videos = kind_impacts["image"], kind_impacts["video"]
-        impact.delete_images, impact.delete_videos = images.delete, videos.delete
-        impact.keep_referenced_images, impact.keep_referenced_videos = images.keep_referenced, videos.keep_referenced
-        impact.keep_active_images, impact.keep_active_videos = images.keep_active, videos.keep_active
-        impact.keep_recent_images, impact.keep_recent_videos = images.keep_recent, videos.keep_recent
-        affected, affected_total = self._describe_affected(confirmed_references) if request.mode == "force" else ([], 0)
+        images, videos = classified.counts["image"], classified.counts["video"]
+        deletable_images, deletable_videos = classified.deletable["image"], classified.deletable["video"]
+        impact = IntermediatesImpact(
+            delete_images=deletable_images.count,
+            delete_videos=deletable_videos.count,
+            keep_referenced_images=images.referenced - deletable_images.referenced,
+            keep_referenced_videos=videos.referenced - deletable_videos.referenced,
+            keep_active_images=images.active,
+            keep_active_videos=videos.active,
+            keep_recent_images=images.recent,
+            keep_recent_videos=videos.recent,
+            reclaimable_bytes=deletable_images.measured_bytes + deletable_videos.measured_bytes,
+            unknown_size_count=deletable_images.unknown_size_count + deletable_videos.unknown_size_count,
+        )
+        affected = self._describe_affected(classified.acknowledged) if request.mode == "force" else []
 
         created = _now()
         dto = IntermediatesPreview(
             preview_id=uuid.uuid4().hex,
             mode=request.mode,
-            scope=scope,
+            scope=request.scope,
             created_at=created,
             expires_at=created + timedelta(seconds=PREVIEW_TTL_SECONDS),
-            target_rows=len(selection) if selection is not None else len(classified.rows),
+            target_rows=len(scope.targets) if scope.targets is not None else len(classified.rows),
             impact=impact,
-            has_more_eligible=classified.has_more,
             affected_documents=affected,
-            affected_documents_total=affected_total,
+            affected_documents_total=len(classified.acknowledged),
         )
         with self._lock:
             self._previews[dto.preview_id] = _Preview(
                 dto=dto,
                 caller_user_id=caller.user_id,
-                targets=targets,
-                allowed_user_ids=allowed,
-                confirmed_references=confirmed_references,
+                scope=scope,
+                recent_cutoff=classified.clock.recent_cutoff,
+                acknowledged=frozenset(classified.acknowledged),
             )
             self._expire_previews_locked(created, keep=dto.preview_id)
         return dto
 
-    def _authorize_scope(self, scope: IntermediatesScope, caller: IntermediatesCaller) -> Optional[frozenset[str]]:
-        """Returns the accounts the scope may touch, or None for every account."""
+    def _resolve_scope(self, scope: IntermediatesScope, caller: IntermediatesCaller) -> _ResolvedScope:
+        """Authorizes a scope and turns it into what the records layer pages over."""
         if scope.kind == "everyone":
             if not caller.is_admin:
                 raise IntermediatesScopeForbiddenError("Only administrators can delete everyone's intermediates")
-            return None
+            return _ResolvedScope(user_id=None, targets=None, allowed_user_ids=None)
         if scope.kind == "owner":
             if scope.user_id is None:
                 raise IntermediatesScopeInvalidError("An owner scope names the account whose intermediates to delete")
             if scope.user_id != caller.user_id and not caller.is_admin:
                 raise IntermediatesScopeForbiddenError("Only administrators can delete another account's intermediates")
-            return frozenset({scope.user_id})
-        if not scope.targets:
-            raise IntermediatesScopeInvalidError("A selection scope names at least one row")
-        owners = frozenset(target.user_id for target in scope.targets)
+            return _ResolvedScope(user_id=scope.user_id, targets=None, allowed_user_ids=frozenset({scope.user_id}))
+        if scope.kind == "matching":
+            owner_id = self._resolve_owner_filter(caller, scope.user_id)
+            rows = self._summary_rows(caller, owner_id=owner_id, project_id=scope.project_id, search=scope.search)
+            excluded = {(target.user_id, target.project_id) for target in scope.excluded}
+            targets = [(row.user_id, row.project_id) for row in rows if (row.user_id, row.project_id) not in excluded]
+            if not targets:
+                raise IntermediatesScopeInvalidError("No rows match the filter")
+            if len(targets) > MAX_RESOLVED_SCOPE_TARGETS:
+                raise IntermediatesScopeInvalidError(
+                    f"More than {MAX_RESOLVED_SCOPE_TARGETS} rows match the filter; narrow it"
+                )
+        else:
+            if not scope.targets:
+                raise IntermediatesScopeInvalidError("A selection scope names at least one row")
+            # Duplicate rows would double-count; the order is irrelevant to the SQL.
+            targets = list(dict.fromkeys((t.user_id, t.project_id) for t in scope.targets))
+        owners = frozenset(user_id for user_id, _ in targets)
         if not caller.is_admin and owners != frozenset({caller.user_id}):
             raise IntermediatesScopeForbiddenError("Only administrators can delete another account's intermediates")
-        return owners
+        return _ResolvedScope(user_id=None, targets=targets, allowed_user_ids=owners)
 
-    def _describe_affected(
-        self, confirmed_references: dict[MediaKind, ReferenceOwners]
-    ) -> tuple[list[IntermediatesAffectedDocument], int]:
-        """The documents a force clear breaks, bounded to the first few by kind and name, and how many there are."""
-        counts: dict[ReferenceOwner, int] = defaultdict(int)
-        for owners in confirmed_references.values():
-            for refs_for_name in owners.values():
-                for owner in refs_for_name:
-                    counts[owner] += 1
-        names = self._records.get_document_names(counts)
+    def _describe_affected(self, acknowledged: dict[ReferenceOwner, int]) -> list[IntermediatesAffectedDocument]:
+        """The documents a force clear breaks, bounded to the first few by kind and name."""
+        names = self._records.get_document_names(acknowledged)
         ordered = sorted(
-            counts, key=lambda owner: (owner.owner_kind, (names.get(owner) or "").casefold(), owner.owner_id)
+            acknowledged, key=lambda owner: (owner.owner_kind, (names.get(owner) or "").casefold(), owner.owner_id)
         )[:MAX_AFFECTED_DOCUMENTS]
         users = self._services.users.get_many(sorted({owner.user_id for owner in ordered}))
-        documents = [
+        return [
             IntermediatesAffectedDocument(
                 kind=cast(MediaReferenceOwnerKind, owner.owner_kind),
                 user_id=owner.user_id,
@@ -416,14 +374,17 @@ class IntermediatesService(IntermediatesServiceBase):
                 user_email=users[owner.user_id].email if owner.user_id in users else None,
                 owner_id=owner.owner_id,
                 name=names.get(owner),
-                references=counts[owner],
+                references=acknowledged[owner],
             )
             for owner in ordered
         ]
-        return documents, len(counts)
 
     def _expire_previews_locked(self, now: datetime, *, keep: Optional[str] = None) -> None:
-        """Drops expired previews, then enforces the caps; ``keep`` (the one just created) always survives."""
+        """Drops expired previews, then each caller's oldest past their cap, then the oldest past the global cap.
+
+        ``keep`` (the one just created) always survives. The per-caller cap is applied first, so
+        one account previewing in a loop evicts only its own pending confirmations.
+        """
         for pid in [pid for pid, preview in self._previews.items() if preview.dto.expires_at <= now]:
             del self._previews[pid]
         by_caller: dict[str, list[str]] = defaultdict(list)
@@ -432,27 +393,9 @@ class IntermediatesService(IntermediatesServiceBase):
         for pids in by_caller.values():
             for pid in [pid for pid in pids if pid != keep][: max(0, len(pids) - MAX_PREVIEWS_PER_CALLER)]:
                 del self._previews[pid]
-
-        # Past the global caps, the caller holding the most frozen targets gives up its oldest
-        # preview first, so no account can evict another's pending confirmation by previewing.
-        frozen: dict[str, int] = defaultdict(int)
-        for preview in self._previews.values():
-            frozen[preview.caller_user_id] += len(preview.targets["image"]) + len(preview.targets["video"])
-        keep_caller = self._previews[keep].caller_user_id if keep in self._previews else None
-        while len(self._previews) > MAX_PREVIEWS or sum(frozen.values()) > MAX_FROZEN_PREVIEW_TARGETS:
-            evictable = [pid for pid in self._previews if pid != keep]
-            if not evictable:
-                break
-            victim = max(
-                evictable,
-                key=lambda pid: (
-                    frozen[self._previews[pid].caller_user_id],
-                    # On a tie, the caller whose request overflowed the cap pays for it.
-                    self._previews[pid].caller_user_id == keep_caller,
-                ),
-            )
-            preview = self._previews.pop(victim)
-            frozen[preview.caller_user_id] -= len(preview.targets["image"]) + len(preview.targets["video"])
+        evictable = [pid for pid in self._previews if pid != keep]
+        for pid in evictable[: max(0, len(self._previews) - MAX_PREVIEWS)]:
+            del self._previews[pid]
 
     # endregion
 
@@ -462,53 +405,42 @@ class IntermediatesService(IntermediatesServiceBase):
         self, request: IntermediatesOperationRequest, caller: IntermediatesCaller
     ) -> IntermediatesOperation:
         with self._lock:
-            key = (caller.user_id, request.idempotency_key)
-            settled = self._idempotency.get(key)
-            if settled is not None:
-                # A replay creates no work, so it is answered even while cleanup is unavailable.
-                settled_preview_id, operation_id = settled
-                if settled_preview_id != request.preview_id:
-                    raise IntermediatesIdempotencyConflictError("Idempotency key was used for a different preview")
-                return self._operations[operation_id].dto.model_copy(deep=True)
-
             self._require_cleanup_available()
-            self._require_active_capacity_locked(caller.user_id)
             self._expire_previews_locked(_now())
             preview = self._previews.get(request.preview_id)
+            # A consumed preview answers "not found" even while its run is still active, so a client
+            # whose start response was lost learns to look the run up rather than to wait.
             if preview is None or preview.caller_user_id != caller.user_id:
                 raise IntermediatesPreviewNotFoundError("Preview expired or unknown; request a new one")
-            self._require_operation_capacity(
-                caller.user_id, len(preview.targets["image"]) + len(preview.targets["video"])
-            )
+            self._require_active_capacity_locked(caller.user_id)
             # Single use: a second confirmation of the same preview must go through a new preview.
             del self._previews[request.preview_id]
-
-            operation = self._register_operation_locked(
-                caller=caller,
+            dto = IntermediatesOperation(
+                operation_id=uuid.uuid4().hex,
+                user_id=caller.user_id,
                 mode=preview.dto.mode,
                 scope=preview.dto.scope,
-                targets=preview.targets,
-                allowed_user_ids=preview.allowed_user_ids,
-                confirmed_references=preview.confirmed_references,
-                retried_from=None,
+                status="pending",
+                created_at=_now(),
+                target_images=preview.dto.impact.delete_images,
+                target_videos=preview.dto.impact.delete_videos,
+                progress=IntermediatesOperationProgress(),
             )
-            try:
-                self._records.save_operation(
-                    caller.user_id,
-                    self._receipt(operation),
-                    preview_id=request.preview_id,
-                    idempotency_key=request.idempotency_key,
-                    targets=self._operation_target_rows(operation),
-                )
-            except Exception:
-                self._operations.pop(operation.dto.operation_id)
-                self._operation_order.remove(operation.dto.operation_id)
-                self._previews[request.preview_id] = preview
-                raise
-            self._idempotency[key] = (request.preview_id, operation.dto.operation_id)
-            self._prune_operations_locked()
-        self._enqueue(operation)
-        return operation.dto.model_copy(deep=True)
+            operation = _Operation(
+                dto=dto,
+                caller=caller,
+                scope=preview.scope,
+                recent_cutoff=preview.recent_cutoff,
+                acknowledged=preview.acknowledged,
+            )
+            self._operations[dto.operation_id] = operation
+            self._retain_operations_locked()
+            snapshot = dto.model_copy(deep=True)
+        # The pending event goes out before the worker can see the id, so no later event precedes it.
+        self._emit(snapshot)
+        self._ensure_worker()
+        self._pending.put(dto.operation_id)
+        return snapshot
 
     def get_operation(self, operation_id: str, caller: IntermediatesCaller) -> IntermediatesOperation:
         with self._lock:
@@ -517,214 +449,39 @@ class IntermediatesService(IntermediatesServiceBase):
                 raise IntermediatesOperationNotFoundError(operation_id)
             return operation.dto.model_copy(deep=True)
 
-    def retry_operation(self, operation_id: str, caller: IntermediatesCaller) -> IntermediatesOperation:
+    def list_operations(self, caller: IntermediatesCaller) -> list[IntermediatesOperation]:
         with self._lock:
-            original = self._operations.get(operation_id)
-            if original is None or (original.caller.user_id != caller.user_id and not caller.is_admin):
-                raise IntermediatesOperationNotFoundError(operation_id)
-            if original.dto.status not in ("completed", "failed"):
-                raise IntermediatesUnavailableError("The operation is still running")
-            existing_retry = (
-                self._operations.get(original.dto.retried_by_operation_id)
-                if original.dto.retried_by_operation_id is not None
-                else None
-            )
-            if existing_retry is not None:
-                # A duplicated retry request (lost response, double click) must not run the same
-                # targets twice; the retry that already took them over is the answer.
-                if existing_retry.caller.user_id != caller.user_id and not caller.is_admin:
-                    raise IntermediatesUnavailableError("Another account already retried this operation")
-                return existing_retry.dto.model_copy(deep=True)
-            self._require_cleanup_available()
-            self._require_active_capacity_locked(caller.user_id)
-            unresolved = {kind: list(names.items()) for kind, names in original.unresolved.items()}
-            if not unresolved["image"] and not unresolved["video"]:
-                raise IntermediatesUnavailableError("The operation has nothing left to retry")
-            # A retry is authorized as the retrying caller, never as the original one.
-            self._authorize_scope(original.dto.scope, caller)
-            self._require_operation_capacity(
-                caller.user_id, len(unresolved["image"]) + len(unresolved["video"]), replacing=original
-            )
-            confirmed_references = original.confirmed_references
-            if not caller.is_admin:
-                confirmed_references = {
-                    kind: _own_references(references, caller.user_id)
-                    for kind, references in confirmed_references.items()
-                }
-            operation = self._register_operation_locked(
-                caller=caller,
-                mode=original.dto.mode,
-                scope=original.dto.scope,
-                targets=unresolved,
-                allowed_user_ids=original.allowed_user_ids,
-                confirmed_references=confirmed_references,
-                retried_from=operation_id,
-            )
-            original.dto.retried_by_operation_id = operation.dto.operation_id
-            try:
-                self._records.save_operation(
-                    caller.user_id,
-                    self._receipt(operation),
-                    linked_operation=self._receipt(original),
-                    targets=self._operation_target_rows(operation),
-                )
-            except Exception:
-                self._operations.pop(operation.dto.operation_id)
-                self._operation_order.remove(operation.dto.operation_id)
-                original.dto.retried_by_operation_id = None
-                raise
-            original.unresolved = {"image": {}, "video": {}}
-            original.confirmed_references = {"image": {}, "video": {}}
-            self._prune_operations_locked()
-        self._enqueue(operation)
-        return operation.dto.model_copy(deep=True)
-
-    def _register_operation_locked(
-        self,
-        *,
-        caller: IntermediatesCaller,
-        mode: IntermediatesCleanupMode,
-        scope: IntermediatesScope,
-        targets: dict[MediaKind, list[tuple[str, Optional[int]]]],
-        allowed_user_ids: Optional[frozenset[str]],
-        confirmed_references: dict[MediaKind, ReferenceOwners],
-        retried_from: Optional[str],
-    ) -> _Operation:
-        dto = IntermediatesOperation(
-            operation_id=uuid.uuid4().hex,
-            user_id=caller.user_id,
-            mode=mode,
-            scope=scope,
-            status="pending",
-            created_at=_now(),
-            target_images=len(targets["image"]),
-            target_videos=len(targets["video"]),
-            progress=IntermediatesOperationProgress(
-                unresolved_images=len(targets["image"]), unresolved_videos=len(targets["video"])
-            ),
-            retried_from_operation_id=retried_from,
-        )
-        operation = _Operation(
-            dto=dto,
-            caller=caller,
-            targets={"image": list(targets["image"]), "video": list(targets["video"])},
-            allowed_user_ids=allowed_user_ids,
-            confirmed_references={kind: dict(owners) for kind, owners in confirmed_references.items()},
-            unresolved={"image": dict(targets["image"]), "video": dict(targets["video"])},
-        )
-        self._operations[dto.operation_id] = operation
-        self._operation_order.append(dto.operation_id)
-        return operation
-
-    @staticmethod
-    def _receipt(operation: _Operation) -> OperationReceipt:
-        return OperationReceipt(
-            dto=operation.dto,
-            caller_is_admin=operation.caller.is_admin,
-            allowed_user_ids=sorted(operation.allowed_user_ids) if operation.allowed_user_ids is not None else None,
-        )
-
-    @staticmethod
-    def _operation_target_rows(operation: _Operation) -> list[OperationTarget]:
-        return [
-            (kind, name, size, operation.confirmed_references[kind].get(name, set()))
-            for kind, names in operation.unresolved.items()
-            for name, size in names.items()
-        ]
-
-    def _can_prune_operation_locked(self, operation: _Operation) -> bool:
-        if operation.dto.status not in ("completed", "failed") or any(operation.unresolved.values()):
-            return False
-        retry_id = operation.dto.retried_by_operation_id
-        retry = self._operations.get(retry_id) if retry_id is not None else None
-        return retry is None or retry.dto.status not in ("pending", "running")
+            own = [op for op in self._operations.values() if op.caller.user_id == caller.user_id]
+            return [op.dto.model_copy(deep=True) for op in reversed(own)]
 
     def _require_active_capacity_locked(self, caller_user_id: str) -> None:
         active = [op for op in self._operations.values() if op.dto.status in ("pending", "running")]
         if sum(op.caller.user_id == caller_user_id for op in active) >= MAX_ACTIVE_OPERATIONS_PER_CALLER:
-            raise IntermediatesUnavailableError("Wait for your running deletions to finish before starting another")
+            raise IntermediatesUnavailableError("Wait for your running deletion to finish before starting another")
         if len(active) >= MAX_ACTIVE_OPERATIONS:
             raise IntermediatesUnavailableError("Too many cleanup operations are already running")
 
-    def _require_operation_capacity(
-        self, caller_user_id: str, incoming_targets: int, *, replacing: Optional[_Operation] = None
-    ) -> None:
-        """Refuses new work past the confirming account's budget; a retry hands its targets over rather than adding."""
-        outstanding = 0
-        caller_outstanding = 0
-        caller_operations: list[_Operation] = []
-        for operation in self._operations.values():
-            if operation is replacing:
-                continue
-            unresolved = len(operation.unresolved["image"]) + len(operation.unresolved["video"])
-            outstanding += unresolved
-            if operation.caller.user_id == caller_user_id:
-                caller_outstanding += unresolved
-                caller_operations.append(operation)
-        if (
-            caller_outstanding + incoming_targets > MAX_RETAINED_TARGETS_PER_CALLER
-            or outstanding + incoming_targets > MAX_RETAINED_TARGETS
-        ):
-            raise IntermediatesUnavailableError("Retry unresolved cleanup targets before starting more cleanup")
-        if (
-            replacing is None
-            and len(caller_operations) >= MAX_RETAINED_OPERATIONS_PER_CALLER
-            and not any(self._can_prune_operation_locked(operation) for operation in caller_operations)
-        ):
-            raise IntermediatesUnavailableError("Retry unresolved cleanup operations before starting more cleanup")
+    def _retain_operations_locked(self) -> None:
+        """Drops each account's oldest settled operations past its budget, then the oldest past the global cap."""
+        settled_by_caller: dict[str, list[str]] = defaultdict(list)
+        for operation_id, operation in self._operations.items():
+            if operation.dto.status in ("completed", "failed"):
+                settled_by_caller[operation.caller.user_id].append(operation_id)
+        for operation_ids in settled_by_caller.values():
+            for operation_id in operation_ids[
+                : max(0, len(operation_ids) - MAX_RETAINED_SETTLED_OPERATIONS_PER_CALLER)
+            ]:
+                del self._operations[operation_id]
+        settled = [oid for oid, op in self._operations.items() if op.dto.status in ("completed", "failed")]
+        for operation_id in settled[: max(0, len(self._operations) - MAX_RETAINED_OPERATIONS)]:
+            del self._operations[operation_id]
 
-    def _prune_operations_locked(self) -> None:
-        """Drops each account's oldest settled receipts past its budget; unresolved ones stay retryable.
-
-        A retry takes the operations it retried with it, even another account's: they point at it
-        and handed it everything they had left.
-        """
-        retained: dict[str, int] = defaultdict(int)
-        for operation in self._operations.values():
-            retained[operation.caller.user_id] += 1
-        evicted: list[str] = []
-        evicted_set: set[str] = set()
-        for operation_id in self._operation_order:
-            operation = self._operations[operation_id]
-            if (
-                operation_id in evicted_set
-                or retained[operation.caller.user_id] <= MAX_RETAINED_OPERATIONS_PER_CALLER
-                or not self._can_prune_operation_locked(operation)
-            ):
-                continue
-            chain = [operation]
-            previous_id = operation.dto.retried_from_operation_id
-            while previous_id is not None and previous_id not in evicted_set:
-                previous = self._operations.get(previous_id)
-                if previous is None:
-                    break
-                chain.append(previous)
-                previous_id = previous.dto.retried_from_operation_id
-            if not all(self._can_prune_operation_locked(link) for link in chain):
-                continue
-            for link in chain:
-                retained[link.caller.user_id] -= 1
-                evicted.append(link.dto.operation_id)
-                evicted_set.add(link.dto.operation_id)
-        if not evicted:
-            return
+    def _emit(self, snapshot: IntermediatesOperation) -> None:
+        """Events carry snapshots taken under the lock; a failing bus must not take the worker down with it."""
         try:
-            self._records.delete_operations(evicted)
-        except Exception as error:
-            self._logger.warning(f"Could not prune old intermediates operations: {error}")
-            return
-        self._operation_order = [
-            operation_id for operation_id in self._operation_order if operation_id not in evicted_set
-        ]
-        for operation_id in evicted:
-            self._operations.pop(operation_id)
-        self._idempotency = {k: v for k, v in self._idempotency.items() if v[1] not in evicted_set}
-
-    def _enqueue(self, operation: _Operation) -> None:
-        self._ensure_worker()
-        self._pending.put(operation.dto.operation_id)
-        # Events carry snapshots: the worker mutates the live DTO as soon as it dequeues the id.
-        self._services.events.emit_intermediates_operation_changed(operation.dto.model_copy(deep=True))
+            self._services.events.emit_intermediates_operation_changed(snapshot)
+        except Exception as error:  # pragma: no cover - defensive: the worker must survive
+            self._logger.error(f"Could not publish intermediates operation {snapshot.operation_id}: {error}")
 
     def _require_cleanup_available(self) -> None:
         image_moves = getattr(self._services, "image_moves", None)
@@ -738,17 +495,24 @@ class IntermediatesService(IntermediatesServiceBase):
     def clear_all_images_now(self, caller: IntermediatesCaller) -> int:
         if not caller.is_admin:
             raise IntermediatesScopeForbiddenError("Only admins can clear all intermediates")
-        guard = self._records.make_delete_guard("image", mode="safe", allowed_user_ids=None)
+        guard = self._records.make_delete_guard(
+            "image", mode="safe", allowed_user_ids=None, caller_user_id=caller.user_id, is_admin=True
+        )
         deleted = 0
-        after_rowid: Optional[int] = 0
-        # Bounded pages keep memory flat however many intermediates exist; the guard re-checks each
-        # batch on the deleting transaction.
-        while after_rowid is not None:
-            page, after_rowid = self._records.page_intermediates(
-                "image", after_rowid=after_rowid, limit=DELETE_BATCH_SIZE
-            )
-            names = [candidate.name for candidate in page if candidate.classification == "safe"]
-            if names:
+        # Bounded windows keep memory flat however many intermediates exist; the guard re-checks
+        # each batch on the deleting transaction.
+        for batch in self._records.iter_deletable_batches(
+            "image",
+            user_id=None,
+            targets=None,
+            mode="safe",
+            is_admin=True,
+            caller_user_id=caller.user_id,
+            recent_cutoff=None,
+            limit=DELETE_BATCH_SIZE,
+        ):
+            if batch:
+                names = [name for name, _ in batch]
                 deleted += len(self._services.images.delete_intermediates_by_names(names, guard).deleted_names)
         return deleted
 
@@ -782,57 +546,65 @@ class IntermediatesService(IntermediatesServiceBase):
                     self._run(operation)
                 except Exception as error:  # pragma: no cover - defensive: the worker must survive
                     self._logger.error(f"Intermediates operation {operation_id} crashed: {error}", exc_info=True)
-                    try:
-                        self._finish(operation, error=str(error))
-                    except Exception as finish_error:
-                        # A failed receipt write must not strand the rest of the accepted queue.
-                        # The target rows remain durable and are retryable after a restart.
-                        self._logger.error(
-                            f"Could not persist failure for intermediates operation {operation_id}: {finish_error}",
-                            exc_info=True,
-                        )
+                    self._finish(operation, error=str(error))
 
     def _run(self, operation: _Operation) -> None:
         with self._lock:
             operation.dto.status = "running"
             operation.dto.started_at = _now()
-            self._records.save_operation(operation.caller.user_id, self._receipt(operation))
-        self._services.events.emit_intermediates_operation_changed(operation.dto.model_copy(deep=True))
+            snapshot = operation.dto.model_copy(deep=True)
+        self._emit(snapshot)
 
         deleters: dict[MediaKind, Callable[[list[str], IntermediateDeleteGuard], IntermediateDeleteResult]] = {
             "image": self._services.images.delete_intermediates_by_names,
             "video": self._services.videos.delete_intermediates_by_names,
         }
         for media_kind, deleter in deleters.items():
-            targets = operation.targets[media_kind]
-            for start in range(0, len(targets), DELETE_BATCH_SIZE):
-                batch = targets[start : start + DELETE_BATCH_SIZE]
+            batches = self._records.iter_deletable_batches(
+                media_kind,
+                user_id=operation.scope.user_id,
+                targets=operation.scope.targets,
+                mode=operation.dto.mode,
+                is_admin=operation.caller.is_admin,
+                caller_user_id=operation.caller.user_id,
+                recent_cutoff=operation.recent_cutoff,
+                limit=DELETE_BATCH_SIZE,
+            )
+            for batch in batches:
+                # Re-checked per window, including windows of only protected rows, so a stop or a
+                # demotion is honoured within one window even across a long protected stretch.
                 halt, is_admin = self._batch_authority(operation)
                 if halt is not None:
                     self._finish(operation, error=halt)
                     return
-                sizes = dict(batch)
-                names = [name for name, _ in batch]
-                confirmed = operation.confirmed_references[media_kind]
-                batch_references = {name: confirmed[name] for name in names if name in confirmed}
-                if not is_admin:
-                    batch_references = _own_references(batch_references, operation.caller.user_id)
+                if not batch:
+                    continue
+                acknowledged = (
+                    operation.acknowledged
+                    if is_admin
+                    else frozenset(o for o in operation.acknowledged if o.user_id == operation.caller.user_id)
+                )
                 guard = self._records.make_delete_guard(
                     media_kind,
                     mode=operation.dto.mode,
-                    allowed_user_ids=operation.allowed_user_ids,
-                    confirmed_references=batch_references,
+                    allowed_user_ids=operation.scope.allowed_user_ids,
+                    caller_user_id=operation.caller.user_id,
+                    is_admin=is_admin,
+                    recent_cutoff=operation.recent_cutoff,
+                    acknowledged=acknowledged,
                 )
+                names = [name for name, _ in batch]
+                sizes = dict(batch)
                 try:
                     result = deleter(names, guard)
                 except Exception as error:
                     self._logger.error(f"Intermediates cleanup batch failed ({media_kind}): {error}", exc_info=True)
-                    self._record_batch(operation, media_kind, batch, deleted=[], deferred=[], failed=names, sizes=sizes)
+                    self._record_batch(operation, media_kind, names, deleted=[], deferred=[], failed=names, sizes=sizes)
                     continue
                 self._record_batch(
                     operation,
                     media_kind,
-                    batch,
+                    names,
                     deleted=result.deleted_names,
                     deferred=result.purge_deferred,
                     failed=[],
@@ -857,7 +629,7 @@ class IntermediatesService(IntermediatesServiceBase):
         user = self._services.users.get(operation.caller.user_id)
         if user is None or not user.is_active:
             return "The confirming account is no longer active", False
-        if operation.allowed_user_ids != frozenset({operation.caller.user_id}) and not user.is_admin:
+        if operation.scope.allowed_user_ids != frozenset({operation.caller.user_id}) and not user.is_admin:
             return "The confirming account no longer administers this instance", False
         return None, operation.caller.is_admin and user.is_admin
 
@@ -865,7 +637,7 @@ class IntermediatesService(IntermediatesServiceBase):
         self,
         operation: _Operation,
         kind: MediaKind,
-        batch: list[tuple[str, Optional[int]]],
+        names: list[str],
         *,
         deleted: Sequence[str],
         deferred: Sequence[str],
@@ -874,11 +646,9 @@ class IntermediatesService(IntermediatesServiceBase):
     ) -> None:
         deleted_set = set(deleted)
         deferred_set = set(deferred)
-        failed_set = set(failed)
         with self._lock:
             progress = operation.dto.progress
-            names = [name for name, _ in batch]
-            retained = len(names) - len(deleted_set) - len(failed_set)
+            retained = len(names) - len(deleted_set) - len(failed)
             for name in deleted_set:
                 if name in deferred_set:
                     progress.pending_disk_cleanup += 1
@@ -888,47 +658,31 @@ class IntermediatesService(IntermediatesServiceBase):
                     progress.unknown_size_count += 1
                 else:
                     progress.reclaimed_bytes += size
-            unresolved = operation.unresolved[kind]
-            for name in names:
-                if name not in failed_set:
-                    unresolved.pop(name, None)
-                    operation.confirmed_references[kind].pop(name, None)
             if kind == "image":
                 progress.processed_images += len(names)
                 progress.deleted_images += len(deleted_set)
-                progress.failed_images += len(failed_set)
+                progress.failed_images += len(failed)
                 progress.retained_images += retained
-                progress.unresolved_images = len(unresolved)
             else:
                 progress.processed_videos += len(names)
                 progress.deleted_videos += len(deleted_set)
-                progress.failed_videos += len(failed_set)
+                progress.failed_videos += len(failed)
                 progress.retained_videos += retained
-                progress.unresolved_videos = len(unresolved)
-            self._records.save_operation(
-                operation.caller.user_id,
-                self._receipt(operation),
-                resolved_targets=(kind, [name for name in names if name not in failed_set]),
-            )
             # Progress events are coalesced; the final state always goes out from `_finish`.
             now = time.monotonic()
             if now - operation.last_progress_event_at < PROGRESS_EVENT_INTERVAL_SECONDS:
                 return
             operation.last_progress_event_at = now
             snapshot = operation.dto.model_copy(deep=True)
-        self._services.events.emit_intermediates_operation_changed(snapshot)
+        self._emit(snapshot)
 
     def _finish(self, operation: _Operation, *, error: Optional[str]) -> None:
         with self._lock:
             operation.dto.status = "failed" if error is not None else "completed"
             operation.dto.error = error
             operation.dto.completed_at = _now()
-            # Only the unresolved names matter after this point; the frozen list is the bulk of an
-            # operation's memory and would otherwise live for as long as the operation is retained.
-            operation.targets = {"image": [], "video": []}
-            self._records.save_operation(operation.caller.user_id, self._receipt(operation))
-            self._prune_operations_locked()
+            self._retain_operations_locked()
             snapshot = operation.dto.model_copy(deep=True)
-        self._services.events.emit_intermediates_operation_changed(snapshot)
+        self._emit(snapshot)
 
     # endregion

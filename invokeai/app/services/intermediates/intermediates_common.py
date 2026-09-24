@@ -11,7 +11,7 @@ IntermediatesCleanupMode = Literal["safe", "force"]
 """`safe` keeps everything a saved document still references; `force` deletes those too. Neither
 touches active work, recent uploads or durable media."""
 
-IntermediatesScopeKind = Literal["selection", "owner", "everyone"]
+IntermediatesScopeKind = Literal["selection", "owner", "everyone", "matching"]
 IntermediatesOperationStatus = Literal["pending", "running", "completed", "failed"]
 IntermediatesSummarySort = Literal["reclaimable_bytes", "project_name"]
 
@@ -26,14 +26,15 @@ PREVIEW_TTL_SECONDS = 10 * 60
 # stops protecting its media after this long.
 BROWSER_HOLD_TTL_SECONDS = 15 * 60
 MAX_BROWSER_HOLD_NAMES = 50_000
-# A lease id is `<holder>` or `<holder>.<part>`: one open editor (tab) is one holder, however many
-# parts it splits its hold into.
-BROWSER_HOLD_LEASE_ID_PATTERN = r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_.-]+)?$"
-# Open editors one account can hold media for at once; past it every lease of the least recently
-# refreshed editor lapses.
-MAX_BROWSER_HOLD_EDITORS_PER_USER = 8
+# One open editor (tab) holds one lease.
+BROWSER_HOLD_LEASE_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+# Leases one account can hold at once; past it the least recently refreshed lease lapses.
+MAX_BROWSER_HOLD_LEASES_PER_USER = 8
 # A force preview lists at most this many broken documents; `affected_documents_total` counts them all.
 MAX_AFFECTED_DOCUMENTS = 200
+# A force preview acknowledges every document it would break by identity; past this many the
+# caller narrows the scope instead of the server holding an unbounded set per preview.
+MAX_ACKNOWLEDGED_DOCUMENTS = 10_000
 
 MediaName = Annotated[str, Field(min_length=1, max_length=255)]
 
@@ -56,6 +57,13 @@ class IntermediatesScopeTarget(BaseModel):
 
 
 class IntermediatesScope(BaseModel):
+    """What a cleanup acts on.
+
+    `selection` names rows; `owner` names an account; `everyone` is every account (administrators);
+    `matching` is every row the summary filters match, minus `excluded`, resolved by the server so
+    a client never has to enumerate rows it has not loaded.
+    """
+
     kind: IntermediatesScopeKind = Field(description="How the targets were chosen")
     targets: list[IntermediatesScopeTarget] = Field(
         default_factory=list, max_length=1000, description="The selected rows; only read for a `selection` scope"
@@ -64,7 +72,17 @@ class IntermediatesScope(BaseModel):
         default=None,
         min_length=1,
         max_length=255,
-        description="The account whose rows are targeted by an `owner` scope",
+        description=(
+            "The account an `owner` scope targets, or the owner filter of a `matching` scope"
+            " (null: the caller's account, or every account for administrators)"
+        ),
+    )
+    project_id: Optional[str] = Field(
+        default=None, min_length=1, max_length=255, description="`matching` only: the summary's project filter"
+    )
+    search: Optional[str] = Field(default=None, max_length=200, description="`matching` only: the summary's search")
+    excluded: list[IntermediatesScopeTarget] = Field(
+        default_factory=list, max_length=1000, description="`matching` only: matching rows to leave out"
     )
 
 
@@ -159,14 +177,13 @@ class IntermediatesPreview(BaseModel):
     created_at: datetime
     expires_at: datetime
     target_rows: int = Field(description="Rows the scope resolved to")
-    has_more_eligible: bool = Field(
-        default=False, description="More eligible intermediates remain outside this bounded preview batch"
-    )
     impact: IntermediatesImpact
     affected_documents: list[IntermediatesAffectedDocument] = Field(
         default_factory=list,
         description=(
-            "Documents a force clear would break. A non-administrator's force clear keeps media other accounts'"
+            "Documents a force clear would break. Confirming acknowledges these documents: the operation deletes"
+            " referenced targets only while every document naming them is acknowledged, so a document saved after"
+            " the preview keeps its media. A non-administrator's force clear keeps media other accounts'"
             " documents name, so these are always the caller's own. Bounded; see `affected_documents_total`"
         ),
     )
@@ -176,8 +193,7 @@ class IntermediatesPreview(BaseModel):
 
 
 class IntermediatesOperationRequest(BaseModel):
-    preview_id: str = Field(min_length=1, max_length=64)
-    idempotency_key: str = Field(min_length=1, max_length=255, description="Caller-owned retry key")
+    preview_id: str = Field(min_length=1, max_length=64, description="A preview is confirmed at most once")
 
 
 class IntermediatesOperationProgress(BaseModel):
@@ -187,7 +203,7 @@ class IntermediatesOperationProgress(BaseModel):
     deleted_videos: int = Field(default=0)
     retained_images: int = Field(default=0, description="Targets the final check kept: promoted, protected or gone")
     retained_videos: int = Field(default=0)
-    failed_images: int = Field(default=0, description="Targets whose deletion raised; retryable")
+    failed_images: int = Field(default=0, description="Targets whose deletion raised; a new cleanup picks them up")
     failed_videos: int = Field(default=0)
     reclaimed_bytes: int = Field(default=0, description="Bytes whose files are confirmed removed")
     unknown_size_count: int = Field(
@@ -196,35 +212,33 @@ class IntermediatesOperationProgress(BaseModel):
     pending_disk_cleanup: int = Field(
         default=0, description="Deleted records whose files could not be purged yet; the journal retries at startup"
     )
-    unresolved_images: int = Field(default=0, description="Image targets that failed or were never attempted")
-    unresolved_videos: int = Field(default=0, description="Video targets that failed or were never attempted")
 
 
 class IntermediatesOperation(BaseModel):
+    """A cleanup run. Operations live in server memory: a restart forgets them, and the live policy
+    is the retry, so a new preview and confirmation picks up whatever an interrupted run left."""
+
     operation_id: str
     user_id: str = Field(description="The account that confirmed the operation")
     mode: IntermediatesCleanupMode
-    scope: IntermediatesScope
+    scope: IntermediatesScope = Field(description="The scope as requested, so a client can request it again")
     status: IntermediatesOperationStatus
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error: Optional[str] = Field(default=None, description="Why the operation stopped, when it failed")
-    target_images: int = Field(description="Frozen image targets")
-    target_videos: int = Field(description="Frozen video targets")
-    progress: IntermediatesOperationProgress
-    retried_from_operation_id: Optional[str] = None
-    retried_by_operation_id: Optional[str] = Field(
-        default=None, description="The retry that took over this operation's unresolved targets, if any"
-    )
-
-    @property
-    def is_retryable(self) -> bool:
-        return (
-            self.status in ("completed", "failed")
-            and self.retried_by_operation_id is None
-            and (self.progress.unresolved_images > 0 or self.progress.unresolved_videos > 0)
+    target_images: int = Field(
+        description=(
+            "Image deletions the preview expected. The scope is paged live, so rows that became deletable"
+            " since the preview are collected too and the deleted count may exceed this"
         )
+    )
+    target_videos: int = Field(description="Video deletions the preview expected; see `target_images`")
+    progress: IntermediatesOperationProgress
+
+
+class IntermediatesOperationList(BaseModel):
+    items: list[IntermediatesOperation] = Field(description="The caller's retained operations, newest first")
 
 
 class IntermediatesPreviewNotFoundError(Exception):
@@ -241,10 +255,6 @@ class IntermediatesScopeForbiddenError(Exception):
 
 class IntermediatesScopeInvalidError(Exception):
     """The scope is malformed for its kind."""
-
-
-class IntermediatesIdempotencyConflictError(Exception):
-    """The idempotency key was already used with a different preview."""
 
 
 class IntermediatesUnavailableError(Exception):

@@ -72,12 +72,12 @@ def test_every_route_requires_authentication(enable_multiuser: Any, client: Test
         client.post("/api/v1/intermediates/previews", json={"mode": "safe", "scope": {"kind": "everyone"}}).status_code
         == status.HTTP_401_UNAUTHORIZED
     )
+    assert client.get("/api/v1/intermediates/operations").status_code == status.HTTP_401_UNAUTHORIZED
     assert (
-        client.post("/api/v1/intermediates/operations", json={"preview_id": "x", "idempotency_key": "k"}).status_code
+        client.post("/api/v1/intermediates/operations", json={"preview_id": "x"}).status_code
         == status.HTTP_401_UNAUTHORIZED
     )
     assert client.get("/api/v1/intermediates/operations/x").status_code == status.HTTP_401_UNAUTHORIZED
-    assert client.post("/api/v1/intermediates/operations/x/retry").status_code == status.HTTP_401_UNAUTHORIZED
     assert client.put("/api/v1/intermediates/holds/tab", json={"images": ["x.png"]}).status_code == 401
     assert client.delete("/api/v1/intermediates/holds/tab").status_code == 401
 
@@ -98,7 +98,7 @@ def test_non_admins_see_only_their_rows_and_cannot_widen_scope(
         client.get("/api/v1/intermediates/summary", params={"owner_id": other}, headers=_auth(user1_token)).status_code
         == status.HTTP_403_FORBIDDEN
     )
-    for scope in ({"kind": "everyone"}, {"kind": "owner", "user_id": other}):
+    for scope in ({"kind": "everyone"}, {"kind": "owner", "user_id": other}, {"kind": "matching", "user_id": other}):
         response = client.post(
             "/api/v1/intermediates/previews", json={"mode": "safe", "scope": scope}, headers=_auth(user1_token)
         )
@@ -109,15 +109,14 @@ def test_non_admins_see_only_their_rows_and_cannot_widen_scope(
         headers=_auth(user1_token),
     )
     assert forged.status_code == status.HTTP_403_FORBIDDEN
-    malformed = client.post(
-        "/api/v1/intermediates/previews",
-        json={"mode": "safe", "scope": {"kind": "owner"}},
-        headers=_auth(user1_token),
-    )
-    assert malformed.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    for malformed in ({"kind": "owner"}, {"kind": "matching", "search": "no such project"}):
+        response = client.post(
+            "/api/v1/intermediates/previews", json={"mode": "safe", "scope": malformed}, headers=_auth(user1_token)
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, response.text
 
 
-def test_preview_operation_and_retry_flow(
+def test_preview_operation_and_list_flow(
     storage_ready: None, mock_invoker: Invoker, client: TestClient, user1_token: str, user2_token: str, admin_token: str
 ) -> None:
     user1 = _user_id(mock_invoker, "user1@test.com")
@@ -125,45 +124,43 @@ def test_preview_operation_and_retry_flow(
 
     preview = client.post(
         "/api/v1/intermediates/previews",
-        json={"mode": "safe", "scope": {"kind": "owner", "user_id": user1}},
+        json={"mode": "safe", "scope": {"kind": "matching", "excluded": []}},
         headers=_auth(user1_token),
     )
     assert preview.status_code == status.HTTP_201_CREATED, preview.text
     assert preview.json()["impact"]["delete_images"] == 1
+    assert preview.json()["scope"]["kind"] == "matching"
     preview_id = preview.json()["preview_id"]
 
     stolen = client.post(
-        "/api/v1/intermediates/operations",
-        json={"preview_id": preview_id, "idempotency_key": "k"},
-        headers=_auth(user2_token),
+        "/api/v1/intermediates/operations", json={"preview_id": preview_id}, headers=_auth(user2_token)
     )
     assert stolen.status_code == status.HTTP_404_NOT_FOUND
 
     started = client.post(
-        "/api/v1/intermediates/operations",
-        json={"preview_id": preview_id, "idempotency_key": "k"},
-        headers=_auth(user1_token),
+        "/api/v1/intermediates/operations", json={"preview_id": preview_id}, headers=_auth(user1_token)
     )
     assert started.status_code == status.HTTP_202_ACCEPTED, started.text
     operation_id = started.json()["operation_id"]
+    # A preview is confirmed once; a client whose response was lost finds the run in the list.
     repeated = client.post(
-        "/api/v1/intermediates/operations",
-        json={"preview_id": preview_id, "idempotency_key": "k"},
-        headers=_auth(user1_token),
+        "/api/v1/intermediates/operations", json={"preview_id": preview_id}, headers=_auth(user1_token)
     )
-    assert repeated.status_code == status.HTTP_202_ACCEPTED and repeated.json()["operation_id"] == operation_id
+    assert repeated.status_code == status.HTTP_404_NOT_FOUND
+    listed = client.get("/api/v1/intermediates/operations", headers=_auth(user1_token))
+    assert [item["operation_id"] for item in listed.json()["items"]] == [operation_id]
+    assert client.get("/api/v1/intermediates/operations", headers=_auth(user2_token)).json() == {"items": []}
 
     finished = _wait(client, user1_token, operation_id)
     assert finished["status"] == "completed"
     assert finished["progress"]["deleted_images"] == 1
+    assert finished["scope"] == preview.json()["scope"]
 
     assert (
         client.get(f"/api/v1/intermediates/operations/{operation_id}", headers=_auth(user2_token)).status_code
         == status.HTTP_404_NOT_FOUND
     )
     assert client.get(f"/api/v1/intermediates/operations/{operation_id}", headers=_auth(admin_token)).status_code == 200
-    nothing_to_retry = client.post(f"/api/v1/intermediates/operations/{operation_id}/retry", headers=_auth(user1_token))
-    assert nothing_to_retry.status_code == status.HTTP_409_CONFLICT
 
 
 def test_mutations_are_refused_during_image_storage_maintenance(
@@ -179,33 +176,11 @@ def test_mutations_are_refused_during_image_storage_maintenance(
 
     started = client.post(
         "/api/v1/intermediates/operations",
-        json={"preview_id": preview.json()["preview_id"], "idempotency_key": "k"},
+        json={"preview_id": preview.json()["preview_id"]},
         headers=_auth(user1_token),
     )
     assert started.status_code == status.HTTP_409_CONFLICT
     assert started.json()["detail"] == "Image storage maintenance is active"
-
-
-def test_replayed_start_succeeds_during_image_storage_maintenance(
-    storage_ready: None, mock_invoker: Invoker, client: TestClient, user1_token: str
-) -> None:
-    user1 = _user_id(mock_invoker, "user1@test.com")
-    _seed_intermediate(mock_invoker, "replay.png", user1)
-    preview = client.post(
-        "/api/v1/intermediates/previews",
-        json={"mode": "safe", "scope": {"kind": "owner", "user_id": user1}},
-        headers=_auth(user1_token),
-    ).json()
-    request = {"preview_id": preview["preview_id"], "idempotency_key": "replay-maintenance"}
-    first = client.post("/api/v1/intermediates/operations", json=request, headers=_auth(user1_token))
-    assert first.status_code == 202
-    _wait(client, user1_token, first.json()["operation_id"])
-    mock_invoker.services.image_moves.is_maintenance_active.return_value = True
-
-    replay = client.post("/api/v1/intermediates/operations", json=request, headers=_auth(user1_token))
-
-    assert replay.status_code == 202
-    assert replay.json()["operation_id"] == first.json()["operation_id"]
 
 
 def test_hold_is_account_scoped_at_the_http_boundary(
@@ -224,15 +199,13 @@ def test_hold_is_account_scoped_at_the_http_boundary(
     assert summary["items"][0]["images"]["active"] == 1
 
 
-def test_hold_lease_ids_name_one_editor_and_an_optional_part(
-    storage_ready: None, client: TestClient, user1_token: str
-) -> None:
-    for lease_id in ("tab.0-0", "tab"):
+def test_hold_lease_ids_are_single_tokens(storage_ready: None, client: TestClient, user1_token: str) -> None:
+    for lease_id in ("tab", "tab-1_x"):
         assert (
             client.put(f"/api/v1/intermediates/holds/{lease_id}", json={}, headers=_auth(user1_token)).status_code
             == 204
         )
-    for lease_id in (".0-0", "tab x", "tab/.."):
+    for lease_id in ("tab.0-0", ".0-0", "tab x", "tab/.."):
         assert (
             client.put(f"/api/v1/intermediates/holds/{lease_id}", json={}, headers=_auth(user1_token)).status_code
             != 204

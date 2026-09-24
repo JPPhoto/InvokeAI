@@ -1,7 +1,8 @@
 """Storage queries of the intermediates manager.
 
 One classification expression decides what every intermediate is under the cleanup policy, and it
-is the same SQL whether it aggregates a summary, freezes a preview's targets or guards a delete:
+is the same SQL whether it aggregates a summary, describes a preview, pages an operation or guards
+a delete:
 
 - ``active``: produced or referenced by a pending, waiting or running queue item, or a
   completed child of an active root workflow.
@@ -11,28 +12,30 @@ is the same SQL whether it aggregates a summary, freezes a preview's targets or 
 - ``referenced``: named by a saved document (`media_references`).
 - ``safe``: none of the above.
 
+A preview freezes the instant its recency is judged at; the operation it confirms and the guard
+on every deleting transaction classify with that same recency cutoff and a live clock for
+everything else. Anything created after the preview is newer than its cutoff, so it stays
+``recent`` for the whole operation. Cached-output holds are judged the same way by the operation
+itself, but the hold table is shared with live-clock callers (summaries, cache hits) that may
+sweep a hold once its grace has passed live; that only ever drops a row whose grace is over.
+
 Queue inputs are found by scanning each active item's stored session for media-name keys; the
 scan is cached per item so a queue of a thousand pending items is parsed once, not per query.
 """
 
-import json
 import re
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Collection, Iterable, Iterator, Literal, NamedTuple, Optional, Sequence, cast
-
-from pydantic import BaseModel
+from typing import Collection, Iterator, Literal, NamedTuple, Optional, Sequence, cast
 
 from invokeai.app.services.intermediates.intermediates_common import (
     BROWSER_HOLD_TTL_SECONDS,
-    MAX_BROWSER_HOLD_EDITORS_PER_USER,
+    MAX_BROWSER_HOLD_LEASES_PER_USER,
     RECENT_GRACE_SECONDS,
     IntermediatesCleanupMode,
     IntermediatesKindCounts,
-    IntermediatesOperation,
-    IntermediatesScopeTarget,
 )
 from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard
 from invokeai.app.services.shared.media_references import IMAGE_NAME_KEYS, VIDEO_NAME_KEYS, MediaReferences
@@ -40,6 +43,8 @@ from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
 
 MediaKind = Literal["image", "video"]
 Classification = Literal["safe", "referenced", "active", "recent"]
+# One row of the manager: (owner, project), project None for the owner's unassigned intermediates.
+ScopeTarget = tuple[str, Optional[str]]
 
 ACTIVE_QUEUE_STATUSES = ("pending", "in_progress", "waiting")
 
@@ -96,17 +101,11 @@ class _Clock(NamedTuple):
     recent_cutoff: str
 
 
-def _clock() -> _Clock:
+def _clock(recent_cutoff: Optional[str] = None) -> _Clock:
+    """The live clock, or the live clock judging recency as of an earlier preview."""
     now = _utc_now()
-    return _Clock(_sql_timestamp(now), _sql_timestamp(now - timedelta(seconds=RECENT_GRACE_SECONDS)))
-
-
-def _lease_holder(lease_id: str) -> str:
-    """The editor a lease belongs to: one tab holds several leases named `<holder>.<part>`."""
-    return lease_id.split(".", 1)[0]
-
-
-_HOLDER_SQL = "CASE WHEN INSTR(lease_id, '.') > 0 THEN SUBSTR(lease_id, 1, INSTR(lease_id, '.') - 1) ELSE lease_id END"
+    live_cutoff = _sql_timestamp(now - timedelta(seconds=RECENT_GRACE_SECONDS))
+    return _Clock(_sql_timestamp(now), min(live_cutoff, recent_cutoff) if recent_cutoff is not None else live_cutoff)
 
 
 class ReferenceOwner(NamedTuple):
@@ -119,13 +118,6 @@ class ReferenceOwner(NamedTuple):
 
 # Media name → the documents naming it.
 ReferenceOwners = dict[str, set[ReferenceOwner]]
-
-
-@dataclass(frozen=True)
-class IntermediateCandidate:
-    name: str
-    classification: Classification
-    file_size_bytes: Optional[int]
 
 
 def _add_count(counts: IntermediatesKindCounts, classification: Classification, n: int) -> None:
@@ -150,43 +142,29 @@ class ScopeCounts:
 
 
 @dataclass
-class ScopeClassification:
-    """A preview's scope classified once, on one transaction, so its counts and targets agree."""
+class DeletableTotals:
+    count: int = 0
+    referenced: int = 0
+    measured_bytes: int = 0
+    unknown_size_count: int = 0
 
+
+@dataclass
+class ScopePreview:
+    """A preview's scope classified once, on one transaction and one clock, so its figures agree."""
+
+    clock: _Clock
     # (owner, project) rows holding any intermediate in scope.
     rows: set[tuple[str, Optional[str]]] = field(default_factory=set)
     counts: dict[MediaKind, IntermediatesKindCounts] = field(
         default_factory=lambda: {"image": IntermediatesKindCounts(), "video": IntermediatesKindCounts()}
     )
-    # Eligible intermediates, bounded; ``has_more`` says whether the bound cut any off.
-    candidates: dict[MediaKind, list[IntermediateCandidate]] = field(default_factory=lambda: {"image": [], "video": []})
-    has_more: bool = False
-    # Documents naming each referenced candidate; only read for a force clear.
-    reference_owners: dict[MediaKind, ReferenceOwners] = field(default_factory=lambda: {"image": {}, "video": {}})
-
-
-class OperationReceipt(BaseModel):
-    """The persisted receipt of an operation (`intermediates_operations.state_json`)."""
-
-    dto: IntermediatesOperation
-    caller_is_admin: bool
-    allowed_user_ids: Optional[list[str]]
-
-
-@dataclass
-class StoredOperation:
-    """An operation restored at startup: its receipt and the targets it left unresolved."""
-
-    user_id: str
-    preview_id: Optional[str]
-    idempotency_key: Optional[str]
-    receipt: OperationReceipt
-    unresolved: dict[MediaKind, dict[str, Optional[int]]]
-    confirmed_references: dict[MediaKind, ReferenceOwners]
-
-
-# (kind, name, size, confirmed reference owners) of one unresolved operation target.
-OperationTarget = tuple[MediaKind, str, Optional[int], set[ReferenceOwner]]
+    deletable: dict[MediaKind, DeletableTotals] = field(
+        default_factory=lambda: {"image": DeletableTotals(), "video": DeletableTotals()}
+    )
+    # Force mode: the documents naming the deletable referenced items, with how many each names.
+    acknowledged: dict[ReferenceOwner, int] = field(default_factory=dict)
+    acknowledged_overflow: bool = False
 
 
 class IntermediatesRecordsSqlite:
@@ -278,150 +256,31 @@ class IntermediatesRecordsSqlite:
                     """,
                     (user_id, lease_id, kind, user_id),
                 )
-            # Past the cap, every lease of the editors refreshed longest ago stops protecting its
-            # media; an editor that is still open restores its leases on its next refresh. Leases
-            # are grouped on the user's primary-key range first, so only their ids reach the holder
-            # grouping.
+            # Past the cap, the leases refreshed longest ago stop protecting their media; an editor
+            # that is still open restores its lease on its next refresh.
             cursor.execute(
-                f"""--sql
+                """--sql
                 WITH leases AS (
-                    SELECT lease_id, {_HOLDER_SQL} AS holder, MAX(expires_at) AS refreshed
+                    SELECT lease_id, MAX(expires_at) AS refreshed
                     FROM intermediates_browser_holds
                     WHERE user_id = ?
                     GROUP BY lease_id
                 ), lapsed AS (
-                    SELECT holder FROM leases
-                    WHERE holder != ?
-                    GROUP BY holder
-                    ORDER BY MAX(refreshed) DESC, holder
+                    SELECT lease_id FROM leases
+                    WHERE lease_id != ?
+                    ORDER BY refreshed DESC, lease_id
                     LIMIT -1 OFFSET ?
                 )
                 DELETE FROM intermediates_browser_holds
-                WHERE user_id = ? AND lease_id IN (SELECT lease_id FROM leases WHERE holder IN lapsed);
+                WHERE user_id = ? AND lease_id IN (SELECT lease_id FROM lapsed);
                 """,
-                (user_id, _lease_holder(lease_id), MAX_BROWSER_HOLD_EDITORS_PER_USER - 1, user_id),
+                (user_id, lease_id, MAX_BROWSER_HOLD_LEASES_PER_USER - 1, user_id),
             )
 
     def release_browser_hold(self, user_id: str, lease_id: str) -> None:
         with self._db.transaction() as cursor:
             cursor.execute(
                 "DELETE FROM intermediates_browser_holds WHERE user_id = ? AND lease_id = ?;", (user_id, lease_id)
-            )
-
-    def load_operations(self) -> tuple[list[StoredOperation], list[tuple[str, Exception]]]:
-        """Every persisted operation, and the ids of rows that could not be read with why.
-
-        An unreadable row is reported rather than raised, so one bad receipt cannot stop startup;
-        its rows stay in place for inspection.
-        """
-        with self._db.transaction() as cursor:
-            cursor.execute(
-                "SELECT operation_id, caller_user_id, preview_id, idempotency_key, state_json "
-                "FROM intermediates_operations ORDER BY created_at, operation_id;"
-            )
-            operations = cursor.fetchall()
-            cursor.execute(
-                "SELECT operation_id, media_kind, media_name, size_bytes, confirmed_refs_json "
-                "FROM intermediates_operation_targets;"
-            )
-            targets: dict[str, list[tuple[str, str, Optional[int], str]]] = defaultdict(list)
-            for operation_id, kind, name, size, refs in cursor.fetchall():
-                targets[str(operation_id)].append((str(kind), str(name), size, str(refs)))
-        loaded: list[StoredOperation] = []
-        failures: list[tuple[str, Exception]] = []
-        for operation_id, user, preview, key, state_json in operations:
-            try:
-                stored = StoredOperation(
-                    user_id=str(user),
-                    preview_id=preview,
-                    idempotency_key=key,
-                    receipt=OperationReceipt.model_validate_json(state_json),
-                    unresolved={"image": {}, "video": {}},
-                    confirmed_references={"image": {}, "video": {}},
-                )
-                for kind, name, size, refs_json in targets.get(str(operation_id), []):
-                    if kind not in ("image", "video"):
-                        raise ValueError(f"Unknown media kind {kind!r}")
-                    media_kind = cast(MediaKind, kind)
-                    stored.unresolved[media_kind][name] = size
-                    refs = {ReferenceOwner(*ref) for ref in json.loads(refs_json)}
-                    if refs:
-                        stored.confirmed_references[media_kind][name] = refs
-            except (ValueError, TypeError) as error:
-                failures.append((str(operation_id), error))
-                continue
-            loaded.append(stored)
-        return loaded, failures
-
-    def save_operation(
-        self,
-        caller_user_id: str,
-        receipt: OperationReceipt,
-        *,
-        preview_id: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
-        linked_operation: Optional[OperationReceipt] = None,
-        targets: Optional[Sequence[OperationTarget]] = None,
-        resolved_targets: Optional[tuple[MediaKind, Sequence[str]]] = None,
-    ) -> None:
-        operation_id = receipt.dto.operation_id
-        state = receipt.model_dump(mode="json")
-        target_rows = (
-            [(operation_id, kind, name, size, json.dumps(sorted(refs))) for kind, name, size, refs in targets]
-            if targets is not None
-            else None
-        )
-        linked = (
-            (linked_operation.dto.operation_id, linked_operation.model_dump_json())
-            if linked_operation is not None
-            else None
-        )
-        with self._db.transaction() as cursor:
-            cursor.execute(
-                "INSERT INTO intermediates_operations "
-                "(operation_id, caller_user_id, preview_id, idempotency_key, state_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(operation_id) DO UPDATE SET state_json = excluded.state_json;",
-                (
-                    operation_id,
-                    caller_user_id,
-                    preview_id,
-                    idempotency_key,
-                    json.dumps(state),
-                    state["dto"]["created_at"],
-                ),
-            )
-            if target_rows is not None:
-                cursor.executemany(
-                    "INSERT INTO intermediates_operation_targets "
-                    "(operation_id, media_kind, media_name, size_bytes, confirmed_refs_json) VALUES (?, ?, ?, ?, ?);",
-                    target_rows,
-                )
-            if resolved_targets is not None:
-                kind, names = resolved_targets
-                cursor.executemany(
-                    "DELETE FROM intermediates_operation_targets "
-                    "WHERE operation_id = ? AND media_kind = ? AND media_name = ?;",
-                    [(operation_id, kind, name) for name in names],
-                )
-            if linked is not None:
-                linked_id, linked_state_json = linked
-                cursor.execute(
-                    "UPDATE intermediates_operations SET state_json = ? WHERE operation_id = ?;",
-                    (linked_state_json, linked_id),
-                )
-                cursor.execute("DELETE FROM intermediates_operation_targets WHERE operation_id = ?;", (linked_id,))
-
-    def delete_operations(self, operation_ids: Sequence[str]) -> None:
-        if not operation_ids:
-            return
-        with self._db.transaction() as cursor:
-            cursor.executemany(
-                "DELETE FROM intermediates_operation_targets WHERE operation_id = ?;",
-                [(name,) for name in operation_ids],
-            )
-            cursor.executemany(
-                "DELETE FROM intermediates_operations WHERE operation_id = ?;", [(name,) for name in operation_ids]
             )
 
     # region policy expression
@@ -454,13 +313,33 @@ class IntermediatesRecordsSqlite:
             END
         """
 
-    def _prepare(self, cursor: sqlite3.Cursor) -> _Clock:
+    @staticmethod
+    def _deletable_sql(
+        kind: MediaKind, mode: IntermediatesCleanupMode, *, is_admin: bool, caller_user_id: str
+    ) -> tuple[str, list[object]]:
+        """What a cleanup may delete, over the classified rows of `_scoped_sql`.
+
+        Force mode adds referenced items, but another account's document is never the caller's to
+        break unless the caller administers the instance. Applied in SQL so a bounded page or
+        batch is a page of what the caller can actually delete.
+        """
+        if mode == "safe":
+            return "cls = 'safe'", []
+        if is_admin:
+            return "cls IN ('safe', 'referenced')", []
+        return (
+            "(cls = 'safe' OR (cls = 'referenced' AND NOT EXISTS ("
+            "SELECT 1 FROM media_references r WHERE r.media_kind = ? AND r.media_name = name AND r.user_id != ?)))",
+            [kind, caller_user_id],
+        )
+
+    def _prepare(self, cursor: sqlite3.Cursor, clock: Optional[_Clock] = None) -> _Clock:
         """Makes the transaction's view of active work current, and returns the instant its classifications use.
 
         Runs on the caller's transaction so a classification and the enqueue it might race are
         ordered by the database lock, never by a stale cache.
         """
-        clock = _clock()
+        clock = clock or _clock()
         self._prepare_session_holds(cursor, clock)
         cursor.execute(
             """--sql
@@ -532,7 +411,7 @@ class IntermediatesRecordsSqlite:
         """
         table, name_column, _ = _TABLES[kind]
         return f"""
-            SELECT m.{name_column} AS name, m.user_id AS user_id,
+            SELECT m.rowid AS rowid, m.{name_column} AS name, m.user_id AS user_id,
                    CASE WHEN p.project_id IS NULL THEN NULL ELSE m.project_id END AS project_key,
                    m.file_size_bytes AS file_size_bytes,
                    {cls._classification_sql(kind)} AS cls
@@ -681,17 +560,21 @@ class IntermediatesRecordsSqlite:
 
     # endregion
 
-    # region candidates
+    # region scope
 
     @classmethod
     def _scope_clauses(
-        cls, *, user_id: Optional[str], targets: Optional[Sequence[IntermediatesScopeTarget]]
+        cls,
+        *,
+        user_id: Optional[str],
+        targets: Optional[Sequence[ScopeTarget]],
+        per_statement: int = _TARGETS_PER_STATEMENT,
     ) -> list[tuple[str, list[object]]]:
         """``AND`` filters (with their parameters) that together cover a scope; each stays under the variable limit."""
         if targets is not None:
             clauses: list[tuple[str, list[object]]] = []
-            for start in range(0, len(targets), _TARGETS_PER_STATEMENT):
-                predicate, params = cls._scope_predicate(targets[start : start + _TARGETS_PER_STATEMENT])
+            for start in range(0, len(targets), per_statement):
+                predicate, params = cls._scope_predicate(targets[start : start + per_statement])
                 if predicate:
                     clauses.append((f"AND ({predicate})", params))
             return clauses
@@ -700,98 +583,132 @@ class IntermediatesRecordsSqlite:
         return [("", [])]
 
     @staticmethod
-    def _scope_predicate(targets: Sequence[IntermediatesScopeTarget]) -> tuple[str, list[object]]:
+    def _scope_predicate(targets: Sequence[ScopeTarget]) -> tuple[str, list[object]]:
         clauses: list[str] = []
         params: list[object] = []
-        for target in targets:
-            if target.project_id is None:
+        for user_id, project_id in targets:
+            if project_id is None:
                 clauses.append("(m.user_id = ? AND p.project_id IS NULL)")
-                params.append(target.user_id)
+                params.append(user_id)
             else:
                 clauses.append("(m.user_id = ? AND m.project_id = ? AND p.project_id IS NOT NULL)")
-                params.extend((target.user_id, target.project_id))
+                params.extend((user_id, project_id))
         return " OR ".join(clauses), params
 
-    def classify_scope(
+    def preview_scope(
         self,
         *,
         user_id: Optional[str],
-        targets: Optional[Sequence[IntermediatesScopeTarget]],
+        targets: Optional[Sequence[ScopeTarget]],
         mode: IntermediatesCleanupMode,
-        max_candidates: int,
-    ) -> ScopeClassification:
-        """Counts every intermediate in scope and freezes up to ``max_candidates`` eligible ones, images first.
+        is_admin: bool,
+        caller_user_id: str,
+        max_acknowledged: int,
+    ) -> ScopePreview:
+        """Counts every intermediate in scope and what a cleanup of ``mode`` may delete.
 
         ``targets`` narrows to selected rows; otherwise ``user_id`` narrows to an owner, and None
-        means everyone. One transaction, one instant and one view of active work serve every figure, so a
-        preview's kept counts and its targets cannot disagree.
+        means everyone. One transaction, one instant and one view of active work serve every
+        figure, so the kept counts, the deletable totals and the acknowledged documents agree.
         """
         clauses = self._scope_clauses(user_id=user_id, targets=targets)
-        eligible = "('safe', 'referenced')" if mode == "force" else "('safe')"
-        result = ScopeClassification()
-        remaining = max_candidates
         with self._db.transaction() as cursor:
-            clock = self._prepare(cursor)
-            for media_kind in _TABLES:
-                candidates = result.candidates[media_kind]
+            result = ScopePreview(clock=self._prepare(cursor))
+            for kind in _TABLES:
+                deletable_sql, deletable_params = self._deletable_sql(
+                    kind, mode, is_admin=is_admin, caller_user_id=caller_user_id
+                )
+                totals = result.deletable[kind]
                 for clause, params in clauses:
-                    for owner, project_key, cls, n, _, _ in self._aggregate(cursor, clock, media_kind, clause, params):
-                        result.rows.add((owner, project_key))
-                        _add_count(result.counts[media_kind], cls, n)
-                    if len(candidates) > remaining:
-                        continue
+                    # Parameters bind by textual position: the deletable predicate sits in the
+                    # SELECT list, ahead of the classified subquery's clock and scope parameters.
                     cursor.execute(
-                        f"SELECT name, cls, file_size_bytes FROM ({self._scoped_sql(media_kind)} {clause}) "
-                        f"WHERE cls IN {eligible} LIMIT ?;",
-                        [*clock, *params, remaining + 1 - len(candidates)],
+                        f"""--sql
+                        SELECT user_id, project_key, cls, {deletable_sql} AS deletable, COUNT(*),
+                               SUM(COALESCE(file_size_bytes, 0)),
+                               SUM(CASE WHEN file_size_bytes IS NULL THEN 1 ELSE 0 END)
+                        FROM ({self._scoped_sql(kind)} {clause})
+                        GROUP BY user_id, project_key, cls, deletable;
+                        """,
+                        [*deletable_params, *result.clock, *params],
                     )
-                    candidates.extend(self._to_candidates(cursor.fetchall()))
-                if len(candidates) > remaining:
-                    result.has_more = True
-                    del candidates[remaining:]
-                remaining -= len(candidates)
-                if mode == "force":
-                    result.reference_owners[media_kind] = self._reference_owners(
-                        cursor, media_kind, [c.name for c in candidates if c.classification == "referenced"]
-                    )
+                    for owner, project_key, cls, deletable, n, total_bytes, unknown in cursor.fetchall():
+                        result.rows.add((cast(str, owner), cast(Optional[str], project_key)))
+                        _add_count(result.counts[kind], cast(Classification, cls), cast(int, n))
+                        if deletable:
+                            totals.count += cast(int, n)
+                            totals.measured_bytes += cast(int, total_bytes)
+                            totals.unknown_size_count += cast(int, unknown)
+                            if cls == "referenced":
+                                totals.referenced += cast(int, n)
+                    if mode == "force":
+                        cursor.execute(
+                            f"""--sql
+                            SELECT r.owner_kind, r.user_id, r.owner_id, COUNT(*)
+                            FROM ({self._scoped_sql(kind)} {clause}) s
+                            JOIN media_references r ON r.media_kind = ? AND r.media_name = s.name
+                            WHERE s.cls = 'referenced' AND {deletable_sql}
+                            GROUP BY r.owner_kind, r.user_id, r.owner_id;
+                            """,
+                            [*result.clock, *params, kind, *deletable_params],
+                        )
+                        for owner_kind, owner_user, owner_id, n in cursor.fetchall():
+                            owner = ReferenceOwner(str(owner_kind), str(owner_user), str(owner_id))
+                            if owner not in result.acknowledged and len(result.acknowledged) >= max_acknowledged:
+                                result.acknowledged_overflow = True
+                                continue
+                            result.acknowledged[owner] = result.acknowledged.get(owner, 0) + cast(int, n)
         return result
 
-    def page_intermediates(
-        self, kind: MediaKind, *, after_rowid: int, limit: int
-    ) -> tuple[list[IntermediateCandidate], Optional[int]]:
-        """One page of every intermediate in insertion order, classified, and the rowid to resume after.
-
-        Paging by rowid classifies each row once however many are kept, where re-querying for the
-        next safe batch would re-classify every kept row in front of it. None means no rows remain.
+    @classmethod
+    def _window_sql(cls, kind: MediaKind, scope_clause: str, deletable_sql: str) -> str:
+        """One window of classified rows in insertion order. Binds ``[*deletable, *clock, *scope, after_rowid, limit]``."""
+        return f"""--sql
+            SELECT rowid, name, file_size_bytes, {deletable_sql} AS deletable
+            FROM ({cls._scoped_sql(kind)} {scope_clause})
+            WHERE rowid > ?
+            ORDER BY rowid
+            LIMIT ?;
         """
-        table, name_column, _ = _TABLES[kind]
-        with self._db.transaction() as cursor:
-            clock = self._prepare(cursor)
-            cursor.execute(
-                f"""--sql
-                SELECT m.rowid, m.{name_column}, {self._classification_sql(kind)}, m.file_size_bytes
-                FROM {table} m
-                WHERE m.is_intermediate = TRUE AND m.rowid > ?
-                ORDER BY m.rowid
-                LIMIT ?;
-                """,
-                (*clock, after_rowid, limit),
-            )
-            rows = cursor.fetchall()
-        if not rows:
-            return [], None
-        return self._to_candidates(row[1:] for row in rows), cast(int, rows[-1][0])
 
-    @staticmethod
-    def _to_candidates(rows: Iterable[Sequence[object]]) -> list[IntermediateCandidate]:
-        return [
-            IntermediateCandidate(
-                name=cast(str, row[0]),
-                classification=cast(Classification, row[1]),
-                file_size_bytes=cast(Optional[int], row[2]),
-            )
-            for row in rows
-        ]
+    def iter_deletable_batches(
+        self,
+        kind: MediaKind,
+        *,
+        user_id: Optional[str],
+        targets: Optional[Sequence[ScopeTarget]],
+        mode: IntermediatesCleanupMode,
+        is_admin: bool,
+        caller_user_id: str,
+        recent_cutoff: Optional[str],
+        limit: int,
+    ) -> Iterator[list[tuple[str, Optional[int]]]]:
+        """The deletable intermediates of a scope in insertion order, a bounded window at a time.
+
+        Each window classifies ``limit`` rows on one short transaction and yields the deletable
+        ones (possibly none, so the caller can re-check its authority between windows), so a long
+        protected stretch never holds the database for more than one window, and a row is
+        classified once per operation however many are kept. Explicit rows are paged one at a
+        time: one (owner, project) per statement is an index seek in rowid order, where an OR over
+        many rows would sort the whole remaining scope on every window. ``recent_cutoff`` freezes
+        recency at the preview that was confirmed; None judges it live.
+        """
+        deletable_sql, deletable_params = self._deletable_sql(
+            kind, mode, is_admin=is_admin, caller_user_id=caller_user_id
+        )
+        window_sql = None
+        for clause, params in self._scope_clauses(user_id=user_id, targets=targets, per_statement=1):
+            window_sql = self._window_sql(kind, clause, deletable_sql)
+            after_rowid = 0
+            while True:
+                with self._db.transaction() as cursor:
+                    clock = self._prepare(cursor, _clock(recent_cutoff))
+                    cursor.execute(window_sql, [*deletable_params, *clock, *params, after_rowid, limit])
+                    rows = cursor.fetchall()
+                if not rows:
+                    break
+                after_rowid = cast(int, rows[-1][0])
+                yield [(cast(str, row[1]), cast(Optional[int], row[2])) for row in rows if row[3]]
 
     @staticmethod
     def _reference_owners(cursor: sqlite3.Cursor, kind: MediaKind, names: Sequence[str]) -> ReferenceOwners:
@@ -808,7 +725,7 @@ class IntermediatesRecordsSqlite:
                 owners.setdefault(str(name), set()).add(ReferenceOwner(str(owner_kind), str(user_id), str(owner_id)))
         return owners
 
-    def get_document_names(self, owners: Iterable[ReferenceOwner]) -> dict[ReferenceOwner, str]:
+    def get_document_names(self, owners: Collection[ReferenceOwner]) -> dict[ReferenceOwner, str]:
         """Names of the referencing documents, one query per kind and chunk; client state has none."""
         queries = {
             "project": "SELECT user_id, project_id, name FROM projects WHERE project_id IN ({});",
@@ -849,19 +766,27 @@ class IntermediatesRecordsSqlite:
         *,
         mode: IntermediatesCleanupMode,
         allowed_user_ids: Optional[frozenset[str]],
-        confirmed_references: Optional[ReferenceOwners] = None,
+        caller_user_id: str,
+        is_admin: bool,
+        recent_cutoff: Optional[str] = None,
+        acknowledged: Optional[frozenset[ReferenceOwner]] = None,
     ) -> IntermediateDeleteGuard:
         """The final check of a cleanup batch, run on the deleting transaction.
 
-        Re-applies the policy to the frozen targets at the moment of deletion: anything that became
-        active, referenced (safe mode) or non-intermediate since the preview is kept, as is anything
-        that left the authorized accounts. ``allowed_user_ids`` None means every account.
+        Re-applies the policy at the moment of deletion, judging recency as of ``recent_cutoff``:
+        anything that became active, referenced (safe mode), non-intermediate or another
+        account's since the batch was read is kept. A force clear deletes a referenced item only
+        while every document naming it is in ``acknowledged``. ``allowed_user_ids`` None means
+        every account.
         """
         table, name_column, _ = _TABLES[kind]
-        deletable = "('safe')" if mode == "safe" else "('safe', 'referenced')"
+        deletable_sql, deletable_params = self._deletable_sql(
+            kind, mode, is_admin=is_admin, caller_user_id=caller_user_id
+        )
+        acknowledged_documents = acknowledged or frozenset()
 
         def guard(cursor: sqlite3.Cursor, names: Sequence[str]) -> list[str]:
-            clock = self._prepare(cursor)
+            clock = self._prepare(cursor, _clock(recent_cutoff))
             kept: list[str] = []
             for start in range(0, len(names), _MAX_SQL_VARIABLES):
                 chunk = list(names[start : start + _MAX_SQL_VARIABLES])
@@ -874,19 +799,16 @@ class IntermediatesRecordsSqlite:
                                {self._classification_sql(kind)} AS cls
                         FROM {table} m
                         WHERE m.{name_column} IN ({placeholders}) AND m.is_intermediate = TRUE
-                    ) WHERE cls IN {deletable};
+                    ) WHERE {deletable_sql};
                     """,
-                    [*clock, *chunk],
+                    [*clock, *chunk, *deletable_params],
                 )
                 # Ownership is re-read here rather than trusted from the preview.
                 kept.extend(
                     cast(str, row[0])
                     for row in cursor.fetchall()
                     if allowed_user_ids is None or cast(str, row[1]) in allowed_user_ids
-                    if mode != "force"
-                    or current_references.get(cast(str, row[0]), set()).issubset(
-                        (confirmed_references or {}).get(cast(str, row[0]), set())
-                    )
+                    if current_references.get(cast(str, row[0]), set()).issubset(acknowledged_documents)
                 )
             return kept
 
