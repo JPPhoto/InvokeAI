@@ -281,7 +281,9 @@ describe('production dependency graph', () => {
       .sort();
 
     expect(violations).toEqual([]);
-  });
+    // A whole-source scan whose cost grows with the codebase; on shared CI runners it already takes 3-5s, so the
+    // default 5s budget turned runner speed into test failures.
+  }, 60_000);
 
   it('has no remaining migration exceptions', () => {
     expect(migrationExceptions).toEqual([]);
