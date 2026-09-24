@@ -1295,14 +1295,19 @@ export type paths = {
         };
         /**
          * Get Intermediates Count
-         * @description Gets the count of intermediate images. Non-admin users only see their own intermediates.
+         * @description Counts the intermediate images a clear would delete. Non-admin users only see their own intermediates.
+         *
+         *     Active, recent and referenced images are left out, as `DELETE /intermediates` keeps them.
          */
         get: operations["get_intermediates_count"];
         put?: never;
         post?: never;
         /**
          * Clear Intermediates
-         * @description Clears all intermediates. Requires admin.
+         * @description Clears every safe intermediate image, instance-wide. Requires admin.
+         *
+         *     Runs under the same policy as the intermediates manager: images that active work, a saved
+         *     document or the recency window protect are kept. Videos are not touched; use the manager.
          */
         delete: operations["clear_intermediates"];
         options?: never;
@@ -1812,6 +1817,108 @@ export type paths = {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intermediates/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Intermediates Summary
+         * @description Per-project intermediates with what a cleanup could reclaim. Non-admins see their own rows.
+         */
+        get: operations["get_intermediates_summary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intermediates/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Intermediates Preview
+         * @description Reports what a cleanup would delete and keep, and fixes the instant its recency is judged at. Previews expire unused.
+         */
+        post: operations["create_intermediates_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intermediates/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Intermediates Operations
+         * @description The caller's running and recently settled cleanups, newest first. Operations do not survive a server restart.
+         */
+        get: operations["list_intermediates_operations"];
+        put?: never;
+        /**
+         * Start Intermediates Operation
+         * @description Starts the cleanup a preview described. A preview is confirmed at most once; list operations to find a run whose response was lost.
+         */
+        post: operations["start_intermediates_operation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intermediates/operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Intermediates Operation */
+        get: operations["get_intermediates_operation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intermediates/holds/{lease_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace Intermediates Browser Hold
+         * @description Protect names still held by this account's open browser editor, including undo state.
+         */
+        put: operations["replace_intermediates_browser_hold"];
+        post?: never;
+        /** Release Intermediates Browser Hold */
+        delete: operations["release_intermediates_browser_hold"];
         options?: never;
         head?: never;
         patch?: never;
@@ -18440,6 +18547,16 @@ export type components = {
              */
             image_subfolder?: string;
             /**
+             * Project Id
+             * @description The project this image originated in, if it was made for one.
+             */
+            project_id?: string | null;
+            /**
+             * File Size Bytes
+             * @description Bytes the image and its thumbnail occupy on disk; null until measured.
+             */
+            file_size_bytes?: number | null;
+            /**
              * Board Id
              * @description The id of the board the image belongs to, if one exists.
              */
@@ -20489,6 +20606,516 @@ export type components = {
              * @constant
              */
             type: "integer_output";
+        };
+        /**
+         * IntermediatesAffectedDocument
+         * @description A saved document a force clear would leave pointing at deleted media.
+         */
+        IntermediatesAffectedDocument: {
+            /**
+             * Kind
+             * @description `client_state` is the legacy editor's persisted state; `quarantined_project` is a project kept for repair
+             * @enum {string}
+             */
+            kind: "project" | "workflow" | "client_state" | "quarantined_project";
+            /** User Id */
+            user_id: string;
+            /**
+             * User Display Name
+             * @description The owner's display name, if known
+             */
+            user_display_name?: string | null;
+            /**
+             * User Email
+             * @description The owner's email, if known
+             */
+            user_email?: string | null;
+            /**
+             * Owner Id
+             * @description The project or workflow id, or the client state key
+             */
+            owner_id: string;
+            /**
+             * Name
+             * @description The document's name, if it still exists
+             */
+            name?: string | null;
+            /**
+             * References
+             * @description How many of the targeted items the document names
+             */
+            references: number;
+        };
+        /** IntermediatesBrowserHoldRequest */
+        IntermediatesBrowserHoldRequest: {
+            /** Images */
+            images?: string[];
+            /** Videos */
+            videos?: string[];
+        };
+        /** IntermediatesImpact */
+        IntermediatesImpact: {
+            /**
+             * Delete Images
+             * @default 0
+             */
+            delete_images?: number;
+            /**
+             * Delete Videos
+             * @default 0
+             */
+            delete_videos?: number;
+            /**
+             * Keep Referenced Images
+             * @default 0
+             */
+            keep_referenced_images?: number;
+            /**
+             * Keep Referenced Videos
+             * @default 0
+             */
+            keep_referenced_videos?: number;
+            /**
+             * Keep Active Images
+             * @default 0
+             */
+            keep_active_images?: number;
+            /**
+             * Keep Active Videos
+             * @default 0
+             */
+            keep_active_videos?: number;
+            /**
+             * Keep Recent Images
+             * @default 0
+             */
+            keep_recent_images?: number;
+            /**
+             * Keep Recent Videos
+             * @default 0
+             */
+            keep_recent_videos?: number;
+            /**
+             * Reclaimable Bytes
+             * @description Measured size of the items that would be deleted
+             * @default 0
+             */
+            reclaimable_bytes?: number;
+            /**
+             * Unknown Size Count
+             * @description Items to delete whose size is not yet measured
+             * @default 0
+             */
+            unknown_size_count?: number;
+        };
+        /**
+         * IntermediatesKindCounts
+         * @description How one media kind's intermediates split under the cleanup policy.
+         */
+        IntermediatesKindCounts: {
+            /**
+             * Safe
+             * @description Unreferenced, inactive and old enough: deleted by either mode
+             * @default 0
+             */
+            safe?: number;
+            /**
+             * Referenced
+             * @description Named by a saved document: kept by safe mode
+             * @default 0
+             */
+            referenced?: number;
+            /**
+             * Active
+             * @description Produced or consumed by pending, waiting or running work: always kept
+             * @default 0
+             */
+            active?: number;
+            /**
+             * Recent
+             * @description Created inside the grace window: always kept
+             * @default 0
+             */
+            recent?: number;
+        };
+        /**
+         * IntermediatesOperation
+         * @description A cleanup run. Operations live in server memory: a restart forgets them, and the live policy
+         *     is the retry, so a new preview and confirmation picks up whatever an interrupted run left.
+         */
+        IntermediatesOperation: {
+            /** Operation Id */
+            operation_id: string;
+            /**
+             * User Id
+             * @description The account that confirmed the operation
+             */
+            user_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "safe" | "force";
+            /** @description The scope as requested, so a client can request it again */
+            scope: components["schemas"]["IntermediatesScope"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Error
+             * @description Why the operation stopped, when it failed
+             */
+            error?: string | null;
+            /**
+             * Target Images
+             * @description Image deletions the preview expected. The scope is paged live, so rows that became deletable since the preview are collected too and the deleted count may exceed this
+             */
+            target_images: number;
+            /**
+             * Target Videos
+             * @description Video deletions the preview expected; see `target_images`
+             */
+            target_videos: number;
+            progress: components["schemas"]["IntermediatesOperationProgress"];
+        };
+        /**
+         * IntermediatesOperationChangedEvent
+         * @description Event model for intermediates_operation_changed.
+         *
+         *     Routed to the confirming account's room and to admins: the operation's progress is that
+         *     account's business, and admins see every cleanup so open managers refresh their counts.
+         */
+        IntermediatesOperationChangedEvent: {
+            /**
+             * Timestamp
+             * @description The timestamp of the event
+             */
+            timestamp: number;
+            /**
+             * User Id
+             * @description The account that confirmed the operation
+             */
+            user_id: string;
+            /** @description The operation's current state */
+            operation: components["schemas"]["IntermediatesOperation"];
+        };
+        /** IntermediatesOperationList */
+        IntermediatesOperationList: {
+            /**
+             * Items
+             * @description The caller's retained operations, newest first
+             */
+            items: components["schemas"]["IntermediatesOperation"][];
+        };
+        /** IntermediatesOperationProgress */
+        IntermediatesOperationProgress: {
+            /**
+             * Processed Images
+             * @default 0
+             */
+            processed_images?: number;
+            /**
+             * Processed Videos
+             * @default 0
+             */
+            processed_videos?: number;
+            /**
+             * Deleted Images
+             * @default 0
+             */
+            deleted_images?: number;
+            /**
+             * Deleted Videos
+             * @default 0
+             */
+            deleted_videos?: number;
+            /**
+             * Retained Images
+             * @description Targets the final check kept: promoted, protected or gone
+             * @default 0
+             */
+            retained_images?: number;
+            /**
+             * Retained Videos
+             * @default 0
+             */
+            retained_videos?: number;
+            /**
+             * Failed Images
+             * @description Targets whose deletion raised; a new cleanup picks them up
+             * @default 0
+             */
+            failed_images?: number;
+            /**
+             * Failed Videos
+             * @default 0
+             */
+            failed_videos?: number;
+            /**
+             * Reclaimed Bytes
+             * @description Bytes whose files are confirmed removed
+             * @default 0
+             */
+            reclaimed_bytes?: number;
+            /**
+             * Unknown Size Count
+             * @description Deleted items whose size was never measured; their bytes are not in reclaimed_bytes
+             * @default 0
+             */
+            unknown_size_count?: number;
+            /**
+             * Pending Disk Cleanup
+             * @description Deleted records whose files could not be purged yet; the journal retries at startup
+             * @default 0
+             */
+            pending_disk_cleanup?: number;
+        };
+        /** IntermediatesOperationRequest */
+        IntermediatesOperationRequest: {
+            /**
+             * Preview Id
+             * @description A preview is confirmed at most once
+             */
+            preview_id: string;
+        };
+        /** IntermediatesPreview */
+        IntermediatesPreview: {
+            /** Preview Id */
+            preview_id: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "safe" | "force";
+            scope: components["schemas"]["IntermediatesScope"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Target Rows
+             * @description Rows the scope resolved to
+             */
+            target_rows: number;
+            impact: components["schemas"]["IntermediatesImpact"];
+            /**
+             * Affected Documents
+             * @description Documents a force clear would break. Confirming acknowledges these documents: the operation deletes referenced targets only while every document naming them is acknowledged, so a document saved after the preview keeps its media. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own. Bounded; see `affected_documents_total`
+             */
+            affected_documents?: components["schemas"]["IntermediatesAffectedDocument"][];
+            /**
+             * Affected Documents Total
+             * @description How many documents a force clear would break, including any not listed
+             * @default 0
+             */
+            affected_documents_total?: number;
+        };
+        /** IntermediatesPreviewRequest */
+        IntermediatesPreviewRequest: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "safe" | "force";
+            scope: components["schemas"]["IntermediatesScope"];
+        };
+        /** IntermediatesRow */
+        IntermediatesRow: {
+            /**
+             * User Id
+             * @description The owning account
+             */
+            user_id: string;
+            /**
+             * Project Id
+             * @description The originating project; null selects the owner's unassigned intermediates
+             */
+            project_id?: string | null;
+            /**
+             * User Display Name
+             * @description The owner's display name, if known
+             */
+            user_display_name?: string | null;
+            /**
+             * User Email
+             * @description The owner's email, if known
+             */
+            user_email?: string | null;
+            /**
+             * Project Name
+             * @description The project's name; null for unassigned rows
+             */
+            project_name?: string | null;
+            /**
+             * Cover Image Name
+             * @description The newest durable image on the project's board, for a thumbnail
+             */
+            cover_image_name?: string | null;
+            images?: components["schemas"]["IntermediatesKindCounts"];
+            videos?: components["schemas"]["IntermediatesKindCounts"];
+            /**
+             * Reclaimable Bytes
+             * @description Measured size of the safe items
+             * @default 0
+             */
+            reclaimable_bytes?: number;
+            /**
+             * Referenced Bytes
+             * @description Measured size of the referenced items a force clear adds
+             * @default 0
+             */
+            referenced_bytes?: number;
+            /**
+             * Unknown Size Count
+             * @description Safe or referenced items whose size is not yet measured
+             * @default 0
+             */
+            unknown_size_count?: number;
+        };
+        /**
+         * IntermediatesScope
+         * @description What a cleanup acts on.
+         *
+         *     `selection` names rows; `owner` names an account; `everyone` is every account (administrators);
+         *     `matching` is every row the summary filters match, minus `excluded`, resolved by the server so
+         *     a client never has to enumerate rows it has not loaded.
+         */
+        IntermediatesScope: {
+            /**
+             * Kind
+             * @description How the targets were chosen
+             * @enum {string}
+             */
+            kind: "selection" | "owner" | "everyone" | "matching";
+            /**
+             * Targets
+             * @description The selected rows; only read for a `selection` scope
+             */
+            targets?: components["schemas"]["IntermediatesScopeTarget"][];
+            /**
+             * User Id
+             * @description The account an `owner` scope targets, or the owner filter of a `matching` scope (null: the caller's account, or every account for administrators)
+             */
+            user_id?: string | null;
+            /**
+             * Project Id
+             * @description `matching` only: the summary's project filter
+             */
+            project_id?: string | null;
+            /**
+             * Search
+             * @description `matching` only: the summary's search
+             */
+            search?: string | null;
+            /**
+             * Excluded
+             * @description `matching` only: matching rows to leave out
+             */
+            excluded?: components["schemas"]["IntermediatesScopeTarget"][];
+        };
+        /**
+         * IntermediatesScopeTarget
+         * @description One row of the manager: an owner's project, or their unassigned intermediates.
+         */
+        IntermediatesScopeTarget: {
+            /**
+             * User Id
+             * @description The owning account
+             */
+            user_id: string;
+            /**
+             * Project Id
+             * @description The originating project; null selects the owner's unassigned intermediates
+             */
+            project_id?: string | null;
+        };
+        /** IntermediatesSummary */
+        IntermediatesSummary: {
+            /** Items */
+            items: components["schemas"]["IntermediatesRow"][];
+            /**
+             * Total
+             * @description Rows matching the request
+             */
+            total: number;
+            /** Offset */
+            offset: number;
+            /** Limit */
+            limit: number;
+            totals: components["schemas"]["IntermediatesSummaryTotals"];
+            /**
+             * Recent Grace Seconds
+             * @description How long a new intermediate is protected
+             */
+            recent_grace_seconds: number;
+            /**
+             * Measuring
+             * @description Whether sizes are still being measured in the background
+             */
+            measuring: boolean;
+            /**
+             * Can Manage Everyone
+             * @description Whether the caller may target other accounts
+             */
+            can_manage_everyone: boolean;
+        };
+        /**
+         * IntermediatesSummaryTotals
+         * @description Totals over every row that matches the request, not just the returned page.
+         */
+        IntermediatesSummaryTotals: {
+            /**
+             * Rows
+             * @default 0
+             */
+            rows?: number;
+            /**
+             * Safe Images
+             * @default 0
+             */
+            safe_images?: number;
+            /**
+             * Safe Videos
+             * @default 0
+             */
+            safe_videos?: number;
+            /**
+             * In Use Images
+             * @default 0
+             */
+            in_use_images?: number;
+            /**
+             * In Use Videos
+             * @default 0
+             */
+            in_use_videos?: number;
+            /**
+             * Reclaimable Bytes
+             * @default 0
+             */
+            reclaimable_bytes?: number;
+            /**
+             * Unknown Size Count
+             * @default 0
+             */
+            unknown_size_count?: number;
         };
         /**
          * Invert Tensor Mask
@@ -41321,6 +41948,11 @@ export type components = {
              */
             user_id?: string;
             /**
+             * Project Id
+             * @description The project this queue item was enqueued for, if any; its outputs inherit it
+             */
+            project_id?: string | null;
+            /**
              * User Display Name
              * @description The display name of the user who created this queue item, if available
              */
@@ -46159,6 +46791,16 @@ export type components = {
              * @default
              */
             video_subfolder?: string;
+            /**
+             * Project Id
+             * @description The project this video originated in, if it was made for one.
+             */
+            project_id?: string | null;
+            /**
+             * File Size Bytes
+             * @description Bytes the video, its thumbnail and sidecar occupy on disk; null until measured.
+             */
+            file_size_bytes?: number | null;
             /**
              * Media Origin
              * @description How this video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio file the server wrapped into a waveform video.
@@ -51593,6 +52235,8 @@ export interface operations {
                 board_id?: string | null;
                 /** @description The session ID associated with this upload, if any */
                 session_id?: string | null;
+                /** @description The caller's project this upload originates in, if any; recorded for intermediates cleanup */
+                project_id?: string | null;
                 /** @description Whether to crop the image */
                 crop_visible?: boolean | null;
             };
@@ -52677,6 +53321,224 @@ export interface operations {
             };
         };
     };
+    get_intermediates_summary: {
+        parameters: {
+            query?: {
+                /** @description Admins only: restrict rows to one account */
+                owner_id?: string | null;
+                project_id?: string | null;
+                /** @description Project (and, for admins, owner) filter */
+                search?: string | null;
+                sort?: "reclaimable_bytes" | "project_name";
+                order?: "asc" | "desc";
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntermediatesSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_intermediates_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntermediatesPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntermediatesPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_intermediates_operations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntermediatesOperationList"];
+                };
+            };
+        };
+    };
+    start_intermediates_operation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntermediatesOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntermediatesOperation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_intermediates_operation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntermediatesOperation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_intermediates_browser_hold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntermediatesBrowserHoldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_intermediates_browser_hold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_video: {
         parameters: {
             query: {
@@ -52688,6 +53550,8 @@ export interface operations {
                 board_id?: string | null;
                 /** @description The session ID associated with this upload, if any */
                 session_id?: string | null;
+                /** @description The caller's project this upload originates in, if any; recorded for intermediates cleanup */
+                project_id?: string | null;
             };
             header?: never;
             path?: never;

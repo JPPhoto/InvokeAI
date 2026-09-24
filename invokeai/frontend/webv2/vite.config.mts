@@ -50,6 +50,7 @@ const ROUTE_SHARED_MODULES = [
   '/workbench/launchpad/formatRelativeTime.ts',
   // Without this the editor pulls the whole Launchpad chunk for one lookup table.
   '/workbench/launchpad/intents.ts',
+  '/workbench/mediaReferences.ts',
   '/workbench/palette/settingsEntryDeps.ts',
   '/workbench/projects/covers.ts',
   '/workbench/projects/components/ProjectFileOptionsProvider.tsx',
@@ -197,6 +198,7 @@ const getLegacyChunkName = (id: string): string | null => {
   if (
     matchesAnySuffix(id, [
       '/platform/i18n/client.ts',
+      '/platform/i18n/languages.ts',
       '/platform/react/useMountEffect.ts',
       '/platform/ui/theme/system.ts',
       '/workbench/hotkeys/resolve.ts',
