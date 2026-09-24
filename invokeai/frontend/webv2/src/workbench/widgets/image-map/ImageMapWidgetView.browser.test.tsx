@@ -7,16 +7,18 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The gallery's values drive the cluster chip and the Esc clear; the image
-// map's own settings read as off.
+// Stand-ins for the gallery's values and the workbench commands the chip and Esc write through.
 const workbench = vi.hoisted(() => ({
   galleryValues: {} as Record<string, unknown>,
   patchValues: vi.fn(),
 }));
 
 vi.mock('@workbench/WorkbenchContext', () => ({
-  useWidgetValuesSelector: (widgetId: string, selector: (values: Record<string, unknown>) => unknown) =>
-    widgetId === 'gallery' ? selector(workbench.galleryValues) : false,
+  // The gallery's values drive the cluster chip and the Esc clear. Every other widget's selector is applied to an
+  // empty value bag rather than answering `false`: each accessor owns its own default, and handing a boolean to a
+  // setting that is a number or null makes the widget act on a value it could never be given in production.
+  useWidgetValuesSelector: (widgetId: string, select: (values: Record<string, unknown>) => unknown) =>
+    select(widgetId === 'gallery' ? workbench.galleryValues : {}),
   useWorkbenchCommands: () => ({ widgets: { patchValues: workbench.patchValues } }),
   useWorkbenchQueries: () => ({ getSnapshot: () => ({ activeProject: {} }) }),
 }));
@@ -161,6 +163,7 @@ const dataFor = (
 const renderState = async (state: Extract<ImageMapState, 'disabled' | 'model_missing'>, modelName?: string) => {
   imageMapStore.setSnapshot({
     clusterLabels: null,
+    clusterLabelsEps: null,
     clusterLabelsHash: null,
     data: dataFor(state, modelName),
     error: null,
@@ -351,6 +354,7 @@ describe('Image Map indexing activity', () => {
   ) => {
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: {
         clusterEps: null,
@@ -436,6 +440,7 @@ describe('Image Map cluster selection chip', () => {
   ) => {
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: {
         clusterEps: null,

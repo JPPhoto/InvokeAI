@@ -123,7 +123,10 @@ const ImageMapPlot = ({
   // Require matching clustering for hover tags: refresh may renumber ids even while stale annotations remain
   // briefly visible.
   const clusterLabelsMatchPoints = imageMapStore.useSelector(
-    (snapshot) => snapshot.clusterLabelsHash !== null && snapshot.clusterLabelsHash === snapshot.data?.visibleHash
+    (snapshot) =>
+      snapshot.clusterLabelsHash !== null &&
+      snapshot.clusterLabelsHash === snapshot.data?.visibleHash &&
+      snapshot.clusterLabelsEps === snapshot.data?.clusterEps
   );
   // Use item keys for selection/recentering equality, including videos.
   const selectedKey = useWidgetValuesSelector('gallery', (values) => {

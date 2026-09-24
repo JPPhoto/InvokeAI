@@ -2599,6 +2599,7 @@
       "sideBySide": "Side by Side",
       "slider": "Slider",
       "hover": "Hover",
+      "imageTags": "Image tags:",
       "hoverComparisonAriaLabel": "Reveal comparison image on hover, focus, or touch",
       "sourceRun": "Source run {{id}}",
       "videoDuration": "Duration {{duration}}",
@@ -4191,7 +4192,12 @@
     "fields": {
       "comparisonMode": "Comparison mode",
       "showClusterLabels": "Show cluster labels",
-      "clickSelectsCluster": "Select clusters on click"
+      "clickSelectsCluster": "Select clusters on click",
+      "clusterStrength": "Clustering strength",
+      "clusterStrengthHint": "Higher values create larger clusters",
+      "clusterStrengthAuto": "auto",
+      "clusterStrengthIncomplete": "Not a number yet \u2014 the clustering strength is unchanged.",
+      "clusterStrengthRange": "Clustering strength must be between {{min}} and {{max}}."
     },
     "changedFromDefault": "Changed from default",
     "changedSetting": "{{setting}}: changed from default"
