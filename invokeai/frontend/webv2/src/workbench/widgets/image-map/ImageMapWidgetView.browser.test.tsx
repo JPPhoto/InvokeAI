@@ -8,7 +8,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@workbench/WorkbenchContext', () => ({
-  useWidgetValuesSelector: () => false,
+  // Applied to an empty value bag rather than answering `false` to every
+  // selector: each accessor owns its own default, and handing a boolean to a
+  // setting that is a number or null makes the widget act on a value it could
+  // never be given in production.
+  useWidgetValuesSelector: (_widgetId: string, select: (values: Record<string, unknown>) => unknown) => select({}),
 }));
 
 // Stub the heavy Plotly sibling; this test owns the progress badge.
@@ -116,6 +120,7 @@ const dataFor = (
 const renderState = async (state: Extract<ImageMapState, 'disabled' | 'model_missing'>, modelName?: string) => {
   imageMapStore.setSnapshot({
     clusterLabels: null,
+    clusterLabelsEps: null,
     clusterLabelsHash: null,
     data: dataFor(state, modelName),
     error: null,
@@ -303,6 +308,7 @@ describe('Image Map indexing activity', () => {
   ) => {
     imageMapStore.setSnapshot({
       clusterLabels: null,
+      clusterLabelsEps: null,
       clusterLabelsHash: null,
       data: {
         clusterEps: null,
