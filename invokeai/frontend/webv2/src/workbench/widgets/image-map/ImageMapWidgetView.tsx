@@ -11,12 +11,17 @@ import {
   useStartersSelector,
 } from '@features/models';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { getImageMapClickSelectsCluster, getImageMapShowClusterLabels } from '@workbench/image-map/imageMapSettings';
+import {
+  getImageMapClickSelectsCluster,
+  getImageMapClusterEps,
+  getImageMapShowClusterLabels,
+} from '@workbench/image-map/imageMapSettings';
 import {
   ensureImageMapLoaded,
   imageMapStore,
   refreshImageIndexStatus,
   refreshImageMapPoints,
+  setClusterEps,
   setClusterLabelsEnabled,
 } from '@workbench/image-map/imageMapStore';
 import { isIndexing } from '@workbench/image-map/indexProgress';
@@ -53,7 +58,14 @@ const plotLoadingFallback = (
 export const ImageMapWidgetView = (_props: WidgetViewProps) => {
   const { data, error, indexCounts, indexUpdatedAt, loadState, renderError } = imageMapStore.useSnapshot();
   const clickSelectsCluster = useWidgetValuesSelector('image-map', getImageMapClickSelectsCluster);
+  const clusterEps = useWidgetValuesSelector('image-map', getImageMapClusterEps);
   const showClusterLabels = useWidgetValuesSelector('image-map', getImageMapShowClusterLabels);
+
+  // Before the first load, so it carries the chosen strength rather than
+  // fetching at the default and immediately refetching.
+  useEffect(() => {
+    setClusterEps(clusterEps);
+  }, [clusterEps]);
 
   useEffect(() => {
     ensureImageMapLoaded();
