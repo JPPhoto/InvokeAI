@@ -1,3 +1,4 @@
+import type { GalleryItemRef } from '@features/gallery/contracts';
 import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { ReactNode } from 'react';
 
@@ -13,6 +14,14 @@ import { lazy, useMemo } from 'react';
 
 const EMPTY_WIDGET_VALUES: Record<string, unknown> = Object.freeze({});
 
+// Loaded on first reveal; the label cache is not part of the editor's initial graph.
+const getItemLabel = (item: GalleryItemRef): Promise<string | null> =>
+  import('@workbench/image-map/imageLabelCache')
+    .then(({ getImageLabels }) => getImageLabels(item))
+    .then((labels) => labels?.label ?? null)
+    // A chunk that fails to load (stale deploy, dropped network) means no label, not an unhandled rejection.
+    .catch(() => null);
+
 const GalleryItemActionsAdapter = lazy(() =>
   import('./GalleryImageActionsBridge').then((module) => ({ default: module.GalleryItemActionsAdapter }))
 );
@@ -20,10 +29,6 @@ const GalleryImageContextMenu = lazy(() =>
   import('./GalleryImageActionsBridge').then((module) => ({ default: module.GalleryImageContextMenu }))
 );
 
-/**
- * Production binding of Gallery's UI port: translates Gallery UI intents into
- * the Workbench aggregate. No second adapter is expected.
- */
 export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) => {
   const { projectId, projectName, galleryValues, generateValues, antialiasProgressImages, liveFollowEnabled } =
     useActiveProjectSelector((project) => ({
@@ -40,10 +45,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
   const accountScope = captureAccountScope();
   const exportProject = useExportLibraryProject();
   const openWorkbenchWidget = useOpenWorkbenchWidget();
-  // These are `lazy()` children of an adapter that only ever mounts in the
-  // editor, and the gallery widget needs them as soon as it renders a row.
-  // Left to Suspense they were fetched at ~476ms — a full round trip after the
-  // boot widget wave had already finished.
+  // Preload row dependencies here to avoid a second fetch wave after the gallery mounts.
   useMountEffect(() => {
     void import('./GalleryImageActionsBridge');
   });
@@ -61,6 +63,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       },
       galleryValues,
       generateValues,
+      getItemLabel,
       ItemActionsProvider: GalleryItemActionsAdapter,
       ImageContextMenu: GalleryImageContextMenu,
       liveFollowEnabled,
