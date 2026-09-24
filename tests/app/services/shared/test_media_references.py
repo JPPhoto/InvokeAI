@@ -18,13 +18,14 @@ def test_collects_names_under_image_and_video_keys_at_any_depth() -> None:
         "layers": [{"image": {"image_name": "layer.png"}}, {"reference": {"imageName": "ref.png"}}],
         "queue": {"items": [{"outputs": [{"imageName": "staged.png"}, {"videoName": "clip.mp4"}]}]},
         "video": {"video_name": "source.mp4", "poster": {"image_name": "poster.png"}},
+        "soundtrack": {"source_video_name": "soundtrack-source.mp4"},
         "ignored": {"name": "not-a-ref.png", "image_name": "", "video_name": "x" * 300, "imageName": 12},
     }
 
     references = extract_media_references(document)
 
     assert references.images == {"layer.png", "ref.png", "staged.png", "poster.png"}
-    assert references.videos == {"clip.mp4", "source.mp4"}
+    assert references.videos == {"clip.mp4", "source.mp4", "soundtrack-source.mp4"}
 
 
 def test_non_object_documents_reference_nothing() -> None:

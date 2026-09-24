@@ -7518,95 +7518,6 @@
         }
       }
     },
-    "/api/v1/intermediates/holds/{lease_id}": {
-      "put": {
-        "tags": ["intermediates"],
-        "summary": "Replace Intermediates Browser Hold",
-        "description": "Protect names still held by this account's open browser editor, including undo state.",
-        "operationId": "replace_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__put",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "lease_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64,
-              "title": "Lease Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IntermediatesBrowserHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": ["intermediates"],
-        "summary": "Release Intermediates Browser Hold",
-        "operationId": "release_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__delete",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "lease_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64,
-              "title": "Lease Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/intermediates/summary": {
       "get": {
         "tags": ["intermediates"],
@@ -7919,6 +7830,97 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/intermediates/holds/{lease_id}": {
+      "put": {
+        "tags": ["intermediates"],
+        "summary": "Replace Intermediates Browser Hold",
+        "description": "Protect names still held by this account's open browser editor, including undo state.",
+        "operationId": "replace_intermediates_browser_hold",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lease_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_.-]+)?$",
+              "title": "Lease Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntermediatesBrowserHoldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["intermediates"],
+        "summary": "Release Intermediates Browser Hold",
+        "operationId": "release_intermediates_browser_hold",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lease_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_.-]+)?$",
+              "title": "Lease Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -49680,7 +49682,13 @@
             },
             "type": "array",
             "title": "Affected Documents",
-            "description": "Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own"
+            "description": "Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own. Bounded; see `affected_documents_total`"
+          },
+          "affected_documents_total": {
+            "type": "integer",
+            "title": "Affected Documents Total",
+            "description": "How many documents a force clear would break, including any not listed",
+            "default": 0
           }
         },
         "type": "object",

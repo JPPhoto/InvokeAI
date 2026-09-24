@@ -103,6 +103,7 @@ interface PreviewDTO {
   has_more_eligible: boolean;
   impact: ImpactDTO;
   affected_documents: AffectedDocumentDTO[];
+  affected_documents_total: number;
 }
 
 interface ProgressDTO {
@@ -246,6 +247,57 @@ export const mapIntermediatesOperation = (dto: IntermediatesOperationDTO): Inter
   userId: dto.user_id,
 });
 
+const PROGRESS_KEYS = [
+  'processed_images',
+  'processed_videos',
+  'deleted_images',
+  'deleted_videos',
+  'retained_images',
+  'retained_videos',
+  'failed_images',
+  'failed_videos',
+  'reclaimed_bytes',
+  'unknown_size_count',
+  'pending_disk_cleanup',
+  'unresolved_images',
+  'unresolved_videos',
+] as const satisfies readonly (keyof ProgressDTO)[];
+const OPERATION_STATUSES = new Set<unknown>(['pending', 'running', 'completed', 'failed']);
+const CLEANUP_MODES = new Set<unknown>(['safe', 'force']);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+const isCount = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value);
+const isNullableString = (value: unknown): boolean => value === null || typeof value === 'string';
+
+const isScopeDTO = (value: unknown): value is ScopeDTO =>
+  isRecord(value) &&
+  (value.kind === 'everyone' ||
+    (value.kind === 'owner' && isNullableString(value.user_id)) ||
+    (value.kind === 'selection' &&
+      Array.isArray(value.targets) &&
+      value.targets.every(
+        (target) => isRecord(target) && typeof target.user_id === 'string' && isNullableString(target.project_id)
+      )));
+
+const isOperationDTO = (value: unknown): value is IntermediatesOperationDTO =>
+  isRecord(value) &&
+  typeof value.operation_id === 'string' &&
+  typeof value.user_id === 'string' &&
+  CLEANUP_MODES.has(value.mode) &&
+  OPERATION_STATUSES.has(value.status) &&
+  isScopeDTO(value.scope) &&
+  isCount(value.target_images) &&
+  isCount(value.target_videos) &&
+  isRecord(value.progress) &&
+  PROGRESS_KEYS.every((key) => isCount((value.progress as Record<string, unknown>)[key])) &&
+  [value.created_at, value.started_at, value.completed_at, value.error].every(isNullableString) &&
+  isNullableString(value.retried_from_operation_id) &&
+  isNullableString(value.retried_by_operation_id);
+
+/** Reads a socket event's operation, which arrives unvalidated; a malformed event yields null. */
+export const parseIntermediatesOperationEvent = (payload: unknown): IntermediatesOperation | null =>
+  isRecord(payload) && isOperationDTO(payload.operation) ? mapIntermediatesOperation(payload.operation) : null;
+
 const buildSummaryUrl = (params: IntermediatesSummaryParams): string => {
   const query = new URLSearchParams();
 
@@ -315,6 +367,7 @@ export const createIntermediatesPreview = async (
 
   return {
     affectedDocuments: dto.affected_documents.map(mapAffectedDocument),
+    affectedDocumentsTotal: dto.affected_documents_total,
     createdAt: dto.created_at,
     expiresAt: dto.expires_at,
     impact: mapImpact(dto.impact),

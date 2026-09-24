@@ -3,14 +3,13 @@
  * includes it.
  */
 
-/** Keys whose string values name an image; the server's `media_references` extractor uses the same set. */
-const IMAGE_NAME_KEYS: ReadonlySet<string> = new Set(['imageName', 'image_name']);
-
-/** Keys whose string values name a video; the server's `media_references` extractor uses the same set. */
-const VIDEO_NAME_KEYS: ReadonlySet<string> = new Set(['videoName', 'video_name']);
-
-/** Server-side names are generated filenames; the cleanup index ignores anything longer. */
-const MAX_HELD_NAME_LENGTH = 255;
+import {
+  collectMediaNames,
+  IMAGE_NAME_KEYS,
+  MAX_HELD_NAME_LENGTH,
+  type MediaNameRefs,
+  VIDEO_NAME_KEYS,
+} from '@workbench/mediaReferences';
 
 /** Top-level document keys that are history rather than live content. */
 export const PROJECT_HISTORY_ROOT_KEYS: ReadonlySet<string> = new Set(['events', 'graphHistory', 'queue']);
@@ -41,68 +40,53 @@ const INSTALLATION_STATE_KEYS: ReadonlySet<string> = new Set([
 /** Blank cached URLs instead of deleting keys, preserving entries while forcing URL derivation from remapped names. */
 const DERIVED_URL_KEYS: ReadonlySet<string> = new Set(['imageUrl', 'thumbnailUrl', 'videoUrl']);
 
-export interface ProjectAssetRefs {
-  images: Set<string>;
-  videos: Set<string>;
+export type ProjectAssetRefs = MediaNameRefs;
+
+export interface CanvasHeldAssetRefs {
+  readonly images: readonly string[];
+  readonly videos: readonly string[];
 }
 
-type CanvasHeldAssetRefs = { images: readonly string[]; videos: readonly string[] };
-const canvasHeldAssetReaders = new Map<string, () => CanvasHeldAssetRefs>();
+/** What a live Canvas engine's undo state retains, and when that changes. */
+export interface CanvasHeldMediaSource {
+  read(): CanvasHeldAssetRefs;
+  subscribe(listener: () => void): () => void;
+}
 
-/** Canvas owns each reader for as long as its engine remains alive. */
-export const registerCanvasHeldAssetRefs = (projectId: string, read: () => CanvasHeldAssetRefs): (() => void) => {
-  canvasHeldAssetReaders.set(projectId, read);
-  return () => {
-    if (canvasHeldAssetReaders.get(projectId) === read) {
-      canvasHeldAssetReaders.delete(projectId);
-    }
+/** One mounted Workbench's live Canvas engines, each registered for as long as its undo state survives. */
+export interface CanvasHeldMediaSources {
+  read(projectId: string): CanvasHeldAssetRefs | undefined;
+  register(projectId: string, source: CanvasHeldMediaSource): () => void;
+  subscribe(listener: () => void): () => void;
+}
+
+export const createCanvasHeldMediaSources = (): CanvasHeldMediaSources => {
+  const sources = new Map<string, CanvasHeldMediaSource>();
+  const listeners = new Set<() => void>();
+  const notify = (): void => listeners.forEach((listener) => listener());
+  return {
+    read: (projectId) => sources.get(projectId)?.read(),
+    register: (projectId, source) => {
+      sources.set(projectId, source);
+      const unsubscribe = source.subscribe(notify);
+      notify();
+      return () => {
+        unsubscribe();
+        if (sources.get(projectId) === source) {
+          sources.delete(projectId);
+          notify();
+        }
+      };
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   };
 };
 
-export const getCanvasHeldAssetRefs = (projectId: string): CanvasHeldAssetRefs | undefined =>
-  canvasHeldAssetReaders.get(projectId)?.();
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-/** Every name under a media-name key, at any depth, except subtrees whose key `skipKey` rejects. */
-const collectMediaNames = (
-  roots: readonly unknown[],
-  skipKey: (key: string) => boolean,
-  maxLength = Number.POSITIVE_INFINITY
-): ProjectAssetRefs => {
-  const refs: ProjectAssetRefs = { images: new Set<string>(), videos: new Set<string>() };
-  const pending = [...roots];
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        pending.push(item);
-      }
-      continue;
-    }
-    if (!isRecord(node)) {
-      continue;
-    }
-    for (const [key, value] of Object.entries(node)) {
-      if (skipKey(key)) {
-        continue;
-      }
-      if (typeof value === 'string') {
-        if (value !== '' && value.length <= maxLength) {
-          if (IMAGE_NAME_KEYS.has(key)) {
-            refs.images.add(value);
-          } else if (VIDEO_NAME_KEYS.has(key)) {
-            refs.videos.add(value);
-          }
-        }
-      } else if (typeof value === 'object' && value !== null) {
-        pending.push(value);
-      }
-    }
-  }
-  return refs;
-};
 
 const withoutHistoryRoots = (projectDocument: object): unknown[] =>
   Object.entries(projectDocument).flatMap(([key, value]) => (PROJECT_HISTORY_ROOT_KEYS.has(key) ? [] : [value]));
@@ -113,50 +97,92 @@ export const collectLiveAssetRefs = (projectDocument: Record<string, unknown>): 
     (key) => PROJECT_HISTORY_KEYS.has(key) || GALLERY_SELECTION_KEYS.has(key)
   );
 
+const isHeldSkipKey = (key: string): boolean => key === 'recentImages' || GALLERY_SELECTION_KEYS.has(key);
+
 /** Open editors hold live content and undo state, but not completed queue/event or gallery history. */
 export const collectHeldAssetRefs = (projects: readonly object[]): ProjectAssetRefs =>
-  collectMediaNames(
-    projects.flatMap(withoutHistoryRoots),
-    (key) => key === 'recentImages' || GALLERY_SELECTION_KEYS.has(key),
-    MAX_HELD_NAME_LENGTH
-  );
+  collectMediaNames(projects.flatMap(withoutHistoryRoots), isHeldSkipKey, MAX_HELD_NAME_LENGTH);
 
-/** Every media name in `values`, history included: what an undo entry can restore. */
-export const collectRestorableAssetRefs = (...values: unknown[]): ProjectAssetRefs =>
-  collectMediaNames(values, () => false, MAX_HELD_NAME_LENGTH);
+/** Containers whose children an edit replaces independently: the canvas, its snapshots and undo stacks. */
+const SPLIT_HELD_KEYS: ReadonlySet<string> = new Set(['canvas', 'snapshots', 'undoRedo', 'past', 'future']);
+
+type HeldPart = ProjectAssetRefs | CanvasHeldAssetRefs;
+
+const scanHeld = (node: object): ProjectAssetRefs => collectMediaNames([node], isHeldSkipKey, MAX_HELD_NAME_LENGTH);
+
+// Edits that replace name-free subtrees (the project root, layout, settings) then leave the parts unchanged.
+const pushNamed = (refs: ProjectAssetRefs, parts: HeldPart[]): void => {
+  if (refs.images.size || refs.videos.size) {
+    parts.push(refs);
+  }
+};
 
 /**
- * Reads what open editors hold: each project's live content plus the undo state its Canvas engine retains. Project
- * snapshots are immutable, so a project's scan is reused until its object changes.
+ * Reads what open editors hold: each project's live content plus the undo state its Canvas engine retains. Edits
+ * replace the canvas, its snapshots and undo stacks child by child, so the project is split there; every other subtree
+ * is immutable and scanned once per identity, as are the primitive fields of each split node. When no part changed
+ * identity the previous result is returned as is; equal name sets under new identities are left to the lease.
  */
 export const createOpenProjectsHeldMediaReader = (
   getProjects: () => readonly (object & { id: string })[],
-  getCanvasRefs: (projectId: string) => CanvasHeldAssetRefs | undefined = getCanvasHeldAssetRefs
+  getCanvasRefs: (projectId: string) => CanvasHeldAssetRefs | undefined
 ): (() => { images: string[]; videos: string[] }) => {
-  const scans = new Map<string, { project: object; refs: ProjectAssetRefs }>();
+  const scans = new WeakMap<object, ProjectAssetRefs>();
+  const residueScans = new WeakMap<object, ProjectAssetRefs>();
+  let last: { parts: HeldPart[]; result: { images: string[]; videos: string[] } } | null = null;
+
+  const collectParts = (node: object, isRoot: boolean, parts: HeldPart[]): void => {
+    const entries = Array.isArray(node)
+      ? node.map((value, index) => [String(index), value] as const)
+      : Object.entries(node);
+    let residue: Record<string, unknown> | null = null;
+    for (const [key, value] of entries) {
+      if (isHeldSkipKey(key) || (isRoot && PROJECT_HISTORY_ROOT_KEYS.has(key))) {
+        continue;
+      }
+      if (typeof value !== 'object' || value === null) {
+        (residue ??= {})[key] = value;
+      } else if (SPLIT_HELD_KEYS.has(key)) {
+        collectParts(value, false, parts);
+      } else {
+        let refs = scans.get(value);
+        if (!refs) {
+          refs = scanHeld(value);
+          scans.set(value, refs);
+        }
+        pushNamed(refs, parts);
+      }
+    }
+    if (residue) {
+      let refs = residueScans.get(node);
+      if (!refs) {
+        refs = scanHeld(residue);
+        residueScans.set(node, refs);
+      }
+      pushNamed(refs, parts);
+    }
+  };
+
   return () => {
+    const parts: HeldPart[] = [];
+    for (const project of getProjects()) {
+      collectParts(project, true, parts);
+      const retained = getCanvasRefs(project.id);
+      if (retained) {
+        parts.push(retained);
+      }
+    }
+    if (last && last.parts.length === parts.length && parts.every((part, index) => part === last!.parts[index])) {
+      return last.result;
+    }
     const images = new Set<string>();
     const videos = new Set<string>();
-    const open = new Set<string>();
-    for (const project of getProjects()) {
-      open.add(project.id);
-      let scan = scans.get(project.id);
-      if (scan?.project !== project) {
-        scan = { project, refs: collectHeldAssetRefs([project]) };
-        scans.set(project.id, scan);
-      }
-      scan.refs.images.forEach((name) => images.add(name));
-      scan.refs.videos.forEach((name) => videos.add(name));
-      const retained = getCanvasRefs(project.id);
-      retained?.images.forEach((name) => images.add(name));
-      retained?.videos.forEach((name) => videos.add(name));
+    for (const part of parts) {
+      part.images.forEach((name) => images.add(name));
+      part.videos.forEach((name) => videos.add(name));
     }
-    for (const projectId of scans.keys()) {
-      if (!open.has(projectId)) {
-        scans.delete(projectId);
-      }
-    }
-    return { images: [...images], videos: [...videos] };
+    last = { parts, result: { images: [...images], videos: [...videos] } };
+    return last.result;
   };
 };
 

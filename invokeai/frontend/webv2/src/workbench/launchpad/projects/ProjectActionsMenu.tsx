@@ -20,7 +20,7 @@ import { useTranslation } from 'react-i18next';
 export const ProjectActionsMenuBody = ({
   isCompatible,
   isPinned,
-  onClearIntermediates,
+  onDeleteIntermediates,
   onDelete,
   onDuplicate,
   onExport,
@@ -31,7 +31,7 @@ export const ProjectActionsMenuBody = ({
   isCompatible: boolean;
   isPinned: boolean;
   projectSearch: { project: string };
-  onClearIntermediates: () => void;
+  onDeleteIntermediates: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onExport: () => void;
@@ -72,9 +72,9 @@ export const ProjectActionsMenuBody = ({
         <Icon as={FileDownIcon} boxSize="3.5" />
         {t('common.export')}
       </Menu.Item>
-      <Menu.Item value="intermediates" onClick={onClearIntermediates}>
+      <Menu.Item value="intermediates" onClick={onDeleteIntermediates}>
         <Icon as={BrushCleaningIcon} boxSize="3.5" />
-        {t('projects.clearIntermediates')}
+        {t('projects.deleteIntermediates')}
       </Menu.Item>
       <Menu.Separator />
       <Menu.Item data-danger="" value="delete" onClick={onDelete}>

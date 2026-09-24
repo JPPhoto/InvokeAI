@@ -1822,27 +1822,6 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/intermediates/holds/{lease_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Replace Intermediates Browser Hold
-         * @description Protect names still held by this account's open browser editor, including undo state.
-         */
-        put: operations["replace_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__put"];
-        post?: never;
-        /** Release Intermediates Browser Hold */
-        delete: operations["release_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/intermediates/summary": {
         parameters: {
             query?: never;
@@ -1935,6 +1914,27 @@ export type paths = {
          */
         post: operations["retry_intermediates_operation"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/intermediates/holds/{lease_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace Intermediates Browser Hold
+         * @description Protect names still held by this account's open browser editor, including undo state.
+         */
+        put: operations["replace_intermediates_browser_hold"];
+        post?: never;
+        /** Release Intermediates Browser Hold */
+        delete: operations["release_intermediates_browser_hold"];
         options?: never;
         head?: never;
         patch?: never;
@@ -20947,9 +20947,15 @@ export type components = {
             impact: components["schemas"]["IntermediatesImpact"];
             /**
              * Affected Documents
-             * @description Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own
+             * @description Documents a force clear would break. A non-administrator's force clear keeps media other accounts' documents name, so these are always the caller's own. Bounded; see `affected_documents_total`
              */
             affected_documents?: components["schemas"]["IntermediatesAffectedDocument"][];
+            /**
+             * Affected Documents Total
+             * @description How many documents a force clear would break, including any not listed
+             * @default 0
+             */
+            affected_documents_total?: number;
         };
         /** IntermediatesPreviewRequest */
         IntermediatesPreviewRequest: {
@@ -53323,68 +53329,6 @@ export interface operations {
             };
         };
     };
-    replace_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lease_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["IntermediatesBrowserHoldRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    release_intermediates_browser_hold_api_v1_intermediates_holds__lease_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lease_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_intermediates_summary: {
         parameters: {
             query?: {
@@ -53540,6 +53484,68 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["IntermediatesOperation"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_intermediates_browser_hold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntermediatesBrowserHoldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_intermediates_browser_hold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

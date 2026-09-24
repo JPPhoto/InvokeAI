@@ -86,6 +86,8 @@ def test_image_upload_refuses_a_project_the_caller_does_not_own(
             headers=_auth(token),
         )
         assert response.status_code == 404, response.text
+        # The webv2 upload fallback matches this exact detail.
+        assert response.json()["detail"] == "Project not found"
 
     mock_invoker.services.images.create.assert_not_called()
 

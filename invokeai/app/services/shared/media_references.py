@@ -10,6 +10,9 @@ save and its references are never observed apart, and the extractor here is the 
 
 Extraction is deliberately over-inclusive: every string under an image- or video-name key counts,
 history included. A false reference retains a file; a missed one deletes something in use.
+
+Applied migrations call the table DDL, the extractors and `replace_media_references`: keep their DDL
+and signatures frozen, since changing them changes what a fresh install's migrations do.
 """
 
 import json
@@ -21,7 +24,7 @@ MediaReferenceOwnerKind = Literal["project", "workflow", "client_state", "quaran
 MediaKind = Literal["image", "video"]
 
 IMAGE_NAME_KEYS = frozenset({"imageName", "image_name"})
-VIDEO_NAME_KEYS = frozenset({"videoName", "video_name"})
+VIDEO_NAME_KEYS = frozenset({"videoName", "video_name", "source_video_name"})
 
 # Bounds a pathological document: names are generated UUID filenames, so anything longer is not
 # one and is not worth a row.

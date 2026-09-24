@@ -79,6 +79,7 @@ describe('intermediates transport', () => {
     const fetchMock = fetchJson(
       {
         affected_documents: [],
+        affected_documents_total: 0,
         created_at: 'now',
         expires_at: 'later',
         has_more_eligible: true,

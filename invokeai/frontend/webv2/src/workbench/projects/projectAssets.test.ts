@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   collectHeldAssetRefs,
   collectLiveAssetRefs,
+  createCanvasHeldMediaSources,
   createOpenProjectsHeldMediaReader,
   remapAssetRefs,
   selectCoverImageName,
@@ -65,6 +66,59 @@ it('holds names Canvas undo retains after the project stops naming them, and dro
   undo = [];
   projects = [];
   expect(read()).toEqual({ images: [], videos: [] });
+});
+
+it('keeps the held result while edits touch only name-free subtrees, and sees names nested edits add', () => {
+  const document = { stacks: { raster: [{ source: { image: { imageName: 'layer.png' } } }] } };
+  const undoEntry = { project: { widgetInstances: { w: { imageName: 'undo.png' } } } };
+  let project = {
+    canvas: { document, snapshots: [{ document: { imageName: 'snapshot.png' } }] },
+    id: 'project-1',
+    layout: { size: 1 },
+    undoRedo: { future: [], past: [undoEntry] },
+  };
+  const read = createOpenProjectsHeldMediaReader(
+    () => [project],
+    () => undefined
+  );
+  const first = read();
+  expect(new Set(first.images)).toEqual(new Set(['layer.png', 'snapshot.png', 'undo.png']));
+
+  project = { ...project, layout: { size: 2 } };
+  expect(read()).toBe(first);
+  project = { ...project, canvas: { ...project.canvas, document: { ...document } } };
+  const rescanned = read();
+  expect(new Set(rescanned.images)).toEqual(new Set(first.images));
+  expect(read()).toBe(rescanned);
+
+  project = {
+    ...project,
+    canvas: {
+      ...project.canvas,
+      document: { stacks: { raster: [{ source: { image: { imageName: 'stroke.png' } } }] } },
+    },
+    undoRedo: { future: [], past: [undoEntry, { project: { widgetInstances: { w: { imageName: 'next.png' } } } }] },
+  };
+  expect(new Set(read().images)).toEqual(new Set(['stroke.png', 'snapshot.png', 'undo.png', 'next.png']));
+});
+
+it('announces engines registering and releasing their held media', () => {
+  const sources = createCanvasHeldMediaSources();
+  const onChange = vi.fn();
+  sources.subscribe(onChange);
+  let notifyEngine = () => undefined as void;
+  const release = sources.register('project-1', {
+    read: () => ({ images: ['undo.png'], videos: [] }),
+    subscribe: (listener) => {
+      notifyEngine = listener;
+      return () => undefined;
+    },
+  });
+  expect(sources.read('project-1')).toEqual({ images: ['undo.png'], videos: [] });
+  notifyEngine();
+  release();
+  expect(sources.read('project-1')).toBeUndefined();
+  expect(onChange).toHaveBeenCalledTimes(3);
 });
 
 const projectDocument = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({

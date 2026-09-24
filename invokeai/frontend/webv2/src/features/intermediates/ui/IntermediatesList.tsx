@@ -4,17 +4,28 @@ import type { TFunction } from 'i18next';
 
 import { Badge, Checkbox, Flex, HStack, Icon, Image, Stack, Text } from '@chakra-ui/react';
 import { getIntermediatesRowKey, getKindInUse } from '@features/intermediates/core/types';
+import { formatBytes, formatCount } from '@platform/i18n/languages';
 import { absolutizeApiUrl } from '@platform/transport/http';
 import { Row } from '@platform/ui/Row';
 import { FolderIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { formatBytes, formatCount } from './format';
-
 export const getRowLabel = (row: IntermediatesRow, unassignedLabel: string): string =>
   row.projectId === null ? unassignedLabel : row.projectName || row.projectId;
 
-export const getOwnerLabel = (row: IntermediatesRow): string => row.userDisplayName || row.userEmail || row.userId;
+export const getOwnerLabel = (row: IntermediatesRow, t: TFunction): string =>
+  row.userDisplayName || row.userEmail || t('intermediates.owner.unknownAccount');
+
+/**
+ * Adds the email to a display name, or a short id to an account with neither, so rows of different accounts stay
+ * distinguishable to assistive tech.
+ */
+const getOwnerAccessibleLabel = (row: IntermediatesRow, t: TFunction): string =>
+  row.userDisplayName && row.userEmail
+    ? t('intermediates.owner.nameWithEmail', { email: row.userEmail, name: row.userDisplayName })
+    : row.userDisplayName || row.userEmail
+      ? getOwnerLabel(row, t)
+      : t('intermediates.owner.unknownAccountWithId', { id: row.userId.slice(0, 8) });
 
 const Cover = ({ imageName }: { imageName: string | null }) =>
   imageName ? (
@@ -66,7 +77,7 @@ const describeRow = (row: IntermediatesRow, showOwner: boolean, t: TFunction): s
     unmeasured: row.unknownSizeCount > 0 ? t('intermediates.list.unmeasured', { count: row.unknownSizeCount }) : '',
   }).trim();
 
-  return showOwner ? t('intermediates.list.ownerAndSize', { owner: getOwnerLabel(row), size }) : size;
+  return showOwner ? t('intermediates.list.ownerAndSize', { owner: getOwnerLabel(row, t), size }) : size;
 };
 
 export interface IntermediatesListProps {
@@ -117,11 +128,7 @@ export const IntermediatesList = ({ isBusy, isSelected, onToggleRow, rows, showO
             <Checkbox.Root
               aria-label={
                 showOwner
-                  ? t('intermediates.list.selectRowForOwner', {
-                      name: label,
-                      owner: getOwnerLabel(row),
-                      userId: row.userId,
-                    })
+                  ? t('intermediates.list.selectRowForOwner', { name: label, owner: getOwnerAccessibleLabel(row, t) })
                   : t('intermediates.list.selectRow', { name: label })
               }
               checked={selected}

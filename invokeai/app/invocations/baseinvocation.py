@@ -277,7 +277,7 @@ class BaseInvocation(ABC, BaseModel):
         if self.use_cache:
             key = services.invocation_cache.create_key(self)
             cached_value = services.invocation_cache.get(key)
-            if cached_value is not None and services.intermediates is not None:
+            if cached_value is not None:
                 references = extract_media_references(cached_value.model_dump(mode="json"))
                 if not references.is_empty() and not services.intermediates.hold_cached_media(
                     context._data.queue_item.session_id, references

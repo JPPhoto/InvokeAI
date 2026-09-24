@@ -92,6 +92,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
         )
         document_json, document_bytes = _serialize_project_document(data)
         _require_project_document_size(document_bytes)
+        references = extract_media_references(data)
 
         try:
             with self._db.transaction() as cursor:
@@ -124,7 +125,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                     owner_kind="project",
                     user_id=user_id,
                     owner_id=project_id,
-                    references=extract_media_references(data),
+                    references=references,
                 )
                 record = self._fetch_record(cursor, user_id=user_id, project_id=project_id)
         except sqlite3.IntegrityError as e:
@@ -201,6 +202,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
         max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     ) -> ProjectRecordDTO:
         document_json, document_bytes = _serialize_project_document(data)
+        references = extract_media_references(data)
 
         with self._db.transaction() as cursor:
             cursor.execute(
@@ -291,7 +293,7 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 owner_kind="project",
                 user_id=user_id,
                 owner_id=project_id,
-                references=extract_media_references(data),
+                references=references,
             )
             record = self._fetch_record(cursor, user_id=user_id, project_id=project_id)
 

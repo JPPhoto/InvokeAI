@@ -20,15 +20,21 @@ import re
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Collection, Iterable, Literal, Optional, Sequence, cast
+from datetime import datetime, timedelta, timezone
+from typing import Collection, Iterable, Iterator, Literal, NamedTuple, Optional, Sequence, cast
+
+from pydantic import BaseModel
 
 from invokeai.app.services.intermediates.intermediates_common import (
     BROWSER_HOLD_TTL_SECONDS,
+    MAX_BROWSER_HOLD_EDITORS_PER_USER,
     RECENT_GRACE_SECONDS,
     IntermediatesCleanupMode,
     IntermediatesKindCounts,
+    IntermediatesOperation,
     IntermediatesScopeTarget,
 )
+from invokeai.app.services.shared.intermediate_delete import IntermediateDeleteGuard
 from invokeai.app.services.shared.media_references import IMAGE_NAME_KEYS, VIDEO_NAME_KEYS, MediaReferences
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
 
@@ -74,14 +80,63 @@ _TABLES: dict[MediaKind, tuple[str, str, str]] = {
 }
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _sql_timestamp(moment: datetime) -> str:
+    """The text `STRFTIME('%Y-%m-%d %H:%M:%f', ...)` stores, so bound instants compare with stored ones as strings."""
+    return moment.strftime("%Y-%m-%d %H:%M:%S.") + f"{moment.microsecond // 1000:03d}"
+
+
+class _Clock(NamedTuple):
+    """One instant for every statement of a classification: SQLite fixes `'NOW'` per statement, not per transaction."""
+
+    now: str
+    recent_cutoff: str
+
+
+def _clock() -> _Clock:
+    now = _utc_now()
+    return _Clock(_sql_timestamp(now), _sql_timestamp(now - timedelta(seconds=RECENT_GRACE_SECONDS)))
+
+
+def _lease_holder(lease_id: str) -> str:
+    """The editor a lease belongs to: one tab holds several leases named `<holder>.<part>`."""
+    return lease_id.split(".", 1)[0]
+
+
+_HOLDER_SQL = "CASE WHEN INSTR(lease_id, '.') > 0 THEN SUBSTR(lease_id, 1, INSTR(lease_id, '.') - 1) ELSE lease_id END"
+
+
+class ReferenceOwner(NamedTuple):
+    """A saved document naming a media item, as `media_references` keys it."""
+
+    owner_kind: str
+    user_id: str
+    owner_id: str
+
+
+# Media name → the documents naming it.
+ReferenceOwners = dict[str, set[ReferenceOwner]]
+
+
 @dataclass(frozen=True)
 class IntermediateCandidate:
     name: str
     classification: Classification
     file_size_bytes: Optional[int]
-    user_id: str
-    # The row the candidate belongs to; None for the owner's unassigned row.
-    project_id: Optional[str]
+
+
+def _add_count(counts: IntermediatesKindCounts, classification: Classification, n: int) -> None:
+    if classification == "safe":
+        counts.safe += n
+    elif classification == "referenced":
+        counts.referenced += n
+    elif classification == "active":
+        counts.active += n
+    else:
+        counts.recent += n
 
 
 @dataclass
@@ -94,27 +149,60 @@ class ScopeCounts:
     unknown_size_count: int = 0
 
 
-@dataclass(frozen=True)
-class AffectedReference:
-    owner_kind: str
+@dataclass
+class ScopeClassification:
+    """A preview's scope classified once, on one transaction, so its counts and targets agree."""
+
+    # (owner, project) rows holding any intermediate in scope.
+    rows: set[tuple[str, Optional[str]]] = field(default_factory=set)
+    counts: dict[MediaKind, IntermediatesKindCounts] = field(
+        default_factory=lambda: {"image": IntermediatesKindCounts(), "video": IntermediatesKindCounts()}
+    )
+    # Eligible intermediates, bounded; ``has_more`` says whether the bound cut any off.
+    candidates: dict[MediaKind, list[IntermediateCandidate]] = field(default_factory=lambda: {"image": [], "video": []})
+    has_more: bool = False
+    # Documents naming each referenced candidate; only read for a force clear.
+    reference_owners: dict[MediaKind, ReferenceOwners] = field(default_factory=lambda: {"image": {}, "video": {}})
+
+
+class OperationReceipt(BaseModel):
+    """The persisted receipt of an operation (`intermediates_operations.state_json`)."""
+
+    dto: IntermediatesOperation
+    caller_is_admin: bool
+    allowed_user_ids: Optional[list[str]]
+
+
+@dataclass
+class StoredOperation:
+    """An operation restored at startup: its receipt and the targets it left unresolved."""
+
     user_id: str
-    owner_id: str
-    references: int
+    preview_id: Optional[str]
+    idempotency_key: Optional[str]
+    receipt: OperationReceipt
+    unresolved: dict[MediaKind, dict[str, Optional[int]]]
+    confirmed_references: dict[MediaKind, ReferenceOwners]
+
+
+# (kind, name, size, confirmed reference owners) of one unresolved operation target.
+OperationTarget = tuple[MediaKind, str, Optional[int], set[ReferenceOwner]]
 
 
 class IntermediatesRecordsSqlite:
     def __init__(self, db: SqliteDatabase) -> None:
         self._db = db
         # Media names an active queue item's session names, keyed by item id and stamped with the
-        # row's status and monotonic session revision: a session rewritten while the item stays
-        # active (a workflow-call parent resuming with its child's outputs) is re-scanned. Entries
-        # live as long as the item is active. This cache is derived from committed
-        # rows only, so it is safe across a rolled-back transaction; the temp table is not, which is
-        # why it is rebuilt on every call rather than skipped on an unchanged set.
-        self._active_inputs: dict[int, tuple[str, set[str], set[str]]] = {}
+        # row's session revision, which a trigger bumps on every session rewrite: a session
+        # rewritten while the item stays active (a workflow-call parent resuming with its child's
+        # outputs) is re-scanned, a status change alone is not. Entries live as long as the item is
+        # active. This cache is derived from committed rows only, so it is safe across a
+        # rolled-back transaction; the temp table is not, which is why it is rebuilt on every call
+        # rather than skipped on an unchanged set.
+        self._active_inputs: dict[int, tuple[int, set[str], set[str]]] = {}
 
     @staticmethod
-    def _prepare_session_holds(cursor: sqlite3.Cursor) -> None:
+    def _prepare_session_holds(cursor: sqlite3.Cursor, clock: _Clock) -> None:
         # These holds share the cache's process lifetime. After restart the cache is empty and
         # recovered queue sessions protect their serialized inputs through the normal scan.
         # A cache hit reuses an old row, so the recency grace a fresh output gets is counted from
@@ -125,20 +213,18 @@ class IntermediatesRecordsSqlite:
             "WITHOUT ROWID;"
         )
         cursor.execute(
-            "UPDATE temp.intermediates_session_media SET released_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW') "
+            "UPDATE temp.intermediates_session_media SET released_at = ? "
             "WHERE released_at IS NULL AND session_id NOT IN "
-            f"(SELECT session_id FROM ({_protected_queue_items_sql()}));"
+            f"(SELECT session_id FROM ({_protected_queue_items_sql()}));",
+            (clock.now,),
         )
-        cursor.execute(
-            "DELETE FROM temp.intermediates_session_media "
-            f"WHERE released_at <= STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '-{RECENT_GRACE_SECONDS} seconds');"
-        )
+        cursor.execute("DELETE FROM temp.intermediates_session_media WHERE released_at <= ?;", (clock.recent_cutoff,))
 
     def hold_cached_media(self, session_id: str, references: MediaReferences) -> bool:
         if references.is_empty():
             return True
         with self._db.transaction() as cursor:
-            self._prepare_session_holds(cursor)
+            self._prepare_session_holds(cursor, _clock())
             statuses = ", ".join(f"'{status}'" for status in ACTIVE_QUEUE_STATUSES)
             cursor.execute(
                 f"SELECT 1 FROM session_queue WHERE session_id = ? AND status IN ({statuses});", (session_id,)
@@ -192,6 +278,29 @@ class IntermediatesRecordsSqlite:
                     """,
                     (user_id, lease_id, kind, user_id),
                 )
+            # Past the cap, every lease of the editors refreshed longest ago stops protecting its
+            # media; an editor that is still open restores its leases on its next refresh. Leases
+            # are grouped on the user's primary-key range first, so only their ids reach the holder
+            # grouping.
+            cursor.execute(
+                f"""--sql
+                WITH leases AS (
+                    SELECT lease_id, {_HOLDER_SQL} AS holder, MAX(expires_at) AS refreshed
+                    FROM intermediates_browser_holds
+                    WHERE user_id = ?
+                    GROUP BY lease_id
+                ), lapsed AS (
+                    SELECT holder FROM leases
+                    WHERE holder != ?
+                    GROUP BY holder
+                    ORDER BY MAX(refreshed) DESC, holder
+                    LIMIT -1 OFFSET ?
+                )
+                DELETE FROM intermediates_browser_holds
+                WHERE user_id = ? AND lease_id IN (SELECT lease_id FROM leases WHERE holder IN lapsed);
+                """,
+                (user_id, _lease_holder(lease_id), MAX_BROWSER_HOLD_EDITORS_PER_USER - 1, user_id),
+            )
 
     def release_browser_hold(self, user_id: str, lease_id: str) -> None:
         with self._db.transaction() as cursor:
@@ -199,7 +308,12 @@ class IntermediatesRecordsSqlite:
                 "DELETE FROM intermediates_browser_holds WHERE user_id = ? AND lease_id = ?;", (user_id, lease_id)
             )
 
-    def load_operations(self) -> list[tuple[str, Optional[str], Optional[str], dict]]:
+    def load_operations(self) -> tuple[list[StoredOperation], list[tuple[str, Exception]]]:
+        """Every persisted operation, and the ids of rows that could not be read with why.
+
+        An unreadable row is reported rather than raised, so one bad receipt cannot stop startup;
+        its rows stay in place for inspection.
+        """
         with self._db.transaction() as cursor:
             cursor.execute(
                 "SELECT operation_id, caller_user_id, preview_id, idempotency_key, state_json "
@@ -213,31 +327,55 @@ class IntermediatesRecordsSqlite:
             targets: dict[str, list[tuple[str, str, Optional[int], str]]] = defaultdict(list)
             for operation_id, kind, name, size, refs in cursor.fetchall():
                 targets[str(operation_id)].append((str(kind), str(name), size, str(refs)))
-            loaded: list[tuple[str, Optional[str], Optional[str], dict]] = []
-            for operation_id, user, preview, key, state_json in operations:
-                state = json.loads(state_json)
-                state["unresolved"] = {"image": {}, "video": {}}
-                state["confirmed_references"] = {"image": {}, "video": {}}
+        loaded: list[StoredOperation] = []
+        failures: list[tuple[str, Exception]] = []
+        for operation_id, user, preview, key, state_json in operations:
+            try:
+                stored = StoredOperation(
+                    user_id=str(user),
+                    preview_id=preview,
+                    idempotency_key=key,
+                    receipt=OperationReceipt.model_validate_json(state_json),
+                    unresolved={"image": {}, "video": {}},
+                    confirmed_references={"image": {}, "video": {}},
+                )
                 for kind, name, size, refs_json in targets.get(str(operation_id), []):
-                    state["unresolved"][kind][name] = size
-                    refs = json.loads(refs_json)
+                    if kind not in ("image", "video"):
+                        raise ValueError(f"Unknown media kind {kind!r}")
+                    media_kind = cast(MediaKind, kind)
+                    stored.unresolved[media_kind][name] = size
+                    refs = {ReferenceOwner(*ref) for ref in json.loads(refs_json)}
                     if refs:
-                        state["confirmed_references"][kind][name] = refs
-                loaded.append((str(user), preview, key, state))
-            return loaded
+                        stored.confirmed_references[media_kind][name] = refs
+            except (ValueError, TypeError) as error:
+                failures.append((str(operation_id), error))
+                continue
+            loaded.append(stored)
+        return loaded, failures
 
     def save_operation(
         self,
-        operation_id: str,
         caller_user_id: str,
-        state: dict,
+        receipt: OperationReceipt,
         *,
         preview_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
-        linked_operation: Optional[tuple[str, dict]] = None,
-        targets: Optional[Sequence[tuple[str, str, Optional[int], str]]] = None,
-        resolved_targets: Optional[tuple[str, Sequence[str]]] = None,
+        linked_operation: Optional[OperationReceipt] = None,
+        targets: Optional[Sequence[OperationTarget]] = None,
+        resolved_targets: Optional[tuple[MediaKind, Sequence[str]]] = None,
     ) -> None:
+        operation_id = receipt.dto.operation_id
+        state = receipt.model_dump(mode="json")
+        target_rows = (
+            [(operation_id, kind, name, size, json.dumps(sorted(refs))) for kind, name, size, refs in targets]
+            if targets is not None
+            else None
+        )
+        linked = (
+            (linked_operation.dto.operation_id, linked_operation.model_dump_json())
+            if linked_operation is not None
+            else None
+        )
         with self._db.transaction() as cursor:
             cursor.execute(
                 "INSERT INTO intermediates_operations "
@@ -253,11 +391,11 @@ class IntermediatesRecordsSqlite:
                     state["dto"]["created_at"],
                 ),
             )
-            if targets is not None:
+            if target_rows is not None:
                 cursor.executemany(
                     "INSERT INTO intermediates_operation_targets "
                     "(operation_id, media_kind, media_name, size_bytes, confirmed_refs_json) VALUES (?, ?, ?, ?, ?);",
-                    [(operation_id, kind, name, size, refs) for kind, name, size, refs in targets],
+                    target_rows,
                 )
             if resolved_targets is not None:
                 kind, names = resolved_targets
@@ -266,11 +404,11 @@ class IntermediatesRecordsSqlite:
                     "WHERE operation_id = ? AND media_kind = ? AND media_name = ?;",
                     [(operation_id, kind, name) for name in names],
                 )
-            if linked_operation is not None:
-                linked_id, linked_state = linked_operation
+            if linked is not None:
+                linked_id, linked_state_json = linked
                 cursor.execute(
                     "UPDATE intermediates_operations SET state_json = ? WHERE operation_id = ?;",
-                    (json.dumps(linked_state), linked_id),
+                    (linked_state_json, linked_id),
                 )
                 cursor.execute("DELETE FROM intermediates_operation_targets WHERE operation_id = ?;", (linked_id,))
 
@@ -290,6 +428,7 @@ class IntermediatesRecordsSqlite:
 
     @staticmethod
     def _classification_sql(kind: MediaKind) -> str:
+        """Binds a `_Clock`'s two fields, in order, ahead of any later parameters of the statement."""
         table, name_column, _ = _TABLES[kind]
         return f"""
             CASE
@@ -301,9 +440,9 @@ class IntermediatesRecordsSqlite:
                 ) OR EXISTS (
                     SELECT 1 FROM intermediates_browser_holds h
                     WHERE h.media_kind = '{kind}' AND h.media_name = m.{name_column}
-                      AND h.expires_at > STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')
+                      AND h.expires_at > ?
                 ) THEN 'active'
-                WHEN m.created_at > STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', '-{RECENT_GRACE_SECONDS} seconds')
+                WHEN m.created_at > ?
                     OR m.{name_column} IN (
                         SELECT name FROM temp.intermediates_session_media
                         WHERE kind = '{kind}' AND released_at IS NOT NULL
@@ -315,13 +454,14 @@ class IntermediatesRecordsSqlite:
             END
         """
 
-    def _prepare(self, cursor: sqlite3.Cursor) -> None:
-        """Makes the transaction's view of active work current.
+    def _prepare(self, cursor: sqlite3.Cursor) -> _Clock:
+        """Makes the transaction's view of active work current, and returns the instant its classifications use.
 
         Runs on the caller's transaction so a classification and the enqueue it might race are
         ordered by the database lock, never by a stale cache.
         """
-        self._prepare_session_holds(cursor)
+        clock = _clock()
+        self._prepare_session_holds(cursor, clock)
         cursor.execute(
             """--sql
             CREATE TEMP TABLE IF NOT EXISTS intermediates_active_media (
@@ -333,11 +473,11 @@ class IntermediatesRecordsSqlite:
         )
         cursor.execute(
             f"""--sql
-            SELECT item_id, status || ':' || COALESCE(session_revision, 0)
+            SELECT item_id, COALESCE(session_revision, 0)
             FROM ({_protected_queue_items_sql()});
             """
         )
-        active = {cast(int, row[0]): str(row[1]) for row in cursor.fetchall()}
+        active = {cast(int, row[0]): cast(int, row[1]) for row in cursor.fetchall()}
 
         for stale in [item_id for item_id in self._active_inputs if item_id not in active]:
             del self._active_inputs[stale]
@@ -351,9 +491,7 @@ class IntermediatesRecordsSqlite:
             placeholders = ",".join("?" for _ in chunk)
             cursor.execute(
                 f"""--sql
-                SELECT item_id,
-                       status || ':' || COALESCE(session_revision, 0),
-                       session
+                SELECT item_id, COALESCE(session_revision, 0), session
                 FROM session_queue WHERE item_id IN ({placeholders});
                 """,
                 chunk,
@@ -361,7 +499,7 @@ class IntermediatesRecordsSqlite:
             for item_id, stamp, session_json in cursor.fetchall():
                 session_text = session_json if isinstance(session_json, str) else ""
                 self._active_inputs[cast(int, item_id)] = (
-                    str(stamp),
+                    cast(int, stamp),
                     set(_IMAGE_NAME_RE.findall(session_text)),
                     set(_VIDEO_NAME_RE.findall(session_text)),
                 )
@@ -379,62 +517,89 @@ class IntermediatesRecordsSqlite:
             "INSERT OR IGNORE INTO temp.intermediates_active_media (kind, name) "
             "SELECT kind, name FROM temp.intermediates_session_media WHERE released_at IS NULL;"
         )
+        return clock
 
     # endregion
 
     # region summary
 
-    def summarize(
-        self, user_ids: Optional[Collection[str]]
-    ) -> dict[tuple[str, Optional[str]], dict[MediaKind, ScopeCounts]]:
-        """Aggregates the intermediates of ``user_ids`` (None: everyone) by (owner, project) and classification.
+    @classmethod
+    def _scoped_sql(cls, kind: MediaKind) -> str:
+        """Every intermediate of ``kind`` with its row and classification; callers append ``AND`` scope filters.
 
-        Media whose project no longer exists, or that never had one, fold into the owner's
-        unassigned row (``project_id`` None).
+        Media whose project no longer exists, or that never had one, belong to the owner's
+        unassigned row (``project_key`` NULL).
         """
+        table, name_column, _ = _TABLES[kind]
+        return f"""
+            SELECT m.{name_column} AS name, m.user_id AS user_id,
+                   CASE WHEN p.project_id IS NULL THEN NULL ELSE m.project_id END AS project_key,
+                   m.file_size_bytes AS file_size_bytes,
+                   {cls._classification_sql(kind)} AS cls
+            FROM {table} m
+            LEFT JOIN projects p ON p.user_id = m.user_id AND p.project_id = m.project_id
+            WHERE m.is_intermediate = TRUE
+        """
+
+    @classmethod
+    def _aggregate(
+        cls, cursor: sqlite3.Cursor, clock: _Clock, kind: MediaKind, scope_clause: str, params: Sequence[object]
+    ) -> Iterator[tuple[str, Optional[str], Classification, int, int, int]]:
+        """(owner, project, classification, count, measured bytes, unmeasured count) groups within a scope."""
+        cursor.execute(
+            f"""--sql
+            SELECT user_id, project_key, cls, COUNT(*),
+                   SUM(COALESCE(file_size_bytes, 0)),
+                   SUM(CASE WHEN file_size_bytes IS NULL THEN 1 ELSE 0 END)
+            FROM ({cls._scoped_sql(kind)} {scope_clause})
+            GROUP BY user_id, project_key, cls;
+            """,
+            [*clock, *params],
+        )
+        for owner, project_key, classification, n, total_bytes, unknown in cursor.fetchall():
+            yield (
+                cast(str, owner),
+                cast(Optional[str], project_key),
+                cast(Classification, classification),
+                cast(int, n),
+                cast(int, total_bytes),
+                cast(int, unknown),
+            )
+
+    def summarize(
+        self, user_ids: Optional[Collection[str]], kinds: Sequence[MediaKind] = ("image", "video")
+    ) -> dict[tuple[str, Optional[str]], dict[MediaKind, ScopeCounts]]:
+        """Aggregates the ``kinds`` intermediates of ``user_ids`` (None: everyone) by (owner, project) and classification."""
         rows: dict[tuple[str, Optional[str]], dict[MediaKind, ScopeCounts]] = defaultdict(
             lambda: {"image": ScopeCounts(), "video": ScopeCounts()}
         )
         owners = sorted(user_ids) if user_ids is not None else None
         # Owner chunks partition the GROUP BY, so their rows never need merging.
-        owner_chunks: list[Optional[list[str]]] = (
-            [owners[start : start + _MAX_SQL_VARIABLES] for start in range(0, len(owners), _MAX_SQL_VARIABLES)]
+        clauses: list[tuple[str, list[object]]] = (
+            [
+                (f"AND m.user_id IN ({','.join('?' for _ in chunk)})", list(chunk))
+                for chunk in (
+                    owners[start : start + _MAX_SQL_VARIABLES] for start in range(0, len(owners), _MAX_SQL_VARIABLES)
+                )
+            ]
             if owners is not None
-            else [None]
+            else [("", [])]
         )
         with self._db.transaction() as cursor:
-            self._prepare(cursor)
-            for kind, chunk in ((kind, chunk) for kind in ("image", "video") for chunk in owner_chunks):
-                table, _, _ = _TABLES[cast(MediaKind, kind)]
-                owner_filter = f"AND m.user_id IN ({','.join('?' for _ in chunk)})" if chunk is not None else ""
-                params: list[object] = list(chunk) if chunk is not None else []
-                cursor.execute(
-                    f"""--sql
-                    SELECT user_id, project_key, cls, COUNT(*) AS n,
-                           SUM(COALESCE(file_size_bytes, 0)) AS bytes,
-                           SUM(CASE WHEN file_size_bytes IS NULL THEN 1 ELSE 0 END) AS unknown
-                    FROM (
-                        SELECT m.user_id AS user_id,
-                               CASE WHEN p.project_id IS NULL THEN NULL ELSE m.project_id END AS project_key,
-                               m.file_size_bytes AS file_size_bytes,
-                               {self._classification_sql(cast(MediaKind, kind))} AS cls
-                        FROM {table} m
-                        LEFT JOIN projects p ON p.user_id = m.user_id AND p.project_id = m.project_id
-                        WHERE m.is_intermediate = TRUE {owner_filter}
-                    )
-                    GROUP BY user_id, project_key, cls;
-                    """,
-                    params,
-                )
-                for owner, project_key, cls, n, total_bytes, unknown in cursor.fetchall():
-                    scope = rows[(cast(str, owner), cast(Optional[str], project_key))][cast(MediaKind, kind)]
-                    setattr(scope.counts, cls, cast(int, n))
-                    if cls == "safe":
-                        scope.safe_bytes += cast(int, total_bytes)
-                        scope.unknown_size_count += cast(int, unknown)
-                    elif cls == "referenced":
-                        scope.referenced_bytes += cast(int, total_bytes)
-                        scope.unknown_size_count += cast(int, unknown)
+            clock = self._prepare(cursor)
+            for kind in kinds:
+                for clause, params in clauses:
+                    for owner, project_key, cls, n, total_bytes, unknown in self._aggregate(
+                        cursor, clock, kind, clause, params
+                    ):
+                        scope = rows[(owner, project_key)][kind]
+                        _add_count(scope.counts, cls, n)
+                        if cls == "safe":
+                            scope.safe_bytes += total_bytes
+                            scope.unknown_size_count += unknown
+                        elif cls == "referenced":
+                            scope.referenced_bytes += total_bytes
+                            scope.unknown_size_count += unknown
         return dict(rows)
 
     def get_projects(self, user_id: Optional[str]) -> dict[tuple[str, str], tuple[str, Optional[str]]]:
@@ -518,6 +683,22 @@ class IntermediatesRecordsSqlite:
 
     # region candidates
 
+    @classmethod
+    def _scope_clauses(
+        cls, *, user_id: Optional[str], targets: Optional[Sequence[IntermediatesScopeTarget]]
+    ) -> list[tuple[str, list[object]]]:
+        """``AND`` filters (with their parameters) that together cover a scope; each stays under the variable limit."""
+        if targets is not None:
+            clauses: list[tuple[str, list[object]]] = []
+            for start in range(0, len(targets), _TARGETS_PER_STATEMENT):
+                predicate, params = cls._scope_predicate(targets[start : start + _TARGETS_PER_STATEMENT])
+                if predicate:
+                    clauses.append((f"AND ({predicate})", params))
+            return clauses
+        if user_id is not None:
+            return [("AND m.user_id = ?", [user_id])]
+        return [("", [])]
+
     @staticmethod
     def _scope_predicate(targets: Sequence[IntermediatesScopeTarget]) -> tuple[str, list[object]]:
         clauses: list[str] = []
@@ -531,65 +712,49 @@ class IntermediatesRecordsSqlite:
                 params.extend((target.user_id, target.project_id))
         return " OR ".join(clauses), params
 
-    def list_candidates(
+    def classify_scope(
         self,
-        kind: MediaKind,
         *,
         user_id: Optional[str],
         targets: Optional[Sequence[IntermediatesScopeTarget]],
-        max_results: Optional[int] = None,
-        eligible_mode: Optional[IntermediatesCleanupMode] = None,
-    ) -> list[IntermediateCandidate]:
-        """Every intermediate in scope with its classification, for freezing a preview.
+        mode: IntermediatesCleanupMode,
+        max_candidates: int,
+    ) -> ScopeClassification:
+        """Counts every intermediate in scope and freezes up to ``max_candidates`` eligible ones, images first.
 
         ``targets`` narrows to selected rows; otherwise ``user_id`` narrows to an owner, and None
-        means everyone.
+        means everyone. One transaction, one instant and one view of active work serve every figure, so a
+        preview's kept counts and its targets cannot disagree.
         """
-        table, name_column, _ = _TABLES[kind]
-        candidates: list[IntermediateCandidate] = []
+        clauses = self._scope_clauses(user_id=user_id, targets=targets)
+        eligible = "('safe', 'referenced')" if mode == "force" else "('safe')"
+        result = ScopeClassification()
+        remaining = max_candidates
         with self._db.transaction() as cursor:
-            self._prepare(cursor)
-            select = f"""--sql
-                SELECT m.{name_column}, {self._classification_sql(kind)} AS classification, m.file_size_bytes, m.user_id,
-                       CASE WHEN p.project_id IS NULL THEN NULL ELSE m.project_id END
-                FROM {table} m
-                LEFT JOIN projects p ON p.user_id = m.user_id AND p.project_id = m.project_id
-                WHERE m.is_intermediate = TRUE
-            """
-
-            def filtered_query(scope_clause: str) -> str:
-                scoped = f"{select} {scope_clause}"
-                if eligible_mode is None:
-                    return scoped
-                classes = "'safe', 'referenced'" if eligible_mode == "force" else "'safe'"
-                return f"SELECT * FROM ({scoped}) WHERE classification IN ({classes})"
-
-            if targets is not None:
-                for start in range(0, len(targets), _TARGETS_PER_STATEMENT):
-                    predicate, params = self._scope_predicate(targets[start : start + _TARGETS_PER_STATEMENT])
-                    if not predicate:
+            clock = self._prepare(cursor)
+            for media_kind in _TABLES:
+                candidates = result.candidates[media_kind]
+                for clause, params in clauses:
+                    for owner, project_key, cls, n, _, _ in self._aggregate(cursor, clock, media_kind, clause, params):
+                        result.rows.add((owner, project_key))
+                        _add_count(result.counts[media_kind], cls, n)
+                    if len(candidates) > remaining:
                         continue
-                    remaining = None if max_results is None else max_results + 1 - len(candidates)
-                    tail = "" if remaining is None else " LIMIT ?"
                     cursor.execute(
-                        f"{filtered_query(f'AND ({predicate})')}{tail};",
-                        [*params, *([remaining] if remaining is not None else [])],
+                        f"SELECT name, cls, file_size_bytes FROM ({self._scoped_sql(media_kind)} {clause}) "
+                        f"WHERE cls IN {eligible} LIMIT ?;",
+                        [*clock, *params, remaining + 1 - len(candidates)],
                     )
                     candidates.extend(self._to_candidates(cursor.fetchall()))
-                    if max_results is not None and len(candidates) > max_results:
-                        break
-            elif user_id is not None:
-                tail = "" if max_results is None else " LIMIT ?"
-                cursor.execute(
-                    f"{filtered_query('AND m.user_id = ?')}{tail};",
-                    [user_id, *([max_results + 1] if max_results is not None else [])],
-                )
-                candidates.extend(self._to_candidates(cursor.fetchall()))
-            else:
-                tail = "" if max_results is None else " LIMIT ?"
-                cursor.execute(f"{filtered_query('')}{tail};", [] if max_results is None else [max_results + 1])
-                candidates.extend(self._to_candidates(cursor.fetchall()))
-        return candidates
+                if len(candidates) > remaining:
+                    result.has_more = True
+                    del candidates[remaining:]
+                remaining -= len(candidates)
+                if mode == "force":
+                    result.reference_owners[media_kind] = self._reference_owners(
+                        cursor, media_kind, [c.name for c in candidates if c.classification == "referenced"]
+                    )
+        return result
 
     def page_intermediates(
         self, kind: MediaKind, *, after_rowid: int, limit: int
@@ -601,16 +766,16 @@ class IntermediatesRecordsSqlite:
         """
         table, name_column, _ = _TABLES[kind]
         with self._db.transaction() as cursor:
-            self._prepare(cursor)
+            clock = self._prepare(cursor)
             cursor.execute(
                 f"""--sql
-                SELECT m.rowid, m.{name_column}, {self._classification_sql(kind)}, m.file_size_bytes, m.user_id, NULL
+                SELECT m.rowid, m.{name_column}, {self._classification_sql(kind)}, m.file_size_bytes
                 FROM {table} m
                 WHERE m.is_intermediate = TRUE AND m.rowid > ?
                 ORDER BY m.rowid
                 LIMIT ?;
                 """,
-                (after_rowid, limit),
+                (*clock, after_rowid, limit),
             )
             rows = cursor.fetchall()
         if not rows:
@@ -624,64 +789,54 @@ class IntermediatesRecordsSqlite:
                 name=cast(str, row[0]),
                 classification=cast(Classification, row[1]),
                 file_size_bytes=cast(Optional[int], row[2]),
-                user_id=cast(str, row[3]),
-                project_id=cast(Optional[str], row[4]),
             )
             for row in rows
         ]
 
-    def affected_references(self, kind: MediaKind, names: Sequence[str]) -> list[AffectedReference]:
-        """The saved documents naming any of ``names``, with how many they name."""
-        counts: dict[tuple[str, str, str], int] = defaultdict(int)
-        with self._db.transaction() as cursor:
-            for start in range(0, len(names), _MAX_SQL_VARIABLES):
-                chunk = list(names[start : start + _MAX_SQL_VARIABLES])
-                placeholders = ",".join("?" for _ in chunk)
-                cursor.execute(
-                    f"""--sql
-                    SELECT owner_kind, user_id, owner_id, COUNT(*)
-                    FROM media_references
-                    WHERE media_kind = ? AND media_name IN ({placeholders})
-                    GROUP BY owner_kind, user_id, owner_id;
-                    """,
-                    [kind, *chunk],
-                )
-                for owner_kind, owner_user, owner_id, n in cursor.fetchall():
-                    counts[(cast(str, owner_kind), cast(str, owner_user), cast(str, owner_id))] += cast(int, n)
-        return [AffectedReference(owner_kind=k, user_id=u, owner_id=o, references=n) for (k, u, o), n in counts.items()]
-
-    def reference_owners(self, kind: MediaKind, names: Sequence[str]) -> dict[str, set[tuple[str, str, str]]]:
-        owners: dict[str, set[tuple[str, str, str]]] = {}
-        with self._db.transaction() as cursor:
-            for start in range(0, len(names), _MAX_SQL_VARIABLES - 1):
-                chunk = list(names[start : start + _MAX_SQL_VARIABLES - 1])
-                placeholders = ",".join("?" for _ in chunk)
-                cursor.execute(
-                    f"SELECT media_name, owner_kind, user_id, owner_id FROM media_references "
-                    f"WHERE media_kind = ? AND media_name IN ({placeholders});",
-                    [kind, *chunk],
-                )
-                for name, owner_kind, user_id, owner_id in cursor.fetchall():
-                    owners.setdefault(str(name), set()).add((str(owner_kind), str(user_id), str(owner_id)))
+    @staticmethod
+    def _reference_owners(cursor: sqlite3.Cursor, kind: MediaKind, names: Sequence[str]) -> ReferenceOwners:
+        owners: ReferenceOwners = {}
+        for start in range(0, len(names), _MAX_SQL_VARIABLES - 1):
+            chunk = list(names[start : start + _MAX_SQL_VARIABLES - 1])
+            placeholders = ",".join("?" for _ in chunk)
+            cursor.execute(
+                f"SELECT media_name, owner_kind, user_id, owner_id FROM media_references "
+                f"WHERE media_kind = ? AND media_name IN ({placeholders});",
+                [kind, *chunk],
+            )
+            for name, owner_kind, user_id, owner_id in cursor.fetchall():
+                owners.setdefault(str(name), set()).add(ReferenceOwner(str(owner_kind), str(user_id), str(owner_id)))
         return owners
 
-    def get_document_names(self, refs: Sequence[AffectedReference]) -> dict[tuple[str, str, str], str]:
-        """Names of the referencing documents; client state has none."""
+    def get_document_names(self, owners: Iterable[ReferenceOwner]) -> dict[ReferenceOwner, str]:
+        """Names of the referencing documents, one query per kind and chunk; client state has none."""
         queries = {
-            "project": "SELECT name FROM projects WHERE user_id = ? AND project_id = ?;",
-            "quarantined_project": "SELECT name FROM orphaned_projects_2026_08_06 WHERE user_id = ? AND project_id = ?;",
-            "workflow": "SELECT name FROM workflow_library WHERE workflow_id = ?;",
+            "project": "SELECT user_id, project_id, name FROM projects WHERE project_id IN ({});",
+            "quarantined_project": (
+                "SELECT user_id, project_id, name FROM orphaned_projects_2026_08_06 WHERE project_id IN ({});"
+            ),
+            # Workflow ids are globally unique, so the owner is not part of the match.
+            "workflow": "SELECT NULL, workflow_id, name FROM workflow_library WHERE workflow_id IN ({});",
         }
-        names: dict[tuple[str, str, str], str] = {}
+        wanted: dict[str, set[ReferenceOwner]] = defaultdict(set)
+        for owner in owners:
+            if owner.owner_kind in queries:
+                wanted[owner.owner_kind].add(owner)
+        names: dict[ReferenceOwner, str] = {}
         with self._db.transaction() as cursor:
-            for ref in refs:
-                query = queries.get(ref.owner_kind)
-                if query is None:
-                    continue
-                cursor.execute(query, (ref.owner_id,) if ref.owner_kind == "workflow" else (ref.user_id, ref.owner_id))
-                row = cursor.fetchone()
-                if row is not None and row[0] is not None:
-                    names[(ref.owner_kind, ref.user_id, ref.owner_id)] = cast(str, row[0])
+            for owner_kind, kind_owners in wanted.items():
+                ids = sorted({owner.owner_id for owner in kind_owners})
+                found: dict[tuple[Optional[str], str], str] = {}
+                for start in range(0, len(ids), _MAX_SQL_VARIABLES):
+                    chunk = ids[start : start + _MAX_SQL_VARIABLES]
+                    cursor.execute(queries[owner_kind].format(",".join("?" for _ in chunk)), chunk)
+                    for user_id, owner_id, name in cursor.fetchall():
+                        if name is not None:
+                            found[(cast(Optional[str], user_id), cast(str, owner_id))] = cast(str, name)
+                for owner in kind_owners:
+                    name = found.get((None if owner_kind == "workflow" else owner.user_id, owner.owner_id))
+                    if name is not None:
+                        names[owner] = name
         return names
 
     # endregion
@@ -694,8 +849,8 @@ class IntermediatesRecordsSqlite:
         *,
         mode: IntermediatesCleanupMode,
         allowed_user_ids: Optional[frozenset[str]],
-        confirmed_references: Optional[dict[str, set[tuple[str, str, str]]]] = None,
-    ):
+        confirmed_references: Optional[ReferenceOwners] = None,
+    ) -> IntermediateDeleteGuard:
         """The final check of a cleanup batch, run on the deleting transaction.
 
         Re-applies the policy to the frozen targets at the moment of deletion: anything that became
@@ -706,22 +861,12 @@ class IntermediatesRecordsSqlite:
         deletable = "('safe')" if mode == "safe" else "('safe', 'referenced')"
 
         def guard(cursor: sqlite3.Cursor, names: Sequence[str]) -> list[str]:
-            self._prepare(cursor)
+            clock = self._prepare(cursor)
             kept: list[str] = []
             for start in range(0, len(names), _MAX_SQL_VARIABLES):
                 chunk = list(names[start : start + _MAX_SQL_VARIABLES])
                 placeholders = ",".join("?" for _ in chunk)
-                current_references: dict[str, set[tuple[str, str, str]]] = {}
-                if mode == "force":
-                    cursor.execute(
-                        f"SELECT media_name, owner_kind, user_id, owner_id FROM media_references "
-                        f"WHERE media_kind = ? AND media_name IN ({placeholders});",
-                        [kind, *chunk],
-                    )
-                    for name, owner_kind, user_id, owner_id in cursor.fetchall():
-                        current_references.setdefault(str(name), set()).add(
-                            (str(owner_kind), str(user_id), str(owner_id))
-                        )
+                current_references = self._reference_owners(cursor, kind, chunk) if mode == "force" else {}
                 cursor.execute(
                     f"""--sql
                     SELECT name, user_id FROM (
@@ -731,7 +876,7 @@ class IntermediatesRecordsSqlite:
                         WHERE m.{name_column} IN ({placeholders}) AND m.is_intermediate = TRUE
                     ) WHERE cls IN {deletable};
                     """,
-                    chunk,
+                    [*clock, *chunk],
                 )
                 # Ownership is re-read here rather than trusted from the preview.
                 kept.extend(

@@ -2,12 +2,15 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
 /**
- * What an entry point wants the manager to start on: a project to preselect, or an account to filter by. Consumed
- * once by the manager when it mounts, so a stale intent never resurfaces on a later visit.
+ * What an entry point wants the manager to start on: a project to preselect, or an account to filter by. The manager
+ * reads it while rendering and consumes it once that render commits, so a discarded render cannot lose it and a
+ * stale intent never resurfaces on a later visit.
  */
 export interface IntermediatesFocus {
   projectId?: string;
   ownerId?: string;
+  /** How to name `ownerId` before any of its rows load. */
+  ownerLabel?: string;
 }
 
 const focusStore = createExternalStore<{ focus: IntermediatesFocus | null }>({ focus: null });
@@ -21,10 +24,11 @@ export const requestIntermediatesFocus = (focus: IntermediatesFocus): void => {
   focusStore.setSnapshot({ focus });
 };
 
-export const takeIntermediatesFocus = (): IntermediatesFocus | null => {
-  const { focus } = focusStore.getSnapshot();
+export const peekIntermediatesFocus = (): IntermediatesFocus | null => focusStore.getSnapshot().focus;
 
-  focusStore.setSnapshot({ focus: null });
-
-  return focus;
+/** Clears `focus` unless a newer request has replaced it. */
+export const consumeIntermediatesFocus = (focus: IntermediatesFocus | null): void => {
+  if (focus !== null && focusStore.getSnapshot().focus === focus) {
+    focusStore.setSnapshot({ focus: null });
+  }
 };

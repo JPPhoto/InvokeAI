@@ -224,6 +224,22 @@ def test_hold_is_account_scoped_at_the_http_boundary(
     assert summary["items"][0]["images"]["active"] == 1
 
 
+def test_hold_lease_ids_name_one_editor_and_an_optional_part(
+    storage_ready: None, client: TestClient, user1_token: str
+) -> None:
+    for lease_id in ("tab.0-0", "tab"):
+        assert (
+            client.put(f"/api/v1/intermediates/holds/{lease_id}", json={}, headers=_auth(user1_token)).status_code
+            == 204
+        )
+    for lease_id in (".0-0", "tab x", "tab/.."):
+        assert (
+            client.put(f"/api/v1/intermediates/holds/{lease_id}", json={}, headers=_auth(user1_token)).status_code
+            != 204
+        ), lease_id
+        assert client.delete(f"/api/v1/intermediates/holds/{lease_id}", headers=_auth(user1_token)).status_code != 204
+
+
 def test_legacy_clear_keeps_its_shape_and_the_safety_policy(
     storage_ready: None, mock_invoker: Invoker, client: TestClient, user1_token: str, admin_token: str
 ) -> None:

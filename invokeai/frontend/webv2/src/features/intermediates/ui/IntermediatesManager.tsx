@@ -4,7 +4,6 @@ import type { IntermediatesSummaryParams } from '@features/intermediates/data/ke
 import type { TFunction } from 'i18next';
 
 import {
-  Badge,
   Box,
   Center,
   Checkbox,
@@ -16,29 +15,33 @@ import {
   Spinner,
   Stack,
   Text,
+  VisuallyHidden,
 } from '@chakra-ui/react';
 import { isRowSelected, resolveScope } from '@features/intermediates/core/selection';
-import { takeIntermediatesFocus } from '@features/intermediates/data/focus';
+import { isOperationSettled } from '@features/intermediates/core/types';
+import { consumeIntermediatesFocus, peekIntermediatesFocus } from '@features/intermediates/data/focus';
 import { intermediatesKeys } from '@features/intermediates/data/keys';
 import {
   INTERMEDIATES_MAX_ROWS,
   INTERMEDIATES_PAGE_SIZE,
   intermediatesSummaryQueryOptions,
 } from '@features/intermediates/data/queries';
+import { formatBytes } from '@platform/i18n/languages';
+import { useMountEffect } from '@platform/react/useMountEffect';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, IconButton } from '@platform/ui/Button';
 import { EmptyState } from '@platform/ui/EmptyState';
+import { RemovableTag } from '@platform/ui/RemovableTag';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BrushCleaningIcon, RefreshCwIcon, SearchIcon, Trash2Icon, XIcon } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { BrushCleaningIcon, RefreshCwIcon, SearchIcon, Trash2Icon } from 'lucide-react';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ClearDialog } from './ClearDialog';
-import { formatBytes } from './format';
 import { getOwnerLabel, IntermediatesList } from './IntermediatesList';
-import { OperationPanel } from './OperationPanel';
+import { getOperationAnnouncement, OperationPanel } from './OperationPanel';
 import { useCleanupDialog } from './useCleanupDialog';
 import { useFollowedOperation } from './useFollowedOperation';
 import { useIntermediatesSelection } from './useIntermediatesSelection';
@@ -46,18 +49,22 @@ import { useIntermediatesSelection } from './useIntermediatesSelection';
 export interface IntermediatesManagerProps {
   /** The current account, or null in single-user mode where the install is the only account. */
   currentUserId: string | null;
+  /** The current account's display name or email, for the account filter before its rows load. */
+  currentUserLabel?: string | null;
   canClearOthersIntermediates: boolean;
 }
 
 const SEARCH_ICON = <Icon as={SearchIcon} boxSize="3.5" color="fg.subtle" />;
 const EMPTY_ROWS: readonly IntermediatesRow[] = [];
+const SEARCH_DEBOUNCE_MS = 250;
 
-const isSameListExceptOffset = (previous: unknown, next: IntermediatesSummaryParams): boolean => {
+/** Paging and refining the search keep the current rows on screen, inert, until the new ones arrive. */
+const isSameListExceptPageOrSearch = (previous: unknown, next: IntermediatesSummaryParams): boolean => {
   if (typeof previous !== 'object' || previous === null) {
     return false;
   }
-  const { offset: _previousOffset, ...previousRest } = previous as IntermediatesSummaryParams;
-  const { offset: _nextOffset, ...nextRest } = next;
+  const { offset: _previousOffset, search: _previousSearch, ...previousRest } = previous as IntermediatesSummaryParams;
+  const { offset: _nextOffset, search: _nextSearch, ...nextRest } = next;
   const keys = new Set([...Object.keys(previousRest), ...Object.keys(nextRest)]) as Set<keyof typeof nextRest>;
   return [...keys].every((key) => previousRest[key] === nextRest[key]);
 };
@@ -68,19 +75,43 @@ const formatSummarySize = (bytes: number, unknownCount: number, t: TFunction): s
     : formatBytes(bytes);
 
 /** The Settings section: search, a select-all row with the delete action, and one row per project. */
-export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserId }: IntermediatesManagerProps) => {
+export const IntermediatesManager = ({
+  canClearOthersIntermediates,
+  currentUserId,
+  currentUserLabel = null,
+}: IntermediatesManagerProps) => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  // An entry point's intent is read once, when the section mounts; a later visit starts clean.
-  const [focus] = useState(takeIntermediatesFocus);
+  // An entry point's intent is read when the section first renders and consumed once that render commits.
+  const [focus] = useState(peekIntermediatesFocus);
   const [search, setSearch] = useState('');
+  const [querySearch, setQuerySearch] = useState('');
+  const searchTimerRef = useRef<number | undefined>(undefined);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshRequestRef = useRef(0);
+  const deleteReasonId = useId();
+  useMountEffect(() => {
+    consumeIntermediatesFocus(focus);
+    return () => window.clearTimeout(searchTimerRef.current);
+  });
   const [ownerFilter, setOwnerFilter] = useState<string | null>(() =>
     focus?.ownerId && canClearOthersIntermediates ? focus.ownerId : currentUserId
   );
   const [projectFilter, setProjectFilter] = useState<string | null>(focus?.projectId ?? null);
   const [offset, setOffset] = useState(0);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const operationRegionRef = useRef<HTMLDivElement | null>(null);
   const operation = useFollowedOperation({ fallbackFocusRef: searchRef });
+  // The live region stays mounted and starts empty; screen readers skip text that arrives with its region.
+  const announcement = getOperationAnnouncement(
+    operation.operationId ? (operation.query.data ?? null) : null,
+    operation.operationId !== null && operation.query.isPending,
+    t
+  );
+  const [announced, setAnnounced] = useState({ source: announcement, text: '' });
+  if (announced.source !== announcement) {
+    setAnnounced({ source: announcement, text: announcement });
+  }
 
   // Non-admins are confined to their own rows by the server whatever is sent.
   const ownerId: string | null = canClearOthersIntermediates ? ownerFilter : currentUserId;
@@ -91,21 +122,21 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       order: 'desc',
       ownerId,
       projectId: projectFilter,
-      search,
+      search: querySearch,
       sort: 'reclaimable_bytes',
     }),
-    [offset, ownerId, projectFilter, search]
+    [offset, ownerId, projectFilter, querySearch]
   );
-  // Paging keeps the current rows on screen until the next page arrives; any other change is a different list.
   const query = useQuery({
     ...intermediatesSummaryQueryOptions(params),
     placeholderData: (previous, previousQuery) =>
-      previousQuery && isSameListExceptOffset(previousQuery.queryKey.at(-1), params) ? previous : undefined,
+      previousQuery && isSameListExceptPageOrSearch(previousQuery.queryKey.at(-1), params) ? previous : undefined,
   });
-  const isPaging = query.isPlaceholderData;
+  // Rows on screen belong to an older request while a page or search loads, or while typing has not settled.
+  const isListBusy = query.isPlaceholderData || search !== querySearch;
   const rows = query.data?.items ?? EMPTY_ROWS;
   const totals = query.data?.totals;
-  const hasSearch = search.trim().length > 0;
+  const hasSearch = querySearch.trim().length > 0;
   const hasSubsetFilter = hasSearch || projectFilter !== null;
   // Rows disappearing (a cleanup, a narrower search) can leave the offset past the end; step back to a valid page.
   if (query.data && !query.isPlaceholderData && offset > 0 && offset >= query.data.total) {
@@ -119,12 +150,13 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
     rows,
     summary: query.data,
   });
-  const dialog = useCleanupDialog({ onStarted: selection.reset, params, selection: selection.effectiveSelection });
+  const dialog = useCleanupDialog({ onStarted: selection.reset });
   const { reset: resetSelection } = selection;
 
-  const handleSearchChange = useCallback(
+  const commitSearch = useCallback(
     (value: string) => {
-      setSearch(value);
+      window.clearTimeout(searchTimerRef.current);
+      setQuerySearch(value);
       setProjectFilter(null);
       setOffset(0);
       // A filter change hides rows; hidden selections would act on what the user can no longer see.
@@ -132,6 +164,18 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
     },
     [resetSelection]
   );
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      setSearch(value);
+      window.clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = window.setTimeout(() => commitSearch(value), SEARCH_DEBOUNCE_MS);
+    },
+    [commitSearch]
+  );
+  const clearSearch = useCallback(() => {
+    setSearch('');
+    commitSearch('');
+  }, [commitSearch]);
   const clearOwnerFilter = useCallback(() => {
     setOwnerFilter(null);
     setOffset(0);
@@ -147,21 +191,40 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
     setOffset(0);
     resetSelection();
   }, [resetSelection]);
+  // Another press restarts the reload, so the control never locks on a request that does not settle.
   const handleRefresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: intermediatesKeys.all });
+    const request = ++refreshRequestRef.current;
+    setIsRefreshing(true);
+    void queryClient.invalidateQueries({ queryKey: intermediatesKeys.all }).finally(() => {
+      if (refreshRequestRef.current === request) {
+        setIsRefreshing(false);
+      }
+    });
   }, [queryClient]);
 
-  const selectedScope = resolveScope({
-    hasSubsetFilter,
-    loadedRows: rows,
-    ownerId,
-    selection: selection.effectiveSelection,
-  });
   const { selectionSummary } = selection;
-  const filteredOwnerRow = ownerFilter ? rows[0] : undefined;
+  const filteredOwnerLabel = !ownerFilter
+    ? null
+    : rows[0]?.userId === ownerFilter
+      ? getOwnerLabel(rows[0], t)
+      : ownerFilter === focus?.ownerId && focus.ownerLabel
+        ? focus.ownerLabel
+        : ownerFilter === currentUserId && currentUserLabel
+          ? currentUserLabel
+          : t('intermediates.owner.unknownAccount');
   const hasPreviousPage = offset > 0;
   const hasNextPage = query.data !== undefined && offset + rows.length < query.data.total;
   const showPagination = offset > 0 || (query.data?.total ?? 0) > INTERMEDIATES_PAGE_SIZE;
+  const followed = operation.query.data;
+  // A second cleanup would replace the panel reporting the first; wait until it settles (or cannot be looked up).
+  const isOperationActive =
+    operation.operationId !== null && !operation.query.isError && !(followed && isOperationSettled(followed));
+  const isDeleteUnavailable = !selection.hasSelection || isOperationActive;
+  const goToPage = (nextOffset: number) => {
+    if (!isListBusy && nextOffset >= 0 && (nextOffset < offset || hasNextPage)) {
+      setOffset(nextOffset);
+    }
+  };
 
   return (
     <Stack gap="3" h="full" minH="0">
@@ -176,14 +239,14 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
         </Stack>
         <Tooltip content={t('intermediates.refresh')}>
           <IconButton
+            aria-busy={isRefreshing || undefined}
             aria-label={t('intermediates.refresh')}
-            disabled={query.isFetching}
             flexShrink={0}
             size="xs"
             variant="outline"
             onClick={handleRefresh}
           >
-            <RefreshCwIcon />
+            {isRefreshing ? <Spinner size="xs" /> : <RefreshCwIcon />}
           </IconButton>
         </Tooltip>
       </HStack>
@@ -207,23 +270,10 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
             onChange={(event) => handleSearchChange(event.currentTarget.value)}
           />
         </InputGroup>
-        {canClearOthersIntermediates && ownerFilter ? (
-          <Badge flexShrink={0} fontSize="2xs" gap="1" pe="0.5" variant="surface">
-            {t('intermediates.owner.filtered', {
-              name: filteredOwnerRow ? getOwnerLabel(filteredOwnerRow) : ownerFilter,
-            })}
-            <Tooltip content={t('intermediates.owner.showEveryone')}>
-              <IconButton
-                aria-label={t('intermediates.owner.showEveryone')}
-                minW="4"
-                size="2xs"
-                variant="ghost"
-                onClick={clearOwnerFilter}
-              >
-                <Icon as={XIcon} boxSize="3" />
-              </IconButton>
-            </Tooltip>
-          </Badge>
+        {canClearOthersIntermediates && filteredOwnerLabel ? (
+          <RemovableTag removeLabel={t('intermediates.owner.showEveryone')} onRemove={clearOwnerFilter}>
+            {t('intermediates.owner.filtered', { name: filteredOwnerLabel })}
+          </RemovableTag>
         ) : null}
         {canClearOthersIntermediates && !ownerFilter && currentUserId ? (
           <Button size="2xs" variant="outline" onClick={showOwnAccount}>
@@ -231,38 +281,40 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
           </Button>
         ) : null}
         {projectFilter ? (
-          <Badge flexShrink={0} fontSize="2xs" gap="1" pe="0.5" variant="surface">
-            {selection.focusedRow?.projectName ?? t('intermediates.owner.projectFilter')}
-            <Tooltip content={t('intermediates.owner.showAllProjects')}>
-              <IconButton
-                aria-label={t('intermediates.owner.showAllProjects')}
-                minW="4"
-                size="2xs"
-                variant="ghost"
-                onClick={clearProjectFilter}
-              >
-                <Icon as={XIcon} boxSize="3" />
-              </IconButton>
-            </Tooltip>
-          </Badge>
+          <RemovableTag removeLabel={t('intermediates.owner.showAllProjects')} onRemove={clearProjectFilter}>
+            {rows.find((row) => row.projectId === projectFilter)?.projectName ?? t('intermediates.owner.projectFilter')}
+          </RemovableTag>
         ) : null}
       </HStack>
+      <VisuallyHidden aria-atomic="true" aria-live="polite" role="status">
+        {announced.text}
+      </VisuallyHidden>
       {operation.operationId ? (
-        <OperationPanel
-          isLoading={operation.query.isPending}
-          isRefetching={operation.query.isFetching}
-          lookupError={
-            operation.query.isError
-              ? getApiErrorMessage(operation.query.error, t('intermediates.operation.lookupFailed'))
-              : null
-          }
-          onRefetch={() => void operation.query.refetch()}
-          isRetrying={operation.isRetrying}
-          operation={operation.query.data ?? null}
-          retryError={operation.retryError}
-          onDismiss={operation.dismiss}
-          onRetry={() => void operation.retry()}
-        />
+        // Takes focus after a start, since the Delete control that opened the dialog has nothing left to act on.
+        <Box
+          ref={operationRegionRef}
+          aria-label={t('intermediates.operation.regionLabel')}
+          focusVisibleRing="outside"
+          role="group"
+          rounded="l2"
+          tabIndex={-1}
+        >
+          <OperationPanel
+            isLoading={operation.query.isPending}
+            isRefetching={operation.query.isFetching}
+            lookupError={
+              operation.query.isError
+                ? getApiErrorMessage(operation.query.error, t('intermediates.operation.lookupFailed'))
+                : null
+            }
+            onRefetch={() => void operation.query.refetch()}
+            isRetrying={operation.isRetrying}
+            operation={operation.query.data ?? null}
+            retryError={operation.retryError}
+            onDismiss={operation.dismiss}
+            onRetry={() => void operation.retry()}
+          />
+        </Box>
       ) : null}
       <Stack flex="1" gap="0" minH="0" mt="-3">
         {/* Keep the bar mounted so a selection never shifts the rows beneath it. */}
@@ -273,7 +325,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
               selection.selectionState === 'all' ? true : selection.selectionState === 'some' ? 'indeterminate' : false
             }
             colorPalette="accent"
-            disabled={rows.length === 0 || isPaging}
+            disabled={rows.length === 0 || isListBusy}
             size="xs"
             onCheckedChange={selection.toggleAll}
             pl="2"
@@ -284,23 +336,25 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
               {t('intermediates.list.selectAll')}
             </Checkbox.Label>
           </Checkbox.Root>
-          <Text color="fg.muted" flex="1" fontSize="2xs" minW="0" textAlign="end" truncate>
-            {selection.estimateState && selectionSummary === null
-              ? t(`intermediates.selection.${selection.estimateState}`, { count: INTERMEDIATES_MAX_ROWS })
-              : selection.hasSelection && selectionSummary
-                ? t('intermediates.selection.estimate', {
-                    count: selectionSummary.rows,
-                    images: t('intermediates.counts.images', { count: selectionSummary.safeImages }),
-                    size: formatSummarySize(selectionSummary.reclaimableBytes, selectionSummary.unknownSizeCount, t),
-                    videos: t('intermediates.counts.videos', { count: selectionSummary.safeVideos }),
-                  })
-                : totals
-                  ? t('intermediates.selection.available', {
-                      images: t('intermediates.counts.images', { count: totals.safeImages }),
-                      size: formatSummarySize(totals.reclaimableBytes, totals.unknownSizeCount, t),
-                      videos: t('intermediates.counts.videos', { count: totals.safeVideos }),
+          <Text color="fg.muted" flex="1" fontSize="2xs" id={deleteReasonId} minW="0" textAlign="end" truncate>
+            {isOperationActive && selection.hasSelection
+              ? t('intermediates.list.deleteWaiting')
+              : selection.estimateState && selectionSummary === null
+                ? t(`intermediates.selection.${selection.estimateState}`, { count: INTERMEDIATES_MAX_ROWS })
+                : selection.hasSelection && selectionSummary
+                  ? t('intermediates.selection.estimate', {
+                      count: selectionSummary.rows,
+                      images: t('intermediates.counts.images', { count: selectionSummary.safeImages }),
+                      size: formatSummarySize(selectionSummary.reclaimableBytes, selectionSummary.unknownSizeCount, t),
+                      videos: t('intermediates.counts.videos', { count: selectionSummary.safeVideos }),
                     })
-                  : ''}
+                  : totals
+                    ? t('intermediates.selection.available', {
+                        images: t('intermediates.counts.images', { count: totals.safeImages }),
+                        size: formatSummarySize(totals.reclaimableBytes, totals.unknownSizeCount, t),
+                        videos: t('intermediates.counts.videos', { count: totals.safeVideos }),
+                      })
+                    : ''}
           </Text>
           {query.data?.measuring ? (
             <Tooltip content={t('intermediates.stats.measuringNote')}>
@@ -308,14 +362,23 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
             </Tooltip>
           ) : null}
           <Separator borderColor="border.subtle" h="4" orientation="vertical" />
+          {/* `aria-disabled` keeps it focusable, so the reason it waits is announced on focus. */}
           <Button
+            aria-describedby={isOperationActive && selection.hasSelection ? deleteReasonId : undefined}
+            aria-disabled={isDeleteUnavailable}
             colorPalette="red"
-            disabled={!selection.hasSelection}
             size="2xs"
             variant="ghost"
             onClick={(event) => {
+              if (isDeleteUnavailable) {
+                return;
+              }
               operation.clearRetryError();
-              dialog.open(selectedScope, event.currentTarget);
+              dialog.open(
+                resolveScope({ hasSubsetFilter, ownerId, selection: selection.effectiveSelection }),
+                params,
+                event.currentTarget
+              );
             }}
           >
             <Icon as={Trash2Icon} boxSize="3" />
@@ -348,7 +411,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
               title={hasSearch ? t('intermediates.empty.noMatches') : t('intermediates.empty.title')}
             >
               {hasSearch ? (
-                <Button size="xs" variant="outline" onClick={() => handleSearchChange('')}>
+                <Button size="xs" variant="outline" onClick={clearSearch}>
                   {t('common.clearSearch')}
                 </Button>
               ) : null}
@@ -358,7 +421,7 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
           <Scrollable flex="1" h="full" label={t('intermediates.title')} minH="0">
             <Box py="1">
               <IntermediatesList
-                isBusy={isPaging}
+                isBusy={isListBusy}
                 isSelected={(row) => isRowSelected(selection.effectiveSelection, row)}
                 rows={rows}
                 showOwner={canClearOthersIntermediates && ownerId === null}
@@ -369,12 +432,12 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
         )}
         {showPagination ? (
           <HStack borderColor="border.subtle" borderTopWidth="1px" flexShrink={0} justify="center" minH="8">
+            {/* `aria-disabled`, not `disabled`: a disabled button drops the keyboard focus it holds. */}
             <Button
-              aria-label={t('common.previousPage')}
-              disabled={!hasPreviousPage || query.isFetching}
+              aria-disabled={!hasPreviousPage || isListBusy}
               size="2xs"
               variant="ghost"
-              onClick={() => setOffset((current) => Math.max(0, current - INTERMEDIATES_PAGE_SIZE))}
+              onClick={() => goToPage(offset - INTERMEDIATES_PAGE_SIZE)}
             >
               {t('common.previousPage')}
             </Button>
@@ -384,11 +447,10 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
               })}
             </Text>
             <Button
-              aria-label={t('common.nextPage')}
-              disabled={!hasNextPage || query.isFetching}
+              aria-disabled={!hasNextPage || isListBusy}
               size="2xs"
               variant="ghost"
-              onClick={() => setOffset((current) => current + INTERMEDIATES_PAGE_SIZE)}
+              onClick={() => goToPage(offset + INTERMEDIATES_PAGE_SIZE)}
             >
               {t('common.nextPage')}
             </Button>
@@ -398,8 +460,9 @@ export const IntermediatesManager = ({ canClearOthersIntermediates, currentUserI
       <ClearDialog
         canManageEveryone={canClearOthersIntermediates}
         currentUserId={currentUserId}
-        fallbackFocusRef={searchRef}
-        finalFocusRef={dialog.triggerRef}
+        getFinalFocus={() =>
+          (dialog.hasStarted() ? operationRegionRef.current : dialog.triggerRef.current) ?? searchRef.current
+        }
         state={dialog.state}
         onClose={dialog.close}
         onConfirm={() => void dialog.confirm()}

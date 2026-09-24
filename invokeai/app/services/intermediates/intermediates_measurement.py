@@ -90,9 +90,9 @@ class IntermediatesSizeMeasurer:
                     # written before measuring it. Wake after the minimum age has elapsed.
                     retry_young = True
             if remaining:
+                # Batches hold the database lock only for their reads and one write; the file stats
+                # between them leave it free for generation and saves.
                 self._requested.set()
-                # Yield the database lock between batches so generation and saves keep flowing.
-                time.sleep(0.05)
             elif retry_young:
                 self._due_at = time.monotonic() + MEASURE_MIN_AGE_SECONDS
         except Exception as error:

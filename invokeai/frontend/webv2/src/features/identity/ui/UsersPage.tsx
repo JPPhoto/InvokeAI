@@ -3,7 +3,11 @@ import { useTranslation } from 'react-i18next';
 
 import { UsersManagementPanel } from './UserManagement';
 
-export const UsersPage = ({ onManageIntermediates }: { onManageIntermediates?: (userId: string) => void }) => {
+export const UsersPage = ({
+  onManageIntermediates,
+}: {
+  onManageIntermediates?: (userId: string, label: string) => void;
+}) => {
   const { t } = useTranslation();
 
   return (

@@ -13,11 +13,17 @@ export const MAX_HOLD_NAMES_PER_KIND = 50_000;
 
 /** The server keeps a lease for 15 minutes; refreshing well inside that survives a missed beat. */
 const HEARTBEAT_MS = 5 * 60_000;
-const RESEND_ON_VISIBLE_AFTER_MS = 60_000;
+/** A tab back from a stretch long enough that throttled timers may have missed the heartbeat. */
+const RESEND_ON_VISIBLE_AFTER_MS = HEARTBEAT_MS;
 const CHANGE_DEBOUNCE_MS = 250;
 
 type Batch = { images: string[]; videos: string[] };
+/** Each batch's request body, which also serves as its signature. */
+type Plan = string[];
 type Slot = 0 | 1;
+
+const sameNames = (left: ReadonlySet<string>, right: ReadonlySet<string>): boolean =>
+  left.size === right.size && [...left].every((name) => right.has(name));
 
 const holdPath = (leaseId: string): string => `/api/v1/intermediates/holds/${encodeURIComponent(leaseId)}`;
 
@@ -45,7 +51,7 @@ export const startIntermediatesHoldLease = ({
   subscribe,
 }: {
   owner: AccountScope;
-  /** Current names to hold, in any order. */
+  /** Current names to hold, in any order; returning the previous object again means nothing changed. */
   read: () => HeldMediaNames;
   /** Notifies when `read` may return something new. */
   subscribe: (onChange: () => void) => () => void;
@@ -59,10 +65,11 @@ export const startIntermediatesHoldLease = ({
   let pendingRefresh = false;
   let lastSentAt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let planned: { held: HeldMediaNames; images: Set<string>; plan: Plan; videos: Set<string> } | null = null;
   // Releases must authenticate as the account that took the lease, even after sign-out cleared the session.
   let leaseToken: string | null = null;
 
-  const batchLeaseId = (slot: Slot, index: number): string => `${leaseId}-${slot}-${index}`;
+  const batchLeaseId = (slot: Slot, index: number): string => `${leaseId}.${slot}-${index}`;
   const isStopped = (): boolean => disposed || owner.signal.aborted;
 
   const fireRelease = (id: string): void => {
@@ -103,14 +110,14 @@ export const startIntermediatesHoldLease = ({
     }
   };
 
-  const putBatch = async (slot: Slot, index: number, batch: Batch): Promise<boolean> => {
+  const putBatch = async (slot: Slot, index: number, body: string): Promise<boolean> => {
     if (isStopped()) {
       return false;
     }
     const token = getHttpAuthToken();
     try {
       await apiFetch(holdPath(batchLeaseId(slot, index)), {
-        body: JSON.stringify(batch),
+        body,
         headers: { 'Content-Type': 'application/json' },
         method: 'PUT',
         signal: owner.signal,
@@ -124,29 +131,43 @@ export const startIntermediatesHoldLease = ({
       fireRelease(batchLeaseId(slot, index));
       return false;
     }
-    leaseSignatures[slot][index] = JSON.stringify([batch.images, batch.videos]);
+    leaseSignatures[slot][index] = body;
     return true;
   };
 
+  /** Sorting and serialising up to 50k names per kind is the expensive part; an unchanged set reuses its plan. */
+  const planFor = (held: HeldMediaNames): Plan => {
+    if (planned?.held === held) {
+      return planned.plan;
+    }
+    const imageSet = new Set(held.images);
+    const videoSet = new Set(held.videos);
+    if (planned && sameNames(imageSet, planned.images) && sameNames(videoSet, planned.videos)) {
+      planned.held = held;
+      return planned.plan;
+    }
+    const plan = partitionHeldMediaNames([...imageSet].sort(), [...videoSet].sort()).map((batch) =>
+      JSON.stringify(batch)
+    );
+    planned = { held, images: imageSet, plan, videos: videoSet };
+    return plan;
+  };
+
   const sendOnce = async (refresh: boolean): Promise<void> => {
-    const held = read();
-    const images = [...new Set(held.images)].sort();
-    const videos = [...new Set(held.videos)].sort();
-    if (!images.length && !videos.length) {
+    const bodies = planFor(read());
+    if (!bodies.length) {
       await releaseSlot(0);
       await releaseSlot(1);
       activeSlot = null;
       return;
     }
-    const batches = partitionHeldMediaNames(images, videos);
-    const signatures = batches.map((batch) => JSON.stringify([batch.images, batch.videos]));
     const current = activeSlot === null ? null : leaseSignatures[activeSlot];
     let trimActive = false;
-    if (current && current.length === signatures.length && signatures.every((value, i) => value === current[i])) {
+    if (current && current.length === bodies.length && bodies.every((value, i) => value === current[i])) {
       if (refresh) {
         let refreshed = true;
-        for (let index = 0; index < batches.length; index += 1) {
-          refreshed = (await putBatch(activeSlot!, index, batches[index]!)) && refreshed;
+        for (let index = 0; index < bodies.length; index += 1) {
+          refreshed = (await putBatch(activeSlot!, index, bodies[index]!)) && refreshed;
         }
         if (refreshed) {
           lastSentAt = Date.now();
@@ -156,8 +177,8 @@ export const startIntermediatesHoldLease = ({
     } else {
       const nextSlot: Slot = activeSlot === 0 ? 1 : 0;
       let staged = true;
-      for (let index = 0; index < batches.length; index += 1) {
-        staged = (await putBatch(nextSlot, index, batches[index]!)) && staged;
+      for (let index = 0; index < bodies.length; index += 1) {
+        staged = (await putBatch(nextSlot, index, bodies[index]!)) && staged;
       }
       if (staged && !isStopped()) {
         const oldSlot = activeSlot;
@@ -171,7 +192,7 @@ export const startIntermediatesHoldLease = ({
     }
     if (activeSlot !== null) {
       if (trimActive) {
-        await releaseSlot(activeSlot, batches.length);
+        await releaseSlot(activeSlot, bodies.length);
       }
       await releaseSlot(activeSlot === 0 ? 1 : 0);
     }

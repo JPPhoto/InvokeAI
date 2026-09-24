@@ -5,6 +5,7 @@ import { createWorkbenchStore } from '@workbench/workbenchStore';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { canvasApplicationPort } from './applicationPort';
+import { CanvasImageUploadError } from './backend/canvasImages';
 import { createCanvasEngine } from './createCanvasEngine';
 import { getCanvasOperations } from './operationAccess';
 
@@ -75,6 +76,51 @@ describe('project-owned canvas uploads', () => {
     }
   });
 
+  it('retries without provenance only when the server no longer knows the project', async () => {
+    const engine = createEngine(() => Promise.resolve());
+    const upload = vi
+      .spyOn(canvasApplicationPort, 'uploadImage')
+      .mockRejectedValueOnce(new CanvasImageUploadError('{"detail":"Project not found"}', 404))
+      .mockResolvedValueOnce({ height: 8, imageName: 'unowned.png', width: 8 })
+      .mockRejectedValueOnce(new CanvasImageUploadError('{"detail":"Board not found"}', 404));
+    try {
+      await expect(getCanvasOperations(engine).uploadIntermediate(new Blob())).resolves.toMatchObject({
+        imageName: 'unowned.png',
+      });
+      expect(upload.mock.calls.map(([, options]) => options?.projectId)).toEqual([engine.projectId, undefined]);
+
+      await expect(getCanvasOperations(engine).uploadIntermediate(new Blob())).rejects.toMatchObject({ status: 404 });
+      expect(upload).toHaveBeenCalledTimes(3);
+    } finally {
+      engine.lifecycle.dispose();
+    }
+  });
+
+  it('sends later uploads once without provenance after a missing project, and tries it again later', async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const engine = createEngine(() => Promise.resolve());
+    const upload = vi
+      .spyOn(canvasApplicationPort, 'uploadImage')
+      .mockRejectedValueOnce(new CanvasImageUploadError('{"detail":"Project not found"}', 404))
+      .mockResolvedValue({ height: 8, imageName: 'unowned.png', width: 8 });
+    try {
+      await getCanvasOperations(engine).uploadIntermediate(new Blob());
+      await getCanvasOperations(engine).uploadIntermediate(new Blob());
+      expect(upload.mock.calls.map(([, options]) => options?.projectId)).toEqual([
+        engine.projectId,
+        undefined,
+        undefined,
+      ]);
+
+      now += 60_000;
+      await getCanvasOperations(engine).uploadIntermediate(new Blob());
+      expect(upload.mock.calls.at(-1)![1]).toMatchObject({ projectId: engine.projectId });
+    } finally {
+      engine.lifecycle.dispose();
+    }
+  });
+
   it('does not upload for a project that closed while it waited', async () => {
     const engine = createEngine(() =>
       Promise.reject(new DOMException('The canvas project is no longer open.', 'AbortError'))
@@ -91,7 +137,7 @@ describe('project-owned canvas uploads', () => {
   });
 
   it.each(['account change', 'engine disposal', 'operation cancellation'] as const)(
-    'does not start a waiting upload after %s',
+    'stops waiting for the project and never uploads after %s',
     async (cancellation) => {
       let acknowledge!: () => void;
       const ready = new Promise<void>((resolve) => {
@@ -112,8 +158,9 @@ describe('project-owned canvas uploads', () => {
         } else {
           controller.abort();
         }
-        acknowledge();
         await rejected;
+        acknowledge();
+        await Promise.resolve();
         expect(upload).not.toHaveBeenCalled();
       } finally {
         engine.lifecycle.dispose();

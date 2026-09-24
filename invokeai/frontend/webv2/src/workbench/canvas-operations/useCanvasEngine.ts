@@ -9,6 +9,7 @@ import { resolveDefaultControlModelForBase } from '@workbench/widgets/layers/con
 import { getSelectedModelBase } from '@workbench/widgets/layers/selectedModel';
 import {
   useActiveProjectId,
+  useWorkbenchCanvasHeldMedia,
   useWorkbenchCommands,
   useWorkbenchInternalStore,
   useWorkbenchPersistenceService,
@@ -68,6 +69,7 @@ export const useCanvasEngine = (): CanvasEngineHandle | null => {
   const fonts = useFontRuntime();
   const store = useWorkbenchInternalStore();
   const persistence = useWorkbenchPersistenceService();
+  const heldMedia = useWorkbenchCanvasHeldMedia();
   const { notifications } = useWorkbenchCommands();
   const projectId = useActiveProjectId();
   const resource = useMemo(
@@ -83,6 +85,7 @@ export const useCanvasEngine = (): CanvasEngineHandle | null => {
             throw new DOMException('The canvas project is no longer open.', 'AbortError');
           }
         },
+        heldMedia,
         getDefaultControlModel: (base) => resolveDefaultControlModelForBase(getModelsSnapshot().models, base),
         getMainModelBase: () => {
           const project = store.getState().projects.find((candidate) => candidate.id === projectId);
@@ -99,7 +102,7 @@ export const useCanvasEngine = (): CanvasEngineHandle | null => {
         mutationPort: createCanvasProjectMutationPort(store, projectId),
         reportError: notifications.reportError,
       }),
-    [fonts, notifications.reportError, persistence, projectId, store]
+    [fonts, heldMedia, notifications.reportError, persistence, projectId, store]
   );
 
   return useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot);

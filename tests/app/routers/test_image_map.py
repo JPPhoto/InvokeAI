@@ -235,6 +235,7 @@ def mock_services(image_index_service: FakeImageIndexService, tmp_path: Path) ->
         gallery=None,  # type: ignore
         image_index_records=(index_records := ImageIndexRecordsSqlite(db=db)),
         image_index=image_index_service,
+        intermediates=None,  # type: ignore
         external_generation=None,  # type: ignore
     )
     image_index_service.index_records = index_records

@@ -9,6 +9,7 @@ import type { BackendGraphContract } from '@workbench/graphContracts';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import { createCanvasEngine as createCanvasEngineCore } from '@workbench/canvas-engine/engine';
 import { canvasApplicationPort } from '@workbench/canvas-operations/applicationPort';
+import { isUploadProjectNotFound } from '@workbench/canvas-operations/backend/canvasImages';
 import { createBoundedCompositeDedupeCache } from '@workbench/canvas-operations/compositeForGeneration';
 import { composeForGeneration } from '@workbench/canvas-operations/generationComposite';
 
@@ -45,6 +46,18 @@ export interface CanvasEngineOptions extends Omit<
 }
 
 export type CanvasOperationsCapability = CanvasOperationCapability;
+
+/** Settles with `promise`, or rejects with the abort reason as soon as `signal` aborts. */
+const raceAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+
+/** How long uploads skip provenance after the server reported the project missing, before trying it again. */
+const MISSING_PROJECT_REUSE_MS = 60_000;
+
 /** Private application composition shape; public callers receive the capability-only handle from the registry API. */
 export type CanvasEngine = CoreCanvasEngineImplementation;
 
@@ -53,10 +66,11 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
   const { ensureProjectOnServer, filterDeps, selectObjectDeps, ...coreOptions } = options;
   const owner = captureAccountScope();
   const uploadLifetime = new AbortController();
+  let projectMissingAt = -Infinity;
   const resolveUploadProjectId = async (): Promise<string | undefined> => {
     try {
       await ensureProjectOnServer();
-      return options.projectId;
+      return Date.now() - projectMissingAt < MISSING_PROJECT_REUSE_MS ? undefined : options.projectId;
     } catch (error) {
       // A project the server has not accepted (offline, conflicted, deleted elsewhere) costs the upload its
       // provenance, never the edit; only a closed project stops it.
@@ -74,10 +88,24 @@ export const createCanvasEngine = (options: CanvasEngineOptions): CanvasEngine =
       ...(uploadOptions?.signal ? [uploadOptions.signal] : []),
     ]);
     signal.throwIfAborted();
-    const projectId = await resolveUploadProjectId();
-    assertAccountScopeCurrent(owner);
+    let projectId: string | undefined;
+    try {
+      projectId = await raceAbort(resolveUploadProjectId(), signal);
+    } finally {
+      assertAccountScopeCurrent(owner);
+    }
     signal.throwIfAborted();
-    return canvasApplicationPort.uploadImage(blob, { ...uploadOptions, projectId, signal });
+    try {
+      return await canvasApplicationPort.uploadImage(blob, { ...uploadOptions, projectId, signal });
+    } catch (error) {
+      // Deleted elsewhere before this editor noticed: the upload still lands, without provenance.
+      if (projectId === undefined || !isUploadProjectNotFound(error)) {
+        throw error;
+      }
+      assertAccountScopeCurrent(owner);
+      projectMissingAt = Date.now();
+      return canvasApplicationPort.uploadImage(blob, { ...uploadOptions, projectId: undefined, signal });
+    }
   };
   const composition = createCanvasEngineCore({
     ...coreOptions,

@@ -1,22 +1,14 @@
-import type { IntermediatesOperation } from '@features/intermediates/core/types';
-import type { AccountScope } from '@platform/state/accountLifecycle';
 import type { RefObject } from 'react';
 
-import {
-  getIntermediatesOperation,
-  retryIntermediatesOperation,
-  startIntermediatesOperation,
-} from '@features/intermediates/data/api';
-import { intermediatesKeys } from '@features/intermediates/data/keys';
+import { retryIntermediatesOperation } from '@features/intermediates/data/api';
 import {
   activeOperationStore,
-  clearPendingIntermediatesStart,
+  adoptIntermediatesOperation,
+  attachIntermediatesManager,
+  findLatestIntermediatesRetry,
   followIntermediatesOperation,
-  isPendingIntermediatesStartCurrent,
-  restoreIntermediatesReceipt,
 } from '@features/intermediates/data/operationStore';
 import { intermediatesOperationQueryOptions } from '@features/intermediates/data/queries';
-import { attachIntermediatesRealtime } from '@features/intermediates/data/realtime';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import {
   assertAccountScopeCurrent,
@@ -28,78 +20,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-const getLatestRetry = async (operationId: string, signal: AbortSignal): Promise<IntermediatesOperation> => {
-  let operation = await getIntermediatesOperation(operationId, signal);
-  const visited = new Set<string>([operationId]);
-  while (operation.retriedByOperationId && !visited.has(operation.retriedByOperationId)) {
-    visited.add(operation.retriedByOperationId);
-    operation = await getIntermediatesOperation(operation.retriedByOperationId, signal);
-  }
-  return operation;
-};
-
-/**
- * The operation the section follows, kept across visits. On mount it attaches realtime updates, replays a Confirm
- * whose response was lost, and otherwise catches up with a retry started elsewhere.
- */
+/** The operation the section follows, kept across visits by the operation store, which this hook subscribes to. */
 export const useFollowedOperation = ({ fallbackFocusRef }: { fallbackFocusRef: RefObject<HTMLElement | null> }) => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const operationId = activeOperationStore.useSelector((snapshot) => snapshot.operationId);
+  const recoveryError = activeOperationStore.useSelector((snapshot) => snapshot.recoveryError);
   const [retryError, setRetryError] = useState<string | null>(null);
-  const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
   const query = useQuery({ ...intermediatesOperationQueryOptions(operationId ?? ''), enabled: operationId !== null });
 
-  const follow = useCallback(
-    (owner: AccountScope, operation: IntermediatesOperation) => {
-      queryClient.setQueryData(intermediatesKeys.operation(owner, operation.operationId), operation);
-      followIntermediatesOperation(operation.operationId);
-    },
-    [queryClient]
-  );
-
-  useMountEffect(() => {
-    let mounted = true;
-    const detach = attachIntermediatesRealtime(queryClient);
-    const owner = captureAccountScope();
-    const pending = restoreIntermediatesReceipt();
-    if (pending) {
-      void startIntermediatesOperation(pending, owner.signal)
-        .then((operation) => {
-          if (isAccountScopeCurrent(owner) && isPendingIntermediatesStartCurrent(pending)) {
-            follow(owner, operation);
-          }
-        })
-        .catch((error: unknown) => {
-          if (isPendingIntermediatesStartCurrent(pending, owner)) {
-            clearPendingIntermediatesStart(owner);
-            if (mounted && isAccountScopeCurrent(owner)) {
-              setRecoveryError(getApiErrorMessage(error, t('intermediates.dialog.startFailed')));
-            }
-          }
-        });
-    } else {
-      const followed = activeOperationStore.getSnapshot().operationId;
-      if (followed) {
-        void getLatestRetry(followed, owner.signal)
-          .then((operation) => {
-            if (
-              isAccountScopeCurrent(owner) &&
-              activeOperationStore.getSnapshot().operationId === followed &&
-              operation.operationId !== followed
-            ) {
-              follow(owner, operation);
-            }
-          })
-          .catch(() => undefined); // The operation query reports lookup failures in the panel.
-      }
-    }
-    return () => {
-      mounted = false;
-      detach();
-    };
-  });
+  useMountEffect(() => attachIntermediatesManager(queryClient));
 
   const retry = useCallback(async () => {
     if (!operationId) {
@@ -111,17 +42,17 @@ export const useFollowedOperation = ({ fallbackFocusRef }: { fallbackFocusRef: R
     try {
       const operation = await retryIntermediatesOperation(operationId, owner.signal);
       assertAccountScopeCurrent(owner);
-      follow(owner, operation);
+      adoptIntermediatesOperation(queryClient, owner, operation);
     } catch (error) {
       if (isAccountScopeCurrent(owner)) {
         try {
-          const latest = await getLatestRetry(operationId, owner.signal);
+          const latest = await findLatestIntermediatesRetry(operationId, owner.signal);
           if (
             latest.operationId !== operationId &&
             isAccountScopeCurrent(owner) &&
             activeOperationStore.getSnapshot().operationId === operationId
           ) {
-            follow(owner, latest);
+            adoptIntermediatesOperation(queryClient, owner, latest);
             return;
           }
         } catch {
@@ -134,7 +65,7 @@ export const useFollowedOperation = ({ fallbackFocusRef }: { fallbackFocusRef: R
         setIsRetrying(false);
       }
     }
-  }, [follow, operationId, t]);
+  }, [operationId, queryClient, t]);
   const dismiss = useCallback(() => {
     followIntermediatesOperation(null);
     setRetryError(null);
@@ -143,5 +74,14 @@ export const useFollowedOperation = ({ fallbackFocusRef }: { fallbackFocusRef: R
   }, [fallbackFocusRef]);
   const clearRetryError = useCallback(() => setRetryError(null), []);
 
-  return { clearRetryError, dismiss, isRetrying, operationId, query, recoveryError, retry, retryError };
+  return {
+    clearRetryError,
+    dismiss,
+    isRetrying,
+    operationId,
+    query,
+    recoveryError: recoveryError ? getApiErrorMessage(recoveryError, t('intermediates.dialog.startFailed')) : null,
+    retry,
+    retryError,
+  };
 };

@@ -124,17 +124,26 @@ it('releases on pagehide and holds again when the page is restored', async () =>
   }
 });
 
-it('does not resend an unchanged hold each time the tab becomes visible', async () => {
+it('refreshes an unchanged hold on becoming visible only after missing a heartbeat', async () => {
   const lease = startWith({ images: ['held.png'], videos: [] });
+  const startedAt = Date.now();
+  const clock = vi.spyOn(Date, 'now');
   try {
     await vi.waitFor(() => expect(calls('PUT')).toHaveLength(1));
     await settle();
     expect(document.visibilityState).toBe('visible');
+    clock.mockReturnValue(startedAt + 2 * 60_000);
     document.dispatchEvent(new Event('visibilitychange'));
     document.dispatchEvent(new Event('visibilitychange'));
     await settle();
     expect(calls('PUT')).toHaveLength(1);
+
+    clock.mockReturnValue(startedAt + 6 * 60_000);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.waitFor(() => expect(calls('PUT')).toHaveLength(2));
+    expect(calls('PUT')[1]!.url).toBe(calls('PUT')[0]!.url);
   } finally {
+    clock.mockRestore();
     lease.stop();
   }
 });
@@ -147,7 +156,7 @@ it('keeps old batches held until every replacement batch is installed', async ()
   let exposed = false;
   let failSecondStagedBatch = true;
   fetchMock.mockImplementation((url, options) => {
-    if (started && options?.method === 'PUT' && String(url).endsWith('-1-1') && failSecondStagedBatch) {
+    if (started && options?.method === 'PUT' && String(url).endsWith('.1-1') && failSecondStagedBatch) {
       failSecondStagedBatch = false;
       throw new Error('temporary network failure');
     }
@@ -172,6 +181,9 @@ it('keeps old batches held until every replacement batch is installed', async ()
     lease.update({ images: ['a.png', ...imageNames], videos: [] });
     await vi.waitFor(() => expect(initialLeases.every((leaseUrl) => !held.has(leaseUrl))).toBe(true));
     expect(exposed).toBe(false);
+    // The server caps distinct holders per account, grouping every `<holder>.<part>` id under its holder.
+    const holders = new Set(calls('PUT').map(({ url }) => decodeURIComponent(url.split('/').at(-1)!).split('.')[0]));
+    expect(holders.size).toBe(1);
   } finally {
     lease.stop();
   }

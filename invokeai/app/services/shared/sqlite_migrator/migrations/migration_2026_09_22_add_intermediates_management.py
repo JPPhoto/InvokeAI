@@ -10,7 +10,7 @@ file, how large it is, or whether a saved document still needs it. This migratio
   inferred.
 - `images.file_size_bytes` / `videos.file_size_bytes`: on-disk size of the media file plus its
   thumbnail (and video sidecar). NULL means not yet measured, never zero.
-- `media_references`: the assets every saved project document and library workflow names, backfilled
+- `media_references`: the assets every saved project document and user library workflow names, backfilled
   here from the existing rows and kept current by their writers from now on.
 """
 
@@ -111,10 +111,14 @@ class AddIntermediatesManagementCallback:
                 select="SELECT user_id, project_id, data FROM projects ORDER BY rowid ASC;",
             )
         if _table_exists(cursor, "workflow_library"):
+            # Only user workflows: default workflows are synced from files and never indexed at runtime.
             indexed += self._index_rows(
                 cursor,
                 owner_kind="workflow",
-                select="SELECT user_id, workflow_id, workflow FROM workflow_library ORDER BY rowid ASC;",
+                select=(
+                    "SELECT user_id, workflow_id, workflow FROM workflow_library"
+                    " WHERE category = 'user' ORDER BY rowid ASC;"
+                ),
             )
         if indexed:
             self._logger.info(f"Intermediates management migration: indexed media references of {indexed} document(s)")

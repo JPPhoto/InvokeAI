@@ -4,7 +4,7 @@
  * recording and `push` is a no-op, avoiding recursive history.
  */
 
-import { collectRestorableAssetRefs } from '@workbench/projects/projectAssets';
+import { collectRestorableAssetRefs } from '@workbench/mediaReferences';
 
 /** Max number of undo entries retained before the oldest is evicted. */
 export const HISTORY_MAX_ENTRIES = 64;
@@ -96,7 +96,7 @@ export interface History {
    */
   entries(): { past: readonly string[]; future: readonly string[] };
   /** Union of media references retained by undo and redo entries. */
-  heldAssetRefs(): { images: string[]; videos: string[] };
+  heldAssetRefs(): HeldAssetRefs;
   /** Subscribes to every stack mutation (push, amend, undo, redo, clear, eviction). Returns an unsubscribe function. */
   subscribe(listener: () => void): () => void;
 }
@@ -168,14 +168,25 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     past: undoStack.map((entry) => entry.label),
   });
 
-  const heldAssetRefs = (): { images: string[]; videos: string[] } => {
+  // Reused while the stacks hold the same entries, so an unchanged union keeps its identity for the hold lease.
+  let heldUnion: { parts: HeldAssetRefs[]; refs: HeldAssetRefs } | null = null;
+  const heldAssetRefs = (): HeldAssetRefs => {
+    const parts = [...undoStack, ...redoStack].map((entry) => entry.heldAssetRefs);
+    if (
+      heldUnion &&
+      heldUnion.parts.length === parts.length &&
+      parts.every((part, i) => part === heldUnion!.parts[i])
+    ) {
+      return heldUnion.refs;
+    }
     const images = new Set<string>();
     const videos = new Set<string>();
-    for (const entry of [...undoStack, ...redoStack]) {
-      entry.heldAssetRefs.images.forEach((name) => images.add(name));
-      entry.heldAssetRefs.videos.forEach((name) => videos.add(name));
+    for (const part of parts) {
+      part.images.forEach((name) => images.add(name));
+      part.videos.forEach((name) => videos.add(name));
     }
-    return { images: [...images], videos: [...videos] };
+    heldUnion = { parts, refs: { images: [...images], videos: [...videos] } };
+    return heldUnion.refs;
   };
 
   const push = (entry: HistoryEntry): void => {

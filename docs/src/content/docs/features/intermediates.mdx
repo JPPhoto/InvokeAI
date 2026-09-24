@@ -1,9 +1,9 @@
 ---
 title: Intermediates
-description: Reclaim disk space by clearing the temporary images and videos generation leaves behind, per project and per account.
+description: Reclaim disk space by deleting the temporary images and videos generation leaves behind, per project and per account.
 ---
 
-Generation produces intermediate images and videos: canvas composites, filter previews, staging candidates and other temporary files that were never saved to the gallery. The **Intermediates** section of Settings lists them per project, shows how much space clearing them would reclaim, and clears them safely. It is also reachable from a project's actions menu, from the Users page (administrators) and from **Data & workspace**.
+Generation produces intermediate images and videos: canvas composites, filter previews, staging candidates and other temporary files that were never saved to the gallery. The **Intermediates** section of Settings lists them per project, shows how much space deleting them would reclaim, and deletes them safely. It is also reachable from a project's actions menu, from the Users page (administrators) and from **Data & workspace**.
 
 ## What the page shows
 
@@ -13,9 +13,9 @@ Select rows, or **Select all**, and press **Delete**. The confirmation explains 
 
 Administrators start on their own account. **Show everyone** expands the view to every account; they can search accounts as well as project names and can open one account from the Users page. Opening the section from a project action shows that project directly, even when it is outside the first results page.
 
-## Safe and force clearing
+## Safe and force deletion
 
-A normal clear deletes only safe items. It always keeps:
+A normal delete removes only safe items. It always keeps:
 
 - anything a pending, waiting or running job produced or uses as an input, including cached images and videos reused from an earlier job and completed child-workflow media until the root workflow finishes;
 - anything created in the last 30 minutes, so an upload the browser is about to reference or enqueue is never collected, and cached media for 30 minutes after the job that reused it ends;
@@ -23,31 +23,35 @@ A normal clear deletes only safe items. It always keeps:
 - anything a saved document still names: a project or library workflow (canvas staging candidates, cropped reference images), the legacy editor's saved canvas and reference images, or a project set aside for repair when project boards were introduced;
 - anything that is no longer an intermediate.
 
-The advanced option in the confirmation, **also delete items that saved projects or workflows still reference**, turns the delete into a force clear. The confirmation lists every document it would break; those projects will show missing images and undo may no longer restore them. Force clearing never touches active, browser-held or recent work and cannot be undone; it asks for an acknowledgement and for the word `CLEAR` to be typed. A regular user's force clear also keeps anything another account's document names, such as a shared workflow. A new saved reference added after the preview is kept until a new preview is confirmed.
+The advanced option in the confirmation, **also delete items that saved projects or workflows still reference**, turns it into a force delete. The confirmation lists the documents it would break (the first 200, with a count of any others); those projects will show missing images and undo may no longer restore them. A force delete never touches active, browser-held or recent work and cannot be undone; it asks for an acknowledgement and for the word `DELETE` to be typed. A regular user's force delete also keeps anything another account's document names, such as a shared workflow. The same applies when an administrator loses administrator rights while their force delete runs, or when they retry it afterwards. A new saved reference added after the preview is kept until a new preview is confirmed.
 
-A single preview includes at most 50,000 eligible items. If more remain, the confirmation says so; run Clear again after that batch finishes. Protected items do not use up the batch limit.
+A single preview includes at most 50,000 eligible items. If more remain, the confirmation says so; run Delete again after that batch finishes. Protected items do not use up the batch limit.
 
 Every confirmation is based on a fresh server preview that freezes exactly which files the cleanup will act on. Files created after the preview are never included, and every batch re-checks its targets at the moment of deletion: an intermediate that was promoted, referenced or picked up by a job in the meantime is kept.
 
-An open editor refreshes its browser hold every five minutes and when the tab becomes visible again. It releases names removed from the current projects and undo history, and releases the whole hold when the tab closes or you sign out. If the tab crashes instead, the hold expires 15 minutes after its last refresh. Reopen an unsaved browser-only draft before clearing old intermediates.
+An open editor refreshes its browser hold every five minutes and when the tab becomes visible again. It releases names removed from the current projects and undo history, and releases the whole hold when the tab closes or you sign out. If the tab crashes instead, the hold expires 15 minutes after its last refresh. Each account holds media for at most eight open editors (tabs) at once; past that, the editor refreshed longest ago stops protecting its media until its next refresh. Reopen an unsaved browser-only draft before deleting old intermediates.
 
 ## Progress and results
 
 Cleanup runs on the server, so you can navigate away while it works. The page reports deleted, kept and failed items separately, along with files whose records are gone but whose bytes could not be removed yet; those are purged on the next server start and are not counted as reclaimed. Operation receipts and unresolved targets survive a server restart; interrupted work is shown as failed and can be retried without widening the original request. The browser also restores its last operation after a page reload.
 
-The server accepts at most eight active operations at a time. Wait for one to finish before confirming more cleanup if that limit is reached. If unresolved targets fill the recovery limit, retry them before starting another cleanup; the server keeps their receipts rather than silently discarding them.
+The server accepts at most eight active operations at a time, and at most two per account. Wait for one to finish before confirming another delete if a limit is reached. Each account keeps up to 50 operation receipts and 100,000 unresolved targets; older finished receipts are discarded first, and a retry is discarded together with the operation it retried. If an account's unresolved targets fill its recovery limit, that account retries them before starting another delete; the server keeps their receipts rather than silently discarding them, and other accounts are not affected.
 
 ## Permissions
 
 | Action | Regular user | Administrator |
 | --- | --- | --- |
-| Clear a project's intermediates | Own projects | Any project |
-| Clear an account's intermediates | Own account | Any account |
-| Clear everyone's intermediates | No | Yes |
-| Force clear referenced intermediates | Own files that only your own documents name | Any authorized scope |
+| Delete a project's intermediates | Own projects | Any project |
+| Delete an account's intermediates | Own account | Any account |
+| Delete everyone's intermediates | No | Yes |
+| Force delete referenced intermediates | Own files that only your own documents name | Any authorized scope |
 
 Cleanup is refused while [image storage maintenance](/features/image-storage-maintenance/) is active.
 
 ## Legacy endpoint
 
-The older `DELETE /api/v1/images/intermediates` route remains available to administrators. It now applies the same safety policy as a normal clear, so it keeps referenced, active and recent images and returns the number of images it deleted. It does not touch videos. `GET /api/v1/images/intermediates` counts exactly the images that route would delete, so the legacy button settles at zero after a clear.
+The older `DELETE /api/v1/images/intermediates` route remains available to administrators. It now applies the same safety policy as a normal delete, so it keeps referenced, active and recent images and returns the number of images it deleted. It does not touch videos. `GET /api/v1/images/intermediates` counts exactly the images that route would delete, so the legacy button settles at zero after it runs.
+
+## Limitations
+
+- Canvas uploads made before the server accepted the project they belong to are stored without a project and are never re-associated with it. They are still protected by saved references and browser holds, but they appear under **Unassigned**.

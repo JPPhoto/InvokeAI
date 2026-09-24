@@ -31,7 +31,7 @@ export const useIntermediatesSelection = ({
   summary: IntermediatesSummary | undefined;
 }) => {
   const [selection, setSelection] = useState<IntermediatesSelection>(EMPTY_SELECTION);
-  // The focused project is queried directly, so pagination cannot hide the entry point's selection.
+  // The manager filters to the focused project, so pagination cannot hide the entry point's selection.
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(initialProjectId);
   const totals = summary?.totals;
   const focusedRow = pendingProjectId ? rows.find((row) => row.projectId === pendingProjectId) : undefined;
@@ -86,7 +86,6 @@ export const useIntermediatesSelection = ({
         : matchingSnapshotQuery.isError
           ? ('estimateFailed' as const)
           : ('checking' as const),
-    focusedRow,
     hasSelection,
     reset,
     selectionState: hasSelection ? (isComplete ? ('all' as const) : ('some' as const)) : ('none' as const),

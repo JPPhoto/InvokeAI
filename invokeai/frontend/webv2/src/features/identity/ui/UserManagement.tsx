@@ -29,7 +29,7 @@ export const UserManagement = () => {
 export const UsersManagementPanel = ({
   onManageIntermediates,
 }: {
-  onManageIntermediates?: (userId: string) => void;
+  onManageIntermediates?: (userId: string, label: string) => void;
 }) => {
   const { t } = useTranslation();
   const session = useAuthSession();
@@ -52,7 +52,7 @@ const UsersDirectory = ({
   onManageIntermediates,
 }: {
   currentUserId: string;
-  onManageIntermediates?: (userId: string) => void;
+  onManageIntermediates?: (userId: string, label: string) => void;
 }) => {
   const { t } = useTranslation();
   const notify = useIdentityNotify();
@@ -215,7 +215,7 @@ const UserRow = ({
   user,
 }: {
   isSelf: boolean;
-  onManageIntermediates?: (userId: string) => void;
+  onManageIntermediates?: (userId: string, label: string) => void;
   setDeleteTarget: (user: UserDTO) => void;
   setFormTarget: (target: UserFormTarget) => void;
   setUserActive: (user: UserDTO, isActive: boolean) => void;
@@ -225,8 +225,8 @@ const UserRow = ({
   const handleDelete = useCallback(() => setDeleteTarget(user), [setDeleteTarget, user]);
   const handleEdit = useCallback(() => setFormTarget({ mode: 'edit', user }), [setFormTarget, user]);
   const handleIntermediates = useCallback(
-    () => onManageIntermediates?.(user.user_id),
-    [onManageIntermediates, user.user_id]
+    () => onManageIntermediates?.(user.user_id, user.display_name || user.email),
+    [onManageIntermediates, user.display_name, user.email, user.user_id]
   );
   const handleSetActive = useCallback(
     (event: { checked: boolean }) => void setUserActive(user, event.checked),

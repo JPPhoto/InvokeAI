@@ -125,34 +125,37 @@ export const summarizeSelection = (
   return summary;
 };
 
-export const selectionToTargets = (
-  selection: IntermediatesSelection,
-  loadedRows: readonly IntermediatesRow[]
-): IntermediatesScopeTarget[] =>
-  [
-    ...(selection.mode === 'all-matching'
-      ? loadedRows.filter((row) => isRowSelected(selection, row))
-      : selection.rows.values()),
-  ].map(({ projectId, userId }) => ({
-    projectId,
-    userId,
-  }));
+const toTarget = ({ projectId, userId }: IntermediatesScopeTarget): IntermediatesScopeTarget => ({ projectId, userId });
 
 /**
- * The scope a confirmation acts on. Without a row filter, "all matching" is exactly the owner filter (or everyone),
- * which the server can freeze without the client enumerating rows.
+ * What a confirmation acts on before it reaches the server. `matching` is every row the current filters match minus
+ * the exclusions; the cleanup scope cannot express filters, so it must be resolved against a complete matching read
+ * with `resolveMatchingTargets` before a preview is requested.
+ */
+export type IntermediatesScopeRequest = IntermediatesScope | { kind: 'matching'; excluded: ReadonlySet<string> };
+
+/**
+ * Without a row filter or exclusions, "all matching" is exactly the owner filter (or everyone), which the server can
+ * freeze without the client enumerating rows. Explicit picks become their targets.
  */
 export const resolveScope = (options: {
   selection: IntermediatesSelection;
-  loadedRows: readonly IntermediatesRow[];
   hasSubsetFilter: boolean;
   ownerId: string | null;
-}): IntermediatesScope => {
-  const { hasSubsetFilter, loadedRows, ownerId, selection } = options;
+}): IntermediatesScopeRequest => {
+  const { hasSubsetFilter, ownerId, selection } = options;
 
-  if (selection.mode === 'all-matching' && selection.excluded.size === 0 && !hasSubsetFilter) {
-    return ownerId === null ? { kind: 'everyone' } : { kind: 'owner', userId: ownerId };
+  if (selection.mode === 'rows') {
+    return { kind: 'selection', targets: [...selection.rows.values()].map(toTarget) };
   }
-
-  return { kind: 'selection', targets: selectionToTargets(selection, loadedRows) };
+  if (selection.excluded.size > 0 || hasSubsetFilter) {
+    return { kind: 'matching', excluded: selection.excluded };
+  }
+  return ownerId === null ? { kind: 'everyone' } : { kind: 'owner', userId: ownerId };
 };
+
+/** The explicit targets of a `matching` request, given every row the filters match. */
+export const resolveMatchingTargets = (
+  excluded: ReadonlySet<string>,
+  matchingRows: readonly IntermediatesRow[]
+): IntermediatesScopeTarget[] => matchingRows.filter((row) => !excluded.has(getIntermediatesRowKey(row))).map(toTarget);

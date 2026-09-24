@@ -1,4 +1,5 @@
 import type { IntermediatesOperation } from '@features/intermediates/core/types';
+import type { TFunction } from 'i18next';
 
 import { Alert, HStack, Progress, Stack, Text } from '@chakra-ui/react';
 import {
@@ -7,10 +8,9 @@ import {
   isOperationRetryable,
   isOperationSettled,
 } from '@features/intermediates/core/types';
+import { formatBytes, formatCount } from '@platform/i18n/languages';
 import { Button } from '@platform/ui/Button';
 import { useTranslation } from 'react-i18next';
-
-import { formatBytes, formatCount } from './format';
 
 export interface OperationPanelProps {
   operation: IntermediatesOperation | null;
@@ -34,6 +34,34 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
     </Text>
   </Stack>
 );
+
+const ANNOUNCED_PROGRESS_STEP = 25;
+
+/**
+ * The sentence screen readers hear. It changes with the status and at most every quarter of the progress, so a 2s poll
+ * or a socket update that only moves the counters stays silent; the progress bar exposes the exact value on demand.
+ */
+export const getOperationAnnouncement = (
+  operation: IntermediatesOperation | null,
+  isLoading: boolean,
+  t: TFunction
+): string => {
+  if (!operation) {
+    return isLoading ? t('intermediates.operation.pending') : '';
+  }
+  const statusLabel = t(`intermediates.operation.status.${operation.status}`);
+  if (isOperationSettled(operation) || operation.status === 'pending') {
+    return statusLabel;
+  }
+  const steps = Math.floor(
+    (getOperationProcessed(operation) / Math.max(getOperationTotalTargets(operation), 1)) *
+      (100 / ANNOUNCED_PROGRESS_STEP)
+  );
+  return t('intermediates.operation.progressAnnouncement', {
+    percent: (steps * ANNOUNCED_PROGRESS_STEP) / 100,
+    status: statusLabel,
+  });
+};
 
 /** The active or most recent cleanup: progress while it runs, a breakdown once it stops, retry for what failed. */
 export const OperationPanel = ({
@@ -86,8 +114,6 @@ export const OperationPanel = ({
 
   return (
     <Alert.Root
-      aria-live="polite"
-      role="status"
       size="sm"
       status={operation.status === 'failed' ? 'error' : operation.status === 'completed' ? 'success' : 'info'}
       variant="surface"

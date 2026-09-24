@@ -153,10 +153,10 @@ class VideoServiceABC(ABC):
     def delete_intermediates_by_names(
         self, video_names: list[str], guard: Optional[IntermediateDeleteGuard] = None
     ) -> IntermediateDeleteResult:
-        """Deletes the named videos that are still intermediates, reporting the names removed.
+        """Deletes the named videos that are still intermediates, journalled, reporting the names removed.
 
-        Files are staged before the conditional record delete and restored for every name the
-        delete (or ``guard``) kept, so a promoted or protected video is never damaged.
+        ``guard`` is consulted on the deleting transaction so the cleanup policy's final check and
+        the record removal are one atomic step.
         """
         pass
 

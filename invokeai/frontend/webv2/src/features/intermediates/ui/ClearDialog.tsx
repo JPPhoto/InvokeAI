@@ -1,20 +1,17 @@
 import type {
-  IntermediatesAffectedDocument,
   IntermediatesAffectedDocumentKind,
   IntermediatesCleanupMode,
   IntermediatesPreview,
 } from '@features/intermediates/core/types';
 /* eslint-disable react-perf/jsx-no-new-function-as-prop */
-import type { RefObject } from 'react';
 
 import { Alert, Box, chakra, Checkbox, Dialog, Input, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
+import { formatBytes } from '@platform/i18n/languages';
 import { Button, CloseButton } from '@platform/ui/Button';
-import { useCallback, useId, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { formatBytes } from './format';
-
-const CONFIRM_WORD = 'CLEAR';
+const CONFIRM_WORD = 'DELETE';
 
 const AFFECTED_DOCUMENT_LABELS = {
   client_state: 'intermediates.dialog.affectedClientState',
@@ -40,9 +37,8 @@ export interface ClearDialogProps {
   currentUserId: string | null;
   /** Force previews for administrators may include other accounts' documents; others' are never touched. */
   canManageEveryone: boolean;
-  finalFocusRef: RefObject<HTMLElement | null>;
-  /** Receives focus when the trigger can no longer take it, e.g. a Delete button disabled by the cleared selection. */
-  fallbackFocusRef: RefObject<HTMLElement | null>;
+  /** Where focus lands when the dialog closes. */
+  getFinalFocus: () => HTMLElement | null;
   onClose: () => void;
   onConfirm: () => void;
   onRetryPreview: () => void;
@@ -104,9 +100,6 @@ const Impact = ({ preview }: { preview: IntermediatesPreview }) => {
   );
 };
 
-const getDocumentOwnerLabel = (document: IntermediatesAffectedDocument): string =>
-  document.userDisplayName || document.userEmail || document.userId;
-
 const AffectedDocuments = ({
   currentUserId,
   preview,
@@ -115,6 +108,7 @@ const AffectedDocuments = ({
   preview: IntermediatesPreview;
 }) => {
   const { t } = useTranslation();
+  const hidden = preview.affectedDocumentsTotal - preview.affectedDocuments.length;
 
   if (preview.affectedDocuments.length === 0) {
     return null;
@@ -135,11 +129,18 @@ const AffectedDocuments = ({
             {currentUserId !== null && document.userId !== currentUserId ? (
               <Text as="span" color="fg.muted">
                 {' '}
-                {t('intermediates.dialog.affectedOwner', { owner: getDocumentOwnerLabel(document) })}
+                {t('intermediates.dialog.affectedOwner', {
+                  owner: document.userDisplayName || document.userEmail || t('intermediates.owner.unknownAccount'),
+                })}
               </Text>
             ) : null}
           </Text>
         ))}
+        {hidden > 0 ? (
+          <Text as="li" color="fg.muted" fontSize="xs">
+            {t('intermediates.dialog.affectedMore', { count: hidden })}
+          </Text>
+        ) : null}
       </Stack>
     </Stack>
   );
@@ -152,8 +153,7 @@ const AffectedDocuments = ({
 export const ClearDialog = ({
   canManageEveryone,
   currentUserId,
-  fallbackFocusRef,
-  finalFocusRef,
+  getFinalFocus,
   onClose,
   onConfirm,
   onModeChange,
@@ -168,6 +168,7 @@ export const ClearDialog = ({
     typed: '',
   });
   const confirmInputId = useId();
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
   const isForce = state?.mode === 'force';
   const preview = state?.preview ?? null;
   const acknowledged = confirmation.previewId === preview?.previewId && confirmation.acknowledged;
@@ -196,11 +197,9 @@ export const ClearDialog = ({
     <Dialog.Root
       closeOnEscape={!state?.isStarting}
       closeOnInteractOutside={!state?.isStarting}
-      finalFocusEl={() => {
-        const trigger = finalFocusRef.current;
-
-        return trigger && !(trigger as HTMLButtonElement).disabled ? trigger : fallbackFocusRef.current;
-      }}
+      finalFocusEl={getFinalFocus}
+      // Cancel, not the force toggle: Space on a first-tabbable checkbox would switch to a force preview.
+      initialFocusEl={() => cancelRef.current}
       lazyMount
       open={state !== null}
       role="alertdialog"
@@ -222,7 +221,7 @@ export const ClearDialog = ({
               <Stack gap="3">
                 {/* zag snapshots aria-describedby at open, so the Description must exist before the preview lands. */}
                 <Dialog.Description asChild>
-                  <Box>
+                  <Box aria-busy={(preview === null && !state?.previewError) || undefined} aria-live="polite">
                     {state?.previewError ? (
                       <Alert.Root size="sm" status="error" variant="surface">
                         <Alert.Indicator />
@@ -314,7 +313,7 @@ export const ClearDialog = ({
               </Stack>
             </Dialog.Body>
             <Dialog.Footer>
-              <Button disabled={state?.isStarting} size="xs" variant="ghost" onClick={onClose}>
+              <Button ref={cancelRef} disabled={state?.isStarting} size="xs" variant="ghost" onClick={onClose}>
                 {t('common.cancel')}
               </Button>
               <Button

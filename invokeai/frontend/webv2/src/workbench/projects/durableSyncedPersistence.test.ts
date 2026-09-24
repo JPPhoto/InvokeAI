@@ -228,15 +228,33 @@ describe('durable project persistence', () => {
     await rejected;
   });
 
-  it('requires a successful acknowledgement after an initial project creation failure', async () => {
+  it('shares one failed creation across waiting and following uploads, then retries after a pause', async () => {
     const api = createApi();
     const project = createDraftProject([]);
     const service = createService(captureAccountScope(), api);
-    vi.mocked(api.createProject).mockRejectedValueOnce(new Error('offline'));
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    let fail!: (error: Error) => void;
+    vi.mocked(api.createProject).mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      })
+    );
+    try {
+      const waiting = [service.ensureProjectOnServer(project), service.ensureProjectOnServer(project)];
+      await vi.waitFor(() => expect(api.createProject).toHaveBeenCalledOnce());
+      fail(new Error('offline'));
+      for (const upload of waiting) {
+        await expect(upload).rejects.toMatchObject({ reason: 'unsynced' });
+      }
+      await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'unsynced' });
+      expect(api.createProject).toHaveBeenCalledOnce();
 
-    await expect(service.ensureProjectOnServer(project)).rejects.toMatchObject({ reason: 'unsynced' });
-    await service.ensureProjectOnServer(project);
-    expect(api.createProject).toHaveBeenCalledTimes(2);
+      clock.mockReturnValue(10_000);
+      await service.ensureProjectOnServer(project);
+      expect(api.createProject).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('rejects deleted projects and expired accounts even after their creation was acknowledged', async () => {

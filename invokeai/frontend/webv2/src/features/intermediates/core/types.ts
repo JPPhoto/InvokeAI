@@ -110,6 +110,8 @@ export interface IntermediatesPreview {
   hasMoreEligible: boolean;
   impact: IntermediatesImpact;
   affectedDocuments: IntermediatesAffectedDocument[];
+  /** Every affected document; the server lists only the first of them. */
+  affectedDocumentsTotal: number;
 }
 
 export interface IntermediatesOperationProgress {

@@ -18,7 +18,11 @@ import { createExtensionRegistry, type ExtensionRegistry } from './extensions/ex
 import { clearLayerPanelStates } from './layerPanelState';
 import { createWorkbenchPersistenceRuntime } from './persistenceRuntime';
 import { createOpenProjectBroker } from './projects/openProjectBroker';
-import { createOpenProjectsHeldMediaReader } from './projects/projectAssets';
+import {
+  createCanvasHeldMediaSources,
+  createOpenProjectsHeldMediaReader,
+  type CanvasHeldMediaSources,
+} from './projects/projectAssets';
 import { describeRefusedProjects } from './projects/projectLoadRefusal';
 import {
   createSyncedWorkbenchPersistence,
@@ -41,6 +45,7 @@ type WorkbenchSelector<T> = (snapshot: WorkbenchSnapshot) => T;
 const WorkbenchStoreContext = createContext<WorkbenchInternalStore | null>(null);
 const WorkbenchPersistenceContext = createContext<SyncedWorkbenchPersistence | null>(null);
 const WorkbenchExtensionsContext = createContext<ExtensionRegistry | null>(null);
+const WorkbenchCanvasHeldMediaContext = createContext<CanvasHeldMediaSources | null>(null);
 const subscribeToNothing = (): (() => void) => () => {};
 const getNullSnapshot = (): null => null;
 
@@ -59,6 +64,7 @@ export const WorkbenchProvider = ({
   const { t } = useTranslation();
   const [persistence] = useState(() => createSyncedWorkbenchPersistence(owner));
   const [extensions] = useState(createExtensionRegistry);
+  const [canvasHeldMedia] = useState(createCanvasHeldMediaSources);
   const [loadUnavailable, setLoadUnavailable] = useState<{ message: string; retry(): void } | null>(null);
   const hasHydrated = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot).hasHydrated;
 
@@ -138,16 +144,21 @@ export const WorkbenchProvider = ({
     persistenceRuntime.start();
     const releaseIntermediateHold = startIntermediatesHoldLease({
       owner,
-      read: createOpenProjectsHeldMediaReader(() => store.getSnapshot().projects),
+      read: createOpenProjectsHeldMediaReader(() => store.getSnapshot().projects, canvasHeldMedia.read),
       subscribe: (onChange) => {
         let projects = store.getSnapshot().projects;
-        return store.subscribe(() => {
+        const unsubscribeProjects = store.subscribe(() => {
           const next = store.getSnapshot().projects;
           if (next !== projects) {
             projects = next;
             onChange();
           }
         });
+        const unsubscribeCanvas = canvasHeldMedia.subscribe(onChange);
+        return () => {
+          unsubscribeProjects();
+          unsubscribeCanvas();
+        };
       },
     });
 
@@ -162,21 +173,23 @@ export const WorkbenchProvider = ({
 
   return (
     <WorkbenchPersistenceContext value={persistence}>
-      <WorkbenchExtensionsContext value={extensions}>
-        <WorkbenchStoreContext value={store}>
-          {loadUnavailable ? (
-            <WorkbenchUnavailableScreen
-              message={loadUnavailable.message}
-              onRetry={loadUnavailable.retry}
-              persistence={persistence}
-            />
-          ) : hasHydrated ? (
-            children
-          ) : (
-            <WorkbenchSplashScreen messageKey="splash.openingProject" />
-          )}
-        </WorkbenchStoreContext>
-      </WorkbenchExtensionsContext>
+      <WorkbenchCanvasHeldMediaContext value={canvasHeldMedia}>
+        <WorkbenchExtensionsContext value={extensions}>
+          <WorkbenchStoreContext value={store}>
+            {loadUnavailable ? (
+              <WorkbenchUnavailableScreen
+                message={loadUnavailable.message}
+                onRetry={loadUnavailable.retry}
+                persistence={persistence}
+              />
+            ) : hasHydrated ? (
+              children
+            ) : (
+              <WorkbenchSplashScreen messageKey="splash.openingProject" />
+            )}
+          </WorkbenchStoreContext>
+        </WorkbenchExtensionsContext>
+      </WorkbenchCanvasHeldMediaContext>
     </WorkbenchPersistenceContext>
   );
 };
@@ -301,6 +314,15 @@ export const useWorkbenchPersistenceService = (): SyncedWorkbenchPersistence => 
 
 export const useOptionalWorkbenchPersistenceService = (): SyncedWorkbenchPersistence | null =>
   use(WorkbenchPersistenceContext);
+
+/** Where live Canvas engines register the undo state the hold lease must keep. */
+export const useWorkbenchCanvasHeldMedia = (): CanvasHeldMediaSources => {
+  const heldMedia = use(WorkbenchCanvasHeldMediaContext);
+  if (!heldMedia) {
+    throw new Error('useWorkbenchCanvasHeldMedia must be used within a WorkbenchProvider.');
+  }
+  return heldMedia;
+};
 
 export const useWorkbenchExtensions = (): ExtensionRegistry => {
   const extensions = use(WorkbenchExtensionsContext);

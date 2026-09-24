@@ -209,7 +209,7 @@ const HostedProjectActionsMenu = ({
     () => onRequestDialog({ actions, kind: 'rename', name: request.summary.name }),
     [actions, onRequestDialog, request.summary.name]
   );
-  const handleClearIntermediates = useCallback(() => {
+  const handleDeleteIntermediates = useCallback(() => {
     // The manager lives in Settings; it reads this intent once when its section mounts.
     requestIntermediatesFocus({ projectId: request.summary.id });
     openWorkbenchSettings('intermediates', request.returnFocus ?? undefined);
@@ -231,7 +231,7 @@ const HostedProjectActionsMenu = ({
             isPinned={request.isPinned}
             isCompatible={isCompatible}
             projectSearch={projectSearch}
-            onClearIntermediates={handleClearIntermediates}
+            onDeleteIntermediates={handleDeleteIntermediates}
             onDelete={handleDelete}
             onDuplicate={handleDuplicate}
             onExport={handleExport}

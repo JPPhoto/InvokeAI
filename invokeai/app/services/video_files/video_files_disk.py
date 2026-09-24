@@ -181,6 +181,7 @@ class DiskVideoFileStorage(VideoFileStorageBase):
             raise VideoFileDeleteException from e
 
     def begin_delete(self, videos: Sequence[tuple[str, str]]) -> _PendingDelete:
+        # Resolving each path validates the names before anything is journalled; the paths are re-derived at commit.
         for name, subfolder in videos:
             self.__delete_candidates(name, subfolder)
         directory = Path(tempfile.mkdtemp(prefix=".delete_", dir=self.__output_folder))

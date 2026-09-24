@@ -8,6 +8,7 @@ from invokeai.app.api.auth_dependencies import CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.services.intermediates.intermediates_base import IntermediatesCaller
 from invokeai.app.services.intermediates.intermediates_common import (
+    BROWSER_HOLD_LEASE_ID_PATTERN,
     IntermediatesBrowserHoldRequest,
     IntermediatesIdempotencyConflictError,
     IntermediatesOperation,
@@ -25,26 +26,6 @@ from invokeai.app.services.intermediates.intermediates_common import (
 from invokeai.app.services.shared.pagination import MAX_PAGE_SIZE
 
 intermediates_router = APIRouter(prefix="/v1/intermediates", tags=["intermediates"])
-
-
-@intermediates_router.put("/holds/{lease_id}", status_code=status.HTTP_204_NO_CONTENT)
-def replace_intermediates_browser_hold(
-    current_user: CurrentUserOrDefault,
-    request: IntermediatesBrowserHoldRequest,
-    lease_id: str = Path(min_length=1, max_length=64),
-) -> Response:
-    """Protect names still held by this account's open browser editor, including undo state."""
-    ApiDependencies.invoker.services.intermediates.replace_browser_hold(_caller(current_user), lease_id, request)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@intermediates_router.delete("/holds/{lease_id}", status_code=status.HTTP_204_NO_CONTENT)
-def release_intermediates_browser_hold(
-    current_user: CurrentUserOrDefault,
-    lease_id: str = Path(min_length=1, max_length=64),
-) -> Response:
-    ApiDependencies.invoker.services.intermediates.release_browser_hold(_caller(current_user), lease_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _caller(current_user: CurrentUserOrDefault) -> IntermediatesCaller:
@@ -162,3 +143,31 @@ def retry_intermediates_operation(
         IntermediatesUnavailableError,
     ) as error:
         raise _translate(error)
+
+
+@intermediates_router.put(
+    "/holds/{lease_id}",
+    operation_id="replace_intermediates_browser_hold",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def replace_intermediates_browser_hold(
+    current_user: CurrentUserOrDefault,
+    request: IntermediatesBrowserHoldRequest,
+    lease_id: str = Path(min_length=1, max_length=64, pattern=BROWSER_HOLD_LEASE_ID_PATTERN),
+) -> Response:
+    """Protect names still held by this account's open browser editor, including undo state."""
+    ApiDependencies.invoker.services.intermediates.replace_browser_hold(_caller(current_user), lease_id, request)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@intermediates_router.delete(
+    "/holds/{lease_id}",
+    operation_id="release_intermediates_browser_hold",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def release_intermediates_browser_hold(
+    current_user: CurrentUserOrDefault,
+    lease_id: str = Path(min_length=1, max_length=64, pattern=BROWSER_HOLD_LEASE_ID_PATTERN),
+) -> Response:
+    ApiDependencies.invoker.services.intermediates.release_browser_hold(_caller(current_user), lease_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

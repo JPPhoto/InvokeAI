@@ -32,7 +32,8 @@ def cursor() -> sqlite3.Cursor:
     )
     connection.execute(
         "CREATE TABLE workflow_library (workflow_id TEXT NOT NULL PRIMARY KEY, workflow TEXT NOT NULL,"
-        " user_id TEXT DEFAULT 'system');"
+        " user_id TEXT DEFAULT 'system',"
+        " category TEXT GENERATED ALWAYS AS (json_extract(workflow, '$.meta.category')) VIRTUAL NOT NULL);"
     )
     return connection.cursor()
 
@@ -82,10 +83,16 @@ def test_backfills_references_from_projects_and_workflows(cursor: sqlite3.Cursor
         "video": {"clips": [{"video_name": "clip.mp4"}]},
         "unrelated": {"imageName": "", "name": "not-a-ref.png"},
     }
-    workflow = {"nodes": [{"data": {"inputs": {"image": {"value": {"image_name": "input.png"}}}}}]}
+    workflow = {
+        "meta": {"category": "user"},
+        "nodes": [{"data": {"inputs": {"image": {"value": {"image_name": "input.png"}}}}}],
+    }
+    default_workflow = {"meta": {"category": "default"}, "nodes": [{"data": {"image_name": "bundled.png"}}]}
     cursor.execute("INSERT INTO projects VALUES ('p1', 'u1', ?);", (json.dumps(project),))
     cursor.execute("INSERT INTO projects VALUES ('p2', 'u2', 'not json');")
     cursor.execute("INSERT INTO workflow_library VALUES ('w1', ?, 'u1');", (json.dumps(workflow),))
+    # Default workflows are synced from bundled files; runtime never indexes them, so neither does the backfill.
+    cursor.execute("INSERT INTO workflow_library VALUES ('d1', ?, 'system');", (json.dumps(default_workflow),))
 
     _run(cursor)
 

@@ -4,9 +4,7 @@ import { isOperationSettled, type IntermediatesOperation } from '@features/inter
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { socketHub } from '@platform/transport/socketHub';
 
-import type { IntermediatesOperationDTO } from './api';
-
-import { mapIntermediatesOperation } from './api';
+import { parseIntermediatesOperationEvent } from './api';
 import { intermediatesKeys } from './keys';
 
 const isOperationKey = (queryKey: readonly unknown[], accountKey: readonly unknown[]): boolean =>
@@ -47,15 +45,10 @@ export const attachIntermediatesRealtime = (queryClient: QueryClient): (() => vo
   });
 
   const detachOperation = socketHub.on('intermediates_operation_changed', (payload: never) => {
-    if (!isAccountScopeCurrent(owner)) {
+    const operation: IntermediatesOperation | null = parseIntermediatesOperationEvent(payload);
+    if (!operation || !isAccountScopeCurrent(owner)) {
       return;
     }
-    const event = payload as unknown as { operation?: IntermediatesOperationDTO } | undefined;
-
-    if (!event?.operation) {
-      return;
-    }
-    const operation = mapIntermediatesOperation(event.operation);
 
     queryClient.setQueryData(intermediatesKeys.operation(owner, operation.operationId), operation);
     noteSettled(operation);

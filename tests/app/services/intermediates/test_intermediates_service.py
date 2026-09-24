@@ -629,6 +629,52 @@ def test_a_demoted_admin_stops_at_the_next_batch(
     assert sum(_exists(invoker, f"bob-{i}.png") for i in range(3)) == 2
 
 
+def test_a_demoted_admin_keeps_media_other_accounts_documents_name_in_its_own_scope(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_image(invoker, "admin-own.png", user_id="admin")
+    invoker.services.workflow_records.create(_workflow_naming("admin-own.png"), user_id="bob")
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("admin")), ADMIN)
+    assert preview.impact.delete_images == 1
+    assert [doc.user_id for doc in preview.affected_documents] == ["bob"]
+    real_get = invoker.services.users.get
+
+    def demoted(user_id: str):
+        user = real_get(user_id)
+        return user.model_copy(update={"is_admin": False}) if user is not None and user_id == "admin" else user
+
+    monkeypatch.setattr(invoker.services.users, "get", demoted)
+
+    started = service.start_operation(
+        IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="k"), ADMIN
+    )
+    operation = _wait(service, started.operation_id, ADMIN)
+
+    assert operation.status == "completed"
+    assert operation.progress.retained_images == 1
+    assert _exists(invoker, "admin-own.png")
+
+
+def test_a_retry_by_a_demoted_admin_keeps_media_other_accounts_documents_name(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_image(invoker, "admin-own.png", user_id="admin")
+    invoker.services.workflow_records.create(_workflow_naming("admin-own.png"), user_id="bob")
+    real_delete = invoker.services.images.delete_intermediates_by_names
+    monkeypatch.setattr(
+        invoker.services.images, "delete_intermediates_by_names", MagicMock(side_effect=OSError("busy"))
+    )
+    _, failed = _run(service, ADMIN, _owner("admin"), mode="force")
+    assert failed.progress.unresolved_images == 1
+    monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
+
+    retry = service.retry_operation(failed.operation_id, IntermediatesCaller(user_id="admin", is_admin=False))
+    retried = _wait(service, retry.operation_id, ADMIN)
+
+    assert retried.progress.retained_images == 1
+    assert _exists(invoker, "admin-own.png")
+
+
 # ── operations: idempotency, retry, availability ──
 
 
@@ -1078,6 +1124,65 @@ def test_force_clear_keeps_a_newly_referenced_target(invoker: Invoker, service: 
     assert _exists(invoker, "force-race.png")
 
 
+def test_an_account_holds_media_for_a_bounded_number_of_editors(
+    invoker: Invoker, service: IntermediatesService
+) -> None:
+    from invokeai.app.services.intermediates.intermediates_common import (
+        MAX_BROWSER_HOLD_EDITORS_PER_USER,
+        IntermediatesBrowserHoldRequest,
+    )
+
+    _seed_image(invoker, "bobs-held.png", user_id="bob")
+    service.replace_browser_hold(BOB, "bob-tab", IntermediatesBrowserHoldRequest(images=["bobs-held.png"]))
+    # Each editor splits its hold into two leases; the cap counts editors, not leases.
+    for editor in range(MAX_BROWSER_HOLD_EDITORS_PER_USER + 1):
+        for part in range(2):
+            _seed_image(invoker, f"held-{editor}-{part}.png")
+            service.replace_browser_hold(
+                ALICE, f"tab-{editor}.{part}-0", IntermediatesBrowserHoldRequest(images=[f"held-{editor}-{part}.png"])
+            )
+        # Refresh order decides which editor lapses; stagger it so the first editor is the stalest.
+        with invoker.services.image_records._db.transaction() as cursor:
+            cursor.execute(
+                "UPDATE intermediates_browser_holds SET expires_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', ?)"
+                " WHERE user_id = 'alice' AND lease_id LIKE ?;",
+                (f"+{60 + editor} seconds", f"tab-{editor}.%"),
+            )
+
+    alice, operation = _run(service, ALICE, _owner("alice"))
+    assert (alice.impact.keep_active_images, alice.impact.delete_images) == (
+        2 * MAX_BROWSER_HOLD_EDITORS_PER_USER,
+        2,
+    )
+    assert operation.progress.deleted_images == 2
+    survivors = {
+        f"held-{editor}-{part}.png"
+        for editor in range(MAX_BROWSER_HOLD_EDITORS_PER_USER + 1)
+        for part in range(2)
+        if _exists(invoker, f"held-{editor}-{part}.png")
+    }
+    assert survivors == {
+        f"held-{editor}-{part}.png" for editor in range(1, MAX_BROWSER_HOLD_EDITORS_PER_USER + 1) for part in range(2)
+    }
+    bob = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("bob")), BOB)
+    assert (bob.impact.keep_active_images, bob.impact.delete_images) == (1, 0)
+
+
+def test_force_preview_lists_a_bounded_number_of_broken_documents(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(intermediates_default, "MAX_AFFECTED_DOCUMENTS", 2)
+    for index in range(3):
+        _seed_image(invoker, f"doc-{index}.png")
+        _project(invoker, "alice", f"Doc {index}", {"imageName": f"doc-{index}.png"})
+
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="force", scope=_owner("alice")), ALICE)
+
+    assert [doc.name for doc in preview.affected_documents] == ["Doc 0", "Doc 1"]
+    assert preview.affected_documents_total == 3
+    assert preview.impact.delete_images == 3
+
+
 def test_browser_hold_protects_unsaved_and_undo_references(invoker: Invoker, service: IntermediatesService) -> None:
     from invokeai.app.services.intermediates.intermediates_common import IntermediatesBrowserHoldRequest
 
@@ -1133,7 +1238,7 @@ def test_operation_receipt_and_retry_survive_restart(
 def test_receipt_pruning_keeps_unresolved_targets_retryable(
     invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS", 2)
+    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS_PER_CALLER", 2)
     _seed_image(invoker, "flaky.png")
     real_delete = invoker.services.images.delete_intermediates_by_names
     monkeypatch.setattr(
@@ -1144,19 +1249,107 @@ def test_receipt_pruning_keeps_unresolved_targets_retryable(
     monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
 
     # New successful receipts may be pruned; the failed operation's exact target must not be.
+    empty = IntermediatesScope(
+        kind="selection",
+        targets=[IntermediatesScopeTarget(user_id="alice", project_id=_project(invoker, "alice", "E", {}))],
+    )
+    _, oldest_settled = _run(service, ALICE, empty)
     for _ in range(2):
-        _run(service, ADMIN, _owner("bob"))
+        _run(service, ALICE, empty)
 
+    with pytest.raises(IntermediatesOperationNotFoundError):
+        service.get_operation(oldest_settled.operation_id, ALICE)
     assert service.get_operation(failed.operation_id, ALICE).progress.unresolved_images == 1
     retry = service.retry_operation(failed.operation_id, ALICE)
     assert _wait(service, retry.operation_id).progress.deleted_images == 1
 
 
-def test_recovery_capacity_refuses_new_work_but_allows_the_unresolved_retry(
+def test_pruning_another_accounts_retry_prunes_the_operation_it_retried(
     invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS", 1)
+    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS_PER_CALLER", 2)
     _seed_image(invoker, "flaky.png")
+    real_delete = invoker.services.images.delete_intermediates_by_names
+    monkeypatch.setattr(
+        invoker.services.images, "delete_intermediates_by_names", MagicMock(side_effect=OSError("busy"))
+    )
+    _, failed = _run(service, ALICE, _owner("alice"))
+    monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
+    retry = service.retry_operation(failed.operation_id, ADMIN)
+    assert _wait(service, retry.operation_id, ADMIN).progress.deleted_images == 1
+
+    # The admin's later cleanups push its retry out of its budget; Alice's original goes with it
+    # rather than pointing at a receipt that no longer exists.
+    for _ in range(3):
+        _run(service, ADMIN, _owner("admin"))
+
+    for operation_id in (retry.operation_id, failed.operation_id):
+        with pytest.raises(IntermediatesOperationNotFoundError):
+            service.get_operation(operation_id, ADMIN)
+    with pytest.raises(IntermediatesOperationNotFoundError):
+        service.retry_operation(failed.operation_id, ALICE)
+
+
+def test_one_account_cannot_fill_the_cleanup_queue(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    _seed_image(invoker, "alice.png")
+    _seed_image(invoker, "bob.png", user_id="bob")
+    release = threading.Event()
+    real_delete = invoker.services.images.delete_intermediates_by_names
+
+    def blocked_delete(names, guard=None):
+        release.wait(10)
+        return real_delete(names, guard)
+
+    monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", blocked_delete)
+
+    def start(caller: IntermediatesCaller) -> IntermediatesOperation:
+        preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner(caller.user_id)), caller)
+        return service.start_operation(
+            IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key=uuid.uuid4().hex), caller
+        )
+
+    try:
+        started = [start(ALICE) for _ in range(intermediates_default.MAX_ACTIVE_OPERATIONS_PER_CALLER)]
+        with pytest.raises(IntermediatesUnavailableError, match="your running deletions"):
+            start(ALICE)
+        started.append(start(BOB))
+    finally:
+        release.set()
+    for operation in started:
+        assert _wait(service, operation.operation_id, ADMIN).status == "completed"
+    assert not _exists(invoker, "alice.png") and not _exists(invoker, "bob.png")
+
+
+def test_a_preview_classifies_its_counts_and_targets_at_one_instant(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from invokeai.app.services.intermediates import intermediates_records_sqlite
+    from invokeai.app.services.intermediates.intermediates_common import RECENT_GRACE_SECONDS
+
+    start = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    readings = iter([start] + [start + timedelta(hours=1)] * 100)
+    monkeypatch.setattr(intermediates_records_sqlite, "_utc_now", lambda: next(readings))
+    crossing = start - timedelta(seconds=RECENT_GRACE_SECONDS - 1)
+    _seed_image(invoker, "crossing.png", created_at=crossing.strftime("%Y-%m-%d %H:%M:%S.000"))
+
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
+
+    # Still inside the grace window at the preview's single instant; an hour later it would be safe.
+    assert (preview.impact.keep_recent_images, preview.impact.delete_images) == (1, 0)
+
+
+def test_unresolved_work_blocks_only_its_own_accounts_new_cleanups(
+    invoker: Invoker, service: IntermediatesService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(intermediates_default, "MAX_RETAINED_OPERATIONS_PER_CALLER", 1)
+    _seed_image(invoker, "flaky.png")
+    _seed_image(invoker, "bobs.png", user_id="bob")
     real_delete = invoker.services.images.delete_intermediates_by_names
     monkeypatch.setattr(
         invoker.services.images, "delete_intermediates_by_names", MagicMock(side_effect=OSError("busy"))
@@ -1165,14 +1358,39 @@ def test_recovery_capacity_refuses_new_work_but_allows_the_unresolved_retry(
     assert failed.progress.unresolved_images == 1
     monkeypatch.setattr(invoker.services.images, "delete_intermediates_by_names", real_delete)
 
-    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("bob")), ADMIN)
+    preview = service.create_preview(IntermediatesPreviewRequest(mode="safe", scope=_owner("alice")), ALICE)
     with pytest.raises(IntermediatesUnavailableError, match="Retry unresolved"):
         service.start_operation(
-            IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="another"), ADMIN
+            IntermediatesOperationRequest(preview_id=preview.preview_id, idempotency_key="another"), ALICE
         )
+    _, bobs = _run(service, BOB, _owner("bob"))
+    assert bobs.progress.deleted_images == 1
+
     assert service.get_operation(failed.operation_id, ALICE).progress.unresolved_images == 1
     retry = service.retry_operation(failed.operation_id, ALICE)
     assert _wait(service, retry.operation_id).progress.deleted_images == 1
+
+
+def test_an_unreadable_operation_receipt_does_not_stop_startup(invoker: Invoker, service: IntermediatesService) -> None:
+    _seed_image(invoker, "a.png")
+    _, finished = _run(service, ALICE, _owner("alice"))
+    service.stop()
+    with invoker.services.image_records._db.transaction() as cursor:
+        cursor.executemany(
+            "INSERT INTO intermediates_operations (operation_id, caller_user_id, state_json, created_at)"
+            " VALUES (?, 'alice', ?, '2020-01-01T00:00:00Z');",
+            [("not-json", "{truncated"), ("not-a-receipt", '{"dto": {}}')],
+        )
+
+    restored = IntermediatesService(IntermediatesRecordsSqlite(invoker.services.image_records._db))
+    invoker.services.intermediates = restored
+    restored.start(invoker)
+    try:
+        assert restored.get_operation(finished.operation_id, ALICE).status == "completed"
+        with pytest.raises(IntermediatesOperationNotFoundError):
+            restored.get_operation("not-json", ALICE)
+    finally:
+        restored.stop()
 
 
 def test_force_confirmation_guard_survives_failed_batch_and_restart(
@@ -1532,7 +1750,7 @@ def test_child_protection_does_not_scan_unrelated_completed_history(
 
         db._conn.set_progress_handler(count_instructions, 100)
         try:
-            candidates = service._records.list_candidates("image", user_id="alice", targets=None)
+            candidates, _ = service._records.page_intermediates("image", after_rowid=0, limit=10)
             assert [(item.name, item.classification) for item in candidates] == [("produced.png", "active")]
             return instructions
         finally:

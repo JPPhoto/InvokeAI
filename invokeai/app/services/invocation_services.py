@@ -109,10 +109,10 @@ class InvocationServices:
         gallery: "GalleryServiceABC",
         image_index_records: "ImageIndexRecordsBase",
         image_index: "ImageIndexServiceBase",
+        intermediates: "IntermediatesServiceBase",
         image_moves: "ImageMoveService | None" = None,
         progress_previews: "ProgressPreviewsBase | None" = None,
         fonts: "FontService | None" = None,
-        intermediates: "IntermediatesServiceBase | None" = None,
     ):
         self.board_images = board_images
         self.board_image_records = board_image_records

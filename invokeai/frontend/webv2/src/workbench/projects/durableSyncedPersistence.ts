@@ -109,6 +109,9 @@ export interface SaveDraftAsNewInput {
 
 export type SaveDraftAsNew = (input: SaveDraftAsNewInput) => Promise<ProjectRecordDTO>;
 
+/** How long a failed upload-provenance creation answers later uploads before another attempt is made. */
+const PROJECT_ENSURE_FAILURE_REUSE_MS = 5_000;
+
 const saveDraftAsNew: SaveDraftAsNew = (input) => {
   return createProjectSettled(
     {
@@ -467,6 +470,8 @@ export const createDurableSyncedWorkbenchPersistence = (
   const deleteDatabase = dependencies.deleteDatabase ?? deleteWorkbenchDatabase;
   const databaseDeleteTimeoutMs = dependencies.databaseDeleteTimeoutMs ?? 5_000;
   const syncEntries = new Map<string, SyncEntry>();
+  const projectEnsures = new Map<string, Promise<void>>();
+  const projectEnsureFailures = new Map<string, { at: number; error: unknown }>();
   const conflicts = new Map<string, ProjectConflictInfo>();
   const schemaRefusals = new Map<string, ProjectSchemaRefusal>();
   const generations = new Map<string, number>();
@@ -1886,13 +1891,36 @@ export const createDurableSyncedWorkbenchPersistence = (
       if (syncEntries.has(project.id)) {
         return Promise.resolve().then(assertProjectIdentityCurrent);
       }
-      return enqueue(async () => {
-        assertProjectIdentityCurrent();
-        if (!syncEntries.has(project.id)) {
-          assertProjectFlushed(await pushProject(project));
-        }
-        assertProjectIdentityCurrent();
-      });
+      // Uploads share one creation attempt, and fall back at once while a recent attempt's failure is fresh.
+      const failure = projectEnsureFailures.get(project.id);
+      if (failure && Date.now() - failure.at < PROJECT_ENSURE_FAILURE_REUSE_MS) {
+        return Promise.resolve().then(() => {
+          assertProjectIdentityCurrent();
+          throw failure.error;
+        });
+      }
+      projectEnsureFailures.delete(project.id);
+      let ensure = projectEnsures.get(project.id);
+      if (!ensure) {
+        ensure = enqueue(async () => {
+          assertProjectIdentityCurrent();
+          if (!syncEntries.has(project.id)) {
+            assertProjectFlushed(await pushProject(project));
+          }
+        }).then(
+          () => {
+            projectEnsures.delete(project.id);
+            projectEnsureFailures.delete(project.id);
+          },
+          (error: unknown) => {
+            projectEnsures.delete(project.id);
+            projectEnsureFailures.set(project.id, { at: Date.now(), error });
+            throw error;
+          }
+        );
+        projectEnsures.set(project.id, ensure);
+      }
+      return ensure.then(assertProjectIdentityCurrent);
     },
     flushProjectToServer: (project) => {
       if (isTerminallyCleared) {
@@ -2750,6 +2778,7 @@ export const createDurableSyncedWorkbenchPersistence = (
       });
     },
     releaseProjectSync: (projectId) => {
+      projectEnsureFailures.delete(projectId);
       if ([...pendingRetargetHandoffs.values()].some((handoff) => handoff.targetProjectId === projectId)) {
         closedRetargetTargetsAwaitingAck.add(projectId);
       }

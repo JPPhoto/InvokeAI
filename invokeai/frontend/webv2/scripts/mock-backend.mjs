@@ -44,12 +44,29 @@ const ARCHITECTURE_CAPABILITIES = JSON.parse(
   )
 );
 
-/** POST /__faults sets capabilities to error, empty, or ok until POST /__reset; independent of workload profile. */
+/**
+ * POST /__faults sets capabilities to error, empty, or ok, and `intermediatesCaller` to admin or user, until POST
+ * /__reset; independent of workload profile. `user` also turns on multi-user auth with a non-admin session: sign in
+ * with any email and password (or reload a page that already holds the token) to reach the non-admin UI.
+ */
 const CAPABILITY_FAULTS = new Set(['ok', 'error', 'empty']);
+const INTERMEDIATES_CALLERS = new Set(['admin', 'user']);
 
-const createFaults = () => ({ capabilities: 'ok' });
+const createFaults = () => ({ capabilities: 'ok', intermediatesCaller: 'admin' });
 
 const MOCK_USER_ID = 'fixture-user';
+const MOCK_USER_TOKEN = 'mock-user-token';
+
+const mockNonAdminUser = () => ({
+  created_at: '2026-01-01T00:00:00Z',
+  display_name: 'Fixture User',
+  email: 'fixture-user@example.com',
+  is_active: true,
+  is_admin: false,
+  last_login_at: null,
+  updated_at: '2026-01-01T00:00:00Z',
+  user_id: MOCK_USER_ID,
+});
 
 const clone = (value) => structuredClone(value);
 
@@ -94,6 +111,7 @@ const createState = (profile) => {
     profile,
     projects: new Map(fixture.projects.map((project) => [project.project_id, clone(project)])),
     intermediates: fixture.intermediates.map(clone),
+    intermediatesIdempotency: new Map(),
     intermediatesOperations: new Map(),
     intermediatesPreviews: new Map(),
     queueItems: new Map(fixture.queueItems.map((item) => [item.item_id, clone(item)])),
@@ -682,6 +700,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         if (method === 'POST') {
           const body = await readJsonBody(request);
           const requested = url.searchParams.get('capabilities') ?? body.capabilities;
+          const caller = url.searchParams.get('intermediatesCaller') ?? body.intermediatesCaller;
 
           if (requested !== undefined && requested !== null) {
             if (!CAPABILITY_FAULTS.has(requested)) {
@@ -689,6 +708,14 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
             }
 
             faults.capabilities = requested;
+          }
+
+          if (caller !== undefined && caller !== null) {
+            if (!INTERMEDIATES_CALLERS.has(caller)) {
+              return json(400, { detail: `Unknown intermediates caller: ${String(caller)}` });
+            }
+
+            faults.intermediatesCaller = caller;
           }
         }
 
@@ -702,10 +729,24 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       if (method === 'GET' && path === '/api/v1/auth/status') {
         return json(200, {
           admin_email: null,
-          multiuser_enabled: false,
+          multiuser_enabled: faults.intermediatesCaller === 'user',
           setup_required: false,
           strict_password_checking: false,
         });
+      }
+
+      if (faults.intermediatesCaller === 'user' && path.startsWith('/api/v1/auth/')) {
+        if (method === 'POST' && path === '/api/v1/auth/login') {
+          return json(200, { expires_in: 86_400, token: MOCK_USER_TOKEN, user: mockNonAdminUser() });
+        }
+        if (method === 'GET' && path === '/api/v1/auth/me') {
+          return request.headers.authorization === `Bearer ${MOCK_USER_TOKEN}`
+            ? json(200, mockNonAdminUser())
+            : json(401, { detail: 'Not authenticated' });
+        }
+        if (method === 'POST' && (path === '/api/v1/auth/media-cookie' || path === '/api/v1/auth/logout')) {
+          return json(200, { success: true });
+        }
       }
 
       if (method === 'GET' && path === '/api/v1/image_map/points') {
@@ -1072,18 +1113,37 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       }
 
       if (method === 'GET' && path === '/api/v1/intermediates/summary') {
-        const search = (url.searchParams.get('search') ?? '').trim().toLowerCase();
+        // Mirrors IntermediatesService.get_summary: non-admins see only their rows and may not name another owner.
+        const isAdmin = faults.intermediatesCaller === 'admin';
+        const ownerId = url.searchParams.get('owner_id');
+        if (!isAdmin && ownerId !== null && ownerId !== MOCK_USER_ID) {
+          return json(403, { detail: 'Only administrators can inspect other accounts' });
+        }
+        const ownerFilter = isAdmin ? ownerId : MOCK_USER_ID;
+        const projectId = url.searchParams.get('project_id');
+        const search = (url.searchParams.get('search') ?? '').toLowerCase();
         const sort = url.searchParams.get('sort') ?? 'reclaimable_bytes';
         const descending = (url.searchParams.get('order') ?? 'desc') === 'desc';
         const offset = Math.max(0, Number(url.searchParams.get('offset') ?? 0));
         const limit = Math.max(1, Number(url.searchParams.get('limit') ?? 50));
         const rows = state.intermediates
-          .filter((row) => !search || (row.project_name ?? '').toLowerCase().includes(search))
+          .filter((row) => ownerFilter === null || row.user_id === ownerFilter)
+          .filter((row) => projectId === null || row.project_id === projectId)
+          .filter(
+            (row) =>
+              !search ||
+              [row.project_name, ...(isAdmin ? [row.user_display_name, row.user_email] : [])].some((value) =>
+                (value ?? '').toLowerCase().includes(search)
+              )
+          )
           .sort((left, right) =>
-            sort === 'project_name'
-              ? (left.project_name ?? '').localeCompare(right.project_name ?? '') * (descending ? -1 : 1)
-              : (right.reclaimable_bytes - left.reclaimable_bytes) * (descending ? 1 : -1)
+            (left.project_name ?? '').toLowerCase().localeCompare((right.project_name ?? '').toLowerCase())
           );
+        if (sort === 'reclaimable_bytes') {
+          rows.sort((left, right) => (right.reclaimable_bytes - left.reclaimable_bytes) * (descending ? 1 : -1));
+        } else if (descending) {
+          rows.reverse();
+        }
         const totals = rows.reduce(
           (acc, row) => ({
             rows: acc.rows + 1,
@@ -1112,22 +1172,55 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           totals,
           recent_grace_seconds: 1800,
           measuring: false,
-          can_manage_everyone: true,
+          can_manage_everyone: isAdmin,
         });
       }
 
       if (method === 'POST' && path === '/api/v1/intermediates/previews') {
         const requested = await readJsonBody(request);
+        // Mirrors IntermediatesService._authorize_scope.
+        const isAdmin = faults.intermediatesCaller === 'admin';
+        const scope = requested?.scope ?? {};
+        if (scope.kind === 'everyone' && !isAdmin) {
+          return json(403, { detail: "Only administrators can clear everyone's intermediates" });
+        }
+        if (scope.kind === 'owner' && !scope.user_id) {
+          return json(422, { detail: 'An owner scope names the account to clear' });
+        }
+        if (scope.kind === 'owner' && scope.user_id !== MOCK_USER_ID && !isAdmin) {
+          return json(403, { detail: "Only administrators can clear another account's intermediates" });
+        }
+        if (scope.kind === 'selection' && !(scope.targets?.length > 0)) {
+          return json(422, { detail: 'A selection scope names at least one row' });
+        }
+        if (scope.kind === 'selection' && !isAdmin && scope.targets.some((target) => target.user_id !== MOCK_USER_ID)) {
+          return json(403, { detail: "Only administrators can clear another account's intermediates" });
+        }
         const previewId = `preview-${state.intermediatesPreviews.size + 1}`;
         const targets =
-          requested?.scope?.kind === 'selection'
+          scope.kind === 'selection'
             ? state.intermediates.filter((row) =>
-                requested.scope.targets.some(
+                scope.targets.some(
                   (target) => target.user_id === row.user_id && (target.project_id ?? null) === row.project_id
                 )
               )
-            : state.intermediates;
+            : scope.kind === 'owner'
+              ? state.intermediates.filter((row) => row.user_id === scope.user_id)
+              : state.intermediates;
         const force = requested?.mode === 'force';
+        const affectedDocuments = force
+          ? targets
+              .filter((row) => row.images.referenced + row.videos.referenced > 0)
+              .map((row) => ({
+                kind: 'project',
+                user_id: row.user_id,
+                user_display_name: row.user_display_name,
+                user_email: row.user_email,
+                owner_id: row.project_id ?? 'unassigned',
+                name: row.project_name,
+                references: row.images.referenced + row.videos.referenced,
+              }))
+          : [];
         const impact = targets.reduce(
           (acc, row) => ({
             delete_images: acc.delete_images + row.images.safe + (force ? row.images.referenced : 0),
@@ -1166,19 +1259,8 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           expires_at: new Date(Date.now() + 600_000).toISOString(),
           target_rows: targets.length,
           impact,
-          affected_documents: force
-            ? targets
-                .filter((row) => row.images.referenced + row.videos.referenced > 0)
-                .map((row) => ({
-                  kind: 'project',
-                  user_id: row.user_id,
-                  user_display_name: row.user_display_name,
-                  user_email: row.user_email,
-                  owner_id: row.project_id ?? 'unassigned',
-                  name: row.project_name,
-                  references: row.images.referenced + row.videos.referenced,
-                }))
-            : [],
+          affected_documents: affectedDocuments.slice(0, 200),
+          affected_documents_total: affectedDocuments.length,
         };
         state.intermediatesPreviews.set(previewId, { preview, targets });
         return json(201, preview);
@@ -1186,6 +1268,14 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
 
       if (method === 'POST' && path === '/api/v1/intermediates/operations') {
         const requested = await readJsonBody(request);
+        // Mirrors IntermediatesService.start_operation: a repeated key replays its operation, even once the
+        // single-use preview is gone.
+        const settled = state.intermediatesIdempotency.get(requested?.idempotency_key);
+        if (settled) {
+          return settled.previewId === requested.preview_id
+            ? json(202, state.intermediatesOperations.get(settled.operationId))
+            : json(409, { detail: 'Idempotency key was used for a different preview' });
+        }
         const frozen = state.intermediatesPreviews.get(requested?.preview_id);
         if (!frozen) {
           return json(404, { detail: 'Preview expired or unknown; request a new one' });
@@ -1195,7 +1285,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         const { impact } = frozen.preview;
         const operation = {
           operation_id: operationId,
-          user_id: 'fixture-user',
+          user_id: MOCK_USER_ID,
           mode: frozen.preview.mode,
           scope: frozen.preview.scope,
           status: 'completed',
@@ -1238,6 +1328,12 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           row.unknown_size_count = 0;
         }
         state.intermediatesOperations.set(operationId, operation);
+        if (typeof requested.idempotency_key === 'string') {
+          state.intermediatesIdempotency.set(requested.idempotency_key, {
+            operationId,
+            previewId: requested.preview_id,
+          });
+        }
         return json(202, operation);
       }
 

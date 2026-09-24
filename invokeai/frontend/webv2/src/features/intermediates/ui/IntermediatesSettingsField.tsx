@@ -9,11 +9,15 @@ import { IntermediatesManager } from './IntermediatesManager';
 export const IntermediatesSettingsField = (_props: SettingFieldProps) => {
   const session = useAuthSession();
   const { canClearOthersIntermediates } = useCapabilities();
-  const currentUserId = session.phase === 'ready' ? (session.user?.user_id ?? null) : null;
+  const user = session.phase === 'ready' ? session.user : null;
 
   return (
     <Box display="flex" flex="1" flexDirection="column" minH="0">
-      <IntermediatesManager canClearOthersIntermediates={canClearOthersIntermediates} currentUserId={currentUserId} />
+      <IntermediatesManager
+        canClearOthersIntermediates={canClearOthersIntermediates}
+        currentUserId={user?.user_id ?? null}
+        currentUserLabel={user ? user.display_name || user.email : null}
+      />
     </Box>
   );
 };

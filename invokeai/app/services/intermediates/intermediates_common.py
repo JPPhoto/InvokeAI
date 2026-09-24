@@ -26,6 +26,14 @@ PREVIEW_TTL_SECONDS = 10 * 60
 # stops protecting its media after this long.
 BROWSER_HOLD_TTL_SECONDS = 15 * 60
 MAX_BROWSER_HOLD_NAMES = 50_000
+# A lease id is `<holder>` or `<holder>.<part>`: one open editor (tab) is one holder, however many
+# parts it splits its hold into.
+BROWSER_HOLD_LEASE_ID_PATTERN = r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_.-]+)?$"
+# Open editors one account can hold media for at once; past it every lease of the least recently
+# refreshed editor lapses.
+MAX_BROWSER_HOLD_EDITORS_PER_USER = 8
+# A force preview lists at most this many broken documents; `affected_documents_total` counts them all.
+MAX_AFFECTED_DOCUMENTS = 200
 
 MediaName = Annotated[str, Field(min_length=1, max_length=255)]
 
@@ -159,8 +167,11 @@ class IntermediatesPreview(BaseModel):
         default_factory=list,
         description=(
             "Documents a force clear would break. A non-administrator's force clear keeps media other accounts'"
-            " documents name, so these are always the caller's own"
+            " documents name, so these are always the caller's own. Bounded; see `affected_documents_total`"
         ),
+    )
+    affected_documents_total: int = Field(
+        default=0, description="How many documents a force clear would break, including any not listed"
     )
 
 

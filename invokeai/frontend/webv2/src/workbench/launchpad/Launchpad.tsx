@@ -76,8 +76,8 @@ const getActiveSectionId = (
     ? requestedSectionId
     : DEFAULT_SECTION_ID;
 
-const manageIntermediatesOf = (userId: string): void => {
-  requestIntermediatesFocus({ ownerId: userId });
+const manageIntermediatesOf = (userId: string, label: string): void => {
+  requestIntermediatesFocus({ ownerId: userId, ownerLabel: label });
   openWorkbenchSettings('intermediates');
 };
 
