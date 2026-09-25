@@ -61,6 +61,42 @@ const openApiFixture = {
             orig_required: true,
             title: 'Prompts',
           },
+          steps: {
+            anyOf: [
+              { items: { maximum: 100, minimum: 1, type: 'integer' }, maxItems: 4, minItems: 1, type: 'array' },
+              { type: 'null' },
+            ],
+            field_kind: 'input',
+            input: 'any',
+            orig_required: true,
+            title: 'Steps',
+          },
+          tags: {
+            default: ['a'],
+            field_kind: 'input',
+            input: 'any',
+            items: { maxLength: 8, type: 'string' },
+            orig_required: false,
+            title: 'Tags',
+            type: 'array',
+          },
+          videos: {
+            anyOf: [
+              { items: { $ref: '#/components/schemas/VideoField' }, minItems: 2, type: 'array' },
+              { type: 'null' },
+            ],
+            field_kind: 'input',
+            input: 'any',
+            orig_required: true,
+            title: 'Videos',
+          },
+          weights: {
+            anyOf: [{ items: { type: 'number' }, type: 'array' }, { type: 'null' }],
+            field_kind: 'input',
+            input: 'connection',
+            orig_required: true,
+            title: 'Weights',
+          },
           scheduler: {
             default: 'euler',
             enum: ['euler', 'ddim'],
@@ -205,6 +241,23 @@ describe('parseOpenApiToTemplates', () => {
     });
     expect(denoise?.inputs.scheduler?.type.name).toBe('EnumField');
     expect(denoise?.inputs.scheduler?.options).toEqual(['euler', 'ddim']);
+  });
+
+  it('reads list bounds and item constraints from the array schema of a collection input', () => {
+    const denoise = templates.denoise;
+    const steps = denoise?.inputs.steps;
+
+    // `Optional[list[int]]` keeps its limits inside the array branch of the union.
+    expect(steps?.type).toEqual({ batch: false, cardinality: 'COLLECTION', name: 'IntegerField' });
+    expect(steps).toMatchObject({ maxItems: 4, maximum: 100, minItems: 1, minimum: 1 });
+    // A required editable list starts empty; a connection-only or optional one keeps no default, and so does a
+    // required list with no editor (readiness must still demand its connection).
+    expect(steps?.default).toEqual([]);
+    expect(denoise?.inputs.weights?.default).toBeUndefined();
+    expect(denoise?.inputs.videos).toMatchObject({ default: undefined, minItems: 2, required: true });
+    expect(denoise?.inputs.tags).toMatchObject({ default: ['a'], maxItems: null, maxLength: 8, minItems: null });
+    // Scalars never carry list bounds.
+    expect(denoise?.inputs.scheduler).not.toHaveProperty('minItems');
   });
 
   it('parses the LoRA collection loader input as an inline-editable model collection', () => {

@@ -7,6 +7,7 @@ import type {
   InvocationTemplatesSnapshot,
 } from '@features/workflow/core/types';
 
+import { isEditableCollectionFieldType } from '@features/workflow/core/fields';
 import { createLogger } from '@platform/logging/logger';
 import {
   captureAccountScope,
@@ -209,6 +210,23 @@ const getDefaultValueForType = (type: FieldType, options: unknown[] | null): unk
   }
 };
 
+/** The array schema of a list property: the property itself, or the array branch of an `Optional[list[...]]`. */
+const getArraySchema = (property: JsonObject): JsonObject | null => {
+  if (property.type === 'array') {
+    return property;
+  }
+
+  if (Array.isArray(property.anyOf)) {
+    const arrays = property.anyOf.filter(
+      (variant): variant is JsonObject => isJsonObject(variant) && variant.type === 'array'
+    );
+
+    return arrays.length === 1 ? (arrays[0] as JsonObject) : null;
+  }
+
+  return null;
+};
+
 const buildInputTemplate = (
   name: string,
   property: JsonObject,
@@ -216,6 +234,9 @@ const buildInputTemplate = (
   fieldKind: FieldInputTemplate['fieldKind']
 ): FieldInputTemplate => {
   const enumValues = getEnumValues(property);
+  const arraySchema = type.cardinality === 'COLLECTION' ? getArraySchema(property) : null;
+  // pydantic places a list's item constraints on `items`; scalar constraints stay on the property.
+  const constraints = arraySchema && isJsonObject(arraySchema.items) ? arraySchema.items : property;
   const options = enumValues
     ? enumValues.every(
         (value) =>
@@ -235,24 +256,38 @@ const buildInputTemplate = (
       )
     : null;
 
+  const required = property.orig_required === true;
+
   return {
     default:
-      type.name === 'EnumField' && property.default === null && property.orig_required !== true
+      type.name === 'EnumField' && property.default === null && !required
         ? undefined
         : property.default !== undefined && property.default !== null
           ? property.default
-          : getDefaultValueForType(type, options),
+          : // A required editable list starts empty so the widget has something to append to; a list
+            // without a widget stays absent so readiness still asks for its connection.
+            required && input !== 'connection' && isEditableCollectionFieldType(type)
+            ? []
+            : getDefaultValueForType(type, options),
     description: typeof property.description === 'string' ? property.description : '',
-    exclusiveMaximum: getNumberOrNull(property.exclusiveMaximum),
-    exclusiveMinimum: getNumberOrNull(property.exclusiveMinimum),
+    exclusiveMaximum: getNumberOrNull(constraints.exclusiveMaximum),
+    exclusiveMinimum: getNumberOrNull(constraints.exclusiveMinimum),
     fieldKind,
     input,
-    maximum: getNumberOrNull(property.maximum),
-    minimum: getNumberOrNull(property.minimum),
-    multipleOf: getNumberOrNull(property.multipleOf),
+    maximum: getNumberOrNull(constraints.maximum),
+    minimum: getNumberOrNull(constraints.minimum),
+    multipleOf: getNumberOrNull(constraints.multipleOf),
     name,
     options,
-    required: property.orig_required === true,
+    required,
+    ...(arraySchema
+      ? {
+          maxItems: getNumberOrNull(arraySchema.maxItems),
+          maxLength: getNumberOrNull(constraints.maxLength),
+          minItems: getNumberOrNull(arraySchema.minItems),
+          minLength: getNumberOrNull(constraints.minLength),
+        }
+      : {}),
     title: typeof property.title === 'string' ? property.title : startCase(name),
     type,
     uiChoiceLabels,

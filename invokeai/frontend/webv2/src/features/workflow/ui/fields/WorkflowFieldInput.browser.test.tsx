@@ -1706,3 +1706,137 @@ describe('WorkflowFieldInput text and number entry', () => {
     });
   });
 });
+
+describe('WorkflowFieldInput scalar collections', () => {
+  let renderCount = 0;
+  const list = (typeName: 'FloatField' | 'IntegerField' | 'StringField', overrides: Partial<FieldInputTemplate> = {}) =>
+    fullTemplate(typeName, { type: { batch: false, cardinality: 'COLLECTION', name: typeName }, ...overrides });
+  const renderList = async (template: FieldInputTemplate, initial: unknown, echo?: 'deferred' | 'sync') => {
+    const onCommit = vi.fn();
+
+    renderCount += 1;
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <StatefulField key={renderCount} echo={echo} initial={initial} template={template} onCommit={onCommit} />
+        </ChakraProvider>
+      );
+    });
+
+    return { onCommit };
+  };
+  // Browser tests render raw i18n keys, so interpolated row names collapse to one key: rows are found by position.
+  const row = (index: number) =>
+    host.querySelectorAll<HTMLInputElement>('input[aria-label="nodes.collectionItemLabel"]')[index - 1] ?? null;
+  const rows = () => host.querySelectorAll('input[aria-label="nodes.collectionItemLabel"]').length;
+  const button = (label: 'nodes.addItem' | 'common.clear') => findButton(label);
+  const removeButton = (index: number) =>
+    host.querySelectorAll<HTMLButtonElement>('button[aria-label="nodes.removeItem"]')[index - 1]!;
+  const click = (element: HTMLElement) =>
+    act(async () => {
+      await userEvent.click(element);
+    });
+  const keys = (sequence: string) =>
+    act(async () => {
+      await userEvent.keyboard(sequence);
+    });
+  const isInvalid = (input: HTMLElement | null) => input?.getAttribute('aria-invalid') === 'true';
+
+  it('appends, edits, and removes rows while each keystroke echoes back late', async () => {
+    const { onCommit } = await renderList(list('IntegerField'), [1, 2], 'deferred');
+
+    expect(rows()).toBe(2);
+    await click(button('nodes.addItem'));
+    expect(onCommit).toHaveBeenLastCalledWith([1, 2, 0]);
+    expect(rows()).toBe(3);
+
+    const third = row(3)!;
+
+    await click(third);
+    await keys('{Control>}a{/Control}42');
+    expect(third.value).toBe('42');
+    expect(onCommit).toHaveBeenLastCalledWith([1, 2, 42]);
+    await keys('{Home}7');
+    expect(third.value).toBe('742');
+    expect(third.selectionStart).toBeNull(); // number inputs expose no caret; focus is the tell
+    expect(document.activeElement).toBe(third);
+    expect(onCommit).toHaveBeenLastCalledWith([1, 2, 742]);
+
+    await click(removeButton(2));
+    expect(onCommit).toHaveBeenLastCalledWith([1, 742]);
+    expect(rows()).toBe(2);
+    expect(row(2)?.value).toBe('742');
+  });
+
+  it('marks only the cleared or out-of-range row invalid and keeps the entry as typed', async () => {
+    const { onCommit } = await renderList(list('IntegerField', { minimum: 0 }), [1, 2]);
+    const first = row(1)!;
+
+    await click(first);
+    await keys('{Control>}a{/Control}{Backspace}-');
+    expect(first.value).toBe('');
+    expect(onCommit).toHaveBeenLastCalledWith([null, 2]);
+    expect(isInvalid(first)).toBe(true);
+    expect(isInvalid(row(2))).toBe(false);
+
+    await keys('3');
+    expect(first.value).toBe('-3');
+    expect(onCommit).toHaveBeenLastCalledWith([-3, 2]);
+    expect(isInvalid(first)).toBe(true);
+
+    await keys('{Home}{Delete}');
+    expect(first.value).toBe('3');
+    expect(onCommit).toHaveBeenLastCalledWith([3, 2]);
+    expect(isInvalid(first)).toBe(false);
+  });
+
+  it('clears a required list to empty and an optional one back to its absent default', async () => {
+    const required = await renderList(list('StringField'), ['a', 'b']);
+
+    await click(button('common.clear'));
+    expect(required.onCommit).toHaveBeenLastCalledWith([]);
+    expect(rows()).toBe(0);
+    expect(Array.from(host.querySelectorAll('button')).map((element) => element.textContent)).not.toContain(
+      'common.clear'
+    );
+
+    await click(button('nodes.addItem'));
+    expect(required.onCommit).toHaveBeenLastCalledWith(['']);
+    await click(row(1)!);
+    await keys('hello');
+    expect(required.onCommit).toHaveBeenLastCalledWith(['hello']);
+
+    const optional = await renderList(list('FloatField', { required: false }), [0.5]);
+
+    await click(removeButton(1));
+    expect(optional.onCommit).toHaveBeenLastCalledWith(undefined);
+    expect(rows()).toBe(0);
+  });
+
+  it('keeps keyboard focus in the list when a removal or clear unmounts the focused button', async () => {
+    const { onCommit } = await renderList(list('IntegerField'), [1, 2, 3]);
+
+    // Removing the last row unmounts its own button; focus steps back to the previous row's.
+    await act(() => removeButton(3).focus());
+    await keys('{Enter}');
+    expect(onCommit).toHaveBeenLastCalledWith([1, 2]);
+    expect(document.activeElement).toBe(removeButton(2));
+
+    // Removing an earlier row keeps the button at that position, now owning the next item.
+    await act(() => removeButton(1).focus());
+    await keys('{Enter}');
+    expect(onCommit).toHaveBeenLastCalledWith([2]);
+    expect(document.activeElement).toBe(removeButton(1));
+
+    await keys('{Enter}');
+    expect(onCommit).toHaveBeenLastCalledWith([]);
+    expect(document.activeElement).toBe(button('nodes.addItem'));
+
+    await keys('{Enter}{Enter}');
+    expect(rows()).toBe(2);
+    await act(() => button('common.clear').focus());
+    await keys('{Enter}');
+    expect(rows()).toBe(0);
+    expect(document.activeElement).toBe(button('nodes.addItem'));
+  });
+});

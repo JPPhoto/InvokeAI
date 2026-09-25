@@ -425,6 +425,14 @@ describe('getProjectGraphUndoEntry', () => {
     expect(getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: true })).toEqual({
       label: 'Edit workflow field value',
     });
+    // Typing into a scalar list row streams like a scalar; picking images into a list does not.
+    expect(
+      getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: [1, null, 'x'] })?.mergeKey
+    ).toBe('setFieldValue:n:a');
+    expect(
+      getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: [{ image_name: 'a' }] })
+        ?.mergeKey
+    ).toBeUndefined();
     expect(
       getProjectGraphUndoEntry({ fieldName: 'workflow_id', nodeId: 'n', type: 'setFieldValue', value: 'workflow-a' })
     ).toEqual({

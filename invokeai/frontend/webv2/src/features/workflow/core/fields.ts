@@ -44,20 +44,26 @@ const MODEL_FIELD_TYPE_NAMES = new Set([
 export const isModelFieldType = (type: FieldType): boolean => MODEL_FIELD_TYPE_NAMES.has(type.name);
 
 /** Collection field types with a direct-input list widget; other collections are connection-only. */
-const DIRECT_COLLECTION_FIELD_TYPE_NAMES = new Set(['ImageField']);
+const DIRECT_COLLECTION_FIELD_TYPE_NAMES = new Set(['FloatField', 'ImageField', 'IntegerField', 'StringField']);
+
+/** A list the editor can author item by item. */
+export const isEditableCollectionFieldType = (type: FieldType): boolean =>
+  type.cardinality === 'COLLECTION' && DIRECT_COLLECTION_FIELD_TYPE_NAMES.has(type.name);
 
 /** True when the field renders an editable control on the node / linear form. */
 export const isDirectInputField = (template: FieldInputTemplate): boolean =>
   template.input !== 'connection' &&
   isStatefulFieldType(template.type) &&
-  (template.type.cardinality !== 'COLLECTION' || DIRECT_COLLECTION_FIELD_TYPE_NAMES.has(template.type.name));
+  (template.type.cardinality !== 'COLLECTION' || isEditableCollectionFieldType(template.type));
 
 /** A field can be exposed to the Linear UI when it can be edited directly. */
 export const isExposableField = (template: FieldInputTemplate): boolean => isDirectInputField(template);
 
-/** Numeric fields whose linear-form element can show a randomize button. */
+/** Scalar numeric fields whose linear-form element can show a randomize button. */
 export const isShuffleableField = (template: FieldInputTemplate): boolean =>
-  (template.type.name === 'IntegerField' || template.type.name === 'FloatField') && isDirectInputField(template);
+  (template.type.name === 'IntegerField' || template.type.name === 'FloatField') &&
+  template.type.cardinality !== 'COLLECTION' &&
+  isDirectInputField(template);
 
 const countDecimals = (value: number): number => {
   const [, fraction = ''] = String(value).split('.');
@@ -205,6 +211,60 @@ const isNumberFieldValueValid = (template: FieldInputTemplate, value: unknown): 
   return true;
 };
 
+const isStringFieldValueValid = (template: FieldInputTemplate, value: unknown): boolean => {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const minLength = finiteNumberOrNull(template.minLength);
+  const maxLength = finiteNumberOrNull(template.maxLength);
+
+  return (minLength === null || value.length >= minLength) && (maxLength === null || value.length <= maxLength);
+};
+
+/** One entry of an editable list, judged by the template's per-item rules. */
+export const isWorkflowCollectionItemValid = (template: FieldInputTemplate, item: unknown): boolean => {
+  switch (template.type.name) {
+    case 'StringField':
+      return isStringFieldValueValid(template, item);
+    case 'IntegerField':
+    case 'FloatField':
+      return isNumberFieldValueValid(template, item);
+    case 'ImageField':
+      return hasNonEmptyStringProp(item, 'image_name');
+    default:
+      return item !== undefined && item !== null;
+  }
+};
+
+/** Count rules first, then the first bad entry, so the message names one thing to fix. */
+const getCollectionInvalidReason = (template: FieldInputTemplate, items: readonly unknown[]): string | null => {
+  const minItems = finiteNumberOrNull(template.minItems);
+  const maxItems = finiteNumberOrNull(template.maxItems);
+
+  if (minItems !== null && minItems > 0 && items.length === 0) {
+    return 'Collection is empty.';
+  }
+
+  if (minItems !== null && items.length < minItems) {
+    return `Needs at least ${minItems} items.`;
+  }
+
+  if (maxItems !== null && items.length > maxItems) {
+    return `Allows at most ${maxItems} items.`;
+  }
+
+  const badIndex = items.findIndex((item) => !isWorkflowCollectionItemValid(template, item));
+
+  if (badIndex === -1) {
+    return null;
+  }
+
+  return items[badIndex] === null || items[badIndex] === undefined
+    ? `Item ${badIndex + 1} is empty.`
+    : `Item ${badIndex + 1} is invalid.`;
+};
+
 const isColorValueValid = (value: unknown): boolean => {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -220,11 +280,22 @@ const isColorValueValid = (value: unknown): boolean => {
 };
 
 export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: unknown): boolean => {
+  if (
+    template.type.cardinality === 'COLLECTION' &&
+    (template.type.name === 'StringField' ||
+      template.type.name === 'IntegerField' ||
+      template.type.name === 'FloatField' ||
+      template.type.name === 'ImageField')
+  ) {
+    return Array.isArray(value) && getCollectionInvalidReason(template, value) === null;
+  }
+
   switch (template.type.name) {
     case 'SavedWorkflowField':
+      return typeof value === 'string';
     case 'StringField':
       // An empty string is a legitimate string value (e.g. a blank negative prompt).
-      return typeof value === 'string';
+      return isStringFieldValueValid(template, value);
     case 'IntegerField':
     case 'FloatField':
       return isNumberFieldValueValid(template, value);
@@ -258,10 +329,6 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
         hasNonEmptyStringProp(value, 'board_id')
       );
     case 'ImageField':
-      if (template.type.cardinality === 'COLLECTION') {
-        return Array.isArray(value) && value.every((item) => hasNonEmptyStringProp(item, 'image_name'));
-      }
-
       return hasNonEmptyStringProp(value, 'image_name');
     case 'VideoField':
       // COLLECTION video values are arrays no direct-input widget authors; keep the
@@ -295,6 +362,11 @@ export const getWorkflowFieldInvalidReason = ({
 
   if (!template.required && isEmptyOptionalValue(value)) {
     return null;
+  }
+
+  // An editable list reports which count or entry rule it breaks; the generic reasons cannot say.
+  if (template.type.cardinality === 'COLLECTION' && Array.isArray(value) && isDirectInputField(template)) {
+    return getCollectionInvalidReason(template, value);
   }
 
   if (!template.required) {

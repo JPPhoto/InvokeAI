@@ -63,6 +63,11 @@ const entryTemplate: InvocationTemplate = {
   inputs: {
     prompt: entryInput('prompt', 'Prompt', 'StringField'),
     scale: entryInput('scale', 'Scale', 'FloatField', false),
+    sizes: {
+      ...entryInput('sizes', 'Sizes', 'IntegerField'),
+      minimum: 1,
+      type: { batch: false, cardinality: 'COLLECTION', name: 'IntegerField' },
+    },
     steps: entryInput('steps', 'Steps', 'IntegerField'),
     weight: entryInput('weight', 'Weight', 'FloatField'),
   },
@@ -443,6 +448,7 @@ describe('Linear form field entry', () => {
       inputs: {
         prompt: { label: '', name: 'prompt', value: 'hello world' },
         scale: { label: '', name: 'scale', value: 1.5 },
+        sizes: { label: '', name: 'sizes', value: [4, 8] },
         steps: { label: '', name: 'steps', value: 20 },
         weight: { label: '', name: 'weight', value: 0.5 },
       },
@@ -590,5 +596,46 @@ describe('Linear form field entry', () => {
     await act(() => scale.blur());
     expect(scale.value).toBe('');
     expect(scale.getAttribute('aria-invalid')).toBeNull();
+  });
+
+  it('edits an exposed scalar list row by row and reports the first empty entry', async () => {
+    const { value } = await renderForm();
+    // Raw i18n keys: every list row shares one accessible name, so rows are found by position.
+    const listRow = (index: number) =>
+      host.querySelectorAll<HTMLInputElement>('input[aria-label="nodes.collectionItemLabel"]')[index - 1]!;
+    // Each row scopes its own Field.Root; the reason text belongs to the host field around the list.
+    const listError = (input: HTMLInputElement) =>
+      input
+        .closest('[data-scope="field"][data-part="root"]')
+        ?.parentElement?.closest('[data-scope="field"][data-part="root"]')
+        ?.querySelector('[data-part="error-text"]')?.textContent ?? null;
+
+    expect(listRow(2).value).toBe('8');
+
+    const addItem = Array.from(host.querySelectorAll('button')).find(
+      (button) => button.textContent === 'nodes.addItem'
+    )!;
+
+    await act(async () => {
+      await userEvent.click(addItem);
+    });
+    expect(value('sizes')).toEqual([4, 8, 1]);
+
+    const third = listRow(3);
+
+    await focusAtEnd(third);
+    await keys('6');
+    expect(third.value).toBe('16');
+    expect(value('sizes')).toEqual([4, 8, 16]);
+    expect(listError(third)).toBeNull();
+
+    await keys('{Control>}a{/Control}{Backspace}');
+    expect(value('sizes')).toEqual([4, 8, null]);
+    expect(third.getAttribute('aria-invalid')).toBe('true');
+    expect(listError(third)).toBe('Item 3 is empty.');
+    // The host field is invalid as a whole, yet only the offending row carries the invalid state.
+    expect(listRow(1).getAttribute('aria-invalid')).toBeNull();
+    expect(listRow(1).getAttribute('data-invalid')).toBeNull();
+    expect(listRow(2).getAttribute('aria-invalid')).toBeNull();
   });
 });

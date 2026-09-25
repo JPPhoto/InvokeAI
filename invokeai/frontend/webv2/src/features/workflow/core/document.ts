@@ -366,16 +366,20 @@ export interface ProjectGraphUndoEntry {
   mergeKey?: string;
 }
 
+const isScalarList = (value: unknown): boolean =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string' || typeof item === 'number' || item === null);
+
 const getUndoMergeKey = (action: ProjectGraphAction): string | undefined => {
   switch (action.type) {
     case 'setFieldDescription':
     case 'setFieldLabel':
       return `${action.type}:${action.nodeId}:${action.fieldName}`;
     case 'setFieldValue':
-      // Typed text and dragged numbers stream; a pick (model, board, switch) is one step of its own.
+      // Typed text and dragged numbers stream, as do the rows of a scalar list; a pick (model, board,
+      // switch, image list) is one step of its own.
       return action.fieldName === 'workflow_id'
         ? undefined
-        : typeof action.value === 'string' || typeof action.value === 'number'
+        : typeof action.value === 'string' || typeof action.value === 'number' || isScalarList(action.value)
           ? `${action.type}:${action.nodeId}:${action.fieldName}`
           : undefined;
     case 'setNodeLabel':

@@ -8,6 +8,7 @@ import {
   isDirectInputField,
   isLoraFieldCollectionEntry,
   isModelFieldType,
+  isWorkflowCollectionItemValid,
   isWorkflowFieldValueValid,
   toLoraFieldCollectionList,
   getRandomWorkflowFieldValue,
@@ -186,16 +187,69 @@ describe('workflow field validation', () => {
     expect(isWorkflowFieldValueValid(images, { image_name: 'a.png' })).toBe(false);
   });
 
-  it('exposes image collections as direct inputs but keeps other collections connection-only', () => {
+  it('exposes image and scalar collections as direct inputs but keeps other collections connection-only', () => {
     expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'ImageField' } }))).toBe(
       true
     );
     expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'VideoField' } }))).toBe(
       false
     );
-    expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'StringField' } }))).toBe(
-      false
-    );
+
+    for (const name of ['StringField', 'IntegerField', 'FloatField']) {
+      const template = input({ type: { batch: false, cardinality: 'COLLECTION', name } });
+
+      expect(isDirectInputField(template)).toBe(true);
+      // A list has no single number to randomize.
+      expect(isShuffleableField(template)).toBe(false);
+    }
+  });
+
+  describe('scalar collections', () => {
+    const list = (name: string, overrides: Partial<FieldInputTemplate> = {}) =>
+      input({ type: { batch: false, cardinality: 'COLLECTION', name }, ...overrides });
+    const reason = (template: FieldInputTemplate, value: unknown) =>
+      getWorkflowFieldInvalidReason({ isConnected: false, template, value });
+
+    it('validates each entry with the scalar rules and reports the first bad one by position', () => {
+      const integers = list('IntegerField', { minimum: 0, multipleOf: 2 });
+
+      expect(isWorkflowFieldValueValid(integers, [0, 2, 4])).toBe(true);
+      expect(isWorkflowFieldValueValid(integers, [])).toBe(true);
+      expect(isWorkflowFieldValueValid(integers, 2)).toBe(false);
+      expect(reason(integers, [2, 3])).toBe('Item 2 is invalid.');
+      expect(reason(integers, [2, -2])).toBe('Item 2 is invalid.');
+      expect(reason(integers, [2, 2.5])).toBe('Item 2 is invalid.');
+      expect(reason(integers, [null, 2])).toBe('Item 1 is empty.');
+      expect(isWorkflowCollectionItemValid(integers, 3)).toBe(false);
+      expect(isWorkflowCollectionItemValid(integers, 4)).toBe(true);
+
+      const strings = list('StringField', { maxLength: 3, minLength: 1 });
+
+      expect(isWorkflowFieldValueValid(strings, ['a', 'abc'])).toBe(true);
+      expect(reason(strings, ['a', ''])).toBe('Item 2 is invalid.');
+      expect(reason(strings, ['abcd'])).toBe('Item 1 is invalid.');
+      expect(reason(strings, ['a', 7])).toBe('Item 2 is invalid.');
+    });
+
+    it('enforces item counts before entries', () => {
+      const floats = list('FloatField', { maxItems: 2, minItems: 1 });
+
+      expect(reason(floats, [])).toBe('Collection is empty.');
+      expect(reason(floats, [1, 2, 3])).toBe('Allows at most 2 items.');
+      expect(reason(list('FloatField', { minItems: 2 }), [1])).toBe('Needs at least 2 items.');
+      expect(reason(list('FloatField', { minItems: 2 }), [])).toBe('Collection is empty.');
+      expect(reason(floats, [1, 2])).toBeNull();
+      // Image lists share the count rules; their entries keep the image-ref check.
+      expect(reason(list('ImageField', { minItems: 1 }), [])).toBe('Collection is empty.');
+      expect(reason(list('ImageField'), [{ image_name: 'a.png' }, { image_name: '' }])).toBe('Item 2 is invalid.');
+    });
+
+    it('tells a missing required list apart from an empty optional one', () => {
+      expect(reason(list('IntegerField'), undefined)).toBe('Required value.');
+      expect(reason(list('IntegerField', { required: false }), undefined)).toBeNull();
+      expect(reason(list('IntegerField', { required: false }), [null])).toBe('Item 1 is empty.');
+      expect(reason(list('IntegerField', { input: 'connection' }), undefined)).toBe('Required connection.');
+    });
   });
 
   it('accepts a LoRA collection as a list, a bare entry, or an empty list', () => {

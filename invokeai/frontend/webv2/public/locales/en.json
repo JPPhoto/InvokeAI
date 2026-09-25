@@ -1506,6 +1506,11 @@
     "forLoopBodyBoundary": "For loop body",
     "imageCollectionCount_one": "{{count}} image",
     "imageCollectionCount_other": "{{count}} images",
+    "addItem": "Add item",
+    "removeItem": "Remove {{field}} item {{index}}",
+    "collectionItemLabel": "{{field}} item {{index}}",
+    "collectionItemCount_one": "{{count}} item",
+    "collectionItemCount_other": "{{count}} items",
     "forLoopBodyBoundaryStatus": {
       "missing_linkage": "missing loop linkage",
       "invalid_linkage": "invalid loop linkage",

@@ -7,6 +7,7 @@ import {
   Badge,
   Box,
   createListCollection,
+  Field,
   Flex,
   HStack,
   Icon,
@@ -62,6 +63,7 @@ import { useWorkflowProjectSelector, useWorkflowUi } from '@features/workflow/ui
 import {
   getResolvedWorkflowEdges,
   isLoraFieldCollectionEntry,
+  isWorkflowCollectionItemValid,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
 import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
@@ -90,7 +92,7 @@ import {
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SeedInput } from '@platform/ui/SeedInput';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilmIcon, ImageIcon, ImagePlusIcon, RotateCcwIcon, Trash2Icon, XIcon } from 'lucide-react';
+import { FilmIcon, ImageIcon, ImagePlusIcon, PlusIcon, RotateCcwIcon, Trash2Icon, XIcon } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -166,7 +168,10 @@ const useFocusedDraft = () => {
   return [draft, setDraft, clearDraft] as const;
 };
 
-const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
+/** A row of a list names itself by position; a scalar field is named by its title. */
+type ScalarInputProps = WorkflowFieldInputProps & { ariaLabel?: string };
+
+const StringInput = ({ ariaLabel, id, invalid, onChange, template, value }: ScalarInputProps) => {
   const [draft, setDraft, clearDraft] = useFocusedDraft();
   const text = draft ?? (typeof value === 'string' ? value : '');
   const onTextChange = useCallback(
@@ -180,7 +185,7 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
   if (template.uiComponent === 'textarea') {
     return (
       <ResizableTextarea
-        aria-label={template.title}
+        aria-label={ariaLabel ?? template.title}
         className="nodrag nowheel"
         defaultHeightPx={96}
         fontFamily="mono"
@@ -199,7 +204,7 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
 
   return (
     <Input
-      aria-label={template.title}
+      aria-label={ariaLabel ?? template.title}
       className="nodrag"
       id={id ? `${id}-input` : undefined}
       size="xs"
@@ -218,7 +223,7 @@ const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTa
 /** Chromium steps a focused number input on wheel and swallows the scroll; unfocused, the panel scrolls instead. */
 const blurOnWheel = (event: WheelEvent<HTMLInputElement>) => event.currentTarget.blur();
 
-const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
+const NumericInput = ({ ariaLabel, id, invalid, onChange, template, value }: ScalarInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
   const [draft, setDraft, clearDraft] = useFocusedDraft();
   // Chromium keeps an unparseable partial entry (`-`, `1e`) on screen but reports it as empty, so the empty commit
@@ -256,7 +261,7 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
 
   return (
     <Input
-      aria-label={template.title}
+      aria-label={ariaLabel ?? template.title}
       className="nodrag"
       id={id ? `${id}-number-input` : undefined}
       max={max !== undefined ? String(max) : undefined}
@@ -1525,6 +1530,156 @@ const LoRACollectionRow = ({
   );
 };
 
+const ScalarCollectionInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
+  const { t } = useTranslation();
+  const items = useMemo<readonly unknown[]>(() => (Array.isArray(value) ? value : []), [value]);
+  const isString = template.type.name === 'StringField';
+  // Each row edits one scalar on a single line, whatever the list's own ui_component says.
+  const itemTemplate = useMemo<FieldInputTemplate>(
+    () => ({ ...template, type: { ...template.type, cardinality: 'SINGLE' }, uiComponent: null }),
+    [template]
+  );
+  // Emptying the list restores the template's own default, so the reset affordance stays quiet.
+  const clearsToUndefined = template.default === undefined && !template.required;
+  const commit = useCallback(
+    (next: unknown[]) => onChange(next.length === 0 && clearsToUndefined ? undefined : next),
+    [clearsToUndefined, onChange]
+  );
+  const onAdd = useCallback(
+    () => commit([...items, isString ? '' : (finiteNumberOrUndefined(template.minimum) ?? 0)]),
+    [commit, isString, items, template.minimum]
+  );
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Rows are keyed by position, so a removal only unmounts the last row's controls. Move keyboard focus off
+  // anything about to unmount before the commit lands, or it falls to the canvas and its delete shortcut.
+  const onClear = useCallback(() => {
+    addButtonRef.current?.focus();
+    commit([]);
+  }, [commit]);
+  const onRemove = useCallback(
+    (index: number) => {
+      if (index === items.length - 1) {
+        const removeButtons = listRef.current?.querySelectorAll<HTMLButtonElement>('[data-collection-remove]');
+
+        (index > 0 ? removeButtons?.[index - 1] : addButtonRef.current)?.focus();
+      }
+
+      commit(items.filter((_, itemIndex) => itemIndex !== index));
+    },
+    [commit, items]
+  );
+  // A cleared or unparseable number row is kept as null: the list keeps its shape and the row reports itself.
+  const onItemChange = useCallback(
+    (index: number, next: unknown) =>
+      commit(items.map((item, itemIndex) => (itemIndex === index ? (next === undefined ? null : next) : item))),
+    [commit, items]
+  );
+
+  return (
+    <Stack gap="1" w="full">
+      {items.length > 0 ? (
+        <Stack
+          ref={listRef}
+          borderWidth="1px"
+          boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
+          className="nowheel"
+          gap="1"
+          maxH="40"
+          overflowY="auto"
+          p="1"
+          rounded="sm"
+          w="full"
+        >
+          {items.map((item, index) => (
+            <ScalarCollectionRow
+              key={index}
+              id={id}
+              index={index}
+              itemTemplate={itemTemplate}
+              value={item}
+              onItemChange={onItemChange}
+              onRemove={onRemove}
+            />
+          ))}
+        </Stack>
+      ) : null}
+      <HStack gap="1.5" w="full">
+        <Button ref={addButtonRef} className="nodrag" size="2xs" variant="outline" onClick={onAdd}>
+          <Icon as={PlusIcon} boxSize="3" />
+          {t('nodes.addItem')}
+        </Button>
+        {items.length > 0 ? (
+          <Button className="nodrag" size="2xs" variant="ghost" onClick={onClear}>
+            {t('common.clear')}
+          </Button>
+        ) : null}
+        {items.length > 0 ? (
+          <Text color="fg.subtle" fontSize="2xs" ms="auto">
+            {t('nodes.collectionItemCount', { count: items.length })}
+          </Text>
+        ) : null}
+      </HStack>
+    </Stack>
+  );
+};
+
+const ScalarCollectionRow = ({
+  id,
+  index,
+  itemTemplate,
+  onItemChange,
+  onRemove,
+  value,
+}: {
+  id?: string;
+  index: number;
+  itemTemplate: FieldInputTemplate;
+  onItemChange: (index: number, next: unknown) => void;
+  onRemove: (index: number) => void;
+  value: unknown;
+}) => {
+  const { t } = useTranslation();
+  const onChange = useCallback((next: unknown) => onItemChange(index, next), [index, onItemChange]);
+  const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
+  const Control = itemTemplate.type.name === 'StringField' ? StringInput : NumericInput;
+  const invalid = !isWorkflowCollectionItemValid(itemTemplate, value);
+  const removeLabel = t('nodes.removeItem', { field: itemTemplate.title, index: index + 1 });
+
+  return (
+    <HStack gap="1" w="full">
+      <Text color="fg.subtle" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums" minW="4" textAlign="end">
+        {index + 1}.
+      </Text>
+      {/* The host's Field.Root marks every control inside it invalid; a row scopes its own validity instead. */}
+      <Field.Root flex="1" invalid={invalid} minW="0">
+        <Control
+          ariaLabel={t('nodes.collectionItemLabel', { field: itemTemplate.title, index: index + 1 })}
+          id={id ? `${id}-item-${index}` : undefined}
+          invalid={invalid}
+          template={itemTemplate}
+          value={value}
+          onChange={onChange}
+        />
+      </Field.Root>
+      <Tooltip content={removeLabel}>
+        <IconButton
+          aria-label={removeLabel}
+          className="nodrag"
+          color="fg.muted"
+          data-collection-remove=""
+          flexShrink="0"
+          size="2xs"
+          variant="ghost"
+          onClick={onRemoveClick}
+        >
+          <Trash2Icon />
+        </IconButton>
+      </Tooltip>
+    </HStack>
+  );
+};
+
 const CONNECTION_ONLY_FALLBACK = (
   <Text color="fg.subtle" fontSize="2xs">
     Connection only
@@ -1679,11 +1834,20 @@ const SavedWorkflowInput = ({ nodeId, onChange, template, value }: WorkflowField
 };
 
 export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
-  // COLLECTION fields hold arrays; only image lists have a list widget. Other
+  // COLLECTION fields hold arrays; only image and scalar lists have a list widget. Other
   // collections stay connection-only even when a migrated linear-form element
   // points at them, since the single-value widget would write a bare value.
   if (props.template.type.cardinality === 'COLLECTION') {
-    return props.template.type.name === 'ImageField' ? <ImageCollectionInput {...props} /> : CONNECTION_ONLY_FALLBACK;
+    switch (props.template.type.name) {
+      case 'ImageField':
+        return <ImageCollectionInput {...props} />;
+      case 'FloatField':
+      case 'IntegerField':
+      case 'StringField':
+        return <ScalarCollectionInput {...props} />;
+      default:
+        return CONNECTION_ONLY_FALLBACK;
+    }
   }
 
   switch (props.template.type.name) {
