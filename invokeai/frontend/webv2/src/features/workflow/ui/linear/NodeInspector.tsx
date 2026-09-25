@@ -15,7 +15,12 @@ import {
   useWorkflowNodeExecutionState,
   useWorkflowProjectSelector,
 } from '@features/workflow/ui/WorkflowUiContext';
-import { formatOutputFieldValue, getNodeUpdateStatus } from '@features/workflow/utility';
+import {
+  formatOutputFieldValue,
+  getNodeUpdateStatus,
+  getWorkflowBatchGroupId,
+  isWorkflowBatchNodeType,
+} from '@features/workflow/utility';
 import { Button, JsonPreview, Scrollable, Tabs } from '@platform/ui';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -39,6 +44,17 @@ const DetailRow = ({ label, value }: { label: string; value: string }) => (
 );
 
 const JsonBlock = ({ label, value }: { label: string; value: unknown }) => <JsonPreview label={label} value={value} />;
+
+/** " (Group 1)" or " (no group)" after a batch node's title; empty for every other node. */
+const getBatchGroupSuffix = (node: WorkflowInvocationNode, t: ReturnType<typeof useTranslation>['t']): string => {
+  if (!isWorkflowBatchNodeType(node.data.type)) {
+    return '';
+  }
+
+  const groupId = getWorkflowBatchGroupId(node);
+
+  return ` (${groupId === 'None' ? t('nodes.noBatchGroup') : groupId})`;
+};
 
 /** The version row's action: update in place when the template allows it, otherwise say why not. */
 const NodeUpdateRow = ({ node, template }: { node: WorkflowInvocationNode; template: InvocationTemplate }) => {
@@ -93,7 +109,10 @@ const DetailsTab = ({ node, template }: { node: WorkflowInvocationNode; template
 
   return (
     <Stack gap="2">
-      <DetailRow label={t('widgets.workflow.title')} value={node.data.label || template?.title || node.data.type} />
+      <DetailRow
+        label={t('widgets.workflow.title')}
+        value={`${node.data.label || template?.title || node.data.type}${getBatchGroupSuffix(node, t)}`}
+      />
       <DetailRow label={t('widgets.workflow.type')} value={node.data.type} />
       <DetailRow label={t('widgets.workflow.version')} value={node.data.version} />
       {template ? <NodeUpdateRow node={node} template={template} /> : null}

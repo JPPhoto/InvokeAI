@@ -2,6 +2,8 @@ import { SEED_MAX } from '@platform/core/seed';
 
 import type { FieldInputTemplate, FieldType, WorkflowFieldInstance } from './types';
 
+import { isWorkflowGeneratorFieldTypeName, parseWorkflowGeneratorValue } from './batch';
+
 export const getEffectiveWorkflowFieldDescription = (
   instance: WorkflowFieldInstance | undefined,
   template: FieldInputTemplate | undefined
@@ -17,8 +19,11 @@ const STATEFUL_FIELD_TYPE_NAMES = new Set([
   'ColorField',
   'EnumField',
   'FloatField',
+  'FloatGeneratorField',
   'ImageField',
+  'ImageGeneratorField',
   'IntegerField',
+  'IntegerGeneratorField',
   // Collection loaders accept scalar or list LoRA fields; edit lists inline without extra selector/collector
   // nodes.
   'LoRAField',
@@ -26,6 +31,7 @@ const STATEFUL_FIELD_TYPE_NAMES = new Set([
   'SchedulerField',
   'SavedWorkflowField',
   'StringField',
+  'StringGeneratorField',
   'StylePresetField',
   'SystemPromptField',
   'VideoField',
@@ -286,6 +292,10 @@ const isColorValueValid = (value: unknown): boolean => {
 };
 
 export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: unknown): boolean => {
+  if (isWorkflowGeneratorFieldTypeName(template.type.name)) {
+    return parseWorkflowGeneratorValue(template.type.name, value) !== null;
+  }
+
   if (
     template.type.cardinality === 'COLLECTION' &&
     (template.type.name === 'StringField' ||

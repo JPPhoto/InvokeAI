@@ -732,3 +732,94 @@ describe('InvocationFlowNode template version', () => {
     expect(updateIcon()?.getAttribute('aria-label')).toBe('nodes.nodeVersionIncompatible');
   });
 });
+
+describe('InvocationFlowNode batch nodes', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement('div');
+    host.style.cssText = 'width: 480px; height: 520px;';
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(() => root.unmount());
+    host.remove();
+  });
+
+  const batchTemplate: InvocationTemplate = {
+    ...template,
+    inputs: {
+      batch_group_id: {
+        ...(template.inputs.a as InvocationTemplate['inputs'][string]),
+        default: 'None',
+        input: 'direct',
+        name: 'batch_group_id',
+        options: ['None', 'Group 1', 'Group 2'],
+        title: 'Batch Group',
+        type: { batch: false, cardinality: 'SINGLE', name: 'EnumField' },
+      },
+      floats: {
+        ...(template.inputs.a as InvocationTemplate['inputs'][string]),
+        default: [],
+        input: 'any',
+        name: 'floats',
+        title: 'Floats',
+        type: { batch: true, cardinality: 'COLLECTION', name: 'FloatField' },
+      },
+    },
+    outputs: {
+      value: {
+        description: '',
+        name: 'value',
+        title: 'Value',
+        type: { batch: false, cardinality: 'SINGLE', name: 'FloatField' },
+      },
+    },
+    type: 'float_batch',
+  };
+  const batchNode = (groupId: string): WorkflowInvocationNode => ({
+    ...documentNode,
+    data: {
+      ...documentNode.data,
+      inputs: {
+        batch_group_id: { label: '', name: 'batch_group_id', value: groupId },
+        floats: { label: '', name: 'floats', value: [1, 2] },
+      },
+      type: 'float_batch',
+    },
+    id: 'batch-node',
+  });
+  const render = (groupId: string) => {
+    const graph: ProjectGraphState = { ...createProjectGraph('batch-test'), nodes: [batchNode(groupId)] };
+
+    return act(() =>
+      root.render(
+        <ChakraProvider value={system}>
+          <WorkflowUiProvider adapter={createAdapter(createExecutionPort().port)}>
+            <ReactFlow
+              edges={[]}
+              nodes={toFlowNodes(graph, [], { float_batch: batchTemplate })}
+              nodeTypes={nodeTypes}
+            />
+          </WorkflowUiProvider>
+        </ChakraProvider>
+      )
+    );
+  };
+  const header = () => host.querySelector<HTMLElement>('.react-flow__node > div > div')!;
+
+  it('names the group beside the title, draws the batch list handle as a diamond, and keeps the footer off', async () => {
+    await render('Group 2');
+    expect(header().textContent).toContain('(Group 2)');
+    expect(host.querySelector<HTMLElement>('.react-flow__handle[data-handleid="floats"]')?.style.transform).toContain(
+      'rotate(45deg)'
+    );
+    expect(host.textContent).not.toContain('Use Cache');
+
+    await render('None');
+    expect(header().textContent).toContain('(nodes.noBatchGroup)');
+  });
+});

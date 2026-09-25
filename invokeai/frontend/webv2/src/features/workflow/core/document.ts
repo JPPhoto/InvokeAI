@@ -21,6 +21,7 @@ import type {
   XYPosition,
 } from './types';
 
+import { isWorkflowGeneratorVariant } from './batch';
 import {
   CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX,
   clearSavedWorkflowDynamicFields,
@@ -646,6 +647,12 @@ export interface ProjectGraphUndoEntry {
 const isScalarList = (value: unknown): boolean =>
   Array.isArray(value) && value.every((item) => typeof item === 'string' || typeof item === 'number' || item === null);
 
+const getGeneratorVariant = (value: unknown): string | null => {
+  const type = typeof value === 'object' && value !== null ? (value as { type?: unknown }).type : undefined;
+
+  return typeof type === 'string' && isWorkflowGeneratorVariant(type) ? type : null;
+};
+
 const getUndoMergeKey = (action: ProjectGraphAction): string | undefined => {
   switch (action.type) {
     case 'setFieldDescription':
@@ -654,11 +661,18 @@ const getUndoMergeKey = (action: ProjectGraphAction): string | undefined => {
     case 'setFieldValue':
       // Typed text and dragged numbers stream, as do the rows of a scalar list; a pick (model, board,
       // switch, image list) is one step of its own.
-      return action.fieldName === 'workflow_id'
-        ? undefined
-        : typeof action.value === 'string' || typeof action.value === 'number' || isScalarList(action.value)
-          ? `${action.type}:${action.nodeId}:${action.fieldName}`
-          : undefined;
+      if (action.fieldName === 'workflow_id') {
+        return undefined;
+      }
+
+      if (typeof action.value === 'string' || typeof action.value === 'number' || isScalarList(action.value)) {
+        return `${action.type}:${action.nodeId}:${action.fieldName}`;
+      }
+
+      // Generator settings are typed too; switching the variant starts a new step.
+      const variant = getGeneratorVariant(action.value);
+
+      return variant ? `${action.type}:${action.nodeId}:${action.fieldName}:${variant}` : undefined;
     case 'setNodeLabel':
     case 'setNodeNotes':
       return `${action.type}:${action.nodeId}`;

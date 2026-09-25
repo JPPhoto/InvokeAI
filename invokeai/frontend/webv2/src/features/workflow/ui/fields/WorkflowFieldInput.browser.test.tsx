@@ -1937,3 +1937,186 @@ describe('WorkflowFieldInput record pickers', () => {
     await vi.waitFor(() => expect(option('Helpful')).toBeDefined());
   });
 });
+
+describe('WorkflowFieldInput generators', () => {
+  const FLOAT_GENERATOR = fullTemplate('FloatField', {
+    default: { count: 10, start: 0, step: 0.1, type: 'float_generator_arithmetic_sequence' },
+    input: 'direct',
+    title: 'Generator Type',
+    type: { batch: false, cardinality: 'SINGLE', name: 'FloatGeneratorField' },
+  });
+  const STRING_GENERATOR = fullTemplate('StringField', {
+    default: { input: 'foo,bar,baz,qux', splitOn: ',', type: 'string_generator_parse_string' },
+    input: 'direct',
+    title: 'Generator Type',
+    type: { batch: false, cardinality: 'SINGLE', name: 'StringGeneratorField' },
+  });
+  const IMAGE_GENERATOR = fullTemplate('StringField', {
+    default: { category: 'images', type: 'image_generator_images_from_board' },
+    input: 'direct',
+    title: 'Generator Type',
+    type: { batch: false, cardinality: 'SINGLE', name: 'ImageGeneratorField' },
+  });
+  let renderCount = 0;
+  const renderGenerator = async (template: FieldInputTemplate, initial: unknown) => {
+    const onCommit = vi.fn();
+
+    renderCount += 1;
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <QueryClientProvider client={queryClient}>
+            <StatefulField key={renderCount} initial={initial} template={template} onCommit={onCommit} />
+          </QueryClientProvider>
+        </ChakraProvider>
+      );
+    });
+    await vi.waitFor(() => expect(host.querySelector('[data-scope="select"][data-part="trigger"]')).not.toBeNull());
+
+    return { onCommit };
+  };
+  const numberInput = (suffix: string) =>
+    host.querySelector<HTMLInputElement>(`input[type="number"][id$="${suffix}"]`)!;
+  const selectVariant = async (label: string) => {
+    await act(() => userEvent.click(host.querySelector('[data-scope="select"][data-part="trigger"]')!));
+    const item = Array.from(document.querySelectorAll<HTMLElement>('[data-scope="select"][data-part="item"]')).find(
+      (candidate) => candidate.textContent?.includes(label)
+    )!;
+    await act(() => userEvent.click(item));
+  };
+
+  it('previews an arithmetic sequence, commits edited settings as typed, and resets on a variant switch', async () => {
+    const { onCommit } = await renderGenerator(FLOAT_GENERATOR, {
+      count: 3,
+      start: 1,
+      step: 0.5,
+      type: 'float_generator_arithmetic_sequence',
+    });
+
+    expect(host.textContent).toContain('1, 1.5, 2');
+
+    await act(() => numberInput('-count').focus());
+    await act(() => userEvent.keyboard('{Control>}a{/Control}4'));
+    expect(onCommit).toHaveBeenLastCalledWith({
+      count: 4,
+      start: 1,
+      step: 0.5,
+      type: 'float_generator_arithmetic_sequence',
+    });
+    // The preview holds the pre-edit value through the typing burst, then settles.
+    await vi.waitFor(() => expect(host.textContent).toContain('1, 1.5, 2, 2.5'), { timeout: 2000 });
+
+    await selectVariant('nodes.parseString');
+    expect(onCommit).toHaveBeenLastCalledWith({
+      input: '0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1',
+      splitOn: ',',
+      type: 'float_generator_parse_string',
+    });
+  });
+
+  it('shows a random draw as a count until a seed pins it, and refuses a count the queue cannot take', async () => {
+    const { onCommit } = await renderGenerator(FLOAT_GENERATOR, {
+      count: 4,
+      max: 9,
+      min: 2,
+      seed: null,
+      type: 'float_generator_random_distribution_uniform',
+    });
+
+    expect(host.textContent).toContain('<nodes.generatorNRandomValues>');
+    expect(numberInput('-seed').disabled).toBe(true);
+    expect(numberInput('-seed').getAttribute('aria-label')).toBe('nodes.generatorSeed');
+
+    // A count below its minimum stays a draft: nothing commits, so the variant and its settings survive.
+    await act(() => numberInput('-count').focus());
+    await act(() => userEvent.keyboard('{Control>}a{/Control}0'));
+    expect(numberInput('-count').value).toBe('0');
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(numberInput('-min').value).toBe('2');
+    await act(() => userEvent.keyboard('5'));
+    expect(onCommit).toHaveBeenLastCalledWith({
+      count: 5,
+      max: 9,
+      min: 2,
+      seed: null,
+      type: 'float_generator_random_distribution_uniform',
+    });
+
+    await act(() => userEvent.click(host.querySelector('[data-scope="checkbox"][data-part="control"]')!));
+    expect(onCommit).toHaveBeenLastCalledWith({
+      count: 5,
+      max: 9,
+      min: 2,
+      seed: 0,
+      type: 'float_generator_random_distribution_uniform',
+    });
+    expect(numberInput('-seed').disabled).toBe(false);
+    expect(host.textContent).not.toContain('<nodes.generatorNRandomValues>');
+    expect(host.textContent).toMatch(/\d+(\.\d+)?, \d+(\.\d+)?/);
+
+    await act(() => numberInput('-count').focus());
+    await act(() => userEvent.keyboard('{Control>}a{/Control}20000'));
+    await vi.waitFor(() => expect(host.textContent).toContain('nodes.generatorTooMany'), { timeout: 2000 });
+  });
+
+  it('loads a parse-string source from a file and previews the split values', async () => {
+    const { onCommit } = await renderGenerator(STRING_GENERATOR, {
+      input: 'a|b',
+      splitOn: '|',
+      type: 'string_generator_parse_string',
+    });
+
+    expect(host.textContent).toContain('a, b');
+
+    const fileInput = host.querySelector<HTMLInputElement>('input[type="file"]')!;
+
+    await act(() => userEvent.upload(fileInput, new File(['x|y|z'], 'values.txt', { type: 'text/plain' })));
+    await vi.waitFor(() =>
+      expect(onCommit).toHaveBeenLastCalledWith({ input: 'x|y|z', splitOn: '|', type: 'string_generator_parse_string' })
+    );
+    await vi.waitFor(() => expect(host.textContent).toContain('x, y, z'), { timeout: 2000 });
+
+    const toast = vi.spyOn(toaster, 'create');
+
+    await act(() =>
+      userEvent.upload(fileInput, new File([new Uint8Array(129 * 1024)], 'big.txt', { type: 'text/plain' }))
+    );
+    await vi.waitFor(() => expect(toast).toHaveBeenCalledWith({ title: 'nodes.generatorFileTooLarge', type: 'error' }));
+    expect(onCommit).toHaveBeenLastCalledWith({ input: 'x|y|z', splitOn: '|', type: 'string_generator_parse_string' });
+    toast.mockRestore();
+  });
+
+  it('previews dynamic prompts from the backend and marks a board the gallery no longer has', async () => {
+    workflowApiMock.apiFetchJson.mockImplementation((path: string) =>
+      path.includes('dynamicprompts')
+        ? Promise.resolve({ error: null, prompts: ['a cute dog', 'a cute cat'] })
+        : Promise.resolve([
+            {
+              board_id: 'b1',
+              board_name: 'Portraits',
+              image_count: 2,
+              asset_count: 0,
+              video_count: 0,
+              asset_video_count: 0,
+              archived: false,
+            },
+          ])
+    );
+    await renderGenerator(STRING_GENERATOR, {
+      input: 'a cute {dog|cat}',
+      maxPrompts: 5,
+      type: 'string_generator_dynamic_prompts_combinatorial',
+    });
+    await vi.waitFor(() => expect(host.textContent).toContain('a cute dog, a cute cat'));
+
+    await renderGenerator(IMAGE_GENERATOR, {
+      board_id: 'gone',
+      category: 'assets',
+      type: 'image_generator_images_from_board',
+    });
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.value).toBe('nodes.generatorBoardMissing')
+    );
+    expect(host.querySelector('input[role="combobox"]')?.getAttribute('aria-invalid')).toBe('true');
+  });
+});

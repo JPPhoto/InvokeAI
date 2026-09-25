@@ -304,6 +304,24 @@ describe('workflow field validation', () => {
     expect(getFieldRecordId(undefined, 'style_preset_id')).toBeNull();
   });
 
+  it('treats a generator field as editable and judges its value by the generator schema', () => {
+    const generator = input({ type: single('FloatGeneratorField') });
+
+    expect(isDirectInputField(generator)).toBe(true);
+    expect(
+      isWorkflowFieldValueValid(generator, { count: 2, start: 0, step: 1, type: 'float_generator_arithmetic_sequence' })
+    ).toBe(true);
+    expect(isWorkflowFieldValueValid(generator, { count: 0, type: 'float_generator_arithmetic_sequence' })).toBe(false);
+    expect(isWorkflowFieldValueValid(generator, undefined)).toBe(false);
+    expect(
+      getWorkflowFieldInvalidReason({
+        isConnected: false,
+        template: generator,
+        value: { type: 'integer_generator_parse_string' },
+      })
+    ).toBe('Invalid value.');
+  });
+
   it('treats empty board values as the Auto sentinel', () => {
     expect(isWorkflowFieldValueValid(input({ type: single('BoardField') }), undefined)).toBe(true);
     expect(isWorkflowFieldValueValid(input({ type: single('BoardField') }), { board_id: 'board-id' })).toBe(true);

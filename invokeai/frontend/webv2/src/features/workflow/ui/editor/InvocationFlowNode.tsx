@@ -41,6 +41,8 @@ import {
   getFieldTypeLabel,
   getNodeUpdateStatus,
   getOutputFieldNamesByScope,
+  getWorkflowBatchGroupId,
+  isWorkflowBatchNodeType,
   getOutputFieldRows,
   getWorkflowFieldInvalidReason,
   isDirectInputField,
@@ -312,6 +314,32 @@ const getUpdateStatusText = (
 };
 
 const UPDATE_TOOLTIP_POSITIONING = { placement: 'top-end' } as const;
+
+/** Legacy's group tints, so a zipped group reads as one colour across the canvas. */
+const BATCH_GROUP_COLORS: Record<string, string> = {
+  'Group 1': 'green.fg',
+  'Group 2': 'blue.fg',
+  'Group 3': 'purple.fg',
+  'Group 4': 'red.fg',
+  'Group 5': 'yellow.fg',
+};
+
+/** A batch node's group beside its title: zipped groups share a colour, an ungrouped node says so. */
+const BatchGroupSuffix = ({ node }: { node: WorkflowInvocationNode }) => {
+  const { t } = useTranslation();
+
+  if (!isWorkflowBatchNodeType(node.data.type)) {
+    return null;
+  }
+
+  const groupId = getWorkflowBatchGroupId(node);
+
+  return (
+    <Text color={BATCH_GROUP_COLORS[groupId] ?? 'fg.subtle'} flexShrink={0} fontSize="2xs" fontWeight="600">
+      ({groupId === 'None' ? t('nodes.noBatchGroup') : groupId})
+    </Text>
+  );
+};
 
 /** Header mark for a node whose version is not its template's; the tooltip says what can be done about it. */
 const NodeUpdateIcon = ({
@@ -839,6 +867,7 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
     >
       <Flex {...getWorkflowNodeHeaderProps()}>
         <MiddleTruncate fontSize="sm" fontWeight="700" minW="0" text={title} />
+        <BatchGroupSuffix node={node} />
         <Box flex="1" />
         <NodeOutcomeIcon execution={execution} node={node} />
         {templateView && isOutdated ? <NodeUpdateIcon node={node} template={templateView.template} /> : null}
@@ -924,6 +953,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
         ) : (
           <>
             <NodeTitle node={node} title={node.data.label || template.title} />
+            <BatchGroupSuffix node={node} />
             <Box flex="1" />
             <NodeOutcomeIcon execution={execution} node={node} />
             {isOutdated ? <NodeUpdateIcon node={node} template={template} /> : null}

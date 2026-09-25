@@ -133,6 +133,63 @@ const openApiFixture = {
         title: 'DenoiseInvocation',
         type: 'object',
       },
+      FloatBatchInvocation: {
+        class: 'invocation',
+        output: { $ref: '#/components/schemas/FloatOutput' },
+        properties: {
+          batch_group_id: {
+            default: 'None',
+            enum: ['None', 'Group 1'],
+            field_kind: 'input',
+            input: 'direct',
+            orig_required: false,
+            title: 'Batch Group',
+            type: 'string',
+          },
+          floats: {
+            anyOf: [{ items: { type: 'number' }, minItems: 1, type: 'array' }, { type: 'null' }],
+            field_kind: 'input',
+            input: 'any',
+            orig_required: true,
+            title: 'Floats',
+          },
+          type: { const: 'float_batch', default: 'float_batch', title: 'type' },
+        },
+        title: 'Float Batch',
+        type: 'object',
+      },
+      FloatGeneratorInvocation: {
+        class: 'invocation',
+        output: { $ref: '#/components/schemas/FloatGeneratorOutput' },
+        properties: {
+          generator: {
+            $ref: '#/components/schemas/FloatGeneratorField',
+            field_kind: 'input',
+            input: 'direct',
+            orig_required: true,
+            title: 'Generator Type',
+          },
+          type: { const: 'float_generator', default: 'float_generator', title: 'type' },
+        },
+        title: 'Float Generator',
+        type: 'object',
+      },
+      FloatGeneratorOutput: {
+        class: 'output',
+        properties: {
+          floats: { field_kind: 'output', items: { type: 'number' }, title: 'Floats', type: 'array' },
+          type: { const: 'float_generator_output', default: 'float_generator_output' },
+        },
+        type: 'object',
+      },
+      FloatOutput: {
+        class: 'output',
+        properties: {
+          type: { const: 'float_output', default: 'float_output' },
+          value: { field_kind: 'output', title: 'Value', type: 'number' },
+        },
+        type: 'object',
+      },
       GraphInvocation: {
         class: 'invocation',
         output: { $ref: '#/components/schemas/IntegerOutput' },
@@ -226,7 +283,14 @@ describe('parseOpenApiToTemplates', () => {
   const templates = parseOpenApiToTemplates(openApiFixture);
 
   it('parses invocation schemas into templates, skipping the denylist', () => {
-    expect(Object.keys(templates).sort()).toEqual(['add', 'denoise', 'lora_collection_loader', 'save_video']);
+    expect(Object.keys(templates).sort()).toEqual([
+      'add',
+      'denoise',
+      'float_batch',
+      'float_generator',
+      'lora_collection_loader',
+      'save_video',
+    ]);
 
     const add = templates.add;
 
@@ -269,6 +333,28 @@ describe('parseOpenApiToTemplates', () => {
       input: 'any',
       required: true,
       type: { batch: false, cardinality: 'SINGLE', name: 'StylePresetField' },
+    });
+  });
+
+  it('marks batch lists and generator outputs so only they can connect, and gives generators a default', () => {
+    const batch = templates.float_batch;
+    const generator = templates.float_generator;
+
+    expect(batch?.inputs.floats?.type).toEqual({ batch: true, cardinality: 'COLLECTION', name: 'FloatField' });
+    expect(batch?.inputs.floats?.default).toEqual([]);
+    expect(batch?.inputs.batch_group_id?.type.batch).toBe(false);
+    expect(generator?.outputs.floats?.type).toEqual({ batch: true, cardinality: 'COLLECTION', name: 'FloatField' });
+    expect(generator?.inputs.generator?.type).toEqual({
+      batch: false,
+      cardinality: 'SINGLE',
+      name: 'FloatGeneratorField',
+    });
+    // The backend model is empty, so the editor supplies the first variant as the default.
+    expect(generator?.inputs.generator?.default).toEqual({
+      count: 10,
+      start: 0,
+      step: 0.1,
+      type: 'float_generator_arithmetic_sequence',
     });
   });
 

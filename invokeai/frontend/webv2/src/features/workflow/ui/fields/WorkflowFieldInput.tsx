@@ -64,6 +64,7 @@ import {
   getResolvedWorkflowEdges,
   isLoraFieldCollectionEntry,
   isWorkflowCollectionItemValid,
+  isWorkflowGeneratorFieldTypeName,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
 import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
@@ -120,6 +121,10 @@ const RECORD_PICKER_FALLBACK = (
   <Button disabled size="xs" w="full">
     Loading…
   </Button>
+);
+// Generator settings load with their node; a plain workflow never pays for them.
+const GeneratorFieldInput = lazy(() =>
+  import('./GeneratorFieldInput').then((module) => ({ default: module.GeneratorFieldInput }))
 );
 
 // Record pickers load with their node so the system-prompt query stays out of the editor's boot graph.
@@ -1861,6 +1866,14 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
       default:
         return CONNECTION_ONLY_FALLBACK;
     }
+  }
+
+  if (isWorkflowGeneratorFieldTypeName(props.template.type.name)) {
+    return (
+      <Suspense fallback={RECORD_PICKER_FALLBACK}>
+        <GeneratorFieldInput {...props} />
+      </Suspense>
+    );
   }
 
   switch (props.template.type.name) {

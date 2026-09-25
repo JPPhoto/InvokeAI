@@ -8,6 +8,11 @@ import type {
   ProjectGraphState,
 } from '@features/workflow/core/types';
 
+import {
+  getDefaultWorkflowGeneratorValue,
+  getWorkflowBatchCollectionField,
+  getWorkflowGeneratorOutputField,
+} from '@features/workflow/core/batch';
 import { updateWorkflowNodes } from '@features/workflow/core/document';
 import { isEditableCollectionFieldType } from '@features/workflow/core/fields';
 import { createLogger } from '@platform/logging/logger';
@@ -270,7 +275,8 @@ const buildInputTemplate = (
             // without a widget stays absent so readiness still asks for its connection.
             required && input !== 'connection' && isEditableCollectionFieldType(type)
             ? []
-            : getDefaultValueForType(type, options),
+            : // The backend's generator models are empty; the editor owns their shape and their default.
+              (getDefaultWorkflowGeneratorValue(type.name) ?? getDefaultValueForType(type, options)),
     description: typeof property.description === 'string' ? property.description : '',
     exclusiveMaximum: getNumberOrNull(constraints.exclusiveMaximum),
     exclusiveMinimum: getNumberOrNull(constraints.exclusiveMinimum),
@@ -356,6 +362,11 @@ const parseInvocationSchema = (schema: JsonObject, schemas: JsonObject): Invocat
       continue;
     }
 
+    // A batch node's list only accepts a generator, and a generator's list only feeds a batch node.
+    if (getWorkflowBatchCollectionField(type) === name) {
+      fieldType.batch = true;
+    }
+
     inputs[name] = buildInputTemplate(name, rawProperty, fieldType, isInternal ? 'internal' : 'input');
   }
 
@@ -382,6 +393,10 @@ const parseInvocationSchema = (schema: JsonObject, schemas: JsonObject): Invocat
 
     if (!fieldType) {
       continue;
+    }
+
+    if (getWorkflowGeneratorOutputField(type) === name) {
+      fieldType.batch = true;
     }
 
     outputs[name] = {

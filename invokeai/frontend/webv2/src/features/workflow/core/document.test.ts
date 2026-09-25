@@ -437,6 +437,15 @@ describe('getProjectGraphUndoEntry', () => {
       getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: [{ image_name: 'a' }] })
         ?.mergeKey
     ).toBeUndefined();
+    // Typing generator settings folds per variant; switching variants starts a new step.
+    expect(
+      getProjectGraphUndoEntry({
+        fieldName: 'generator',
+        nodeId: 'n',
+        type: 'setFieldValue',
+        value: { input: 'a,b', splitOn: ',', type: 'string_generator_parse_string' },
+      })?.mergeKey
+    ).toBe('setFieldValue:n:generator:string_generator_parse_string');
     expect(
       getProjectGraphUndoEntry({ fieldName: 'workflow_id', nodeId: 'n', type: 'setFieldValue', value: 'workflow-a' })
     ).toEqual({
