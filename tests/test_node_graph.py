@@ -1188,6 +1188,49 @@ def test_graph_rejects_mixed_if_branch_types_for_collector_items():
         graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
 
 
+def test_graph_validation_does_not_repeat_shared_if_branch_compatibility_checks(monkeypatch: pytest.MonkeyPatch):
+    from invokeai.app.services.shared import graph as graph_facade
+
+    true_value = StringInvocation(id="true", value="true")
+    false_value = StringInvocation(id="false", value="false")
+    nodes = {true_value.id: true_value, false_value.id: false_value}
+    edges = []
+
+    previous_if_id = "if_0"
+    nodes[previous_if_id] = IfInvocation(id=previous_if_id)
+    edges.extend(
+        [
+            create_edge(true_value.id, "value", previous_if_id, "true_input"),
+            create_edge(false_value.id, "value", previous_if_id, "false_input"),
+        ]
+    )
+
+    for index in range(1, 12):
+        if_node_id = f"if_{index}"
+        nodes[if_node_id] = IfInvocation(id=if_node_id)
+        edges.extend(
+            [
+                create_edge(previous_if_id, "value", if_node_id, "true_input"),
+                create_edge(previous_if_id, "value", if_node_id, "false_input"),
+            ]
+        )
+        previous_if_id = if_node_id
+
+    graph = Graph(nodes=nodes, edges=edges)
+    compatibility_calls = 0
+    original_are_connections_compatible = graph_facade.are_connections_compatible
+
+    def count_compatibility_calls(*args, **kwargs):
+        nonlocal compatibility_calls
+        compatibility_calls += 1
+        return original_are_connections_compatible(*args, **kwargs)
+
+    monkeypatch.setattr(graph_facade, "are_connections_compatible", count_compatibility_calls)
+    graph.validate_self()
+
+    assert compatibility_calls <= len(edges) * 2
+
+
 def test_graph_rejects_collector_output_edge_before_input_edge():
     graph = Graph()
     graph.add_node(CollectInvocation(id="collect"))

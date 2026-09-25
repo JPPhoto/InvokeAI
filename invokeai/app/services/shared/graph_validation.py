@@ -1928,33 +1928,41 @@ class Graph(BaseModel):
             return "Iterator collection type must match all iterator output types"
         return None
 
-    def _get_effective_output_connections(
-        self, node_id: str, field: str, visited: Optional[set[tuple[str, str]]] = None
-    ) -> list[EdgeConnection] | None:
-        """Resolve an If output to its connected branch sources, or None when a branch is unresolved."""
-        if visited is None:
-            visited = set()
-        source = (node_id, field)
-        node = self.get_node(node_id)
-        if not isinstance(node, IfInvocation) or field != "value":
-            return [EdgeConnection(node_id=node_id, field=field)]
-        if source in visited:
-            return None
-        visited.add(source)
-
+    def _get_effective_output_connections(self, node_id: str, field: str) -> list[EdgeConnection] | None:
+        """Resolve an If output to its unique branch sources, or None when a branch is unresolved or cyclic."""
+        pending: list[tuple[str, str, bool]] = [(node_id, field, False)]
+        active: set[tuple[str, str]] = set()
+        visited: set[tuple[str, str]] = set()
         sources: list[EdgeConnection] = []
-        for branch_field in ("true_input", "false_input"):
-            branch_edges = self._get_input_edges(node_id, branch_field)
-            if len(branch_edges) != 1:
+        while pending:
+            source_node_id, source_field, exiting = pending.pop()
+            source = (source_node_id, source_field)
+            if exiting:
+                active.remove(source)
+                visited.add(source)
+                continue
+            if source in active:
                 return None
+            if source in visited:
+                continue
 
-            branch_edge = branch_edges[0]
-            branch_sources = self._get_effective_output_connections(
-                branch_edge.source.node_id, branch_edge.source.field, visited.copy()
-            )
-            if branch_sources is None:
-                return None
-            sources.extend(branch_sources)
+            node = self.get_node(source_node_id)
+            if not isinstance(node, IfInvocation) or source_field != "value":
+                visited.add(source)
+                sources.append(EdgeConnection(node_id=source_node_id, field=source_field))
+                continue
+
+            branch_sources: list[tuple[str, str]] = []
+            for branch_field in ("true_input", "false_input"):
+                branch_edges = self._get_input_edges(source_node_id, branch_field)
+                if len(branch_edges) != 1:
+                    return None
+                branch_edge = branch_edges[0]
+                branch_sources.append((branch_edge.source.node_id, branch_edge.source.field))
+
+            active.add(source)
+            pending.append((source_node_id, source_field, True))
+            pending.extend((*branch_source, False) for branch_source in reversed(branch_sources))
 
         return sources
 
