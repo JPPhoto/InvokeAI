@@ -116,6 +116,19 @@ const MODEL_SELECT_FALLBACK = (
     Loading models…
   </Button>
 );
+const RECORD_PICKER_FALLBACK = (
+  <Button disabled size="xs" w="full">
+    Loading…
+  </Button>
+);
+
+// Record pickers load with their node so the system-prompt query stays out of the editor's boot graph.
+const StylePresetInput = lazy(() =>
+  import('./RecordPickerInput').then((module) => ({ default: module.StylePresetInput }))
+);
+const SystemPromptInput = lazy(() =>
+  import('./RecordPickerInput').then((module) => ({ default: module.SystemPromptInput }))
+);
 
 export const getWorkflowSelectedGalleryImage = getSelectedGalleryImageFromValues;
 
@@ -1883,6 +1896,18 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
       return <ModelIdentifierInput {...props} />;
     case 'SchedulerField':
       return <SchedulerInput {...props} />;
+    case 'StylePresetField':
+      return (
+        <Suspense fallback={RECORD_PICKER_FALLBACK}>
+          <StylePresetInput {...props} />
+        </Suspense>
+      );
+    case 'SystemPromptField':
+      return (
+        <Suspense fallback={RECORD_PICKER_FALLBACK}>
+          <SystemPromptInput {...props} />
+        </Suspense>
+      );
     case 'BoardField':
       return <BoardInput {...props} />;
     case 'ImageField':

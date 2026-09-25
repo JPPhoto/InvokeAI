@@ -26,6 +26,8 @@ const STATEFUL_FIELD_TYPE_NAMES = new Set([
   'SchedulerField',
   'SavedWorkflowField',
   'StringField',
+  'StylePresetField',
+  'SystemPromptField',
   'VideoField',
 ]);
 
@@ -134,6 +136,10 @@ const isNonEmptyString = (value: unknown): value is string => typeof value === '
 
 const hasNonEmptyStringProp = (value: unknown, prop: string): boolean =>
   typeof value === 'object' && value !== null && isNonEmptyString((value as Record<string, unknown>)[prop]);
+
+/** The id inside a record-reference value such as `{ style_preset_id }`, or null when absent. */
+export const getFieldRecordId = (value: unknown, prop: string): string | null =>
+  hasNonEmptyStringProp(value, prop) ? ((value as Record<string, string>)[prop] as string) : null;
 
 /** A LoRA model identifier paired with its weight — one entry of a LoRA collection field. */
 export interface LoraFieldCollectionEntry {
@@ -320,6 +326,10 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
       return Array.isArray(value) ? value.every(isLoraFieldCollectionEntry) : isLoraFieldCollectionEntry(value);
     case 'SchedulerField':
       return isNonEmptyString(value);
+    case 'StylePresetField':
+      return hasNonEmptyStringProp(value, 'style_preset_id');
+    case 'SystemPromptField':
+      return hasNonEmptyStringProp(value, 'system_prompt_id');
     case 'BoardField':
       return (
         value === undefined ||

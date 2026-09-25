@@ -4,6 +4,7 @@ import type { FieldInputTemplate, FieldType } from './types';
 
 import {
   getEffectiveWorkflowFieldDescription,
+  getFieldRecordId,
   getWorkflowFieldInvalidReason,
   isDirectInputField,
   isLoraFieldCollectionEntry,
@@ -277,6 +278,30 @@ describe('workflow field validation', () => {
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: loras, value: [{ weight: 1 }] })).toBe(
       'Invalid value.'
     );
+  });
+
+  it('validates style preset and system prompt references by their record id', () => {
+    const preset = input({ type: single('StylePresetField') });
+    const prompt = input({ type: single('SystemPromptField') });
+
+    expect(isDirectInputField(preset)).toBe(true);
+    expect(isDirectInputField(prompt)).toBe(true);
+    expect(isWorkflowFieldValueValid(preset, { style_preset_id: 'preset-1' })).toBe(true);
+    expect(isWorkflowFieldValueValid(preset, { style_preset_id: '' })).toBe(false);
+    expect(isWorkflowFieldValueValid(preset, { system_prompt_id: 'prompt-1' })).toBe(false);
+    expect(isWorkflowFieldValueValid(prompt, { system_prompt_id: 'prompt-1' })).toBe(true);
+    expect(isWorkflowFieldValueValid(prompt, 'prompt-1')).toBe(false);
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: preset, value: undefined })).toBe(
+      'Required value.'
+    );
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: preset, value: {} })).toBe('Invalid value.');
+    // Core cannot see the preset list, so a stale id stays valid here and the backend rejects it on invoke.
+    expect(
+      getWorkflowFieldInvalidReason({ isConnected: false, template: preset, value: { style_preset_id: 'gone' } })
+    ).toBeNull();
+    expect(getFieldRecordId({ style_preset_id: 'preset-1' }, 'style_preset_id')).toBe('preset-1');
+    expect(getFieldRecordId({ style_preset_id: ' ' }, 'style_preset_id')).toBeNull();
+    expect(getFieldRecordId(undefined, 'style_preset_id')).toBeNull();
   });
 
   it('treats empty board values as the Auto sentinel', () => {

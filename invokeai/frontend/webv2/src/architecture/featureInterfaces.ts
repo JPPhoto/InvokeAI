@@ -28,6 +28,7 @@ export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[
     'react',
     'runtime',
     'settings',
+    'systemPrompts',
     'widget',
   ],
   identity: [],

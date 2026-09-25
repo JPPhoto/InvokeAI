@@ -105,6 +105,13 @@ const openApiFixture = {
             title: 'Scheduler',
             type: 'string',
           },
+          style_preset: {
+            anyOf: [{ $ref: '#/components/schemas/StylePresetField' }, { type: 'null' }],
+            field_kind: 'input',
+            input: 'any',
+            orig_required: true,
+            title: 'Style Preset',
+          },
           type: { const: 'denoise', default: 'denoise', title: 'type' },
           use_cache: { default: true, field_kind: 'internal', type: 'boolean' },
         },
@@ -241,6 +248,13 @@ describe('parseOpenApiToTemplates', () => {
     });
     expect(denoise?.inputs.scheduler?.type.name).toBe('EnumField');
     expect(denoise?.inputs.scheduler?.options).toEqual(['euler', 'ddim']);
+    // Record references (`{ style_preset_id }`) arrive as bare refs with no schema default; unset until picked.
+    expect(denoise?.inputs.style_preset).toMatchObject({
+      default: undefined,
+      input: 'any',
+      required: true,
+      type: { batch: false, cardinality: 'SINGLE', name: 'StylePresetField' },
+    });
   });
 
   it('reads list bounds and item constraints from the array schema of a collection input', () => {

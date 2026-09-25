@@ -231,7 +231,8 @@ afterEach(async () => {
   host.remove();
 });
 
-const queryClient = new QueryClient();
+// No retry backoff: failure states must be observable inside a test timeout.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 const renderField = async (
   template: FieldInputTemplate,
@@ -1838,5 +1839,101 @@ describe('WorkflowFieldInput scalar collections', () => {
     await keys('{Enter}');
     expect(rows()).toBe(0);
     expect(document.activeElement).toBe(button('nodes.addItem'));
+  });
+});
+
+describe('WorkflowFieldInput record pickers', () => {
+  const STYLE_PRESET = fullTemplate('StringField', {
+    title: 'Style Preset',
+    type: { batch: false, cardinality: 'SINGLE', name: 'StylePresetField' },
+  });
+  const SYSTEM_PROMPT = fullTemplate('StringField', {
+    title: 'System Prompt',
+    type: { batch: false, cardinality: 'SINGLE', name: 'SystemPromptField' },
+  });
+  const presetDto = (id: string, name: string) => ({
+    id,
+    image: null,
+    is_public: false,
+    name,
+    preset_data: { negative_prompt: '', positive_prompt: '{prompt}, cinematic' },
+    type: 'user',
+    user_id: 'user-1',
+  });
+  const promptDto = (id: string, name: string) => ({
+    content: 'Be helpful.',
+    id,
+    is_public: true,
+    max_tokens: null,
+    name,
+    user_id: 'user-1',
+  });
+  const combobox = () => host.querySelector<HTMLInputElement>('input[role="combobox"]');
+  const option = (label: string) =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-scope="combobox"][data-part="item"]')).find((item) =>
+      item.textContent?.includes(label)
+    );
+
+  it('picks a style preset by name and clears it back to an absent value', async () => {
+    workflowApiMock.apiFetchJson.mockResolvedValue([
+      presetDto('preset-1', 'Cinematic'),
+      presetDto('preset-2', 'Anime'),
+    ]);
+    const onChange = vi.fn();
+
+    await renderField(STYLE_PRESET, undefined, onChange);
+    await vi.waitFor(() => expect(combobox()?.placeholder).toBe('nodes.stylePresetSearch'));
+    expect(host.querySelector('button[aria-label="nodes.stylePresetClear"]')).toBeNull();
+
+    await act(() => userEvent.click(combobox()!));
+    await vi.waitFor(() => expect(option('Anime')).toBeDefined());
+    await act(() => userEvent.click(option('Anime')!));
+    expect(onChange).toHaveBeenLastCalledWith({ style_preset_id: 'preset-2' });
+
+    await renderField(STYLE_PRESET, { style_preset_id: 'preset-2' }, onChange);
+    await vi.waitFor(() => expect(combobox()?.value).toBe('Anime'));
+    expect(combobox()?.getAttribute('aria-invalid')).toBeNull();
+    await act(() =>
+      userEvent.click(host.querySelector<HTMLButtonElement>('button[aria-label="nodes.stylePresetClear"]')!)
+    );
+    expect(onChange).toHaveBeenLastCalledWith(undefined);
+    // The clear button leaves with the value; focus lands on the input rather than falling to the page.
+    expect(document.activeElement).toBe(combobox());
+  });
+
+  it('keeps a system prompt id the list no longer holds and flags it as missing', async () => {
+    workflowApiMock.apiFetchJson.mockResolvedValue([promptDto('prompt-1', 'Helpful')]);
+    const onChange = vi.fn();
+
+    await renderField(SYSTEM_PROMPT, { system_prompt_id: 'prompt-gone' }, onChange);
+    await vi.waitFor(() => expect(combobox()?.value).toBe('nodes.systemPromptMissing'));
+    expect(combobox()?.getAttribute('aria-invalid')).toBe('true');
+    // The reason is linked to the input so assistive tech reads it with the invalid state.
+    const describedBy = combobox()?.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent).toBe('nodes.systemPromptMissing');
+    expect(onChange).not.toHaveBeenCalled();
+
+    // The live record is still offered next to the missing one.
+    await act(() => userEvent.click(combobox()!));
+    await vi.waitFor(() => expect(option('Helpful')).toBeDefined());
+    await act(() => userEvent.click(option('Helpful')!));
+    expect(onChange).toHaveBeenLastCalledWith({ system_prompt_id: 'prompt-1' });
+  });
+
+  it('offers a retry when the list fails to load', async () => {
+    workflowApiMock.apiFetchJson.mockRejectedValue(new Error('offline'));
+
+    await renderField(SYSTEM_PROMPT, undefined, vi.fn());
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLButtonElement>('button[aria-label="common.retry"]')).not.toBeNull()
+    );
+    expect(host.textContent).toContain('nodes.recordListFailed');
+
+    workflowApiMock.apiFetchJson.mockResolvedValue([promptDto('prompt-1', 'Helpful')]);
+    await act(() => userEvent.click(host.querySelector<HTMLButtonElement>('button[aria-label="common.retry"]')!));
+    await vi.waitFor(() => expect(host.querySelector('button[aria-label="common.retry"]')).toBeNull());
+    await act(() => userEvent.click(combobox()!));
+    await vi.waitFor(() => expect(option('Helpful')).toBeDefined());
   });
 });
