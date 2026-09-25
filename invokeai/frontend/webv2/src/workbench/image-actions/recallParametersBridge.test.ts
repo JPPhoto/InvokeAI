@@ -4,7 +4,7 @@ import type { TFunction } from 'i18next';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { attachRecallParametersRuntime } from './recallParametersBridge';
+import { attachRecallParametersRuntime, attachVideoRecallRuntime } from './recallParametersBridge';
 
 type SocketHandler = (payload: never) => void;
 
@@ -85,7 +85,8 @@ describe('attachRecallParametersRuntime', () => {
           release = resolve;
         })
     );
-    const bridge = attachRecallParametersRuntime({ ...deps, hub: socket.hub, load });
+    const getSessionUserId = () => 'owner';
+    const bridge = attachRecallParametersRuntime({ ...deps, getSessionUserId, hub: socket.hub, load });
 
     expect(load).not.toHaveBeenCalled();
 
@@ -96,6 +97,8 @@ describe('attachRecallParametersRuntime', () => {
 
     release({ createRecallParametersRuntime: deps.createRecallParametersRuntime });
     await flush();
+    // The multi-user fence must survive the lazy hand-over: admins receive other users' recall events.
+    expect(deps.createRecallParametersRuntime).toHaveBeenCalledWith(expect.objectContaining({ getSessionUserId }));
     socket.emit('recall_parameters_updated', event({ steps: 3 }));
 
     expect(deps.received.map((entry) => [stepsOf(entry), entry.projectId])).toEqual([
@@ -150,5 +153,42 @@ describe('attachRecallParametersRuntime', () => {
     expect(deps.received.map(stepsOf)).toEqual([2]);
 
     bridge.dispose();
+  });
+});
+
+describe('attachVideoRecallRuntime', () => {
+  it('loads the video runtime on its own event only, handing over the arrival project', async () => {
+    const socket = createFakeSocketHub();
+    const deps = createDeps();
+    const createVideoRecallRuntime = vi.fn(({ replay = [] }: RuntimeOptions) => {
+      deps.received.push(...replay);
+      return { dispose: deps.dispose };
+    });
+    const load = vi.fn(() => Promise.resolve({ createVideoRecallRuntime }));
+    const getSessionUserId = () => 'owner';
+    const openVideoWidget = vi.fn();
+    const bridge = attachVideoRecallRuntime({
+      ...deps,
+      commands: { ...deps.commands, widgets: {} as WorkbenchCommands['widgets'] },
+      getSessionUserId,
+      hub: socket.hub,
+      load,
+      openVideoWidget,
+    });
+
+    socket.emit('recall_parameters_updated', event({ steps: 1 }));
+    expect(load).not.toHaveBeenCalled();
+
+    socket.emit('video_recall_requested', { action: 'initial_video', user_id: 'owner' });
+    await flush();
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(createVideoRecallRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ getSessionUserId, openVideoWidget })
+    );
+    expect(deps.received).toEqual([{ payload: { action: 'initial_video', user_id: 'owner' }, projectId: 'project-1' }]);
+
+    bridge.dispose();
+    expect(deps.dispose).toHaveBeenCalledTimes(1);
   });
 });
