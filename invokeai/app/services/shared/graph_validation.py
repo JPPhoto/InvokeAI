@@ -1892,7 +1892,16 @@ class Graph(BaseModel):
             if output_type_error is not None:
                 return output_type_error
 
-        return self._validate_iterator_collector_input(input_node, output_field_types)
+        if input_sources is None:
+            return self._validate_iterator_collector_input(input_node, output_field_types)
+
+        for source in input_sources:
+            collector_input_error = self._validate_iterator_collector_input(
+                self.get_node(source.node_id), output_field_types
+            )
+            if collector_input_error is not None:
+                return collector_input_error
+        return None
 
     def _validate_iterator_input_presence(self, inputs: list[EdgeConnection]) -> str | None:
         if len(inputs) == 0:
@@ -1930,6 +1939,11 @@ class Graph(BaseModel):
 
     def _get_effective_output_connections(self, node_id: str, field: str) -> list[EdgeConnection] | None:
         """Resolve an If output to its unique branch sources, or None when a branch is unresolved or cyclic."""
+        root_source = (node_id, field)
+        root_node = self.get_node(node_id)
+        if not isinstance(root_node, IfInvocation) or field != "value":
+            return [EdgeConnection(node_id=node_id, field=field)]
+
         pending: list[tuple[str, str, bool]] = [(node_id, field, False)]
         active: set[tuple[str, str]] = set()
         visited: set[tuple[str, str]] = set()
@@ -1946,7 +1960,7 @@ class Graph(BaseModel):
             if source in visited:
                 continue
 
-            node = self.get_node(source_node_id)
+            node = root_node if source == root_source else self.get_node(source_node_id)
             if not isinstance(node, IfInvocation) or source_field != "value":
                 visited.add(source)
                 sources.append(EdgeConnection(node_id=source_node_id, field=source_field))

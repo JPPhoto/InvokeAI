@@ -1188,6 +1188,49 @@ def test_graph_rejects_mixed_if_branch_types_for_collector_items():
         graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
 
 
+def test_graph_rejects_iterator_consumers_incompatible_with_if_collector_branches():
+    graph = Graph()
+    string_value = StringInvocation(id="string", value="text")
+    image_value = ImageToImageTestInvocation(id="image")
+    string_collector = CollectInvocation(id="string_collector")
+    image_collector = CollectInvocation(id="image_collector")
+    if_node = IfInvocation(id="if")
+    iterator = IterateInvocation(id="iterator")
+    string_sink = StringInvocation(id="string_sink")
+    for node in (string_value, image_value, string_collector, image_collector, if_node, iterator, string_sink):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(string_value.id, "value", string_collector.id, "item"))
+    graph.add_edge(create_edge(image_value.id, "image", image_collector.id, "item"))
+    graph.add_edge(create_edge(string_collector.id, "collection", if_node.id, "true_input"))
+    graph.add_edge(create_edge(image_collector.id, "collection", if_node.id, "false_input"))
+    graph.add_edge(create_edge(if_node.id, "value", iterator.id, "collection"))
+
+    with pytest.raises(InvalidEdgeError, match="Iterator output type does not match iterator input type"):
+        graph.add_edge(create_edge(iterator.id, "item", string_sink.id, "value"))
+
+
+def test_graph_skips_if_traversal_state_for_non_if_sources(monkeypatch: pytest.MonkeyPatch):
+    from invokeai.app.services.shared import graph_validation
+
+    string_value = StringInvocation(id="string", value="text")
+    graph = Graph(nodes={string_value.id: string_value})
+    set_calls = 0
+    original_set = set
+
+    def count_set_calls(*args: Any, **kwargs: Any) -> set[Any]:
+        nonlocal set_calls
+        set_calls += 1
+        return original_set(*args, **kwargs)
+
+    monkeypatch.setattr(graph_validation, "set", count_set_calls, raising=False)
+
+    assert graph._get_effective_output_connections(string_value.id, "value") == [
+        EdgeConnection(node_id=string_value.id, field="value")
+    ]
+    assert set_calls == 0
+
+
 def test_graph_validation_bounds_shared_if_branch_validation_work(monkeypatch: pytest.MonkeyPatch):
     from invokeai.app.services.shared import graph as graph_facade
 
