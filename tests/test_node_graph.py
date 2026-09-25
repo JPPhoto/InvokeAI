@@ -1188,7 +1188,7 @@ def test_graph_rejects_mixed_if_branch_types_for_collector_items():
         graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
 
 
-def test_graph_validation_does_not_repeat_shared_if_branch_compatibility_checks(monkeypatch: pytest.MonkeyPatch):
+def test_graph_validation_bounds_shared_if_branch_validation_work(monkeypatch: pytest.MonkeyPatch):
     from invokeai.app.services.shared import graph as graph_facade
 
     true_value = StringInvocation(id="true", value="true")
@@ -1218,16 +1218,27 @@ def test_graph_validation_does_not_repeat_shared_if_branch_compatibility_checks(
 
     graph = Graph(nodes=nodes, edges=edges)
     compatibility_calls = 0
+    branch_input_lookups = 0
     original_are_connections_compatible = graph_facade.are_connections_compatible
+    original_get_input_edges = Graph._get_input_edges
 
     def count_compatibility_calls(*args, **kwargs):
         nonlocal compatibility_calls
         compatibility_calls += 1
         return original_are_connections_compatible(*args, **kwargs)
 
+    def count_branch_input_lookups(graph: Graph, node_id: str, field: str | None = None, **kwargs: Any):
+        nonlocal branch_input_lookups
+        if field in ("true_input", "false_input"):
+            branch_input_lookups += 1
+        return original_get_input_edges(graph, node_id, field, **kwargs)
+
     monkeypatch.setattr(graph_facade, "are_connections_compatible", count_compatibility_calls)
+    monkeypatch.setattr(Graph, "_get_input_edges", count_branch_input_lookups)
     graph.validate_self()
 
+    if_node_count = sum(isinstance(node, IfInvocation) for node in nodes.values())
+    assert branch_input_lookups <= len(edges) * if_node_count * 2
     assert compatibility_calls <= len(edges) * 2
 
 
