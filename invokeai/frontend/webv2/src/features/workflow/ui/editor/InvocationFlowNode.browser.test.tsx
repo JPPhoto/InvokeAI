@@ -689,3 +689,46 @@ describe('InvocationFlowNode field entry', () => {
     expect(rowError(steps)).toBeNull();
   });
 });
+
+describe('InvocationFlowNode template version', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement('div');
+    host.style.cssText = 'width: 480px; height: 520px;';
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(() => root.unmount());
+    host.remove();
+  });
+
+  const render = (nodes: ReturnType<typeof toFlowNodes>) =>
+    act(() =>
+      root.render(
+        <ChakraProvider value={system}>
+          <WorkflowUiProvider adapter={createAdapter(createExecutionPort().port)}>
+            <ReactFlow edges={[]} nodes={nodes} nodeTypes={nodeTypes} />
+          </WorkflowUiProvider>
+        </ChakraProvider>
+      )
+    );
+  const updateIcon = () => host.querySelector('.react-flow__node [role="img"][aria-label^="nodes.node"]');
+  const borderColor = () => getComputedStyle(host.querySelector<HTMLElement>('.react-flow__node > div')!).borderColor;
+
+  it('marks a node whose template moved on with a warning border and an update tooltip, and leaves a current one alone', async () => {
+    await render(flowNodes);
+    expect(updateIcon()).toBeNull();
+    const currentBorder = borderColor();
+
+    await render(toFlowNodes(projectGraph, [], { preview: { ...template, version: '1.1.0' } }));
+    expect(updateIcon()?.getAttribute('aria-label')).toBe('nodes.nodeUpdateAvailable');
+    expect(borderColor()).not.toBe(currentBorder);
+
+    await render(toFlowNodes(projectGraph, [], { preview: { ...template, version: '2.0.0' } }));
+    expect(updateIcon()?.getAttribute('aria-label')).toBe('nodes.nodeVersionIncompatible');
+  });
+});

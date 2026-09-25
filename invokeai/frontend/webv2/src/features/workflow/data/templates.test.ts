@@ -1,6 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import type { ProjectGraphState } from '@features/workflow/core/types';
 
-import { parseFieldType, parseOpenApiToTemplates } from './templates';
+import { buildInvocationNode, createProjectGraph } from '@features/workflow/core/document';
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  parseFieldType,
+  parseOpenApiToTemplates,
+  refreshInvocationTemplates,
+  updateLoadedWorkflowNodes,
+} from './templates';
+
+const httpMock = vi.hoisted(() => ({ apiFetchJson: vi.fn() }));
+
+vi.mock('@platform/transport/http', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  apiFetchJson: httpMock.apiFetchJson,
+}));
 
 const openApiFixture = {
   components: {
@@ -505,5 +520,45 @@ describe('integer Literal enum templates', () => {
     });
 
     expect(parsed.nullable_max_seq_len_invocation?.inputs.t5_max_seq_len?.default).toBe(256);
+  });
+});
+
+describe('updateLoadedWorkflowNodes', () => {
+  const translate = (key: string, options: { count: number }) => `${key}:${options.count}`;
+  const outdatedDocument = (): ProjectGraphState => {
+    const templates = parseOpenApiToTemplates(openApiFixture);
+    const node = buildInvocationNode(templates.add!, { x: 0, y: 0 });
+
+    return {
+      ...createProjectGraph('load-test'),
+      edges: [
+        { id: 'stale', source: 'x', sourceHandle: 'value', target: node.id, targetHandle: 'gone', type: 'default' },
+      ],
+      nodes: [
+        {
+          ...node,
+          data: {
+            ...node.data,
+            inputs: { ...node.data.inputs, gone: { label: '', name: 'gone', value: 1 } },
+            version: '1.0.0',
+          },
+        },
+      ],
+    };
+  };
+
+  it('leaves a document alone until templates have loaded, then migrates it and words what was dropped', async () => {
+    const document = outdatedDocument();
+
+    expect(updateLoadedWorkflowNodes(document, translate)).toEqual({ document, warnings: [] });
+
+    httpMock.apiFetchJson.mockResolvedValueOnce(openApiFixture);
+    await refreshInvocationTemplates();
+
+    const { document: updated, warnings } = updateLoadedWorkflowNodes(document, translate);
+
+    expect(updated.nodes[0]?.type === 'invocation' ? updated.nodes[0].data.version : null).toBe('1.0.1');
+    expect(updated.edges).toEqual([]);
+    expect(warnings).toEqual(['nodes.updateDroppedEdges:1']);
   });
 });

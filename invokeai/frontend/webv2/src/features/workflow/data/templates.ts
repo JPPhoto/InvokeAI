@@ -5,8 +5,10 @@ import type {
   InvocationTemplate,
   InvocationTemplates,
   InvocationTemplatesSnapshot,
+  ProjectGraphState,
 } from '@features/workflow/core/types';
 
+import { updateWorkflowNodes } from '@features/workflow/core/document';
 import { isEditableCollectionFieldType } from '@features/workflow/core/fields';
 import { createLogger } from '@platform/logging/logger';
 import {
@@ -488,6 +490,37 @@ export const useInvocationTemplatesSelector = store.useSelector;
 
 /** Imperative read for the workbench reducer and route validation. */
 export const getInvocationTemplatesSnapshot = (): InvocationTemplatesSnapshot => store.getSnapshot();
+
+/**
+ * Moves a freshly parsed document's nodes to the loaded templates before it enters the project, so an outdated
+ * workflow opens current, and words what the update could not keep. A document loaded before templates arrive is
+ * left as is; the editor's update actions cover it later.
+ */
+export const updateLoadedWorkflowNodes = (
+  document: ProjectGraphState,
+  translate: (key: string, options: { count: number }) => string
+): { document: ProjectGraphState; warnings: string[] } => {
+  const snapshot = store.getSnapshot();
+
+  if (snapshot.status !== 'loaded') {
+    return { document, warnings: [] };
+  }
+
+  const update = updateWorkflowNodes(document, snapshot.templates);
+  const warnings = [
+    ...(update.skippedNodeIds.length > 0
+      ? [translate('nodes.unableToUpdateNodes', { count: update.skippedNodeIds.length })]
+      : []),
+    ...(update.droppedEdgeIds.length > 0
+      ? [translate('nodes.updateDroppedEdges', { count: update.droppedEdgeIds.length })]
+      : []),
+    ...(update.droppedFormElementIds.length > 0
+      ? [translate('nodes.updateDroppedFormFields', { count: update.droppedFormElementIds.length })]
+      : []),
+  ];
+
+  return { document: update.document, warnings };
+};
 
 /** For readers that combine this store with another one; a single-store reader uses the selector. */
 export const subscribeInvocationTemplates = store.subscribe;
