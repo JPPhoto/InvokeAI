@@ -18,6 +18,7 @@ from invokeai.app.invocations.baseinvocation import (
     invocation_output,
 )
 from invokeai.app.invocations.fields import InputField, OutputField, OutputScope
+from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.invocations.loops import ForInvocation, ForReturnInvocation
 from invokeai.app.invocations.math import AddInvocation
 from invokeai.app.invocations.primitives import (
@@ -1062,6 +1063,129 @@ def test_graph_connects_collector():
     g.add_edge(e1)
     g.add_edge(e2)
     g.add_edge(e3)
+
+
+def test_graph_collector_accepts_if_output_when_both_branches_have_matching_type():
+    graph = Graph()
+    true_value = StringInvocation(id="true", value="true")
+    false_value = StringInvocation(id="false", value="false")
+    if_node = IfInvocation(id="if")
+    collector = CollectInvocation(id="collect")
+    consumer = PromptCollectionTestInvocation(id="consumer", collection=[])
+    for node in (true_value, false_value, if_node, collector, consumer):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(true_value.id, "value", if_node.id, "true_input"))
+    graph.add_edge(create_edge(false_value.id, "value", if_node.id, "false_input"))
+    graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
+    graph.add_edge(create_edge(collector.id, "collection", consumer.id, "collection"))
+
+
+def test_graph_collectors_accept_if_output_with_and_without_a_string_collection_seed():
+    graph = Graph()
+    true_value = StringInvocation(id="true", value="true")
+    false_value = StringInvocation(id="false", value="false")
+    if_node = IfInvocation(id="if")
+    unseeded_collector = CollectInvocation(id="unseeded_collect")
+    seeded_collector = CollectInvocation(id="seeded_collect")
+    seed = StringCollectionInvocation(id="seed", collection=["existing"])
+    unseeded_consumer = PromptCollectionTestInvocation(id="unseeded_consumer", collection=[])
+    seeded_consumer = PromptCollectionTestInvocation(id="seeded_consumer", collection=[])
+    for node in (
+        true_value,
+        false_value,
+        if_node,
+        unseeded_collector,
+        seeded_collector,
+        seed,
+        unseeded_consumer,
+        seeded_consumer,
+    ):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(true_value.id, "value", if_node.id, "true_input"))
+    graph.add_edge(create_edge(false_value.id, "value", if_node.id, "false_input"))
+    graph.add_edge(create_edge(if_node.id, "value", unseeded_collector.id, "item"))
+    graph.add_edge(create_edge(if_node.id, "value", seeded_collector.id, "item"))
+    graph.add_edge(create_edge(seed.id, "collection", seeded_collector.id, "collection"))
+    graph.add_edge(create_edge(unseeded_collector.id, "collection", unseeded_consumer.id, "collection"))
+    graph.add_edge(create_edge(seeded_collector.id, "collection", seeded_consumer.id, "collection"))
+
+
+def test_graph_rejects_if_output_when_its_branches_do_not_match_target_type():
+    graph = Graph()
+    true_value = StringInvocation(id="true", value="true")
+    false_value = StringInvocation(id="false", value="false")
+    if_node = IfInvocation(id="if")
+    consumer = ImageToImageTestInvocation(id="consumer")
+    for node in (true_value, false_value, if_node, consumer):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(true_value.id, "value", if_node.id, "true_input"))
+    graph.add_edge(create_edge(false_value.id, "value", if_node.id, "false_input"))
+
+    with pytest.raises(InvalidEdgeError, match="Field types are incompatible"):
+        graph.add_edge(create_edge(if_node.id, "value", consumer.id, "image"))
+
+
+def test_graph_rejects_if_branch_that_invalidates_existing_output_edge():
+    graph = Graph()
+    true_value = StringInvocation(id="true", value="true")
+    false_value = IntegerInvocation(id="false", value=1)
+    if_node = IfInvocation(id="if")
+    consumer = ImageToImageTestInvocation(id="consumer")
+    for node in (true_value, false_value, if_node, consumer):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(true_value.id, "value", if_node.id, "true_input"))
+    graph.add_edge(create_edge(if_node.id, "value", consumer.id, "image"))
+
+    false_branch_edge = create_edge(false_value.id, "value", if_node.id, "false_input")
+    with pytest.raises(InvalidEdgeError):
+        graph.add_edge(false_branch_edge)
+
+    assert false_branch_edge not in graph.edges
+    assert graph.is_valid()
+
+
+def test_graph_rejects_if_branch_that_makes_collector_items_incompatible():
+    graph = Graph()
+    true_value = StringInvocation(id="true", value="true")
+    false_value = IntegerInvocation(id="false", value=1)
+    if_node = IfInvocation(id="if")
+    collector = CollectInvocation(id="collect")
+    seed = StringCollectionInvocation(id="seed", collection=["existing"])
+    consumer = PromptCollectionTestInvocation(id="consumer", collection=[])
+    for node in (true_value, false_value, if_node, collector, seed, consumer):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(true_value.id, "value", if_node.id, "true_input"))
+    graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
+    graph.add_edge(create_edge(seed.id, "collection", collector.id, "collection"))
+    graph.add_edge(create_edge(collector.id, "collection", consumer.id, "collection"))
+
+    false_branch_edge = create_edge(false_value.id, "value", if_node.id, "false_input")
+    with pytest.raises(InvalidEdgeError, match="Collector output type does not match collector input type"):
+        graph.add_edge(false_branch_edge)
+
+    assert false_branch_edge not in graph.edges
+    assert graph.is_valid()
+
+
+def test_graph_rejects_mixed_if_branch_types_for_collector_items():
+    graph = Graph()
+    string_value = StringInvocation(id="string", value="text")
+    integer_value = IntegerInvocation(id="integer", value=1)
+    if_node = IfInvocation(id="if")
+    collector = CollectInvocation(id="collect")
+    for node in (string_value, integer_value, if_node, collector):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(string_value.id, "value", if_node.id, "true_input"))
+    graph.add_edge(create_edge(integer_value.id, "value", if_node.id, "false_input"))
+
+    with pytest.raises(InvalidEdgeError, match="Collector input collection items must be of a single type"):
+        graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
 
 
 def test_graph_rejects_collector_output_edge_before_input_edge():
