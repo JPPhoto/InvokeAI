@@ -13,8 +13,8 @@ Covers:
   so FLUX RMSNorm.scale and friends aren't crushed to FP8.
 """
 
-from contextlib import contextmanager
 import copy
+from contextlib import contextmanager
 from logging import getLogger
 from types import SimpleNamespace
 from unittest.mock import patch
