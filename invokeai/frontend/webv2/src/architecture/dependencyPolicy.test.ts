@@ -240,6 +240,7 @@ describe('feature public-interface registry', () => {
     expect(
       checkDependency('features/workflow/ui/fields/RecordPickerInput.tsx', '@features/generation/systemPrompts')
     ).toEqual([]);
+    expect(checkDependency('workbench/invocationSubmit.ts', '@features/workflow/generators')).toEqual([]);
     expect(
       checkDependency('workbench/invocationSubmit.ts', '@features/generation/data/dynamicPromptsQueries')
     ).toMatchObject([{ rule: 'feature-private-interface' }]);

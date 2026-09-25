@@ -16,7 +16,7 @@ vi.mock('@features/workflow/react', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getInvocationTemplatesSnapshot: () => templatesMock.snapshot,
 }));
-vi.mock('@features/workflow/queries', async (importOriginal) => ({
+vi.mock('@features/workflow/generators', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   resolveWorkflowGenerators: generatorsMock.resolveWorkflowGenerators,
 }));

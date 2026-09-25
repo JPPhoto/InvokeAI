@@ -2,10 +2,7 @@ import type { ChangeEvent, WheelEvent } from 'react';
 
 import { Box, chakra, Checkbox, createListCollection, HStack, Input, Stack, Textarea } from '@chakra-ui/react';
 import { galleryBoardsOptions } from '@features/gallery/queries';
-import {
-  getWorkflowGeneratorQueryOptions,
-  type WorkflowGeneratorQueryResult,
-} from '@features/workflow/data/generatorQueries';
+import { getWorkflowGeneratorQueryOptions, type WorkflowGeneratorQueryResult } from '@features/workflow/generators';
 import {
   getDefaultWorkflowGeneratorValue,
   getWorkflowGeneratorRequestedCount,

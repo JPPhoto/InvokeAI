@@ -19,7 +19,6 @@ import {
   sanitizeBatchCount,
 } from '@features/generation/settings';
 import { getWorkflowBatchCapReason } from '@features/workflow/graph';
-import { resolveWorkflowGenerators } from '@features/workflow/queries';
 import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
 import { planWorkflowBatch } from '@features/workflow/utility';
 import { queryClient } from '@platform/query/client';
@@ -120,6 +119,8 @@ const resolveWorkflowGeneratorsForRoute = async (
     return null;
   }
 
+  // Loaded on demand: the resolver and its gallery/prompt query dependencies stay out of the boot graph.
+  const { resolveWorkflowGenerators } = await import('@features/workflow/generators');
   const { errors, resolutions } = await resolveWorkflowGenerators(queryClient, pending);
 
   if (!isAccountScopeCurrent(owner)) {
