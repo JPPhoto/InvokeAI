@@ -102,7 +102,9 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type FocusEvent,
   type MouseEvent,
+  type WheelEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -133,14 +135,14 @@ const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invali
 // The media well's hover, matching DropZone's pointer-hover accent preview.
 const MEDIA_INPUT_HOVER_PROPS = { borderColor: 'accent.solid' };
 
-const toFiniteNumber = (raw: string): number | null => {
+const toFiniteNumber = (raw: string): number | undefined => {
   if (raw.trim() === '') {
-    return null;
+    return undefined;
   }
 
   const parsed = Number(raw);
 
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
 const finiteNumberOrUndefined = (value: number | null | undefined): number | undefined =>
@@ -152,15 +154,27 @@ const positiveFiniteNumberOrUndefined = (value: number | null | undefined): numb
   return normalized !== undefined && normalized > 0 ? normalized : undefined;
 };
 
+/**
+ * The text exactly as typed, held while the control is focused and dropped on blur. Rendering the committed value
+ * instead lets its echo rewrite the input under the caret (dropping a trailing `.` or `0`, moving the caret to the
+ * end), and the Canvas rebuilds its flow model in a transition, so the echo can lag a keystroke behind.
+ */
+const useFocusedDraft = () => {
+  const [draft, setDraft] = useState<string | null>(null);
+  const clearDraft = useCallback(() => setDraft(null), []);
+
+  return [draft, setDraft, clearDraft] as const;
+};
+
 const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
-  const text = typeof value === 'string' ? value : '';
-  const onTextareaChange = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>) => onChange(event.currentTarget.value),
-    [onChange]
-  );
-  const onInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => onChange(event.currentTarget.value),
-    [onChange]
+  const [draft, setDraft, clearDraft] = useFocusedDraft();
+  const text = draft ?? (typeof value === 'string' ? value : '');
+  const onTextChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setDraft(event.currentTarget.value);
+      onChange(event.currentTarget.value);
+    },
+    [onChange, setDraft]
   );
 
   if (template.uiComponent === 'textarea') {
@@ -177,7 +191,8 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
         value={text}
         w="full"
         {...invalidProps(invalid)}
-        onChange={onTextareaChange}
+        onBlur={clearDraft}
+        onChange={onTextChange}
       />
     );
   }
@@ -191,7 +206,8 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
       value={text}
       w="full"
       {...invalidProps(invalid)}
-      onChange={onInputChange}
+      onBlur={clearDraft}
+      onChange={onTextChange}
     />
   );
 };
@@ -199,22 +215,44 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
 /** A double-click anywhere in the box selects the whole value, not just the word under the pointer. */
 const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTarget.select();
 
+/** Chromium steps a focused number input on wheel and swallows the scroll; unfocused, the panel scrolls instead. */
+const blurOnWheel = (event: WheelEvent<HTMLInputElement>) => event.currentTarget.blur();
+
 const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
-  const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
+  const [draft, setDraft, clearDraft] = useFocusedDraft();
+  // Chromium keeps an unparseable partial entry (`-`, `1e`) on screen but reports it as empty, so the empty commit
+  // alone cannot tell the field apart from a cleared one.
+  const [hasBadInput, setHasBadInput] = useState(false);
+  const text = draft ?? (typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
   const min = finiteNumberOrUndefined(template.minimum) ?? finiteNumberOrUndefined(template.exclusiveMinimum);
   const max = finiteNumberOrUndefined(template.maximum) ?? finiteNumberOrUndefined(template.exclusiveMaximum);
   const multipleOf = positiveFiniteNumberOrUndefined(template.multipleOf);
   const onInputChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const parsed = toFiniteNumber(event.currentTarget.value);
+      const { validity, value: nextText } = event.currentTarget;
 
-      if (parsed !== null) {
-        onChange(isInteger ? Math.round(parsed) : parsed);
-      }
+      setDraft(nextText);
+      setHasBadInput(validity.badInput);
+      // Committed as typed: rounding, clamping, or dropping a sign would change what is on screen. The host marks
+      // fractional integers, out-of-range values, and an empty required field invalid instead.
+      onChange(toFiniteNumber(nextText));
     },
-    [isInteger, onChange]
+    [onChange, setDraft]
   );
+  const onBlur = useCallback(
+    (event: FocusEvent<HTMLInputElement>) => {
+      setHasBadInput(event.currentTarget.validity.badInput);
+      clearDraft();
+    },
+    [clearDraft]
+  );
+
+  // Any non-empty text React writes replaces the bad entry on screen (a reset or undo landing a number), so the
+  // flag cannot outlive it; while the entry is held the text is empty, so a lagging Canvas echo leaves it alone.
+  if (hasBadInput && text !== '') {
+    setHasBadInput(false);
+  }
 
   return (
     <Input
@@ -226,11 +264,13 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
       size="xs"
       step={multipleOf !== undefined ? String(multipleOf) : isInteger ? '1' : 'any'}
       type="number"
-      value={numericValue}
+      value={text}
       w="full"
-      {...invalidProps(invalid)}
+      {...invalidProps(invalid || hasBadInput)}
+      onBlur={onBlur}
       onChange={onInputChange}
       onDoubleClick={selectInputText}
+      onWheel={blurOnWheel}
     />
   );
 };

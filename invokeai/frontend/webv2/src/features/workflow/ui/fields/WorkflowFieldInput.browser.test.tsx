@@ -2,10 +2,11 @@ import type { FieldInputTemplate } from '@features/workflow/contracts';
 
 import { ChakraProvider, Field } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
+import { getWorkflowFieldInvalidReason } from '@features/workflow/utility';
 import { toaster } from '@platform/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
-import { act, cloneElement, useCallback, useState } from 'react';
+import { act, cloneElement, startTransition, useCallback, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -1117,5 +1118,591 @@ describe('WorkflowFieldInput seed inputs', () => {
     expect(seedInput()?.disabled).toBe(true);
     expect(seedInput()?.value).toBe('42');
     expect(diceButton()?.disabled).toBe(true);
+  });
+});
+
+const fullTemplate = (
+  typeName: 'FloatField' | 'IntegerField' | 'StringField',
+  overrides: Partial<FieldInputTemplate> = {}
+): FieldInputTemplate => ({
+  default: undefined,
+  description: '',
+  exclusiveMaximum: null,
+  exclusiveMinimum: null,
+  fieldKind: 'input',
+  input: 'any',
+  maximum: null,
+  minimum: null,
+  multipleOf: null,
+  name: 'value',
+  options: null,
+  required: true,
+  title: 'Value',
+  type: { batch: false, cardinality: 'SINGLE', name: typeName },
+  uiChoiceLabels: null,
+  uiComponent: null,
+  uiHidden: false,
+  uiModelBase: null,
+  uiModelFormat: null,
+  uiModelType: null,
+  uiOrder: null,
+  ...overrides,
+});
+
+/**
+ * Feeds each commit back as the next prop and derives `invalid` the way both hosts do, so echo-driven caret bugs
+ * reproduce. A deferred echo lands in a transition, as the Canvas flow-model rebuild does.
+ */
+const StatefulField = ({
+  echo = 'sync',
+  initial,
+  onCommit,
+  template,
+}: {
+  echo?: 'deferred' | 'sync';
+  initial: unknown;
+  onCommit: (value: unknown) => void;
+  template: FieldInputTemplate;
+}) => {
+  const [value, setValue] = useState(initial);
+  const onChange = useCallback(
+    (next: unknown) => {
+      if (echo === 'deferred') {
+        startTransition(() => setValue(next));
+      } else {
+        setValue(next);
+      }
+      onCommit(next);
+    },
+    [echo, onCommit]
+  );
+  const invalid = getWorkflowFieldInvalidReason({ isConnected: false, template, value }) !== null;
+
+  return <WorkflowFieldInput invalid={invalid} template={template} value={value} onChange={onChange} />;
+};
+
+describe('WorkflowFieldInput text and number entry', () => {
+  let renderCount = 0;
+  const renderStateful = async (template: FieldInputTemplate, initial: unknown, echo?: 'deferred' | 'sync') => {
+    const onCommit = vi.fn();
+
+    // Keyed so a later render in the same test starts from its own initial value.
+    renderCount += 1;
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <StatefulField key={renderCount} echo={echo} initial={initial} template={template} onCommit={onCommit} />
+        </ChakraProvider>
+      );
+    });
+
+    const input = host.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+
+    if (!input) {
+      throw new Error('Field input not rendered');
+    }
+
+    // The click lands past the end of a short value; End makes the starting caret explicit either way.
+    await act(async () => {
+      await userEvent.click(input);
+      await userEvent.keyboard('{End}');
+    });
+
+    return { input, onCommit };
+  };
+  const keys = (sequence: string) =>
+    act(async () => {
+      await userEvent.keyboard(sequence);
+    });
+  const blur = (input: HTMLElement) =>
+    act(() => {
+      input.blur();
+    });
+  const caret = (input: HTMLInputElement | HTMLTextAreaElement) => [input.selectionStart, input.selectionEnd];
+  const isInvalid = (input: HTMLElement) => input.getAttribute('aria-invalid') === 'true';
+  const FLOAT = fullTemplate('FloatField');
+  const INTEGER = fullTemplate('IntegerField');
+  const TEXT = fullTemplate('StringField');
+
+  describe('text', () => {
+    it('keeps the caret at the edit point while each keystroke echoes back through the value', async () => {
+      const { input, onCommit } = await renderStateful(TEXT, 'hello world');
+
+      await keys('{Home}X');
+      expect(input.value).toBe('Xhello world');
+      expect(caret(input)).toEqual([1, 1]);
+
+      await keys('{End}{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}Y');
+      expect(input.value).toBe('Xhello Yworld');
+      expect(caret(input)).toEqual([8, 8]);
+
+      await keys('{End}Z');
+      expect(input.value).toBe('Xhello YworldZ');
+      expect(caret(input)).toEqual([14, 14]);
+      expect(onCommit).toHaveBeenLastCalledWith('Xhello YworldZ');
+      expect(document.activeElement).toBe(input);
+    });
+
+    it('keeps every keystroke and the caret when the committed value echoes back late', async () => {
+      const { input, onCommit } = await renderStateful(TEXT, 'hello world', 'deferred');
+
+      // Two keystrokes inside one act: the second lands before the first commit has echoed back.
+      await keys('{Home}{ArrowRight}ab');
+      expect(input.value).toBe('habello world');
+      expect(caret(input)).toEqual([3, 3]);
+      expect(onCommit).toHaveBeenLastCalledWith('habello world');
+
+      const number = await renderStateful(FLOAT, 0.5, 'deferred');
+
+      await keys('{Home}12');
+      expect(number.input.value).toBe('120.5');
+      expect(number.onCommit).toHaveBeenLastCalledWith(120.5);
+      await keys('3');
+      expect(number.input.value).toBe('1230.5');
+    });
+
+    it('replaces a selection in place and leaves the caret after the replacement', async () => {
+      const { input, onCommit } = await renderStateful(TEXT, 'hello world');
+
+      await keys('{Shift>}{ArrowLeft}{ArrowLeft}{/Shift}ab');
+      expect(input.value).toBe('hello worab');
+      expect(caret(input)).toEqual([11, 11]);
+
+      await keys('{Control>}{Shift>}{ArrowLeft}{/Shift}{/Control}there');
+      expect(input.value).toBe('hello there');
+      expect(caret(input)).toEqual([11, 11]);
+
+      await keys('{Home}{ArrowRight}{ArrowRight}{Shift>}{ArrowRight}{/Shift}L');
+      expect(input.value).toBe('heLlo there');
+      expect(caret(input)).toEqual([3, 3]);
+
+      await keys('{Control>}a{/Control}new value');
+      expect(input.value).toBe('new value');
+      expect(caret(input)).toEqual([9, 9]);
+      expect(onCommit).toHaveBeenLastCalledWith('new value');
+
+      await act(async () => {
+        await userEvent.dblClick(input);
+      });
+      await keys('word');
+      expect(input.value).toBe('new word');
+      expect(caret(input)).toEqual([8, 8]);
+    });
+
+    it('deletes at the caret, holds still at the boundaries, and stays empty once cleared', async () => {
+      const { input, onCommit } = await renderStateful(TEXT, 'abc');
+
+      await keys('{Home}{Backspace}');
+      expect(input.value).toBe('abc');
+      expect(caret(input)).toEqual([0, 0]);
+
+      await keys('{End}{Delete}');
+      expect(input.value).toBe('abc');
+      expect(caret(input)).toEqual([3, 3]);
+
+      await keys('{ArrowLeft}{Backspace}');
+      expect(input.value).toBe('ac');
+      expect(caret(input)).toEqual([1, 1]);
+
+      await keys('{Home}{Delete}');
+      expect(input.value).toBe('c');
+      expect(caret(input)).toEqual([0, 0]);
+
+      await keys('{Delete}');
+      expect(input.value).toBe('');
+      expect(onCommit).toHaveBeenLastCalledWith('');
+      expect(document.activeElement).toBe(input);
+
+      await keys('xyz{Control>}a{/Control}{Backspace}');
+      expect(input.value).toBe('');
+      expect(onCommit).toHaveBeenLastCalledWith('');
+      expect(document.activeElement).toBe(input);
+    });
+
+    it('pastes at the caret and over a selection, and keeps spacing and punctuation as typed', async () => {
+      const { input, onCommit } = await renderStateful(TEXT, 'hello world');
+
+      await keys('{Control>}{Shift>}{ArrowLeft}{/Shift}{/Control}');
+      await act(async () => {
+        await userEvent.copy();
+      });
+      await keys('{Home}');
+      await act(async () => {
+        await userEvent.paste();
+      });
+      expect(input.value).toBe('worldhello world');
+      expect(caret(input)).toEqual([5, 5]);
+
+      await keys('{End}{ArrowLeft}{ArrowLeft}{ArrowLeft}');
+      await act(async () => {
+        await userEvent.paste();
+      });
+      expect(input.value).toBe('worldhello woworldrld');
+      expect(caret(input)).toEqual([18, 18]);
+
+      await keys('{Control>}a{/Control}');
+      await act(async () => {
+        await userEvent.paste();
+      });
+      expect(input.value).toBe('world');
+      expect(caret(input)).toEqual([5, 5]);
+
+      await keys(', again.  ');
+      expect(input.value).toBe('world, again.  ');
+      expect(onCommit).toHaveBeenLastCalledWith('world, again.  ');
+    });
+
+    it('keeps newlines and cross-line replacements in a textarea', async () => {
+      const { input, onCommit } = await renderStateful(
+        fullTemplate('StringField', { uiComponent: 'textarea' }),
+        'alpha beta'
+      );
+
+      expect(input.tagName).toBe('TEXTAREA');
+
+      await keys('{Home}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{Enter}');
+      expect(input.value).toBe('alpha\n beta');
+      expect(caret(input)).toEqual([6, 6]);
+
+      await keys('X');
+      expect(input.value).toBe('alpha\nX beta');
+      expect(caret(input)).toEqual([7, 7]);
+
+      await keys('{Control>}{Home}{/Control}{ArrowRight}{ArrowRight}{ArrowRight}{Shift>}{ArrowDown}{/Shift}Q');
+      expect(input.value).toBe('alpQeta');
+      expect(caret(input)).toEqual([4, 4]);
+      expect(onCommit).toHaveBeenLastCalledWith('alpQeta');
+
+      await keys('{End}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}');
+      expect(input.value).toBe('');
+      expect(onCommit).toHaveBeenLastCalledWith('');
+      expect(document.activeElement).toBe(input);
+    });
+  });
+
+  describe('float', () => {
+    it('inserts digits at the caret of a decimal and commits each result as typed', async () => {
+      const cases: [string, string, string, number][] = [
+        ['{Home}2', '20.5', '230.5', 230.5],
+        ['{Home}{ArrowRight}2', '02.5', '023.5', 23.5],
+        ['{End}{ArrowLeft}6', '0.65', '0.635', 0.635],
+        ['{End}2', '0.52', '0.523', 0.523],
+      ];
+
+      for (const [sequence, afterInsert, afterNext, committed] of cases) {
+        const { input, onCommit } = await renderStateful(FLOAT, 0.5);
+
+        await keys(sequence);
+        expect(input.value).toBe(afterInsert);
+        // A number input hides its caret; where the next digit lands shows it stayed after the insertion.
+        await keys('3');
+        expect(input.value).toBe(afterNext);
+        expect(onCommit).toHaveBeenLastCalledWith(committed);
+        expect(document.activeElement).toBe(input);
+      }
+    });
+
+    it('replaces a selected digit or the whole value without jumping after the first character', async () => {
+      const { input, onCommit } = await renderStateful(FLOAT, 0.5);
+
+      await keys('{Shift>}{ArrowLeft}{/Shift}6');
+      expect(input.value).toBe('0.6');
+      expect(onCommit).toHaveBeenLastCalledWith(0.6);
+
+      await keys('7');
+      expect(input.value).toBe('0.67');
+
+      await keys('{Control>}a{/Control}0.6');
+      expect(input.value).toBe('0.6');
+      expect(onCommit).toHaveBeenLastCalledWith(0.6);
+
+      await keys('{Control>}a{/Control}25');
+      expect(input.value).toBe('25');
+      expect(onCommit).toHaveBeenLastCalledWith(25);
+      expect(document.activeElement).toBe(input);
+
+      await act(async () => {
+        await userEvent.dblClick(input);
+      });
+      await keys('4');
+      expect(input.value).toBe('4');
+      expect(onCommit).toHaveBeenLastCalledWith(4);
+    });
+
+    it('keeps decimal and sign drafts while they are incomplete', async () => {
+      const fromZero = await renderStateful(FLOAT, 0);
+      const commitsBeforeDot = fromZero.onCommit.mock.calls.length;
+
+      await keys('.');
+      expect(fromZero.onCommit.mock.calls.length).toBe(commitsBeforeDot);
+      await keys('6');
+      expect(fromZero.input.value).toBe('0.6');
+      expect(fromZero.onCommit).toHaveBeenLastCalledWith(0.6);
+
+      const fromEmpty = await renderStateful(FLOAT, undefined);
+
+      await keys('.6');
+      expect(fromEmpty.input.value).toBe('.6');
+      expect(fromEmpty.onCommit).toHaveBeenLastCalledWith(0.6);
+      await blur(fromEmpty.input);
+      expect(fromEmpty.input.value).toBe('0.6');
+
+      const signed = await renderStateful(FLOAT, undefined);
+
+      await keys('-');
+      expect(signed.input.value).toBe('');
+      expect((signed.input as HTMLInputElement).validity.badInput).toBe(true);
+      await keys('4');
+      expect(signed.input.value).toBe('-4');
+      expect(signed.onCommit).toHaveBeenLastCalledWith(-4);
+      expect(isInvalid(signed.input)).toBe(false);
+
+      await keys('{Control>}a{/Control}0.5{Home}-');
+      expect(signed.input.value).toBe('-0.5');
+      expect(signed.onCommit).toHaveBeenLastCalledWith(-0.5);
+      await keys('{End}{Backspace}{Backspace}{Backspace}{Backspace}1.');
+      await keys('5');
+      expect(signed.input.value).toBe('1.5');
+      expect(signed.onCommit.mock.calls.slice(-2).map(([value]) => value)).toEqual([1, 1.5]);
+
+      await keys('{Control>}a{/Control}1e-3');
+      expect(signed.input.value).toBe('1e-3');
+      expect(signed.onCommit).toHaveBeenLastCalledWith(0.001);
+      await blur(signed.input);
+      expect(signed.input.value).toBe('0.001');
+    });
+
+    it('edits the decimal point in place and holds still at the boundaries', async () => {
+      const { input, onCommit } = await renderStateful(FLOAT, 0.5);
+
+      await keys('{Home}{ArrowRight}{Delete}');
+      expect(input.value).toBe('05');
+      expect(onCommit).toHaveBeenLastCalledWith(5);
+      await keys('9');
+      expect(input.value).toBe('095');
+
+      await keys('{Control>}a{/Control}0.5{End}{ArrowLeft}{Backspace}');
+      expect(input.value).toBe('05');
+      await keys('9');
+      expect(input.value).toBe('095');
+
+      await keys('{Control>}a{/Control}45{Home}{Backspace}');
+      expect(input.value).toBe('45');
+      await keys('1');
+      expect(input.value).toBe('145');
+
+      await keys('{End}{Delete}');
+      expect(input.value).toBe('145');
+      await keys('2');
+      expect(input.value).toBe('1452');
+      expect(onCommit).toHaveBeenLastCalledWith(1452);
+    });
+
+    it('clears with Backspace, Delete, or a selection and stays empty and focused', async () => {
+      const backspaced = await renderStateful(FLOAT, 4);
+
+      await keys('{Backspace}');
+      expect(backspaced.input.value).toBe('');
+      expect(backspaced.onCommit).toHaveBeenLastCalledWith(undefined);
+      expect(isInvalid(backspaced.input)).toBe(true);
+      expect(document.activeElement).toBe(backspaced.input);
+      await keys('7');
+      expect(backspaced.input.value).toBe('7');
+      expect(isInvalid(backspaced.input)).toBe(false);
+
+      const deleted = await renderStateful(FLOAT, 4);
+
+      await keys('{Home}{Delete}');
+      expect(deleted.input.value).toBe('');
+      expect(deleted.onCommit).toHaveBeenLastCalledWith(undefined);
+      await keys('8');
+      expect(deleted.input.value).toBe('8');
+
+      const selected = await renderStateful(FLOAT, 1234);
+
+      await keys('{Control>}a{/Control}{Delete}');
+      expect(selected.input.value).toBe('');
+      await keys('12{Control>}a{/Control}{Backspace}');
+      expect(selected.input.value).toBe('');
+      expect(selected.onCommit).toHaveBeenLastCalledWith(undefined);
+      expect(document.activeElement).toBe(selected.input);
+
+      const optional = await renderStateful(fullTemplate('FloatField', { required: false }), 4);
+
+      await keys('{Backspace}');
+      expect(optional.input.value).toBe('');
+      expect(optional.onCommit).toHaveBeenLastCalledWith(undefined);
+      expect(isInvalid(optional.input)).toBe(false);
+    });
+
+    it('steps with the arrow keys by the declared step and ignores the wheel', async () => {
+      const stepped = await renderStateful(fullTemplate('FloatField', { multipleOf: 0.25 }), 0.5);
+
+      await keys('{ArrowUp}');
+      expect(stepped.input.value).toBe('0.75');
+      expect(stepped.onCommit).toHaveBeenLastCalledWith(0.75);
+      await keys('{ArrowDown}{ArrowDown}');
+      expect(stepped.input.value).toBe('0.25');
+      expect(stepped.onCommit).toHaveBeenLastCalledWith(0.25);
+      expect(document.activeElement).toBe(stepped.input);
+
+      // Chromium would step the focused value on wheel; the field gives up focus so the panel scrolls instead.
+      await act(async () => {
+        await userEvent.wheel(stepped.input, { delta: { y: 100 } });
+      });
+      expect(stepped.input.value).toBe('0.25');
+      expect(stepped.onCommit).toHaveBeenLastCalledWith(0.25);
+      expect(document.activeElement).not.toBe(stepped.input);
+
+      const integer = await renderStateful(INTEGER, 3);
+
+      await keys('{ArrowUp}');
+      expect(integer.input.value).toBe('4');
+      expect(integer.onCommit).toHaveBeenLastCalledWith(4);
+    });
+
+    it('pastes a number at the caret and over a selection', async () => {
+      const { input, onCommit } = await renderStateful(FLOAT, 25);
+
+      await keys('{Home}{Shift>}{ArrowRight}{/Shift}');
+      await act(async () => {
+        await userEvent.copy();
+      });
+      await keys('{End}');
+      await act(async () => {
+        await userEvent.paste();
+      });
+      expect(input.value).toBe('252');
+      expect(onCommit).toHaveBeenLastCalledWith(252);
+      await keys('1');
+      expect(input.value).toBe('2521');
+
+      await keys('{Control>}a{/Control}');
+      await act(async () => {
+        await userEvent.paste();
+      });
+      expect(input.value).toBe('2');
+      expect(onCommit).toHaveBeenLastCalledWith(2);
+    });
+
+    it('normalizes a valid draft on blur and keeps an incomplete one visible and invalid', async () => {
+      const { input, onCommit } = await renderStateful(FLOAT, 0.5);
+
+      await keys('0');
+      expect(input.value).toBe('0.50');
+      expect(onCommit).toHaveBeenLastCalledWith(0.5);
+      await blur(input);
+      expect(input.value).toBe('0.5');
+
+      await act(async () => {
+        await userEvent.click(input);
+      });
+      await keys('{Control>}a{/Control}-');
+      expect(input.value).toBe('');
+      expect(onCommit).toHaveBeenLastCalledWith(undefined);
+      await blur(input);
+      expect((input as HTMLInputElement).validity.badInput).toBe(true);
+      expect(isInvalid(input)).toBe(true);
+      expect(onCommit).toHaveBeenLastCalledWith(undefined);
+    });
+  });
+
+  describe('integer and bounds', () => {
+    it('keeps a fractional or negative entry visible and invalid instead of correcting it', async () => {
+      const fractional = await renderStateful(INTEGER, undefined);
+
+      await keys('2.5');
+      expect(fractional.input.value).toBe('2.5');
+      expect(fractional.onCommit).toHaveBeenLastCalledWith(2.5);
+      expect(isInvalid(fractional.input)).toBe(true);
+      await keys('{Backspace}{Backspace}');
+      expect(fractional.input.value).toBe('2');
+      expect(fractional.onCommit).toHaveBeenLastCalledWith(2);
+      expect(isInvalid(fractional.input)).toBe(false);
+
+      const nonNegative = await renderStateful(fullTemplate('IntegerField', { minimum: 0 }), undefined);
+
+      await keys('-7');
+      expect(nonNegative.input.value).toBe('-7');
+      expect(nonNegative.onCommit).toHaveBeenLastCalledWith(-7);
+      expect(isInvalid(nonNegative.input)).toBe(true);
+      await blur(nonNegative.input);
+      expect(nonNegative.input.value).toBe('-7');
+      expect(isInvalid(nonNegative.input)).toBe(true);
+      await act(async () => {
+        await userEvent.click(nonNegative.input);
+      });
+      await keys('{Home}{Delete}');
+      expect(nonNegative.input.value).toBe('7');
+      expect(nonNegative.onCommit).toHaveBeenLastCalledWith(7);
+      expect(isInvalid(nonNegative.input)).toBe(false);
+
+      const negativeFloat = await renderStateful(fullTemplate('FloatField', { minimum: 0 }), 4);
+
+      await keys('{Home}-');
+      expect(negativeFloat.input.value).toBe('-4');
+      expect(negativeFloat.onCommit).toHaveBeenLastCalledWith(-4);
+      expect(isInvalid(negativeFloat.input)).toBe(true);
+    });
+
+    it('edits a multi-digit integer at every position and completes a signed draft', async () => {
+      const { input, onCommit } = await renderStateful(INTEGER, 1234);
+
+      await keys('{Home}9');
+      expect(input.value).toBe('91234');
+      await keys('{End}{ArrowLeft}{ArrowLeft}{Backspace}');
+      expect(input.value).toBe('9134');
+      await keys('{Home}{ArrowRight}{Delete}');
+      expect(input.value).toBe('934');
+      expect(onCommit).toHaveBeenLastCalledWith(934);
+
+      await keys('{Control>}a{/Control}56');
+      expect(input.value).toBe('56');
+      expect(onCommit).toHaveBeenLastCalledWith(56);
+
+      await keys('{Control>}a{/Control}{Backspace}-');
+      expect(input.value).toBe('');
+      expect(onCommit).toHaveBeenLastCalledWith(undefined);
+      await keys('12');
+      expect(input.value).toBe('-12');
+      expect(onCommit).toHaveBeenLastCalledWith(-12);
+      expect(isInvalid(input)).toBe(false);
+
+      await keys('{Control>}a{/Control}4{Backspace}');
+      expect(input.value).toBe('');
+      expect(onCommit).toHaveBeenLastCalledWith(undefined);
+      await keys('4{Home}{Delete}');
+      expect(input.value).toBe('');
+      expect(document.activeElement).toBe(input);
+    });
+
+    it('marks out-of-range and off-step entries invalid but editable, then valid once corrected', async () => {
+      const { input, onCommit } = await renderStateful(
+        fullTemplate('FloatField', { exclusiveMaximum: 1, minimum: 0, multipleOf: 0.25 }),
+        0.5
+      );
+
+      await keys('{Control>}a{/Control}1');
+      expect(input.value).toBe('1');
+      expect(isInvalid(input)).toBe(true);
+      await keys('{Backspace}0.75');
+      expect(input.value).toBe('0.75');
+      expect(isInvalid(input)).toBe(false);
+
+      await keys('{Backspace}');
+      expect(input.value).toBe('0.7');
+      expect(onCommit).toHaveBeenLastCalledWith(0.7);
+      expect(isInvalid(input)).toBe(true);
+      await keys('5');
+      expect(input.value).toBe('0.75');
+      expect(isInvalid(input)).toBe(false);
+
+      await keys('{Home}-');
+      expect(input.value).toBe('-0.75');
+      expect(isInvalid(input)).toBe(true);
+      await keys('{Home}{Delete}');
+      expect(input.value).toBe('0.75');
+      expect(isInvalid(input)).toBe(false);
+    });
   });
 });
