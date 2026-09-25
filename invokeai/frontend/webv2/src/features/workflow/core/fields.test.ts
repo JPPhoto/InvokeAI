@@ -106,6 +106,54 @@ describe('workflow field validation', () => {
     expect(isWorkflowFieldValueValid(template, 5.5)).toBe(false);
   });
 
+  it('treats inclusive bounds, exclusive bounds, and steps exactly at their boundaries', () => {
+    const inclusive = input({ maximum: 10, minimum: -2, type: single('FloatField') });
+
+    expect(isWorkflowFieldValueValid(inclusive, -2)).toBe(true);
+    expect(isWorkflowFieldValueValid(inclusive, -2.001)).toBe(false);
+    expect(isWorkflowFieldValueValid(inclusive, 10)).toBe(true);
+    expect(isWorkflowFieldValueValid(inclusive, 10.001)).toBe(false);
+
+    const exclusive = input({ exclusiveMaximum: 1, exclusiveMinimum: -1, type: single('FloatField') });
+
+    expect(isWorkflowFieldValueValid(exclusive, -1)).toBe(false);
+    expect(isWorkflowFieldValueValid(exclusive, -0.999)).toBe(true);
+    expect(isWorkflowFieldValueValid(exclusive, 1)).toBe(false);
+    expect(isWorkflowFieldValueValid(exclusive, 0.999)).toBe(true);
+
+    // An off-step value stays a value: it is reported, never snapped to the nearest step.
+    const stepped = input({ exclusiveMinimum: -1, maximum: 1, multipleOf: 0.25, type: single('FloatField') });
+
+    expect(isWorkflowFieldValueValid(stepped, 0.75)).toBe(true);
+    expect(isWorkflowFieldValueValid(stepped, 0.7)).toBe(false);
+    expect(isWorkflowFieldValueValid(stepped, -0.75)).toBe(true);
+    expect(isWorkflowFieldValueValid(stepped, -1)).toBe(false);
+    expect(isWorkflowFieldValueValid(stepped, -0.8)).toBe(false);
+    expect(isWorkflowFieldValueValid(input({ multipleOf: 2, type: single('IntegerField') }), -4)).toBe(true);
+    expect(isWorkflowFieldValueValid(input({ multipleOf: 2, type: single('IntegerField') }), -3)).toBe(false);
+  });
+
+  it('tells a cleared required number apart from a present but invalid one', () => {
+    const required = input({ minimum: 0, type: single('IntegerField') });
+    const optional = input({ required: false, type: single('FloatField') });
+
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: required, value: undefined })).toBe(
+      'Required value.'
+    );
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: required, value: 2.5 })).toBe(
+      'Invalid value.'
+    );
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: required, value: -1 })).toBe('Invalid value.');
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: optional, value: undefined })).toBe(null);
+    expect(
+      getWorkflowFieldInvalidReason({
+        isConnected: false,
+        template: input({ input: 'connection', type: single('IntegerField') }),
+        value: 2.5,
+      })
+    ).toBe('Required connection.');
+  });
+
   it('allows empty optional direct values but flags populated invalid optional values', () => {
     const template = input({ maximum: 10, minimum: 1, required: false, type: single('IntegerField') });
 

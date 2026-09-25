@@ -309,7 +309,11 @@ export const getWorkflowFieldInvalidReason = ({
     return null;
   }
 
-  return isDirectInputField(template) ? 'Required value.' : 'Required connection.';
+  if (!isDirectInputField(template)) {
+    return 'Required connection.';
+  }
+
+  return isEmptyOptionalValue(value) ? 'Required value.' : 'Invalid value.';
 };
 
 // Raw hex (not Chakra tokens) because xyflow handles are styled inline.
