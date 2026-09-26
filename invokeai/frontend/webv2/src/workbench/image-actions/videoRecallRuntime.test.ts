@@ -310,6 +310,22 @@ describe('createVideoRecallRuntime', () => {
       runtime.dispose();
     });
 
+    it('clears the references for an explicitly empty list sent beside an initial video', async () => {
+      const { runtime, socket, videoValues } = setup(REF2VA);
+
+      for (const name of ['a.mp4', 'b.mp4', 'c.mp4']) {
+        socket.emit(placementEvent('reference_video', { video_name: name }));
+        await flush();
+      }
+      socket.emit(parametersEvent({ minimax_h3_references: [], source_video: { video_name: 'clip.mp4' } }));
+      await flush();
+
+      expect(referenceNames(videoValues())).toEqual(['clip.mp4*']);
+      expect(videoValues()).toMatchObject({ sourceVideo: { video_name: 'clip.mp4' } });
+
+      runtime.dispose();
+    });
+
     it('ignores a first frame a Ref2VA panel cannot use, keeping its initial video', async () => {
       const { runtime, socket, videoValues } = setup(REF2VA);
 

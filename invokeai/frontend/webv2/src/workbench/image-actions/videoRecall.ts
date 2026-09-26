@@ -812,16 +812,21 @@ export const buildVideoRecallSettings = ({
     fields.push('media');
   } else if (hadMedia && !partial) {
     fields.push('media');
-  } else if (
+  }
+
+  // A partial record's explicitly empty list asks for no references, whatever other media it names; an absent one
+  // leaves them alone.
+  if (
     partial &&
     isRecord(metadata) &&
     Array.isArray(metadata.minimax_h3_references) &&
     metadata.minimax_h3_references.length === 0 &&
     values.references.length > 0
   ) {
-    // An explicitly empty list asks for no references; an absent one leaves them alone.
     values = { ...values, references: [] };
-    fields.push('media');
+    if (!fields.includes('media')) {
+      fields.push('media');
+    }
   }
 
   // Recalled alongside the source rather than with the sampling block: it is only meaningful for a
