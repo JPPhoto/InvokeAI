@@ -7,12 +7,12 @@ import {
   Badge,
   Box,
   createListCollection,
+  Field,
   Flex,
   HStack,
   Icon,
   Image,
   Input,
-  NumberInput,
   SimpleGrid,
   Stack,
   Switch,
@@ -62,6 +62,10 @@ import { useWorkflowProjectSelector, useWorkflowUi } from '@features/workflow/ui
 import {
   getResolvedWorkflowEdges,
   isLoraFieldCollectionEntry,
+  isLoraFieldWeightValid,
+  isWorkflowCollectionItemValid,
+  isWorkflowGeneratorFieldTypeName,
+  LORA_FIELD_WEIGHT_RANGE,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
 import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
@@ -90,7 +94,7 @@ import {
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SeedInput } from '@platform/ui/SeedInput';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilmIcon, ImageIcon, ImagePlusIcon, RotateCcwIcon, Trash2Icon, XIcon } from 'lucide-react';
+import { FilmIcon, ImageIcon, ImagePlusIcon, PlusIcon, RotateCcwIcon, Trash2Icon, XIcon } from 'lucide-react';
 import {
   lazy,
   Suspense,
@@ -102,7 +106,9 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type FocusEvent,
   type MouseEvent,
+  type WheelEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -111,6 +117,23 @@ const MODEL_SELECT_FALLBACK = (
   <Button disabled size="xs" w="full">
     Loading models…
   </Button>
+);
+const RECORD_PICKER_FALLBACK = (
+  <Button disabled size="xs" w="full">
+    Loading…
+  </Button>
+);
+// Generator settings load with their node; a plain workflow never pays for them.
+const GeneratorFieldInput = lazy(() =>
+  import('./GeneratorFieldInput').then((module) => ({ default: module.GeneratorFieldInput }))
+);
+
+// Record pickers load with their node so the system-prompt query stays out of the editor's boot graph.
+const StylePresetInput = lazy(() =>
+  import('./RecordPickerInput').then((module) => ({ default: module.StylePresetInput }))
+);
+const SystemPromptInput = lazy(() =>
+  import('./RecordPickerInput').then((module) => ({ default: module.SystemPromptInput }))
 );
 
 export const getWorkflowSelectedGalleryImage = getSelectedGalleryImageFromValues;
@@ -133,14 +156,14 @@ const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invali
 // The media well's hover, matching DropZone's pointer-hover accent preview.
 const MEDIA_INPUT_HOVER_PROPS = { borderColor: 'accent.solid' };
 
-const toFiniteNumber = (raw: string): number | null => {
+const toFiniteNumber = (raw: string): number | undefined => {
   if (raw.trim() === '') {
-    return null;
+    return undefined;
   }
 
   const parsed = Number(raw);
 
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) ? parsed : undefined;
 };
 
 const finiteNumberOrUndefined = (value: number | null | undefined): number | undefined =>
@@ -152,21 +175,39 @@ const positiveFiniteNumberOrUndefined = (value: number | null | undefined): numb
   return normalized !== undefined && normalized > 0 ? normalized : undefined;
 };
 
-const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
-  const text = typeof value === 'string' ? value : '';
-  const onTextareaChange = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>) => onChange(event.currentTarget.value),
-    [onChange]
-  );
-  const onInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => onChange(event.currentTarget.value),
-    [onChange]
+/**
+ * The text exactly as typed, held while the control is focused and dropped on blur. Rendering the committed value
+ * instead lets its echo rewrite the input under the caret (dropping a trailing `.` or `0`, moving the caret to the
+ * end), and the Canvas rebuilds its flow model in a transition, so the echo can lag a keystroke behind.
+ */
+const useFocusedDraft = () => {
+  const [draft, setDraft] = useState<string | null>(null);
+  const clearDraft = useCallback(() => setDraft(null), []);
+
+  return [draft, setDraft, clearDraft] as const;
+};
+
+/**
+ * A row of a list names itself by position; a scalar field is named by its title. `step` is the arrow-key
+ * increment when the template declares no `multipleOf`.
+ */
+type ScalarInputProps = WorkflowFieldInputProps & { ariaLabel?: string; step?: number };
+
+const StringInput = ({ ariaLabel, id, invalid, onChange, template, value }: ScalarInputProps) => {
+  const [draft, setDraft, clearDraft] = useFocusedDraft();
+  const text = draft ?? (typeof value === 'string' ? value : '');
+  const onTextChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setDraft(event.currentTarget.value);
+      onChange(event.currentTarget.value);
+    },
+    [onChange, setDraft]
   );
 
   if (template.uiComponent === 'textarea') {
     return (
       <ResizableTextarea
-        aria-label={template.title}
+        aria-label={ariaLabel ?? template.title}
         className="nodrag nowheel"
         defaultHeightPx={96}
         fontFamily="mono"
@@ -177,21 +218,23 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
         value={text}
         w="full"
         {...invalidProps(invalid)}
-        onChange={onTextareaChange}
+        onBlur={clearDraft}
+        onChange={onTextChange}
       />
     );
   }
 
   return (
     <Input
-      aria-label={template.title}
+      aria-label={ariaLabel ?? template.title}
       className="nodrag"
       id={id ? `${id}-input` : undefined}
       size="xs"
       value={text}
       w="full"
       {...invalidProps(invalid)}
-      onChange={onInputChange}
+      onBlur={clearDraft}
+      onChange={onTextChange}
     />
   );
 };
@@ -199,38 +242,92 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
 /** A double-click anywhere in the box selects the whole value, not just the word under the pointer. */
 const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTarget.select();
 
-const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
+const NumericInput = ({ ariaLabel, id, invalid, onChange, step, template, value }: ScalarInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
-  const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
+  const [draft, setDraft, clearDraft] = useFocusedDraft();
+  // Set while a wheel event passes through: the blur it causes must not end the draft.
+  const wheelRefocus = useRef(false);
+  // Chromium keeps an unparseable partial entry (`-`, `1e`) on screen but reports it as empty, so the empty commit
+  // alone cannot tell the field apart from a cleared one.
+  const [hasBadInput, setHasBadInput] = useState(false);
+  const text = draft ?? (typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
   const min = finiteNumberOrUndefined(template.minimum) ?? finiteNumberOrUndefined(template.exclusiveMinimum);
   const max = finiteNumberOrUndefined(template.maximum) ?? finiteNumberOrUndefined(template.exclusiveMaximum);
   const multipleOf = positiveFiniteNumberOrUndefined(template.multipleOf);
   const onInputChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const parsed = toFiniteNumber(event.currentTarget.value);
+      const { validity, value: nextText } = event.currentTarget;
 
-      if (parsed !== null) {
-        onChange(isInteger ? Math.round(parsed) : parsed);
-      }
+      setDraft(nextText);
+      setHasBadInput(validity.badInput);
+      // Committed as typed: rounding, clamping, or dropping a sign would change what is on screen. The host marks
+      // fractional integers, out-of-range values, and an empty required field invalid instead.
+      onChange(toFiniteNumber(nextText));
     },
-    [isInteger, onChange]
+    [onChange, setDraft]
   );
+  const onBlur = useCallback(
+    (event: FocusEvent<HTMLInputElement>) => {
+      if (wheelRefocus.current) {
+        return;
+      }
+
+      setHasBadInput(event.currentTarget.validity.badInput);
+      clearDraft();
+    },
+    [clearDraft]
+  );
+  // Chromium steps a focused number input on wheel and swallows the scroll. Dropping focus for the event lets the
+  // panel scroll instead; focus returns, with the draft and caret, once the scroll has been dispatched.
+  const onWheel = useCallback(
+    (event: WheelEvent<HTMLInputElement>) => {
+      const input = event.currentTarget;
+
+      if (document.activeElement !== input || wheelRefocus.current) {
+        return;
+      }
+
+      wheelRefocus.current = true;
+      input.blur();
+      requestAnimationFrame(() => {
+        wheelRefocus.current = false;
+
+        if (input.isConnected && document.activeElement === document.body) {
+          input.focus({ preventScroll: true });
+        } else {
+          // Focus went elsewhere within the frame (momentum wheel plus a click): finish the blur that was skipped.
+          setHasBadInput(input.validity.badInput);
+          clearDraft();
+        }
+      });
+    },
+    [clearDraft]
+  );
+
+  // Any non-empty text React writes replaces the bad entry on screen (a reset or undo landing a number), so the
+  // flag cannot outlive it; while the entry is held the text is empty, so a lagging Canvas echo leaves it alone.
+  if (hasBadInput && text !== '') {
+    setHasBadInput(false);
+  }
 
   return (
     <Input
-      aria-label={template.title}
+      aria-label={ariaLabel ?? template.title}
       className="nodrag"
       id={id ? `${id}-number-input` : undefined}
       max={max !== undefined ? String(max) : undefined}
       min={min !== undefined ? String(min) : undefined}
       size="xs"
-      step={multipleOf !== undefined ? String(multipleOf) : isInteger ? '1' : 'any'}
+      fontVariantNumeric="tabular-nums"
+      step={multipleOf !== undefined ? String(multipleOf) : step !== undefined ? String(step) : isInteger ? '1' : 'any'}
       type="number"
-      value={numericValue}
+      value={text}
       w="full"
-      {...invalidProps(invalid)}
+      {...invalidProps(invalid || hasBadInput)}
+      onBlur={onBlur}
       onChange={onInputChange}
       onDoubleClick={selectInputText}
+      onWheel={onWheel}
     />
   );
 };
@@ -1364,7 +1461,7 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
     [commit, entries]
   );
   const onWeightChange = useCallback(
-    (index: number, weight: number) =>
+    (index: number, weight: number | null) =>
       commit(
         entries.map((entry, entryIndex) =>
           entryIndex === index && isLoraFieldCollectionEntry(entry) ? { ...entry, weight } : entry
@@ -1407,6 +1504,31 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
   );
 };
 
+/** The weight column edits a bounded float; the range is the same one the Generate LoRA controls use. */
+const LORA_WEIGHT_TEMPLATE: FieldInputTemplate = {
+  default: undefined,
+  description: '',
+  exclusiveMaximum: null,
+  exclusiveMinimum: null,
+  fieldKind: 'input',
+  input: 'direct',
+  maximum: LORA_FIELD_WEIGHT_RANGE.max,
+  minimum: LORA_FIELD_WEIGHT_RANGE.min,
+  multipleOf: null,
+  name: 'weight',
+  options: null,
+  required: true,
+  title: 'Weight',
+  type: { batch: false, cardinality: 'SINGLE', name: 'FloatField' },
+  uiChoiceLabels: null,
+  uiComponent: null,
+  uiHidden: false,
+  uiModelBase: null,
+  uiModelFormat: null,
+  uiModelType: null,
+  uiOrder: null,
+};
+
 const LoRACollectionRow = ({
   entry,
   id,
@@ -1418,28 +1540,16 @@ const LoRACollectionRow = ({
   id?: string;
   index: number;
   onRemove: (index: number) => void;
-  onWeightChange: (index: number, weight: number) => void;
+  onWeightChange: (index: number, weight: number | null) => void;
 }) => {
   const label = entry ? entry.lora.name : 'Unreadable entry';
-  // Keep raw weight drafts through typing so trailing decimals survive numeric commits; blur returns to the
-  // clamped committed value.
-  const [draft, setDraft] = useState<string | null>(null);
   const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
+  // The shared numeric control commits as typed; a cleared or out-of-range weight stays on screen and blocks
+  // invoking through the field's own reason instead of being clamped.
   const onValueChange = useCallback(
-    ({ value: valueAsText, valueAsNumber }: NumberInput.ValueChangeDetails) => {
-      setDraft(valueAsText);
-
-      if (Number.isFinite(valueAsNumber)) {
-        onWeightChange(index, valueAsNumber);
-      }
-    },
+    (weight: unknown) => onWeightChange(index, typeof weight === 'number' ? weight : null),
     [index, onWeightChange]
   );
-  const onFocusChange = useCallback(({ focused }: NumberInput.FocusChangeDetails) => {
-    if (!focused) {
-      setDraft(null);
-    }
-  }, []);
 
   return (
     <HStack gap="1" minW="0" w="full">
@@ -1447,28 +1557,17 @@ const LoRACollectionRow = ({
         <MiddleTruncate color={entry ? undefined : 'fg.error'} flex="1" fontSize="2xs" minW="0" text={label} />
       </Tooltip>
       {entry ? (
-        <NumberInput.Root
-          className="nodrag"
-          // Stated rather than left to the default: `min`/`max` are otherwise advisory here, and a
-          // mistyped 999 would run — the backend takes an unbounded float and nothing downstream
-          // rejects it.
-          clampValueOnBlur
-          flexShrink="0"
-          max={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMax}
-          min={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMin}
-          size="xs"
-          step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
-          value={draft ?? String(entry.weight)}
-          w="16"
-          onFocusChange={onFocusChange}
-          onValueChange={onValueChange}
-        >
-          <NumberInput.Input
-            aria-label={`${label} weight`}
-            fontVariantNumeric="tabular-nums"
-            id={id ? `${id}-lora-${index}-weight` : undefined}
+        <Box flexShrink="0" w="16">
+          <NumericInput
+            ariaLabel={`${label} weight`}
+            id={id ? `${id}-lora-${index}` : undefined}
+            invalid={!isLoraFieldWeightValid(entry.weight)}
+            step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
+            template={LORA_WEIGHT_TEMPLATE}
+            value={entry.weight ?? undefined}
+            onChange={onValueChange}
           />
-        </NumberInput.Root>
+        </Box>
       ) : null}
       <IconButton
         aria-label={`Remove ${label}`}
@@ -1481,6 +1580,156 @@ const LoRACollectionRow = ({
       >
         <Trash2Icon />
       </IconButton>
+    </HStack>
+  );
+};
+
+const ScalarCollectionInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
+  const { t } = useTranslation();
+  const items = useMemo<readonly unknown[]>(() => (Array.isArray(value) ? value : []), [value]);
+  const isString = template.type.name === 'StringField';
+  // Each row edits one scalar on a single line, whatever the list's own ui_component says.
+  const itemTemplate = useMemo<FieldInputTemplate>(
+    () => ({ ...template, type: { ...template.type, cardinality: 'SINGLE' }, uiComponent: null }),
+    [template]
+  );
+  // Emptying the list restores the template's own default, so the reset affordance stays quiet.
+  const clearsToUndefined = template.default === undefined && !template.required;
+  const commit = useCallback(
+    (next: unknown[]) => onChange(next.length === 0 && clearsToUndefined ? undefined : next),
+    [clearsToUndefined, onChange]
+  );
+  const onAdd = useCallback(
+    () => commit([...items, isString ? '' : (finiteNumberOrUndefined(template.minimum) ?? 0)]),
+    [commit, isString, items, template.minimum]
+  );
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Rows are keyed by position, so a removal only unmounts the last row's controls. Move keyboard focus off
+  // anything about to unmount before the commit lands, or it falls to the canvas and its delete shortcut.
+  const onClear = useCallback(() => {
+    addButtonRef.current?.focus();
+    commit([]);
+  }, [commit]);
+  const onRemove = useCallback(
+    (index: number) => {
+      if (index === items.length - 1) {
+        const removeButtons = listRef.current?.querySelectorAll<HTMLButtonElement>('[data-collection-remove]');
+
+        (index > 0 ? removeButtons?.[index - 1] : addButtonRef.current)?.focus();
+      }
+
+      commit(items.filter((_, itemIndex) => itemIndex !== index));
+    },
+    [commit, items]
+  );
+  // A cleared or unparseable number row is kept as null: the list keeps its shape and the row reports itself.
+  const onItemChange = useCallback(
+    (index: number, next: unknown) =>
+      commit(items.map((item, itemIndex) => (itemIndex === index ? (next === undefined ? null : next) : item))),
+    [commit, items]
+  );
+
+  return (
+    <Stack gap="1" w="full">
+      {items.length > 0 ? (
+        <Stack
+          ref={listRef}
+          borderWidth="1px"
+          boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
+          className="nowheel"
+          gap="1"
+          maxH="40"
+          overflowY="auto"
+          p="1"
+          rounded="sm"
+          w="full"
+        >
+          {items.map((item, index) => (
+            <ScalarCollectionRow
+              key={index}
+              id={id}
+              index={index}
+              itemTemplate={itemTemplate}
+              value={item}
+              onItemChange={onItemChange}
+              onRemove={onRemove}
+            />
+          ))}
+        </Stack>
+      ) : null}
+      <HStack gap="1.5" w="full">
+        <Button ref={addButtonRef} className="nodrag" size="2xs" variant="outline" onClick={onAdd}>
+          <Icon as={PlusIcon} boxSize="3" />
+          {t('nodes.addItem')}
+        </Button>
+        {items.length > 0 ? (
+          <Button className="nodrag" size="2xs" variant="ghost" onClick={onClear}>
+            {t('common.clear')}
+          </Button>
+        ) : null}
+        {items.length > 0 ? (
+          <Text color="fg.subtle" fontSize="2xs" ms="auto">
+            {t('nodes.collectionItemCount', { count: items.length })}
+          </Text>
+        ) : null}
+      </HStack>
+    </Stack>
+  );
+};
+
+const ScalarCollectionRow = ({
+  id,
+  index,
+  itemTemplate,
+  onItemChange,
+  onRemove,
+  value,
+}: {
+  id?: string;
+  index: number;
+  itemTemplate: FieldInputTemplate;
+  onItemChange: (index: number, next: unknown) => void;
+  onRemove: (index: number) => void;
+  value: unknown;
+}) => {
+  const { t } = useTranslation();
+  const onChange = useCallback((next: unknown) => onItemChange(index, next), [index, onItemChange]);
+  const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
+  const Control = itemTemplate.type.name === 'StringField' ? StringInput : NumericInput;
+  const invalid = !isWorkflowCollectionItemValid(itemTemplate, value);
+  const removeLabel = t('nodes.removeItem', { field: itemTemplate.title, index: index + 1 });
+
+  return (
+    <HStack gap="1" w="full">
+      <Text color="fg.subtle" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums" minW="4" textAlign="end">
+        {index + 1}.
+      </Text>
+      {/* The host's Field.Root marks every control inside it invalid; a row scopes its own validity instead. */}
+      <Field.Root flex="1" invalid={invalid} minW="0">
+        <Control
+          ariaLabel={t('nodes.collectionItemLabel', { field: itemTemplate.title, index: index + 1 })}
+          id={id ? `${id}-item-${index}` : undefined}
+          invalid={invalid}
+          template={itemTemplate}
+          value={value}
+          onChange={onChange}
+        />
+      </Field.Root>
+      <Tooltip content={removeLabel}>
+        <IconButton
+          aria-label={removeLabel}
+          className="nodrag"
+          color="fg.muted"
+          data-collection-remove=""
+          flexShrink="0"
+          size="2xs"
+          variant="ghost"
+          onClick={onRemoveClick}
+        >
+          <Trash2Icon />
+        </IconButton>
+      </Tooltip>
     </HStack>
   );
 };
@@ -1639,11 +1888,28 @@ const SavedWorkflowInput = ({ nodeId, onChange, template, value }: WorkflowField
 };
 
 export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
-  // COLLECTION fields hold arrays; only image lists have a list widget. Other
+  // COLLECTION fields hold arrays; only image and scalar lists have a list widget. Other
   // collections stay connection-only even when a migrated linear-form element
   // points at them, since the single-value widget would write a bare value.
   if (props.template.type.cardinality === 'COLLECTION') {
-    return props.template.type.name === 'ImageField' ? <ImageCollectionInput {...props} /> : CONNECTION_ONLY_FALLBACK;
+    switch (props.template.type.name) {
+      case 'ImageField':
+        return <ImageCollectionInput {...props} />;
+      case 'FloatField':
+      case 'IntegerField':
+      case 'StringField':
+        return <ScalarCollectionInput {...props} />;
+      default:
+        return CONNECTION_ONLY_FALLBACK;
+    }
+  }
+
+  if (isWorkflowGeneratorFieldTypeName(props.template.type.name)) {
+    return (
+      <Suspense fallback={RECORD_PICKER_FALLBACK}>
+        <GeneratorFieldInput {...props} />
+      </Suspense>
+    );
   }
 
   switch (props.template.type.name) {
@@ -1679,6 +1945,18 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
       return <ModelIdentifierInput {...props} />;
     case 'SchedulerField':
       return <SchedulerInput {...props} />;
+    case 'StylePresetField':
+      return (
+        <Suspense fallback={RECORD_PICKER_FALLBACK}>
+          <StylePresetInput {...props} />
+        </Suspense>
+      );
+    case 'SystemPromptField':
+      return (
+        <Suspense fallback={RECORD_PICKER_FALLBACK}>
+          <SystemPromptInput {...props} />
+        </Suspense>
+      );
     case 'BoardField':
       return <BoardInput {...props} />;
     case 'ImageField':
