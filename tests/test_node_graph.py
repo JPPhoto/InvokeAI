@@ -1210,25 +1210,114 @@ def test_graph_rejects_iterator_consumers_incompatible_with_if_collector_branche
         graph.add_edge(create_edge(iterator.id, "item", string_sink.id, "value"))
 
 
-def test_graph_skips_if_traversal_state_for_non_if_sources(monkeypatch: pytest.MonkeyPatch):
-    from invokeai.app.services.shared import graph_validation
+@pytest.mark.parametrize("collector_count", [1, 3])
+def test_graph_rejects_if_branch_that_invalidates_iterator_through_collectors(collector_count: int):
+    true_value = StringInvocation(id="true", value="true")
+    false_value = StringInvocation(id="false", value="false")
+    if_node = IfInvocation(id="if")
+    collectors = [CollectInvocation(id=f"collect_{index}") for index in range(collector_count)]
+    iterator = IterateInvocation(id="iterator")
+    image_sink = ImageToImageTestInvocation(id="image_sink")
+    string_sink = StringInvocation(id="string_sink")
+    nodes = [true_value, false_value, if_node, *collectors, iterator, image_sink, string_sink]
+    image_edge = create_edge(iterator.id, "item", image_sink.id, "image")
+    graph = Graph(
+        nodes={node.id: node for node in nodes},
+        edges=[
+            create_edge(true_value.id, "value", if_node.id, "true_input"),
+            create_edge(if_node.id, "value", collectors[0].id, "item"),
+            *[
+                create_edge(source.id, "collection", target.id, "collection")
+                for source, target in zip(collectors, collectors[1:], strict=False)
+            ],
+            create_edge(collectors[-1].id, "collection", iterator.id, "collection"),
+            image_edge,
+        ],
+    )
+    graph.validate_self()
+    original_edges = list(graph.edges)
+    branch_edge = create_edge(false_value.id, "value", if_node.id, "false_input")
 
-    string_value = StringInvocation(id="string", value="text")
-    graph = Graph(nodes={string_value.id: string_value})
-    set_calls = 0
-    original_set = set
+    with pytest.raises(InvalidEdgeError, match="[Ii]terator.*type"):
+        graph.add_edge(branch_edge)
 
-    def count_set_calls(*args: Any, **kwargs: Any) -> set[Any]:
-        nonlocal set_calls
-        set_calls += 1
-        return original_set(*args, **kwargs)
+    assert graph.edges == original_edges
+    graph.validate_self()
 
-    monkeypatch.setattr(graph_validation, "set", count_set_calls, raising=False)
+    graph.delete_edge(image_edge)
+    graph.add_edge(create_edge(iterator.id, "item", string_sink.id, "value"))
+    graph.add_edge(branch_edge)
+    graph.validate_self()
 
-    assert graph._get_effective_output_connections(string_value.id, "value") == [
-        EdgeConnection(node_id=string_value.id, field="value")
+
+def test_graph_if_branch_revalidates_only_affected_iterators_once(monkeypatch: pytest.MonkeyPatch):
+    nodes = [
+        StringInvocation(id="true", value="true"),
+        StringInvocation(id="false", value="false"),
+        IfInvocation(id="if"),
+        CollectInvocation(id="first_collect"),
+        CollectInvocation(id="second_collect"),
+        IterateInvocation(id="affected_iterator"),
+        StringInvocation(id="sink"),
+        *[IterateInvocation(id=f"unrelated_{index}") for index in range(32)],
     ]
-    assert set_calls == 0
+    graph = Graph(
+        nodes={node.id: node for node in nodes},
+        edges=[
+            create_edge("true", "value", "if", "true_input"),
+            create_edge("if", "value", "first_collect", "item"),
+            create_edge("if", "value", "second_collect", "item"),
+            create_edge("first_collect", "collection", "second_collect", "collection"),
+            create_edge("second_collect", "collection", "affected_iterator", "collection"),
+            create_edge("affected_iterator", "item", "sink", "value"),
+        ],
+    )
+    validated_iterators: list[str] = []
+    original_validate_iterator = Graph._is_iterator_connection_valid
+
+    def count_iterator_validations(graph: Graph, node_id: str, *args: Any, **kwargs: Any):
+        validated_iterators.append(node_id)
+        return original_validate_iterator(graph, node_id, *args, **kwargs)
+
+    monkeypatch.setattr(Graph, "_is_iterator_connection_valid", count_iterator_validations)
+    graph.add_edge(create_edge("false", "value", "if", "false_input"))
+
+    assert validated_iterators == ["affected_iterator"]
+
+
+@pytest.mark.parametrize("operation", ["add_edge", "validate_self"])
+def test_graph_ordinary_edge_validation_avoids_projection_work(operation: str, monkeypatch: pytest.MonkeyPatch):
+    nodes = [StringInvocation(id=f"string_{index}", value="text") for index in range(25)]
+    edges = [
+        create_edge(source.id, "value", target.id, "value") for source, target in zip(nodes, nodes[1:], strict=False)
+    ]
+    graph = Graph(nodes={node.id: node for node in nodes}, edges=edges if operation == "validate_self" else [])
+    node_lookups = 0
+    connection_allocations = 0
+    original_get_node = Graph.get_node
+    original_connection_init = EdgeConnection.__init__
+
+    def count_node_lookups(graph: Graph, node_id: str):
+        nonlocal node_lookups
+        node_lookups += 1
+        return original_get_node(graph, node_id)
+
+    def count_connection_allocations(connection: EdgeConnection, **kwargs: Any):
+        nonlocal connection_allocations
+        connection_allocations += 1
+        original_connection_init(connection, **kwargs)
+
+    monkeypatch.setattr(Graph, "get_node", count_node_lookups)
+    monkeypatch.setattr(EdgeConnection, "__init__", count_connection_allocations)
+
+    if operation == "add_edge":
+        for edge in edges:
+            graph.add_edge(edge)
+    else:
+        graph.validate_self()
+
+    assert graph.edges == edges
+    assert (node_lookups, connection_allocations) == (2 * len(edges), 0)
 
 
 def test_graph_validation_bounds_shared_if_branch_validation_work(monkeypatch: pytest.MonkeyPatch):
