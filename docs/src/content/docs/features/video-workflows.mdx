@@ -186,10 +186,10 @@ Every LTX-2 workflow outputs an MP4 with a **jointly generated stereo soundtrack
     Provide both; the clip starts on the first image and lands on the second. Give the two images the same aspect ratio.
   </Card>
   <Card title="Extend Video - LTX-2" icon="clock">
-    Continue an existing clip. The continuation starts from the source's last few frames **and its closing sound**, and joins onto it with a cross-fade over the same span, so the picture and the soundtrack both carry across the join. `context_frames` sets how much of the source is carried in.
+    Continue an existing clip. The continuation starts from the source's last few frames **and its closing sound**, and joins onto it with a cross-fade over the same span, so the picture and the soundtrack both carry across the join. **Context Frames** sets how much of the source is carried in.
   </Card>
   <Card title="Extend Video to Image - LTX-2" icon="clock">
-    The same, with a **destination image**: the continuation ends on your image. Give it the source clip's aspect ratio.
+    The same, with a **Last Frame** image: the continuation ends on your image. Give it the source clip's aspect ratio.
   </Card>
   <Card title="Audio to Video - LTX-2" icon="seti:audio">
     Drop in a clip — or an audio file uploaded to the gallery — and LTX-2 generates a picture for its soundtrack, down to lip movement. The soundtrack decides the length, and the output carries the original recording. Say in the prompt who or what is making the sound.
@@ -201,11 +201,11 @@ Every LTX-2 workflow outputs an MP4 with a **jointly generated stereo soundtrack
 
 :::tip[Tuning the LTX-2 workflows]
 * **Use a single-pass resolution** (512p, 704p or 768p) everywhere except the Two-Stage workflow. The other workflows have no refine pass, so 1024p and 1536p render *smaller* than 768p. Audio-to-video and video-to-audio cannot run two-stage at all.
-* **Frames** must be on LTX-2's 8·n + 1 grid (9, 17, … 121, … 241); unlike the Video panel, the workflows do not snap other values, and the run fails at the Denoise node. The frame rate sets how much audio is generated, as well as the clip's duration.
-* **Extending:** `context_frames` defaults to 17 (about 0.7 s at 24 fps) — enough for motion, but only about one syllable of sound. For singing or other rhythmic material, raise it along the same grid (25, 33, 41, 49 …). `num_frames` *includes* the context, so the extension adds `num_frames − context_frames` new frames; raise both together.
+* **Number of Frames** must be on LTX-2's 8·n + 1 grid (9, 17, … 121, … 241); unlike the Video panel, the workflows do not snap other values, and the run fails at the Denoise node. The frame rate sets how much audio is generated, as well as the clip's duration.
+* **Extending:** **Context Frames** defaults to 17 (about 0.7 s at 24 fps) — enough for motion, but only about one syllable of sound. For singing or other rhythmic material, raise it along the same grid (25, 33, 41, 49 …). **Number of Frames** *includes* the context, so the extension adds Number of Frames − Context Frames new frames; raise both together.
 * **The Distilled LoRA** (the 8-step fast path for the Dev transformer) goes in the LoRA Collection workflow's list. Also set **Schedule** to `distilled`, **Steps** to 8 and **CFG** to 1 in the form — the `auto` schedule follows the checkpoint, not the LoRA.
 
-The **Notes** panel of each lists the models to select: an LTX-2.5 transformer, the LTX-2.5 Components install, and the Gemma-4 text encoder.
+The **Notes** panel of each lists the models to select in the form's **Model** section: an LTX-2.5 transformer for **Model**, the LTX-2.5 Components install for **Components**, and the Gemma-4 text encoder for **Text Encoder**.
 :::
 
 ---
@@ -221,7 +221,7 @@ The **Notes** panel of each lists the models to select: an LTX-2.5 transformer, 
 3. **Set your inputs:**
    - *Text to Video* — type a **positive prompt** describing the scene and motion.
    - *Image to Video / First (or Last) Frame to Video* — drop a starting (or ending) **image** into the image field, and optionally add a prompt.
-   - *Extend Video* — provide a **starting video** and use the sliders to pick where the continuation begins.
+   - *Extend Video* — provide a **starting video** and trim it with the **Start Frame** and **End Frame** sliders (they appear once the video is loaded); the continuation picks up from the end of the trimmed range.
 
 4. **(Optional) adjust resolution.** The defaults are chosen to balance speed and memory. If you hit an out-of-memory error, lower the resolution preset — see the [VRAM tips](#which-one-fits-my-gpu) below.
 
