@@ -3515,6 +3515,7 @@
       "source:src/features/workflow/ui/editor/useLasso.tsx",
       "source:src/features/workflow/ui/editor/workflowViewportStore.ts",
       "source:src/features/workflow/ui/fields/FieldDescriptionPopover.tsx",
+      "source:src/features/workflow/ui/fields/NumericInput.tsx",
       "source:src/features/workflow/ui/fields/WorkflowFieldInput.tsx",
       "source:src/features/workflow/ui/fields/mediaFieldDnd.ts",
       "source:src/features/workflow/ui/graph-preview/FlowMiniMap.tsx",

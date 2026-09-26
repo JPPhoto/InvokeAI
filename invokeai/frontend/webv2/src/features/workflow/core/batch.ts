@@ -70,25 +70,25 @@ export const getWorkflowBatchGroupId = (node: WorkflowInvocationNode): WorkflowB
 
 export interface FloatGeneratorArithmeticSequence {
   type: 'float_generator_arithmetic_sequence';
-  start: number;
-  step: number;
-  count: number;
+  start: number | null;
+  step: number | null;
+  count: number | null;
   values?: number[];
 }
 
 export interface FloatGeneratorLinearDistribution {
   type: 'float_generator_linear_distribution';
-  start: number;
-  end: number;
-  count: number;
+  start: number | null;
+  end: number | null;
+  count: number | null;
   values?: number[];
 }
 
 export interface FloatGeneratorUniformRandom {
   type: 'float_generator_random_distribution_uniform';
-  min: number;
-  max: number;
-  count: number;
+  min: number | null;
+  max: number | null;
+  count: number | null;
   seed: number | null;
   values?: number[];
 }
@@ -108,23 +108,23 @@ export type FloatGeneratorValue =
 
 export interface IntegerGeneratorArithmeticSequence {
   type: 'integer_generator_arithmetic_sequence';
-  start: number;
-  step: number;
-  count: number;
+  start: number | null;
+  step: number | null;
+  count: number | null;
 }
 
 export interface IntegerGeneratorLinearDistribution {
   type: 'integer_generator_linear_distribution';
-  start: number;
-  end: number;
-  count: number;
+  start: number | null;
+  end: number | null;
+  count: number | null;
 }
 
 export interface IntegerGeneratorUniformRandom {
   type: 'integer_generator_random_distribution_uniform';
-  min: number;
-  max: number;
-  count: number;
+  min: number | null;
+  max: number | null;
+  count: number | null;
   seed: number | null;
 }
 
@@ -149,14 +149,14 @@ export interface StringGeneratorParseString {
 export interface StringGeneratorDynamicPromptsRandom {
   type: 'string_generator_dynamic_prompts_random';
   input: string;
-  count: number;
+  count: number | null;
   seed: number | null;
 }
 
 export interface StringGeneratorDynamicPromptsCombinatorial {
   type: 'string_generator_dynamic_prompts_combinatorial';
   input: string;
-  maxPrompts: number;
+  maxPrompts: number | null;
 }
 
 export type StringGeneratorValue =
@@ -294,7 +294,9 @@ export const getDefaultWorkflowGeneratorValue = (fieldTypeName: string): Workflo
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
-/** `undefined` means the property is omitted; `null` means the stored value is unusable. */
+const UNUSABLE = Symbol('unusable');
+
+/** `undefined` means the property is omitted; `UNUSABLE` means the stored value cannot be read at all. */
 const readProperty = (spec: PropertySpec, raw: unknown, fallback: unknown): unknown => {
   if (raw === undefined) {
     return fallback;
@@ -302,15 +304,14 @@ const readProperty = (spec: PropertySpec, raw: unknown, fallback: unknown): unkn
 
   switch (spec) {
     case 'number':
-      return isFiniteNumber(raw) ? raw : null;
     case 'integer':
-      return Number.isInteger(raw) ? raw : null;
     case 'count':
-      return Number.isInteger(raw) && (raw as number) >= 1 ? raw : null;
+      // Kept as entered: `null` is a cleared setting, an off-rule number a readable one that cannot run yet.
+      return raw === null || isFiniteNumber(raw) ? raw : UNUSABLE;
     case 'string':
-      return typeof raw === 'string' ? raw : null;
+      return typeof raw === 'string' ? raw : UNUSABLE;
     case 'seed':
-      return raw === null ? null : Number.isInteger(raw) ? raw : undefined;
+      return raw === null || isFiniteNumber(raw) ? raw : undefined;
     case 'category':
       return raw === 'images' || raw === 'assets' ? raw : undefined;
     case 'boardId':
@@ -322,7 +323,8 @@ const readProperty = (spec: PropertySpec, raw: unknown, fallback: unknown): unkn
 
 /**
  * Reads a stored generator value the way the legacy schemas did: missing properties take their defaults, a missing
- * variant is the field's first one, and a wrong-typed property makes the whole value unusable (null).
+ * variant is the field's first one, and a wrong-typed property makes the whole value unusable (null). Numbers are
+ * kept as entered; `getWorkflowGeneratorInvalidReason` says whether they can run.
  */
 export const parseWorkflowGeneratorValue = (fieldTypeName: string, raw: unknown): WorkflowGeneratorValue | null => {
   if (!isWorkflowGeneratorFieldTypeName(fieldTypeName) || typeof raw !== 'object' || raw === null) {
@@ -344,7 +346,7 @@ export const parseWorkflowGeneratorValue = (fieldTypeName: string, raw: unknown)
     const read = readProperty(spec, source[key], defaults[key]);
 
     // Optional properties (seed, board, override values, category) recover from bad input; required ones do not.
-    if (read === null && spec !== 'seed') {
+    if (read === UNUSABLE) {
       return null;
     }
 
@@ -380,6 +382,91 @@ export const getWorkflowGeneratorKey = (value: WorkflowGeneratorValue): string =
 
 export const isWorkflowGeneratorVariant = (type: string): type is WorkflowGeneratorVariant =>
   Object.hasOwn(VARIANT_PROPERTIES, type);
+
+/** Dynamic prompt expansion is bounded server-side; the legacy editor capped a request at this. */
+export const WORKFLOW_DYNAMIC_PROMPTS_MAX = 1000;
+
+const PROPERTY_LABELS: Record<string, string> = {
+  count: 'Count',
+  end: 'End',
+  max: 'Max',
+  maxPrompts: 'Max prompts',
+  min: 'Min',
+  seed: 'Seed',
+  start: 'Start',
+  step: 'Step',
+};
+
+/** Why one numeric setting cannot run, or null. Text, board, and category settings always can. */
+export const getWorkflowGeneratorPropertyInvalidReason = (
+  value: WorkflowGeneratorValue,
+  key: string
+): string | null => {
+  const spec = VARIANT_PROPERTIES[value.type][key];
+
+  if (spec !== 'number' && spec !== 'integer' && spec !== 'count' && spec !== 'seed') {
+    return null;
+  }
+
+  const raw = (value as unknown as Record<string, unknown>)[key];
+  const label = PROPERTY_LABELS[key] ?? key;
+
+  if (raw === null) {
+    return spec === 'seed' ? null : `${label} is empty.`;
+  }
+
+  if (!isFiniteNumber(raw)) {
+    return `${label} is invalid.`;
+  }
+
+  if (spec === 'number') {
+    return null;
+  }
+
+  if (!Number.isInteger(raw)) {
+    return `${label} must be a whole number.`;
+  }
+
+  if (spec === 'count' && raw < 1) {
+    return `${label} must be at least 1.`;
+  }
+
+  if (spec === 'seed' && raw < 0) {
+    return `${label} must be at least 0.`;
+  }
+
+  if (
+    spec === 'count' &&
+    value.type.startsWith('string_generator_dynamic_prompts') &&
+    raw > WORKFLOW_DYNAMIC_PROMPTS_MAX
+  ) {
+    return `${label} can be at most ${WORKFLOW_DYNAMIC_PROMPTS_MAX}.`;
+  }
+
+  return null;
+};
+
+/** The first setting that keeps a readable generator from running, or null when it can. */
+export const getWorkflowGeneratorInvalidReason = (value: WorkflowGeneratorValue): string | null => {
+  // A legacy resolved override stands in for the settings, as it does when resolving.
+  if ('values' in value && value.values) {
+    return null;
+  }
+
+  for (const key of Object.keys(VARIANT_PROPERTIES[value.type])) {
+    const reason = getWorkflowGeneratorPropertyInvalidReason(value, key);
+
+    if (reason !== null) {
+      return reason;
+    }
+  }
+
+  return null;
+};
+
+/** A generator whose settings all pass `getWorkflowGeneratorInvalidReason`: numbers present, seeds still optional. */
+type Runnable<T> = T extends unknown ? { [K in keyof T]: K extends 'seed' ? T[K] : Exclude<T[K], null> } : never;
+export type RunnableWorkflowGeneratorValue = Runnable<WorkflowGeneratorValue>;
 
 /**
  * How many items a generator asks for, before any are built: a stored count can be arbitrarily large, and the
@@ -466,14 +553,21 @@ const sequence = (count: number, at: (index: number) => number): number[] =>
 
 /** Turns a stored generator into its items, or into the request an async source needs. */
 export const resolveWorkflowGeneratorValue = (
-  value: WorkflowGeneratorValue,
+  stored: WorkflowGeneratorValue,
   random: () => number = Math.random
 ): WorkflowGeneratorResolution => {
   const items = (list: WorkflowBatchItem[]): WorkflowGeneratorResolution => ({ items: list, kind: 'items' });
 
-  if ('values' in value && value.values) {
-    return items(value.values);
+  if ('values' in stored && stored.values) {
+    return items(stored.values);
   }
+
+  // A setting that cannot run yields nothing; the field check names it.
+  if (getWorkflowGeneratorInvalidReason(stored) !== null) {
+    return items([]);
+  }
+
+  const value = stored as RunnableWorkflowGeneratorValue;
 
   switch (value.type) {
     case 'float_generator_arithmetic_sequence':
@@ -631,21 +725,22 @@ export const planWorkflowBatch = (
           source.data.inputs.generator?.value
         );
 
-        // An unreadable generator is reported by the field check; here it only leaves the size unknown.
-        const requested = value ? getWorkflowGeneratorRequestedCount(value) : null;
+        // An unreadable or off-rule generator is reported by the field check; here it only leaves the size unknown.
+        const runnable = value !== null && getWorkflowGeneratorInvalidReason(value) === null ? value : null;
+        const requested = runnable ? getWorkflowGeneratorRequestedCount(runnable) : null;
 
         if (requested !== null && requested > WORKFLOW_BATCH_MAX_ITEMS) {
           // Refused by its count alone: building the list would cost memory in every readiness pass.
           oversizedGenerator = true;
-        } else if (value?.type === 'image_generator_images_from_board' && value.board_id === undefined) {
+        } else if (runnable?.type === 'image_generator_images_from_board' && runnable.board_id === undefined) {
           reasons.push(`Image generator "${getNodeDisplayName(source, templates)}" has no board selected.`);
-        } else if (value) {
-          const resolution = resolveWorkflowGeneratorValue(value, random);
+        } else if (runnable) {
+          const resolution = resolveWorkflowGeneratorValue(runnable, random);
 
           if (resolution.kind === 'items') {
             items = resolution.items;
           } else {
-            const key = getWorkflowGeneratorKey(value);
+            const key = getWorkflowGeneratorKey(runnable);
             const resolved = generators[source.id];
 
             if (resolved && resolved.key === key) {

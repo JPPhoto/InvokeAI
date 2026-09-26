@@ -269,6 +269,28 @@ describe('workflow field validation', () => {
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: loras, value: [] })).toBe(null);
   });
 
+  it('reports a generator setting that cannot run through the field, as the widget shows it', () => {
+    const generator = input({
+      type: { batch: false, cardinality: 'SINGLE', name: 'FloatGeneratorField' },
+    });
+    const reasonFor = (value: unknown) =>
+      getWorkflowFieldInvalidReason({ isConnected: false, template: generator, value });
+
+    expect(reasonFor({ count: 3, start: 0, step: 0.5, type: 'float_generator_arithmetic_sequence' })).toBeNull();
+    expect(reasonFor({ count: null, start: 0, step: 0.5, type: 'float_generator_arithmetic_sequence' })).toBe(
+      'Count is empty.'
+    );
+    expect(reasonFor({ count: 3, start: 'x', type: 'float_generator_arithmetic_sequence' })).toBe('Invalid value.');
+    expect(
+      isWorkflowFieldValueValid(generator, {
+        count: 0,
+        start: 0,
+        step: 0.5,
+        type: 'float_generator_arithmetic_sequence',
+      })
+    ).toBe(false);
+  });
+
   it('keeps a cleared or out-of-range LoRA weight as a readable entry that names its own reason', () => {
     const loras = input({
       required: false,

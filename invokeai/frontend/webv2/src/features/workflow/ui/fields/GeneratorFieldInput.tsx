@@ -1,15 +1,18 @@
-import type { ChangeEvent, WheelEvent } from 'react';
+import type { ChangeEvent } from 'react';
 
-import { Box, chakra, Checkbox, createListCollection, HStack, Input, Stack, Textarea } from '@chakra-ui/react';
+import { Box, chakra, Checkbox, createListCollection, Field, HStack, Input, Stack, Textarea } from '@chakra-ui/react';
 import { galleryBoardsOptions } from '@features/gallery/queries';
 import { getWorkflowGeneratorQueryOptions, type WorkflowGeneratorQueryResult } from '@features/workflow/generators';
 import {
   getDefaultWorkflowGeneratorValue,
+  getWorkflowGeneratorInvalidReason,
+  getWorkflowGeneratorPropertyInvalidReason,
   getWorkflowGeneratorRequestedCount,
   getWorkflowGeneratorVariantDefaults,
   isRandomWorkflowGeneratorValue,
   isWorkflowGeneratorVariant,
   WORKFLOW_BATCH_MAX_ITEMS,
+  WORKFLOW_DYNAMIC_PROMPTS_MAX,
   parseWorkflowGeneratorValue,
   resolveWorkflowGeneratorValue,
   WORKFLOW_GENERATOR_VARIANTS,
@@ -26,6 +29,8 @@ import { useTranslation } from 'react-i18next';
 
 import type { WorkflowFieldInputProps } from './WorkflowFieldInput';
 
+import { NumericInput, type NumericInputTemplate } from './NumericInput';
+
 const VARIANT_LABEL_KEYS: Record<WorkflowGeneratorVariant, string> = {
   float_generator_arithmetic_sequence: 'nodes.arithmeticSequence',
   float_generator_linear_distribution: 'nodes.linearDistribution',
@@ -41,8 +46,6 @@ const VARIANT_LABEL_KEYS: Record<WorkflowGeneratorVariant, string> = {
   string_generator_parse_string: 'nodes.parseString',
 };
 
-/** Dynamic prompt expansion is bounded server-side; the legacy editor capped the request at this. */
-const DYNAMIC_PROMPTS_MAX = 1000;
 const FILE_SIZE_LIMIT = 128 * 1024;
 const PREVIEW_ITEM_LIMIT = 200;
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -53,28 +56,16 @@ const CATEGORY_OPTIONS = [
   { labelKey: 'nodes.generatorCategoryAssets', value: 'assets' },
 ] as const;
 
-const toFiniteNumber = (raw: string): number | undefined => {
-  if (raw.trim() === '') {
-    return undefined;
-  }
-
-  const parsed = Number(raw);
-
-  return Number.isFinite(parsed) ? parsed : undefined;
-};
-
-/** Chromium steps a focused number input on wheel and swallows the scroll; unfocused, the panel scrolls instead. */
-const blurOnWheel = (event: WheelEvent<HTMLInputElement>) => event.currentTarget.blur();
-
 /**
- * One labelled number in a settings row. Committed as typed, like the scalar field inputs: an empty or partial
- * entry keeps the last committed number, so a setting never silently becomes NaN.
+ * One labelled number in a settings row, on the shared numeric control: committed as typed, `null` when cleared,
+ * and marked by the generator's own rule for that setting rather than corrected here.
  */
 const NumberSetting = ({
   ariaLabel,
   disabled,
   id,
   integer,
+  invalid,
   label,
   max,
   min,
@@ -86,57 +77,47 @@ const NumberSetting = ({
   disabled?: boolean;
   id: string;
   integer: boolean;
+  invalid: boolean;
   label: string;
   max?: number;
   min?: number;
-  value: number;
-  onCommit: (value: number) => void;
+  value: number | null;
+  onCommit: (value: number | null) => void;
 }) => {
-  const [draft, setDraft] = useState<string | null>(null);
-  const onChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const text = event.currentTarget.value;
-      const next = toFiniteNumber(text);
-
-      setDraft(text);
-
-      // Out-of-range entries stay on screen as a draft but never commit: a count of 0 would make the stored
-      // value unreadable and the widget would lose the variant.
-      if (
-        next !== undefined &&
-        (!integer || Number.isInteger(next)) &&
-        (min === undefined || next >= min) &&
-        (max === undefined || next <= max)
-      ) {
-        onCommit(next);
-      }
-    },
-    [integer, max, min, onCommit]
+  const template = useMemo<NumericInputTemplate>(
+    () => ({
+      exclusiveMaximum: null,
+      exclusiveMinimum: null,
+      maximum: max ?? null,
+      minimum: min ?? null,
+      multipleOf: null,
+      title: label || ariaLabel || '',
+      type: { batch: false, cardinality: 'SINGLE', name: integer ? 'IntegerField' : 'FloatField' },
+    }),
+    [ariaLabel, integer, label, max, min]
   );
-  const onBlur = useCallback(() => setDraft(null), []);
+  const onChange = useCallback((next: number | undefined) => onCommit(next ?? null), [onCommit]);
 
   return (
-    <HStack gap="1" minW="0">
+    <HStack flex="1" gap="1" minW="0">
       {label ? (
-        <chakra.label color="fg.subtle" flexShrink={0} fontSize="2xs" htmlFor={id} minW="10">
+        <chakra.label color="fg.subtle" flexShrink={0} fontSize="2xs" htmlFor={`${id}-number-input`} minW="10">
           {label}
         </chakra.label>
       ) : null}
-      <Input
-        aria-label={ariaLabel}
-        className="nodrag"
-        disabled={disabled}
-        id={id}
-        max={max}
-        min={min}
-        size="2xs"
-        step={integer ? 1 : 'any'}
-        type="number"
-        value={draft ?? String(value)}
-        onBlur={onBlur}
-        onChange={onChange}
-        onWheel={blurOnWheel}
-      />
+      {/* The host's Field.Root marks every control inside it invalid; each setting scopes its own validity. */}
+      <Field.Root flex="1" invalid={invalid} minW="12">
+        <NumericInput
+          ariaLabel={ariaLabel}
+          disabled={disabled}
+          id={id}
+          invalid={invalid}
+          size="2xs"
+          template={template}
+          value={value ?? undefined}
+          onChange={onChange}
+        />
+      </Field.Root>
     </HStack>
   );
 };
@@ -144,10 +125,12 @@ const NumberSetting = ({
 /** The seed row: unchecked draws fresh values every time, checked pins them to a seed. */
 const SeedSetting = ({
   id,
+  invalid,
   seed,
   onCommit,
 }: {
   id: string;
+  invalid: boolean;
   seed: number | null;
   onCommit: (seed: number | null) => void;
 }) => {
@@ -156,23 +139,36 @@ const SeedSetting = ({
     (event: { checked: boolean | 'indeterminate' }) => onCommit(event.checked === true ? 0 : null),
     [onCommit]
   );
+  // `null` already means "unseeded" here, so a cleared input keeps the pinned seed instead of unchecking the box.
+  const onSeedCommit = useCallback(
+    (next: number | null) => {
+      if (next !== null) {
+        onCommit(next);
+      }
+    },
+    [onCommit]
+  );
 
   return (
     <HStack gap="2" minW="0">
-      <Checkbox.Root checked={seed !== null} colorPalette="accent" size="xs" onCheckedChange={onCheckedChange}>
-        <Checkbox.HiddenInput />
-        <Checkbox.Control />
-        <Checkbox.Label fontSize="2xs">{t('nodes.generatorSeed')}</Checkbox.Label>
-      </Checkbox.Root>
+      {/* Ark controls take the enclosing field's control id; a field of their own keeps ids unique in the widget. */}
+      <Field.Root flexShrink={0} gap="0" w="auto">
+        <Checkbox.Root checked={seed !== null} colorPalette="accent" size="xs" onCheckedChange={onCheckedChange}>
+          <Checkbox.HiddenInput />
+          <Checkbox.Control />
+          <Checkbox.Label fontSize="2xs">{t('nodes.generatorSeed')}</Checkbox.Label>
+        </Checkbox.Root>
+      </Field.Root>
       <NumberSetting
         ariaLabel={t('nodes.generatorSeed')}
         disabled={seed === null}
         id={`${id}-seed`}
         integer
+        invalid={invalid}
         label=""
         min={0}
         value={seed ?? 0}
-        onCommit={onCommit}
+        onCommit={onSeedCommit}
       />
     </HStack>
   );
@@ -263,17 +259,19 @@ const BoardSetting = ({
   const onValueChange = useCallback((value: string) => onCommit(value), [onCommit]);
 
   return (
-    <Combobox
-      aria-label={t('nodes.generatorBoard')}
-      className="nodrag nowheel"
-      id={id}
-      invalid={isMissing}
-      noResultsText={t('nodes.generatorSelectBoard')}
-      options={options}
-      searchPlaceholder={boards.isLoading ? t('nodes.recordListLoading') : t('nodes.generatorSelectBoard')}
-      value={boardId ?? null}
-      onValueChange={onValueChange}
-    />
+    <Field.Root gap="0" invalid={isMissing} minW="0" w="full">
+      <Combobox
+        aria-label={t('nodes.generatorBoard')}
+        className="nodrag nowheel"
+        id={id}
+        invalid={isMissing}
+        noResultsText={t('nodes.generatorSelectBoard')}
+        options={options}
+        searchPlaceholder={boards.isLoading ? t('nodes.recordListLoading') : t('nodes.generatorSelectBoard')}
+        value={boardId ?? null}
+        onValueChange={onValueChange}
+      />
+    </Field.Root>
   );
 };
 
@@ -353,6 +351,12 @@ const GeneratorPreview = ({
   settled: WorkflowGeneratorValue;
 }) => {
   const { t } = useTranslation();
+  const invalidReason = getWorkflowGeneratorInvalidReason(generator);
+
+  if (invalidReason !== null) {
+    return <PreviewBox tone="fg.error">{invalidReason}</PreviewBox>;
+  }
+
   const requested = getWorkflowGeneratorRequestedCount(settled);
 
   // Never build an oversized list for a preview; readiness refuses it on the same rule.
@@ -365,7 +369,7 @@ const GeneratorPreview = ({
   }
 
   if (isRandomWorkflowGeneratorValue(generator)) {
-    const count = 'count' in generator ? generator.count : 0;
+    const count = 'count' in generator && generator.count !== null ? generator.count : 0;
 
     return <PreviewBox>{`<${t('nodes.generatorNRandomValues', { count })}>`}</PreviewBox>;
   }
@@ -482,7 +486,9 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
     [setProperty]
   );
   const onSeedChange = useCallback((seed: number | null) => setProperty('seed', seed), [setProperty]);
-  const number = (key: string) => (next: number) => setProperty(key, next, true);
+  const number = (key: string) => (next: number | null) => setProperty(key, next, true);
+  const isOff = (key: string) =>
+    generator !== undefined && getWorkflowGeneratorPropertyInvalidReason(generator, key) !== null;
   const variantType = generator?.type ?? '';
   const variantValue = useMemo(() => [variantType], [variantType]);
   const category = generator?.type === 'image_generator_images_from_board' ? generator.category : 'images';
@@ -510,6 +516,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
         <HStack gap="2">
           <NumberSetting
             id={`${prefix}-start`}
+            invalid={isOff('start')}
             integer={generator.type.startsWith('integer')}
             label={t('nodes.generatorStart')}
             value={generator.start}
@@ -517,6 +524,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
           />
           <NumberSetting
             id={`${prefix}-step`}
+            invalid={isOff('step')}
             integer={generator.type.startsWith('integer')}
             label={t('nodes.generatorStep')}
             value={generator.step}
@@ -524,6 +532,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
           />
           <NumberSetting
             id={`${prefix}-count`}
+            invalid={isOff('count')}
             integer
             label={t('nodes.generatorCount')}
             min={1}
@@ -537,6 +546,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
         <HStack gap="2">
           <NumberSetting
             id={`${prefix}-start`}
+            invalid={isOff('start')}
             integer={generator.type.startsWith('integer')}
             label={t('nodes.generatorStart')}
             value={generator.start}
@@ -544,6 +554,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
           />
           <NumberSetting
             id={`${prefix}-end`}
+            invalid={isOff('end')}
             integer={generator.type.startsWith('integer')}
             label={t('nodes.generatorEnd')}
             value={generator.end}
@@ -551,6 +562,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
           />
           <NumberSetting
             id={`${prefix}-count`}
+            invalid={isOff('count')}
             integer
             label={t('nodes.generatorCount')}
             min={1}
@@ -565,6 +577,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
           <HStack gap="2">
             <NumberSetting
               id={`${prefix}-min`}
+              invalid={isOff('min')}
               integer={generator.type.startsWith('integer')}
               label={t('nodes.generatorMin')}
               value={generator.min}
@@ -572,6 +585,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
             />
             <NumberSetting
               id={`${prefix}-max`}
+              invalid={isOff('max')}
               integer={generator.type.startsWith('integer')}
               label={t('nodes.generatorMax')}
               value={generator.max}
@@ -579,6 +593,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
             />
             <NumberSetting
               id={`${prefix}-count`}
+              invalid={isOff('count')}
               integer
               label={t('nodes.generatorCount')}
               min={1}
@@ -586,7 +601,7 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
               onCommit={number('count')}
             />
           </HStack>
-          <SeedSetting id={prefix} seed={generator.seed} onCommit={onSeedChange} />
+          <SeedSetting id={prefix} invalid={isOff('seed')} seed={generator.seed} onCommit={onSeedChange} />
         </Stack>
       ) : null}
       {generator.type === 'float_generator_parse_string' ||
@@ -613,14 +628,15 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
           <HStack gap="2">
             <NumberSetting
               id={`${prefix}-count`}
+              invalid={isOff('count')}
               integer
               label={t('nodes.generatorCount')}
-              max={DYNAMIC_PROMPTS_MAX}
+              max={WORKFLOW_DYNAMIC_PROMPTS_MAX}
               min={1}
               value={generator.count}
               onCommit={number('count')}
             />
-            <SeedSetting id={prefix} seed={generator.seed} onCommit={onSeedChange} />
+            <SeedSetting id={prefix} invalid={isOff('seed')} seed={generator.seed} onCommit={onSeedChange} />
           </HStack>
           <InputSetting id={`${prefix}-input`} value={generator.input} onCommit={onInputChange} />
         </Stack>
@@ -629,9 +645,10 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
         <Stack gap="1.5">
           <NumberSetting
             id={`${prefix}-max-prompts`}
+            invalid={isOff('maxPrompts')}
             integer
             label={t('nodes.generatorMaxPrompts')}
-            max={DYNAMIC_PROMPTS_MAX}
+            max={WORKFLOW_DYNAMIC_PROMPTS_MAX}
             min={1}
             value={generator.maxPrompts}
             onCommit={number('maxPrompts')}
@@ -642,16 +659,18 @@ export const GeneratorFieldInput = ({ id, invalid, onChange, template, value }: 
       {generator.type === 'image_generator_images_from_board' ? (
         <Stack gap="1.5">
           <BoardSetting boardId={generator.board_id} id={`${prefix}-board`} onCommit={onBoardChange} />
-          <Select
-            aria-label={t('nodes.generatorImagesCategory')}
-            className="nodrag"
-            collection={categoryCollection}
-            size="xs"
-            value={categoryValue}
-            valueTextProps={SELECT_VALUE_TEXT_PROPS}
-            w="full"
-            onValueChange={onCategoryChange}
-          />
+          <Field.Root gap="0" minW="0" w="full">
+            <Select
+              aria-label={t('nodes.generatorImagesCategory')}
+              className="nodrag"
+              collection={categoryCollection}
+              size="xs"
+              value={categoryValue}
+              valueTextProps={SELECT_VALUE_TEXT_PROPS}
+              w="full"
+              onValueChange={onCategoryChange}
+            />
+          </Field.Root>
         </Stack>
       ) : null}
       <GeneratorPreview generator={generator} settled={held ?? generator} />

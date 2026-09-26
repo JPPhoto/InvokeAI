@@ -2,7 +2,11 @@ import { SEED_MAX } from '@platform/core/seed';
 
 import type { FieldInputTemplate, FieldType, WorkflowFieldInstance } from './types';
 
-import { isWorkflowGeneratorFieldTypeName, parseWorkflowGeneratorValue } from './batch';
+import {
+  getWorkflowGeneratorInvalidReason,
+  isWorkflowGeneratorFieldTypeName,
+  parseWorkflowGeneratorValue,
+} from './batch';
 
 export const getEffectiveWorkflowFieldDescription = (
   instance: WorkflowFieldInstance | undefined,
@@ -322,7 +326,9 @@ const isColorValueValid = (value: unknown): boolean => {
 
 export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: unknown): boolean => {
   if (isWorkflowGeneratorFieldTypeName(template.type.name)) {
-    return parseWorkflowGeneratorValue(template.type.name, value) !== null;
+    const generator = parseWorkflowGeneratorValue(template.type.name, value);
+
+    return generator !== null && getWorkflowGeneratorInvalidReason(generator) === null;
   }
 
   if (
@@ -423,6 +429,16 @@ export const getWorkflowFieldInvalidReason = ({
 
   if (template.type.name === 'LoRAField' && isDirectInputField(template) && !isEmptyOptionalValue(value)) {
     return getLoraCollectionInvalidReason(toLoraFieldCollectionList(value));
+  }
+
+  if (
+    isWorkflowGeneratorFieldTypeName(template.type.name) &&
+    isDirectInputField(template) &&
+    !isEmptyOptionalValue(value)
+  ) {
+    const generator = parseWorkflowGeneratorValue(template.type.name, value);
+
+    return generator === null ? 'Invalid value.' : getWorkflowGeneratorInvalidReason(generator);
   }
 
   if (!template.required) {
