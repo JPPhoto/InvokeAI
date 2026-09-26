@@ -125,6 +125,8 @@ export interface ReconcileInput {
   status: 'pending' | 'running';
   backendItemIds?: number[];
   backendBatchId?: string;
+  /** Persisted compiled graph contains a Call Saved Workflow node. */
+  hasWorkflowCall?: boolean;
 }
 
 export type ReconcileOutcome =
@@ -181,6 +183,7 @@ interface RunProgressState {
 
 interface WaitState {
   frameGates: Map<number, { revision: number | null; sessionId: string }>;
+  hasWorkflowCall: boolean;
   localQueueItemId: string;
   settle: (outcome: TerminalOutcome) => void;
 }
@@ -228,6 +231,19 @@ export const createQueueCoordinator = (
   const runs = new Map<string, RunState>();
   const runProgress = new Map<string, RunProgressState>();
   const waits = new Map<number, WaitState>();
+  const markWorkflowCallRoot = (event: {
+    item_id: number;
+    root_item_id?: number | null;
+    workflow_call_parent_source_id?: string | null;
+  }): void => {
+    const rootItemId = event.root_item_id;
+    if (rootItemId !== null && rootItemId !== undefined && rootItemId !== event.item_id) {
+      const wait = waits.get(rootItemId);
+      if (wait && event.workflow_call_parent_source_id !== null && event.workflow_call_parent_source_id !== undefined) {
+        wait.hasWorkflowCall = true;
+      }
+    }
+  };
   const clearFrameGate = (itemId: number): void => {
     for (const wait of waits.values()) {
       if (wait.frameGates.delete(itemId)) {
@@ -400,6 +416,7 @@ export const createQueueCoordinator = (
     }
 
     const backendItemId = getTrackedBackendItemId(nodeEvent.event);
+    markWorkflowCallRoot(nodeEvent.event);
     const invocationSourceId = getNodeSourceId(nodeEvent.event);
 
     trackNodeForItem(backendItemId, invocationSourceId, nodeEvent.sequence);
@@ -590,7 +607,7 @@ export const createQueueCoordinator = (
       const target = getProgressImageTarget(wait.localQueueItemId, queueItem.id);
       if (queueItem.status === 'in_progress') {
         activeProgressTarget.set(target);
-      } else if (queueItem.status === 'pending' || queueItem.status === 'waiting') {
+      } else if ((queueItem.status === 'pending' || queueItem.status === 'waiting') && !wait.hasWorkflowCall) {
         activeProgressTarget.clear(target);
       }
     }
@@ -602,7 +619,11 @@ export const createQueueCoordinator = (
   const isTrackedEvent = (event: { item_id: number; root_item_id?: number | null }): boolean =>
     waits.has(getTrackedBackendItemId(event));
 
-  const trackBackendItem = (localQueueItemId: string, backendItemId: number): Promise<TerminalOutcome> => {
+  const trackBackendItem = (
+    localQueueItemId: string,
+    backendItemId: number,
+    hasWorkflowCall: boolean
+  ): Promise<TerminalOutcome> => {
     const bufferedOutcome = recentTerminalOutcomes.get(backendItemId);
 
     if (bufferedOutcome) {
@@ -615,16 +636,24 @@ export const createQueueCoordinator = (
     }
 
     return new Promise<TerminalOutcome>((settle) => {
-      waits.set(backendItemId, { frameGates: new Map(), localQueueItemId, settle });
+      waits.set(backendItemId, { frameGates: new Map(), hasWorkflowCall, localQueueItemId, settle });
       replayNodeEvents(backendItemId);
       replayProgressEvent(backendItemId);
     });
   };
 
-  const beginRun = (localQueueItemId: string, backendItemIds: number[], backendBatchId?: string): void => {
+  const beginRun = (
+    localQueueItemId: string,
+    backendItemIds: number[],
+    backendBatchId?: string,
+    hasWorkflowCall = false
+  ): void => {
     if (!isActive()) {
       throw new QueueItemCancelledError(localQueueItemId);
     }
+
+    const hasRecognizedWorkflowCall =
+      hasWorkflowCall || backendItemIds.some((backendItemId) => waits.get(backendItemId)?.hasWorkflowCall);
 
     runProgress.set(localQueueItemId, {
       backendItemIds,
@@ -636,7 +665,9 @@ export const createQueueCoordinator = (
     runs.set(localQueueItemId, {
       backendBatchId,
       backendItemIds,
-      outcomePromises: backendItemIds.map((backendItemId) => trackBackendItem(localQueueItemId, backendItemId)),
+      outcomePromises: backendItemIds.map((backendItemId) =>
+        trackBackendItem(localQueueItemId, backendItemId, hasRecognizedWorkflowCall)
+      ),
     });
 
     publishRunProgress(localQueueItemId);
@@ -737,7 +768,7 @@ export const createQueueCoordinator = (
       // whatever frames follow belong to a new leg, and after a backend restart
       // their revisions start over.
       if (event.status === 'pending' || event.status === 'waiting') {
-        if (wait) {
+        if (wait && !wait.hasWorkflowCall) {
           activeProgressTarget.clear(getProgressImageTarget(wait.localQueueItemId, event.item_id));
         }
         wait?.frameGates.clear();
@@ -827,6 +858,8 @@ export const createQueueCoordinator = (
       }
       return;
     }
+
+    markWorkflowCallRoot(event);
 
     if (event.image?.dataURL && isStaleFrame(event)) {
       return;
@@ -1060,7 +1093,7 @@ export const createQueueCoordinator = (
       const backendItemIds = foundBackendItems.map((backendItem) => backendItem.id);
       const backendBatchId = item.backendBatchId ?? foundBackendItems[0]?.batchId;
 
-      beginRun(item.id, backendItemIds, backendBatchId);
+      beginRun(item.id, backendItemIds, backendBatchId, item.hasWorkflowCall);
 
       for (const backendItem of foundBackendItems) {
         settleFromQueueItem(backendItem);
@@ -1092,13 +1125,14 @@ export const createQueueCoordinator = (
   const adoptEnqueueResult = (
     localQueueItemId: string,
     result: QueueEnqueueResult,
-    workKind: 'generation' | 'workflow'
+    workKind: 'generation' | 'workflow',
+    hasWorkflowCall = false
   ): QueueEnqueueResult => {
     if (result.enqueued === 0) {
       throw new QueueEnqueueNotAcceptedError(workKind);
     }
 
-    beginRun(localQueueItemId, result.itemIds, result.batchId);
+    beginRun(localQueueItemId, result.itemIds, result.batchId, hasWorkflowCall);
 
     return result;
   };
@@ -1125,7 +1159,12 @@ export const createQueueCoordinator = (
     }
 
     return await withSubmissionInFlight(async () =>
-      adoptEnqueueResult(localQueueItemId, await backend.enqueueWorkflow(request), 'workflow')
+      adoptEnqueueResult(
+        localQueueItemId,
+        await backend.enqueueWorkflow(request),
+        'workflow',
+        Object.values(request.graph.nodes).some((node) => node.type === 'call_saved_workflow')
+      )
     );
   };
 

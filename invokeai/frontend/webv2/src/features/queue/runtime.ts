@@ -121,6 +121,27 @@ const getQueueItemCompiledGraph = (queueItem: QueueItem): unknown => {
   return submission && typeof submission === 'object' && 'graph' in submission ? submission.graph : undefined;
 };
 
+const queueItemHasWorkflowCall = (queueItem: QueueItem): boolean => {
+  const submission = (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;
+  if (!submission || typeof submission !== 'object' || !('kind' in submission) || submission.kind !== 'workflow') {
+    return false;
+  }
+
+  const graph = getQueueItemCompiledGraph(queueItem);
+  if (!graph || typeof graph !== 'object' || Array.isArray(graph) || !('nodes' in graph)) {
+    return false;
+  }
+
+  const nodes = graph.nodes;
+  if (!nodes || typeof nodes !== 'object' || Array.isArray(nodes)) {
+    return false;
+  }
+
+  return Object.values(nodes).some(
+    (node) => node !== null && typeof node === 'object' && 'type' in node && node.type === 'call_saved_workflow'
+  );
+};
+
 /** Recover legacy random-toggle submissions with their original seed expansion rules. */
 const readSubmissionSeedStep = (submission: { seedStep?: unknown; shouldRandomizeSeed?: unknown }) =>
   isQueueSeedStep(submission.seedStep)
@@ -1558,6 +1579,7 @@ export const createQueueRuntime = ({
         const inputs: ReconcileInput[] = ownedItems.map(({ project, queueItem }) => ({
           backendBatchId: queueItem.backendBatchId,
           backendItemIds: queueItem.backendItemIds,
+          hasWorkflowCall: queueItemHasWorkflowCall(queueItem),
           id: queueItem.id,
           projectId: project.id,
           status: queueItem.status === 'running' ? 'running' : 'pending',
