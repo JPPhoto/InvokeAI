@@ -207,8 +207,10 @@ Runs a sequence of checks:
      hooks; the current condition value does not narrow the possible types.
    - Collector item/collection checks and iterator collection checks also use the resolved branch sources. This allows
      matching string branches to feed a string collector without an intermediate string node.
-   - If a branch is unresolved or traversal encounters a cycle, retain the declared output compatibility behavior
-     (`Any` for collector type inference). The graph's separate DAG check still rejects cycles.
+   - If a branch is unresolved, retain the declared output compatibility behavior (`Any` for collector type
+     inference). The graph's separate DAG check rejects cycles before projection.
+   - Collectors can combine `int` and `float` items as `float`, preserving numeric workflows whose downstream
+     consumers accept floats; unrelated mixed item types remain invalid.
    - Ordinary source ports use the direct compatibility path with already resolved nodes, without If traversal or
      projection allocations.
 

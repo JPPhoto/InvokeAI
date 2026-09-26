@@ -1948,31 +1948,22 @@ class Graph(BaseModel):
         return None
 
     def _get_effective_output_connections(self, node_id: str, field: str) -> list[EdgeConnection] | None:
-        """Resolve an If output to its unique branch sources, or None when a branch is unresolved or cyclic."""
-        root_source = (node_id, field)
-        root_node = self.get_node(node_id)
-        if not isinstance(root_node, IfInvocation) or field != "value":
-            return [EdgeConnection(node_id=node_id, field=field)]
+        """Resolve If.value to its unique branch sources, or None when a branch is unresolved.
 
-        pending: list[tuple[str, str, bool]] = [(node_id, field, False)]
-        active: set[tuple[str, str]] = set()
+        Callers validate acyclicity before resolving connections.
+        """
+        pending = [(node_id, field)]
         visited: set[tuple[str, str]] = set()
         sources: list[EdgeConnection] = []
         while pending:
-            source_node_id, source_field, exiting = pending.pop()
+            source_node_id, source_field = pending.pop()
             source = (source_node_id, source_field)
-            if exiting:
-                active.remove(source)
-                visited.add(source)
-                continue
-            if source in active:
-                return None
             if source in visited:
                 continue
+            visited.add(source)
 
-            node = root_node if source == root_source else self.get_node(source_node_id)
+            node = self.get_node(source_node_id)
             if not isinstance(node, IfInvocation) or source_field != "value":
-                visited.add(source)
                 sources.append(EdgeConnection(node_id=source_node_id, field=source_field))
                 continue
 
@@ -1984,13 +1975,15 @@ class Graph(BaseModel):
                 branch_edge = branch_edges[0]
                 branch_sources.append((branch_edge.source.node_id, branch_edge.source.field))
 
-            active.add(source)
-            pending.append((source_node_id, source_field, True))
-            pending.extend((*branch_source, False) for branch_source in reversed(branch_sources))
+            pending.extend(reversed(branch_sources))
 
         return sources
 
     def _get_effective_output_field_types(self, node_id: str, field: str) -> set[Any]:
+        node = self.get_node(node_id)
+        if not isinstance(node, IfInvocation) or field != "value":
+            return {get_output_field_type(node, field)}
+
         sources = self._get_effective_output_connections(node_id, field)
         if sources is None:
             return {Any}
@@ -2134,6 +2127,9 @@ class Graph(BaseModel):
         self, input_field_types: set[Any]
     ) -> tuple[bool, Any | None]:
         non_any_input_field_types = {t for t in input_field_types if t != Any}
+        if non_any_input_field_types == {int, float}:
+            return False, float
+
         root_types = self._get_type_tree_root_types(non_any_input_field_types)
         if len(root_types) > 1:
             return True, None

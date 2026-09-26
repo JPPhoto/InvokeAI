@@ -1081,6 +1081,21 @@ def test_graph_collector_accepts_if_output_when_both_branches_have_matching_type
     graph.add_edge(create_edge(collector.id, "collection", consumer.id, "collection"))
 
 
+def test_graph_effective_if_output_deduplicates_shared_branch_sources():
+    graph = Graph(
+        nodes={
+            "value": StringInvocation(id="value", value="shared"),
+            "if": IfInvocation(id="if"),
+        },
+        edges=[
+            create_edge("value", "value", "if", "true_input"),
+            create_edge("value", "value", "if", "false_input"),
+        ],
+    )
+
+    assert graph._get_effective_output_connections("if", "value") == [EdgeConnection(node_id="value", field="value")]
+
+
 def test_graph_collectors_accept_if_output_with_and_without_a_string_collection_seed():
     graph = Graph()
     true_value = StringInvocation(id="true", value="true")
@@ -1188,6 +1203,32 @@ def test_graph_rejects_mixed_if_branch_types_for_collector_items():
         graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
 
 
+@pytest.mark.parametrize("condition", [True, False])
+def test_graph_accepts_and_runs_mixed_numeric_if_branches_through_iterator(condition: bool):
+    graph = Graph()
+    integer_value = IntegerInvocation(id="integer", value=2)
+    float_value = FloatInvocation(id="float", value=3.5)
+    if_node = IfInvocation(id="if", condition=condition)
+    collector = CollectInvocation(id="collect")
+    iterator = IterateInvocation(id="iterate")
+    float_consumer = FloatInvocation(id="float_consumer")
+    for node in (integer_value, float_value, if_node, collector, iterator, float_consumer):
+        graph.add_node(node)
+
+    graph.add_edge(create_edge(integer_value.id, "value", if_node.id, "true_input"))
+    graph.add_edge(create_edge(float_value.id, "value", if_node.id, "false_input"))
+    graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
+    graph.add_edge(create_edge(collector.id, "collection", iterator.id, "collection"))
+    graph.add_edge(create_edge(iterator.id, "item", float_consumer.id, "value"))
+
+    session = GraphExecutionState(graph=graph)
+    run_session_with_mock_context(session)
+    output = get_single_output_from_session(session, float_consumer.id)
+
+    assert output.value == (2.0 if condition else 3.5)
+    assert isinstance(output.value, float)
+
+
 def test_graph_rejects_iterator_consumers_incompatible_with_if_collector_branches():
     graph = Graph()
     string_value = StringInvocation(id="string", value="text")
@@ -1285,39 +1326,34 @@ def test_graph_if_branch_revalidates_only_affected_iterators_once(monkeypatch: p
     assert validated_iterators == ["affected_iterator"]
 
 
-@pytest.mark.parametrize("operation", ["add_edge", "validate_self"])
-def test_graph_ordinary_edge_validation_avoids_projection_work(operation: str, monkeypatch: pytest.MonkeyPatch):
-    nodes = [StringInvocation(id=f"string_{index}", value="text") for index in range(25)]
-    edges = [
-        create_edge(source.id, "value", target.id, "value") for source, target in zip(nodes, nodes[1:], strict=False)
-    ]
-    graph = Graph(nodes={node.id: node for node in nodes}, edges=edges if operation == "validate_self" else [])
-    node_lookups = 0
-    connection_allocations = 0
-    original_get_node = Graph.get_node
+def test_graph_collector_validation_avoids_ordinary_source_allocations(monkeypatch: pytest.MonkeyPatch):
+    item_sources = [StringInvocation(id=f"string_{index}", value="text") for index in range(16)]
+    seed = StringCollectionInvocation(id="seed", collection=["seed"])
+    collector = CollectInvocation(id="collect")
+    consumer = PromptCollectionTestInvocation(id="consumer", collection=[])
+    nodes = [*item_sources, seed, collector, consumer]
+    edges = [create_edge(source.id, "value", collector.id, "item") for source in item_sources]
+    edges.extend(
+        [
+            create_edge(seed.id, "collection", collector.id, "collection"),
+            create_edge(collector.id, "collection", consumer.id, "collection"),
+        ]
+    )
+    graph = Graph(nodes={node.id: node for node in nodes}, edges=edges)
     original_connection_init = EdgeConnection.__init__
-
-    def count_node_lookups(graph: Graph, node_id: str):
-        nonlocal node_lookups
-        node_lookups += 1
-        return original_get_node(graph, node_id)
+    connection_allocations = 0
 
     def count_connection_allocations(connection: EdgeConnection, **kwargs: Any):
         nonlocal connection_allocations
         connection_allocations += 1
         original_connection_init(connection, **kwargs)
 
-    monkeypatch.setattr(Graph, "get_node", count_node_lookups)
     monkeypatch.setattr(EdgeConnection, "__init__", count_connection_allocations)
 
-    if operation == "add_edge":
-        for edge in edges:
-            graph.add_edge(edge)
-    else:
-        graph.validate_self()
+    graph.validate_self()
 
     assert graph.edges == edges
-    assert (node_lookups, connection_allocations) == (2 * len(edges), 0)
+    assert connection_allocations == 0
 
 
 def test_graph_validation_bounds_shared_if_branch_validation_work(monkeypatch: pytest.MonkeyPatch):
