@@ -1336,14 +1336,14 @@
         "type": "container",
         "data": {
           "children": [
-            "heading-0",
-            "field-lora_collection-loras",
-            "field-denoise_latents-schedule",
             "heading-3",
             "field-positive_prompt-value",
             "field-negative_prompt-value",
             "container-canvas",
             "container-sampling",
+            "heading-0",
+            "field-lora_collection-loras",
+            "field-denoise_latents-schedule",
             "heading-14",
             "field-model_loader-model",
             "field-model_loader-component_source",
