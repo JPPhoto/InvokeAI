@@ -493,7 +493,11 @@ clients automatically:
 
 The update lands in the **Generate** panel of the project that was active when
 the event arrived, and shows a notification summarizing how many fields were
-applied. Parameters the Generate panel has no home for, and entries that could
+applied. If that project is still on screen, the Generate widget is brought to the
+front the same way the [Video Recall API](/development/guides/video-recall-api/#frontend-behavior)
+brings the Video widget forward: its tab is selected, a floating window is raised
+(and unrolled if shaded),
+and nothing moves while the user is typing. Parameters the Generate panel has no home for, and entries that could
 not be resolved, are left out and named in a second notification so the caller
 can tell what did not land. The editor must be open: events that arrive while
 the user is on the Launchpad are dropped even though the request returns 200.
