@@ -423,7 +423,9 @@ const ModelIdentifierInput = ({ id, invalid, onChange, template, value }: Workfl
   const filter = useCallback(
     (model: ModelConfig) =>
       (allowedBases ? allowedBases.includes(model.base) : true) &&
-      (allowedFormats ? allowedFormats.includes(model.format) : true),
+      // A components-only folder carries no transformer, so it can only fill a field that asks for
+      // folders explicitly (e.g. a loader's Components field), never a format-agnostic model field.
+      (allowedFormats ? allowedFormats.includes(model.format) : model.components_only !== true),
     [allowedBases, allowedFormats]
   );
   const onModelChange = useCallback(
@@ -438,7 +440,7 @@ const ModelIdentifierInput = ({ id, invalid, onChange, template, value }: Workfl
     <Suspense fallback={MODEL_SELECT_FALLBACK}>
       <ModelSelect
         className="nodrag nowheel"
-        filter={allowedBases || allowedFormats ? filter : undefined}
+        filter={filter}
         id={id ? `${id}-model-combobox` : undefined}
         invalid={invalid}
         isClearable={false}

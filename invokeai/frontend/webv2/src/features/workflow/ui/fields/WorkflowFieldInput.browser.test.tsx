@@ -1010,6 +1010,48 @@ describe('WorkflowFieldInput LoRA collection', () => {
   });
 });
 
+describe('WorkflowFieldInput model identifiers', () => {
+  const ltx2Template = (uiModelFormat: string[] | null) =>
+    ({
+      name: 'model',
+      title: 'Model',
+      type: { batch: false, cardinality: 'SINGLE', name: 'ModelIdentifierField' },
+      uiModelBase: ['ltx-2'],
+      uiModelFormat,
+      uiModelType: ['main'],
+    }) as unknown as FieldInputTemplate;
+  const transformer = { base: 'ltx-2', format: 'checkpoint', key: 'dev', type: 'main' };
+  const fullFolder = { base: 'ltx-2', components_only: false, format: 'diffusers', key: 'full', type: 'main' };
+  const componentsFolder = { base: 'ltx-2', components_only: true, format: 'diffusers', key: 'parts', type: 'main' };
+
+  const pickerFilter = async (template: FieldInputTemplate) => {
+    await renderField(template, undefined, vi.fn());
+    await vi.waitFor(
+      () => {
+        expect(modelSelectState.props).not.toBeNull();
+      },
+      { timeout: 5_000 }
+    );
+    return modelSelectState.props!.filter!;
+  };
+
+  it('keeps components-only folders out of a format-agnostic model field', async () => {
+    const filter = await pickerFilter(ltx2Template(null));
+
+    expect(filter(transformer)).toBe(true);
+    expect(filter(fullFolder)).toBe(true);
+    expect(filter(componentsFolder)).toBe(false);
+    expect(filter({ ...transformer, base: 'wan' })).toBe(false);
+  });
+
+  it('offers components-only folders to a field that asks for folders', async () => {
+    const filter = await pickerFilter(ltx2Template(['diffusers']));
+
+    expect(filter(componentsFolder)).toBe(true);
+    expect(filter(transformer)).toBe(false);
+  });
+});
+
 describe('WorkflowFieldInput seed inputs', () => {
   const settle = async (action: () => void) => {
     await act(async () => {

@@ -78,8 +78,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Negative Prompt",
+            "description": "What to steer the generation away from.",
             "value": "has_subtitles, has_blurbox, transition from black, transition to black, speech_ending_short, blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
           }
         },
@@ -105,8 +105,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Prompt",
+            "description": "Describe what to generate.",
             "value": ""
           }
         },
@@ -132,8 +132,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Seed",
+            "description": "Reuse a seed to repeat a result.",
             "value": 0
           }
         },
@@ -159,19 +159,19 @@
         "inputs": {
           "model": {
             "name": "model",
-            "label": "",
+            "label": "Model",
             "description": "",
             "value": null
           },
           "component_source": {
             "name": "component_source",
-            "label": "",
+            "label": "Components",
             "description": "",
             "value": null
           },
           "text_encoder_model": {
             "name": "text_encoder_model",
-            "label": "",
+            "label": "Text Encoder",
             "description": "",
             "value": null
           }
@@ -255,7 +255,7 @@
           },
           "num_frames": {
             "name": "num_frames",
-            "label": "",
+            "label": "Number of Frames",
             "description": "",
             "value": 121
           },
@@ -381,19 +381,19 @@
         "inputs": {
           "video": {
             "name": "video",
-            "label": "",
+            "label": "Source Video",
             "description": "",
             "value": null
           },
           "start_frame": {
             "name": "start_frame",
-            "label": "",
+            "label": "Start Frame",
             "description": "",
             "value": 0
           },
           "end_frame": {
             "name": "end_frame",
-            "label": "",
+            "label": "End Frame",
             "description": "",
             "value": -1
           },
@@ -541,9 +541,10 @@
           },
           "context_frames": {
             "name": "context_frames",
-            "label": "",
-            "description": "",
-            "value": 17
+            "label": "Context Frames",
+            "description": "How many frames from the initial video to carry into the extension. More frames improves continuity, but reduces the overall length of the clip.",
+            "value": 17,
+            "descriptionOverride": true
           },
           "tile_size": {
             "name": "tile_size",
@@ -937,7 +938,7 @@
           },
           "target_resolution": {
             "name": "target_resolution",
-            "label": "",
+            "label": "Target Resolution",
             "description": "",
             "value": "704p"
           }
@@ -964,8 +965,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Steps",
+            "description": "Number of denoising steps.",
             "value": 30
           }
         },
@@ -1327,218 +1328,255 @@
   ],
   "form": {
     "elements": {
-      "heading-0": {
-        "id": "heading-0",
-        "parentId": "root",
+      "heading-initial-video": {
+        "id": "heading-initial-video",
         "type": "heading",
+        "parentId": "root",
         "data": {
-          "content": "Source"
+          "content": "Initial Video"
         }
       },
       "field-source_video-video": {
         "id": "field-source_video-video",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "root",
         "data": {
           "fieldIdentifier": {
             "nodeId": "source_video",
             "fieldName": "video"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "field-source_video-start_frame": {
         "id": "field-source_video-start_frame",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "container-trim",
         "data": {
           "fieldIdentifier": {
             "nodeId": "source_video",
             "fieldName": "start_frame"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "field-source_video-end_frame": {
         "id": "field-source_video-end_frame",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "container-trim",
         "data": {
           "fieldIdentifier": {
             "nodeId": "source_video",
             "fieldName": "end_frame"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
-      "heading-4": {
-        "id": "heading-4",
+      "container-trim": {
+        "id": "container-trim",
+        "type": "container",
         "parentId": "root",
-        "type": "heading",
         "data": {
-          "content": "Continuation"
+          "layout": "row",
+          "children": [
+            "field-source_video-start_frame",
+            "field-source_video-end_frame"
+          ]
         }
       },
       "field-extend_conditioning-context_frames": {
         "id": "field-extend_conditioning-context_frames",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "root",
         "data": {
           "fieldIdentifier": {
             "nodeId": "extend_conditioning",
             "fieldName": "context_frames"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
-      "field-denoise_latents-num_frames": {
-        "id": "field-denoise_latents-num_frames",
-        "parentId": "root",
-        "type": "node-field",
-        "data": {
-          "fieldIdentifier": {
-            "nodeId": "denoise_latents",
-            "fieldName": "num_frames"
-          },
-          "showDescription": true
-        }
-      },
-      "heading-7": {
-        "id": "heading-7",
-        "parentId": "root",
+      "heading-extension": {
+        "id": "heading-extension",
         "type": "heading",
+        "parentId": "root",
         "data": {
-          "content": "Generation"
+          "content": "Extension"
         }
       },
       "field-positive_prompt-value": {
         "id": "field-positive_prompt-value",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "root",
         "data": {
           "fieldIdentifier": {
             "nodeId": "positive_prompt",
             "fieldName": "value"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "field-negative_prompt-value": {
         "id": "field-negative_prompt-value",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "root",
         "data": {
           "fieldIdentifier": {
             "nodeId": "negative_prompt",
             "fieldName": "value"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "field-ideal_dimensions-target_resolution": {
         "id": "field-ideal_dimensions-target_resolution",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "container-continuation",
         "data": {
           "fieldIdentifier": {
             "nodeId": "ideal_dimensions",
             "fieldName": "target_resolution"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
+        }
+      },
+      "field-denoise_latents-num_frames": {
+        "id": "field-denoise_latents-num_frames",
+        "type": "node-field",
+        "parentId": "container-continuation",
+        "data": {
+          "fieldIdentifier": {
+            "nodeId": "denoise_latents",
+            "fieldName": "num_frames"
+          },
+          "showDescription": true,
+          "showShuffle": false
+        }
+      },
+      "container-continuation": {
+        "id": "container-continuation",
+        "type": "container",
+        "parentId": "root",
+        "data": {
+          "layout": "row",
+          "children": [
+            "field-ideal_dimensions-target_resolution",
+            "field-denoise_latents-num_frames"
+          ]
         }
       },
       "field-steps-value": {
         "id": "field-steps-value",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "container-sampling",
         "data": {
           "fieldIdentifier": {
             "nodeId": "steps",
             "fieldName": "value"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "field-seed-value": {
         "id": "field-seed-value",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "container-sampling",
         "data": {
           "fieldIdentifier": {
             "nodeId": "seed",
             "fieldName": "value"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
-      "heading-13": {
-        "id": "heading-13",
+      "container-sampling": {
+        "id": "container-sampling",
+        "type": "container",
         "parentId": "root",
+        "data": {
+          "layout": "row",
+          "children": [
+            "field-steps-value",
+            "field-seed-value"
+          ]
+        }
+      },
+      "heading-model": {
+        "id": "heading-model",
         "type": "heading",
+        "parentId": "root",
         "data": {
           "content": "Model"
         }
       },
       "field-model_loader-model": {
         "id": "field-model_loader-model",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "root",
         "data": {
           "fieldIdentifier": {
             "nodeId": "model_loader",
             "fieldName": "model"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "field-model_loader-component_source": {
         "id": "field-model_loader-component_source",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "root",
         "data": {
           "fieldIdentifier": {
             "nodeId": "model_loader",
             "fieldName": "component_source"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "field-model_loader-text_encoder_model": {
         "id": "field-model_loader-text_encoder_model",
-        "parentId": "root",
         "type": "node-field",
+        "parentId": "root",
         "data": {
           "fieldIdentifier": {
             "nodeId": "model_loader",
             "fieldName": "text_encoder_model"
           },
-          "showDescription": true
+          "showDescription": true,
+          "showShuffle": false
         }
       },
       "root": {
         "id": "root",
         "type": "container",
         "data": {
+          "layout": "column",
           "children": [
-            "heading-0",
+            "heading-initial-video",
             "field-source_video-video",
-            "field-source_video-start_frame",
-            "field-source_video-end_frame",
-            "heading-4",
+            "container-trim",
             "field-extend_conditioning-context_frames",
-            "field-denoise_latents-num_frames",
-            "heading-7",
+            "heading-extension",
             "field-positive_prompt-value",
             "field-negative_prompt-value",
-            "field-ideal_dimensions-target_resolution",
-            "field-steps-value",
-            "field-seed-value",
-            "heading-13",
+            "container-continuation",
+            "container-sampling",
+            "heading-model",
             "field-model_loader-model",
             "field-model_loader-component_source",
             "field-model_loader-text_encoder_model"
-          ],
-          "layout": "column"
+          ]
         }
       }
     },

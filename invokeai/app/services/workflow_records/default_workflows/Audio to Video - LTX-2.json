@@ -78,8 +78,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Prompt",
+            "description": "Describe what to generate.",
             "value": ""
           }
         },
@@ -105,8 +105,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Negative Prompt",
+            "description": "What to steer the generation away from.",
             "value": "has_subtitles, has_blurbox, transition from black, transition to black, speech_ending_short, blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
           }
         },
@@ -132,8 +132,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Seed",
+            "description": "Reuse a seed to repeat a result.",
             "value": 0
           }
         },
@@ -159,8 +159,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Frames per Second",
+            "description": "Playback rate of the generated clip.",
             "value": 24
           }
         },
@@ -186,8 +186,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "CFG",
+            "description": "How strongly the prompt guides the generation.",
             "value": 3.0
           }
         },
@@ -213,19 +213,19 @@
         "inputs": {
           "model": {
             "name": "model",
-            "label": "",
+            "label": "Model",
             "description": "",
             "value": null
           },
           "component_source": {
             "name": "component_source",
-            "label": "",
+            "label": "Components",
             "description": "",
             "value": null
           },
           "text_encoder_model": {
             "name": "text_encoder_model",
-            "label": "",
+            "label": "Text Encoder",
             "description": "",
             "value": null
           }
@@ -786,8 +786,8 @@
         "inputs": {
           "value": {
             "name": "value",
-            "label": "",
-            "description": "",
+            "label": "Steps",
+            "description": "Number of denoising steps.",
             "value": 30
           }
         },
@@ -813,19 +813,19 @@
         "inputs": {
           "width": {
             "name": "width",
-            "label": "",
+            "label": "Width",
             "description": "",
             "value": 1920
           },
           "height": {
             "name": "height",
-            "label": "",
+            "label": "Height",
             "description": "",
             "value": 1080
           },
           "target_resolution": {
             "name": "target_resolution",
-            "label": "",
+            "label": "Target Resolution",
             "description": "",
             "value": "704p"
           }
@@ -852,7 +852,7 @@
         "inputs": {
           "video": {
             "name": "video",
-            "label": "",
+            "label": "Soundtrack Clip",
             "description": "",
             "value": null
           },
@@ -1211,7 +1211,7 @@
       },
       "field-ideal_dimensions-width": {
         "id": "field-ideal_dimensions-width",
-        "parentId": "root",
+        "parentId": "container-dimensions",
         "type": "node-field",
         "data": {
           "fieldIdentifier": {
@@ -1223,7 +1223,7 @@
       },
       "field-ideal_dimensions-height": {
         "id": "field-ideal_dimensions-height",
-        "parentId": "root",
+        "parentId": "container-dimensions",
         "type": "node-field",
         "data": {
           "fieldIdentifier": {
@@ -1235,7 +1235,7 @@
       },
       "field-ideal_dimensions-target_resolution": {
         "id": "field-ideal_dimensions-target_resolution",
-        "parentId": "root",
+        "parentId": "container-dimensions",
         "type": "node-field",
         "data": {
           "fieldIdentifier": {
@@ -1247,7 +1247,7 @@
       },
       "field-fps-value": {
         "id": "field-fps-value",
-        "parentId": "root",
+        "parentId": "container-canvas",
         "type": "node-field",
         "data": {
           "fieldIdentifier": {
@@ -1259,7 +1259,7 @@
       },
       "field-steps-value": {
         "id": "field-steps-value",
-        "parentId": "root",
+        "parentId": "container-sampling",
         "type": "node-field",
         "data": {
           "fieldIdentifier": {
@@ -1271,7 +1271,7 @@
       },
       "field-cfg_scale-value": {
         "id": "field-cfg_scale-value",
-        "parentId": "root",
+        "parentId": "container-sampling",
         "type": "node-field",
         "data": {
           "fieldIdentifier": {
@@ -1283,7 +1283,7 @@
       },
       "field-seed-value": {
         "id": "field-seed-value",
-        "parentId": "root",
+        "parentId": "container-sampling",
         "type": "node-field",
         "data": {
           "fieldIdentifier": {
@@ -1347,19 +1347,52 @@
             "heading-2",
             "field-positive_prompt-value",
             "field-negative_prompt-value",
-            "field-ideal_dimensions-width",
-            "field-ideal_dimensions-height",
-            "field-ideal_dimensions-target_resolution",
-            "field-fps-value",
-            "field-steps-value",
-            "field-cfg_scale-value",
-            "field-seed-value",
+            "container-canvas",
+            "container-sampling",
             "heading-12",
             "field-model_loader-model",
             "field-model_loader-component_source",
             "field-model_loader-text_encoder_model"
           ],
           "layout": "column"
+        }
+      },
+      "container-dimensions": {
+        "id": "container-dimensions",
+        "type": "container",
+        "parentId": "container-canvas",
+        "data": {
+          "layout": "row",
+          "children": [
+            "field-ideal_dimensions-width",
+            "field-ideal_dimensions-height",
+            "field-ideal_dimensions-target_resolution"
+          ]
+        }
+      },
+      "container-canvas": {
+        "id": "container-canvas",
+        "type": "container",
+        "parentId": "root",
+        "data": {
+          "layout": "column",
+          "children": [
+            "container-dimensions",
+            "field-fps-value"
+          ]
+        }
+      },
+      "container-sampling": {
+        "id": "container-sampling",
+        "type": "container",
+        "parentId": "root",
+        "data": {
+          "layout": "row",
+          "children": [
+            "field-cfg_scale-value",
+            "field-steps-value",
+            "field-seed-value"
+          ]
         }
       }
     },
