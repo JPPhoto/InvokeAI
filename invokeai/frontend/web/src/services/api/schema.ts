@@ -47606,6 +47606,13 @@ export type components = {
              * @description Requested fields dropped because their model or media could not be used
              */
             skipped: string[];
+            /**
+             * Overridden
+             * @description Requested media fields dropped because another medium in the same request takes precedence over them, mapped to that field (e.g. first_frame_image -> source_video)
+             */
+            overridden?: {
+                [key: string]: string;
+            };
         };
         /**
          * VideoRecallRequestedEvent

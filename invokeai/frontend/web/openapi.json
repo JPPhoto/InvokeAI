@@ -15507,7 +15507,53 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/VideoRecallParameter",
-                "description": "Video parameters to recall"
+                "description": "Video parameters to recall. Every field is optional: send only the ones to change."
+              },
+              "examples": {
+                "prompt_and_model": {
+                  "summary": "Prompt and model",
+                  "value": {
+                    "positive_prompt": "a heron takes flight over a misty lake",
+                    "model": "Wan 2.2 I2V A14B (Diffusers)"
+                  }
+                },
+                "first_frame": {
+                  "summary": "Start from a gallery image",
+                  "value": {
+                    "model": "Wan 2.2 I2V A14B (Diffusers)",
+                    "first_frame_image": {
+                      "image_name": "<gallery image name>.png"
+                    }
+                  }
+                },
+                "extend_video": {
+                  "summary": "Extend a gallery video",
+                  "value": {
+                    "positive_prompt": "the camera keeps panning left",
+                    "source_video": {
+                      "video_name": "<gallery video name>.mp4"
+                    },
+                    "source_video_start_frame": 0,
+                    "source_video_end_frame": 80
+                  }
+                },
+                "ref2va_references": {
+                  "summary": "MiniMax H3 Ref2VA references",
+                  "value": {
+                    "model": "MiniMax H3 Ref2VA Transformer (int8, pruned)",
+                    "minimax_h3_references": [
+                      {
+                        "kind": "image",
+                        "image_name": "<gallery image name>.png"
+                      },
+                      {
+                        "kind": "video",
+                        "video_name": "<gallery video name>.mp4",
+                        "conditioning": "video_audio"
+                      }
+                    ]
+                  }
+                }
               }
             }
           }
@@ -106174,6 +106220,14 @@
             "type": "array",
             "title": "Skipped",
             "description": "Requested fields dropped because their model or media could not be used"
+          },
+          "overridden": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Overridden",
+            "description": "Requested media fields dropped because another medium in the same request takes precedence over them, mapped to that field (e.g. first_frame_image -> source_video)"
           }
         },
         "type": "object",
