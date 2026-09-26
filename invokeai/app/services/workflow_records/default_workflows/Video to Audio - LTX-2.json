@@ -775,7 +775,7 @@
           "video": {
             "name": "video",
             "label": "Source Clip",
-            "description": "",
+            "description": "The video to generate an audio track for",
             "value": null
           }
         },
