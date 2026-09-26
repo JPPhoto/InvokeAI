@@ -536,6 +536,9 @@ class TestParameterRecall:
         for example in VIDEO_RECALL_EXAMPLES.values():
             VideoRecallParameter.model_validate(example["value"])
 
+        # The reference example names every field the request accepts, so it cannot fall behind the model.
+        assert set(VIDEO_RECALL_EXAMPLES["every_field"]["value"]) == set(VideoRecallParameter.model_fields)
+
     def test_an_empty_request_emits_nothing(self, invoker: Invoker, client: TestClient) -> None:
         response = client.post("/api/v1/recall/video/default", json={})
 
