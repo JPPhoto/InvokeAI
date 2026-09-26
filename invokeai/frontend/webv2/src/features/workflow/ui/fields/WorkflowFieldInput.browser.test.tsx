@@ -1036,6 +1036,48 @@ describe('WorkflowFieldInput LoRA collection', () => {
   });
 });
 
+describe('WorkflowFieldInput model identifiers', () => {
+  const ltx2Template = (uiModelFormat: string[] | null) =>
+    ({
+      name: 'model',
+      title: 'Model',
+      type: { batch: false, cardinality: 'SINGLE', name: 'ModelIdentifierField' },
+      uiModelBase: ['ltx-2'],
+      uiModelFormat,
+      uiModelType: ['main'],
+    }) as unknown as FieldInputTemplate;
+  const transformer = { base: 'ltx-2', format: 'checkpoint', key: 'dev', type: 'main' };
+  const fullFolder = { base: 'ltx-2', components_only: false, format: 'diffusers', key: 'full', type: 'main' };
+  const componentsFolder = { base: 'ltx-2', components_only: true, format: 'diffusers', key: 'parts', type: 'main' };
+
+  const pickerFilter = async (template: FieldInputTemplate) => {
+    await renderField(template, undefined, vi.fn());
+    await vi.waitFor(
+      () => {
+        expect(modelSelectState.props).not.toBeNull();
+      },
+      { timeout: 5_000 }
+    );
+    return modelSelectState.props!.filter!;
+  };
+
+  it('keeps components-only folders out of a format-agnostic model field', async () => {
+    const filter = await pickerFilter(ltx2Template(null));
+
+    expect(filter(transformer)).toBe(true);
+    expect(filter(fullFolder)).toBe(true);
+    expect(filter(componentsFolder)).toBe(false);
+    expect(filter({ ...transformer, base: 'wan' })).toBe(false);
+  });
+
+  it('offers components-only folders to a field that asks for folders', async () => {
+    const filter = await pickerFilter(ltx2Template(['diffusers']));
+
+    expect(filter(componentsFolder)).toBe(true);
+    expect(filter(transformer)).toBe(false);
+  });
+});
+
 describe('WorkflowFieldInput seed inputs', () => {
   const settle = async (action: () => void) => {
     await act(async () => {
@@ -1203,7 +1245,12 @@ const StatefulField = ({
   );
   const invalid = getWorkflowFieldInvalidReason({ isConnected: false, template, value }) !== null;
 
-  return <WorkflowFieldInput invalid={invalid} template={template} value={value} onChange={onChange} />;
+  // Both editors wrap the control in a Field.Root that marks everything inside it invalid.
+  return (
+    <Field.Root invalid={invalid}>
+      <WorkflowFieldInput invalid={invalid} template={template} value={value} onChange={onChange} />
+    </Field.Root>
+  );
 };
 
 describe('WorkflowFieldInput text and number entry', () => {
@@ -2044,7 +2091,7 @@ describe('WorkflowFieldInput generators', () => {
     return { onCommit };
   };
   const numberInput = (suffix: string) =>
-    host.querySelector<HTMLInputElement>(`input[type="number"][id$="${suffix}"]`)!;
+    host.querySelector<HTMLInputElement>(`input[type="number"][id$="${suffix}-number-input"]`)!;
   const selectVariant = async (label: string) => {
     await act(() => userEvent.click(host.querySelector('[data-scope="select"][data-part="trigger"]')!));
     const item = Array.from(document.querySelectorAll<HTMLElement>('[data-scope="select"][data-part="item"]')).find(
@@ -2095,11 +2142,20 @@ describe('WorkflowFieldInput generators', () => {
     expect(numberInput('-seed').disabled).toBe(true);
     expect(numberInput('-seed').getAttribute('aria-label')).toBe('nodes.generatorSeed');
 
-    // A count below its minimum stays a draft: nothing commits, so the variant and its settings survive.
+    // A count below its minimum commits as typed, is flagged, and names its rule; the other settings survive.
     await act(() => numberInput('-count').focus());
     await act(() => userEvent.keyboard('{Control>}a{/Control}0'));
     expect(numberInput('-count').value).toBe('0');
-    expect(onCommit).not.toHaveBeenCalled();
+    expect(onCommit).toHaveBeenLastCalledWith({
+      count: 0,
+      max: 9,
+      min: 2,
+      seed: null,
+      type: 'float_generator_random_distribution_uniform',
+    });
+    expect(numberInput('-count').getAttribute('aria-invalid')).toBe('true');
+    expect(numberInput('-min').getAttribute('aria-invalid')).toBeNull();
+    expect(host.textContent).toContain('Count must be at least 1.');
     expect(numberInput('-min').value).toBe('2');
     await act(() => userEvent.keyboard('5'));
     expect(onCommit).toHaveBeenLastCalledWith({
@@ -2125,6 +2181,27 @@ describe('WorkflowFieldInput generators', () => {
     await act(() => numberInput('-count').focus());
     await act(() => userEvent.keyboard('{Control>}a{/Control}20000'));
     await vi.waitFor(() => expect(host.textContent).toContain('nodes.generatorTooMany'), { timeout: 2000 });
+
+    // Clearing leaves the setting empty and flagged, on blur too, instead of restoring the last count.
+    await act(() => userEvent.keyboard('{Control>}a{/Control}{Backspace}'));
+    expect(onCommit).toHaveBeenLastCalledWith({
+      count: null,
+      max: 9,
+      min: 2,
+      seed: 0,
+      type: 'float_generator_random_distribution_uniform',
+    });
+    expect(host.textContent).toContain('Count is empty.');
+    await act(() => numberInput('-count').blur());
+    expect(numberInput('-count').value).toBe('');
+    expect(numberInput('-count').getAttribute('aria-invalid')).toBe('true');
+
+    // A fractional pinned seed is kept and flagged rather than dropped back to a random draw.
+    await act(() => numberInput('-seed').focus());
+    await act(() => userEvent.keyboard('{Control>}a{/Control}2.5'));
+    expect(onCommit).toHaveBeenLastCalledWith(expect.objectContaining({ seed: 2.5 }));
+    expect(numberInput('-seed').getAttribute('aria-invalid')).toBe('true');
+    expect(numberInput('-seed').disabled).toBe(false);
   });
 
   it('loads a parse-string source from a file and previews the split values', async () => {

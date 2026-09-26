@@ -12,6 +12,8 @@ import {
   createSeededRandom,
   getDefaultWorkflowGeneratorValue,
   getWorkflowBatchGroupId,
+  getWorkflowGeneratorInvalidReason,
+  getWorkflowGeneratorPropertyInvalidReason,
   getWorkflowGeneratorKey,
   getWorkflowGeneratorVariantDefaults,
   isRandomWorkflowGeneratorValue,
@@ -98,9 +100,15 @@ describe('generator values', () => {
         type: 'integer_generator_arithmetic_sequence',
       })
     ).toBeNull();
+    // Numbers are kept as entered, even off their rule; the reason check says whether they can run.
     expect(
-      parseWorkflowGeneratorValue('IntegerGeneratorField', { count: 0, type: 'integer_generator_arithmetic_sequence' })
-    ).toBeNull();
+      parseWorkflowGeneratorValue('IntegerGeneratorField', {
+        count: 0,
+        start: null,
+        step: 1.5,
+        type: 'integer_generator_arithmetic_sequence',
+      })
+    ).toEqual({ count: 0, start: null, step: 1.5, type: 'integer_generator_arithmetic_sequence' });
     expect(parseWorkflowGeneratorValue('IntegerGeneratorField', { type: 'float_generator_parse_string' })).toBeNull();
     expect(parseWorkflowGeneratorValue('FloatGeneratorField', 'nope')).toBeNull();
     // Optional properties recover from bad input instead.
@@ -111,6 +119,77 @@ describe('generator values', () => {
         values: 'x',
       })
     ).toMatchObject({ seed: null });
+  });
+
+  it('names the first setting that keeps a readable generator from running, and yields nothing for it', () => {
+    const arithmetic = (overrides: Record<string, unknown>) =>
+      parseWorkflowGeneratorValue('IntegerGeneratorField', {
+        count: 3,
+        start: 0,
+        step: 1,
+        type: 'integer_generator_arithmetic_sequence',
+        ...overrides,
+      })!;
+    const reason = (value: WorkflowGeneratorValue) => getWorkflowGeneratorInvalidReason(value);
+
+    expect(reason(arithmetic({}))).toBeNull();
+    expect(reason(arithmetic({ start: null }))).toBe('Start is empty.');
+    expect(reason(arithmetic({ step: 1.5 }))).toBe('Step must be a whole number.');
+    expect(reason(arithmetic({ count: 0 }))).toBe('Count must be at least 1.');
+    expect(reason(arithmetic({ count: 2.5 }))).toBe('Count must be a whole number.');
+    expect(getWorkflowGeneratorPropertyInvalidReason(arithmetic({ count: 0, start: null }), 'count')).toBe(
+      'Count must be at least 1.'
+    );
+    // Floats may be fractional; a seed is optional but must be a whole number of at least 0 when pinned.
+    expect(
+      reason(
+        parseWorkflowGeneratorValue('FloatGeneratorField', {
+          count: 2,
+          max: 1,
+          min: 0.5,
+          seed: 2.5,
+          type: 'float_generator_random_distribution_uniform',
+        })!
+      )
+    ).toBe('Seed must be a whole number.');
+    expect(
+      reason(
+        parseWorkflowGeneratorValue('FloatGeneratorField', {
+          count: 2,
+          max: 1,
+          min: 0.5,
+          seed: -1,
+          type: 'float_generator_random_distribution_uniform',
+        })!
+      )
+    ).toBe('Seed must be at least 0.');
+    expect(
+      reason(
+        parseWorkflowGeneratorValue('StringGeneratorField', {
+          count: 1001,
+          input: 'a',
+          seed: null,
+          type: 'string_generator_dynamic_prompts_random',
+        })!
+      )
+    ).toBe('Count can be at most 1000.');
+
+    // A legacy resolved override stands in for its settings, whatever they say.
+    expect(
+      reason(
+        parseWorkflowGeneratorValue('FloatGeneratorField', {
+          count: 0,
+          start: 0,
+          step: 1,
+          type: 'float_generator_arithmetic_sequence',
+          values: [4, 5],
+        })!
+      )
+    ).toBeNull();
+
+    // An off-rule generator resolves to no items rather than a broken sequence.
+    expect(resolveWorkflowGeneratorValue(arithmetic({ count: 0 }))).toEqual({ items: [], kind: 'items' });
+    expect(resolveWorkflowGeneratorValue(arithmetic({ start: null }))).toEqual({ items: [], kind: 'items' });
   });
 
   it('fingerprints a value independently of key order and spots unseeded random variants', () => {
