@@ -89,6 +89,7 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/features/generation/data/architectureCapabilitiesApi.ts',
   '/features/generation/data/architectureCapabilitiesStore.ts',
   '/features/generation/data/dynamicPromptsQueries.ts',
+  '/features/generation/data/promptTemplates.ts',
   '/features/generation/data/promptUtilities.ts',
   '/features/generation/data/systemPrompts.ts',
   '/features/generation/prompts.ts',
