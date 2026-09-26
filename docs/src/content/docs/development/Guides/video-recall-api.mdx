@@ -64,6 +64,22 @@ whose medium was dropped. A LoRA or reference list whose every entry was dropped
 is left out entirely rather than sent empty, so it cannot clear the panel's list.
 Unknown fields, and values outside the bounds below, are rejected with `422`.
 
+Media fields in one request are read in the Video panel's precedence, highest first:
+
+1. `ltx2_conditioning_video` — a whole-generation conditioning clip excludes every
+   other medium.
+2. `minimax_h3_references` (non-empty) — references replace the frame slots; a
+   `source_video` rides alongside them.
+3. `source_video` — an initial video replaces `first_frame_image`, which extend
+   mode takes from the clip itself.
+4. `first_frame_image`, `last_frame_image`.
+
+A medium that a higher-precedence one in the same request excludes is not sent, and
+the response's `overridden` maps it to the field that won — for example
+`{"first_frame_image": "source_video"}`. Only media that could be found take
+precedence: a `source_video` that is missing from the gallery overrides nothing.
+Send only the fields you mean to set; the Swagger page offers minimal examples.
+
 ### Send Video and Use as Ref Video
 
 The name-only routes take `video_name` as a query parameter; the video must be in
@@ -202,13 +218,16 @@ Recall / Remix:
   "status": "success",
   "queue_id": "default",
   "parameters": { "positive_prompt": "…", "model": { "key": "…", "hash": "…", "name": "…", "base": "wan", "type": "main" } },
-  "skipped": ["loras[1]"]
+  "skipped": ["loras[1]"],
+  "overridden": {}
 }
 ```
 
 `status` is `no_parameters_provided` for an empty body and `nothing_resolved`
 when every field was dropped; no event is emitted in either case. `parameters` is
-exactly what the frontend receives.
+exactly what the frontend receives. `skipped` lists fields whose model or medium
+could not be used; `overridden` maps media fields that lost to a higher-precedence
+medium in the same request to the field that won.
 
 Send Video / Use as Ref Video:
 

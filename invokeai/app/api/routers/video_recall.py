@@ -8,6 +8,7 @@ how they land in the panel.
 from typing import Annotated, Any, Literal, Optional, Union
 
 from fastapi import Body, HTTPException, Path, Query, Request
+from fastapi.openapi.models import Example
 from fastapi.routing import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -213,6 +214,13 @@ class VideoRecallParametersResponse(BaseModel):
     queue_id: str
     parameters: dict[str, Any] = Field(description="The resolved parameters sent to the frontend")
     skipped: list[str] = Field(description="Requested fields dropped because their model or media could not be used")
+    overridden: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Requested media fields dropped because another medium in the same request takes precedence over them, "
+            "mapped to that field (e.g. first_frame_image -> source_video)"
+        ),
+    )
 
 
 class VideoRecallMediaResponse(BaseModel):
@@ -334,16 +342,93 @@ def resolve_video_recall_parameters(
             resolved[key] = value
 
     # Trim bounds and the conditioning role qualify their medium; without it they mean nothing.
-    for medium, qualifiers in (
-        ("source_video", ("source_video_start_frame", "source_video_end_frame")),
-        ("ltx2_conditioning_video", ("ltx2_conditioning_role",)),
-    ):
+    for medium, qualifiers in MEDIA_QUALIFIERS.items():
         if medium not in resolved:
             for qualifier in qualifiers:
                 if resolved.pop(qualifier, None) is not None:
                     skip(qualifier, f"{medium} is not being recalled")
 
     return resolved, skipped
+
+
+# Media keys and the keys that only qualify them.
+MEDIA_QUALIFIERS: dict[str, tuple[str, ...]] = {
+    "source_video": ("source_video_start_frame", "source_video_end_frame"),
+    "ltx2_conditioning_video": ("ltx2_conditioning_role",),
+}
+
+
+def apply_media_precedence(resolved: dict[str, Any]) -> dict[str, str]:
+    """Drop media a higher-precedence medium in the same request excludes; returns {dropped field: winner}.
+
+    Mirrors the Video panel's reading of a record: a whole-generation conditioning clip excludes every other slot;
+    Ref2VA references replace the frame slots (an initial video rides alongside them); an initial video replaces
+    the first frame, which extend mode extracts from the clip itself.
+    """
+    rules: list[tuple[str, bool, tuple[str, ...]]] = [
+        (
+            "ltx2_conditioning_video",
+            "ltx2_conditioning_video" in resolved,
+            ("minimax_h3_references", "source_video", "first_frame_image", "last_frame_image"),
+        ),
+        (
+            "minimax_h3_references",
+            bool(resolved.get("minimax_h3_references")),
+            ("first_frame_image", "last_frame_image"),
+        ),
+        ("source_video", "source_video" in resolved, ("first_frame_image",)),
+    ]
+    overridden: dict[str, str] = {}
+    for winner, present, losers in rules:
+        if not present or winner not in resolved:
+            continue
+        for loser in losers:
+            # An explicitly empty reference list asks for no references; the winning clip clears them too, so it
+            # loses nothing and stays.
+            if resolved.get(loser) == []:
+                continue
+            if resolved.pop(loser, None) is not None:
+                overridden[loser] = winner
+                for qualifier in MEDIA_QUALIFIERS.get(loser, ()):
+                    if resolved.pop(qualifier, None) is not None:
+                        overridden[qualifier] = winner
+    return overridden
+
+
+# Swagger pre-fills the first example. Without these it offers every field with placeholder values, and the
+# placeholder media then take precedence over the one field a caller meant to send.
+VIDEO_RECALL_EXAMPLES: dict[str, Example] = {
+    "prompt_and_model": Example(
+        summary="Prompt and model",
+        value={"positive_prompt": "a heron takes flight over a misty lake", "model": "Wan 2.2 I2V A14B (Diffusers)"},
+    ),
+    "first_frame": Example(
+        summary="Start from a gallery image",
+        value={
+            "model": "Wan 2.2 I2V A14B (Diffusers)",
+            "first_frame_image": {"image_name": "<gallery image name>.png"},
+        },
+    ),
+    "extend_video": Example(
+        summary="Extend a gallery video",
+        value={
+            "positive_prompt": "the camera keeps panning left",
+            "source_video": {"video_name": "<gallery video name>.mp4"},
+            "source_video_start_frame": 0,
+            "source_video_end_frame": 80,
+        },
+    ),
+    "ref2va_references": Example(
+        summary="MiniMax H3 Ref2VA references",
+        value={
+            "model": "MiniMax H3 Ref2VA Transformer (int8, pruned)",
+            "minimax_h3_references": [
+                {"kind": "image", "image_name": "<gallery image name>.png"},
+                {"kind": "video", "video_name": "<gallery video name>.mp4", "conditioning": "video_audio"},
+            ],
+        },
+    ),
+}
 
 
 @video_recall_router.post(
@@ -354,7 +439,11 @@ def resolve_video_recall_parameters(
 def recall_video_parameters(
     current_user: CurrentUserOrDefault,
     queue_id: str = Path(..., description="The queue id to perform this operation on"),
-    parameters: VideoRecallParameter = Body(..., description="Video parameters to recall"),
+    parameters: VideoRecallParameter = Body(
+        ...,
+        description="Video parameters to recall. Every field is optional: send only the ones to change.",
+        openapi_examples=VIDEO_RECALL_EXAMPLES,
+    ),
     mode: VideoRecallMode = Query(
         default="recall", description="`recall` applies every field; `remix` applies everything except the seed"
     ),
@@ -377,15 +466,18 @@ def recall_video_parameters(
 
     assert_image_move_maintenance_inactive()
     resolved, skipped = resolve_video_recall_parameters(parameters, mode, current_user)
+    overridden = apply_media_precedence(resolved)
     if not resolved:
         return VideoRecallParametersResponse(
-            status="nothing_resolved", queue_id=queue_id, parameters={}, skipped=skipped
+            status="nothing_resolved", queue_id=queue_id, parameters={}, skipped=skipped, overridden=overridden
         )
 
     ApiDependencies.invoker.services.events.emit_video_recall_requested(
         queue_id, current_user.user_id, "parameters", mode=mode, strict=strict, parameters=resolved
     )
-    return VideoRecallParametersResponse(status="success", queue_id=queue_id, parameters=resolved, skipped=skipped)
+    return VideoRecallParametersResponse(
+        status="success", queue_id=queue_id, parameters=resolved, skipped=skipped, overridden=overridden
+    )
 
 
 def _emit_video_placement(

@@ -383,37 +383,33 @@ class TestParameterRecall:
             "source_video_start_frame",
             "source_video_end_frame",
         ]
+        # References replace the frame slots, so the last frame is reported as overridden rather than sent.
+        assert response.json()["overridden"] == {"last_frame_image": "minimax_h3_references"}
         assert _only_recall_event(invoker).parameters == {
-            "last_frame_image": {"image_name": "last.png"},
             "minimax_h3_references": [
                 {"kind": "video", "video_name": "ref.mp4", "conditioning": "video", "start_frame": 0, "end_frame": 8},
                 {"kind": "image", "image_name": "ref.png", "detail": "max"},
             ],
         }
 
-    def test_trims_and_roles_travel_with_their_media(self, invoker: Invoker, client: TestClient) -> None:
-        _save_video(invoker, "source.mp4")
-        _save_video(invoker, "song.mp4")
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"source_video": {"video_name": "clip.mp4"}, "source_video_start_frame": 8, "source_video_end_frame": 40},
+            {"ltx2_conditioning_video": {"video_name": "clip.mp4"}, "ltx2_conditioning_role": "audio"},
+        ],
+        ids=["source-video-trim", "conditioning-role"],
+    )
+    def test_trims_and_roles_travel_with_their_media(
+        self, invoker: Invoker, client: TestClient, body: dict[str, Any]
+    ) -> None:
+        _save_video(invoker, "clip.mp4")
 
-        response = client.post(
-            "/api/v1/recall/video/default",
-            json={
-                "source_video": {"video_name": "source.mp4"},
-                "source_video_start_frame": 8,
-                "source_video_end_frame": 40,
-                "ltx2_conditioning_video": {"video_name": "song.mp4"},
-                "ltx2_conditioning_role": "audio",
-            },
-        )
+        response = client.post("/api/v1/recall/video/default", json=body)
 
         assert response.json()["skipped"] == []
-        assert _only_recall_event(invoker).parameters == {
-            "source_video": {"video_name": "source.mp4"},
-            "source_video_start_frame": 8,
-            "source_video_end_frame": 40,
-            "ltx2_conditioning_video": {"video_name": "song.mp4"},
-            "ltx2_conditioning_role": "audio",
-        }
+        assert response.json()["overridden"] == {}
+        assert _only_recall_event(invoker).parameters == body
 
     def test_a_missing_conditioning_video_takes_its_role_with_it(self, invoker: Invoker, client: TestClient) -> None:
         response = client.post(
@@ -442,6 +438,104 @@ class TestParameterRecall:
 
         assert _only_recall_event(invoker).queue_id == "queue-b"
 
+    @pytest.mark.parametrize(
+        ("body", "sent", "overridden"),
+        [
+            (
+                {"first_frame_image": {"image_name": "first.png"}, "source_video": {"video_name": "clip.mp4"}},
+                {"source_video"},
+                {"first_frame_image": "source_video"},
+            ),
+            (
+                {
+                    "first_frame_image": {"image_name": "first.png"},
+                    "last_frame_image": {"image_name": "last.png"},
+                    "source_video": {"video_name": "clip.mp4"},
+                    "minimax_h3_references": [{"kind": "image", "image_name": "ref.png"}],
+                },
+                {"source_video", "minimax_h3_references"},
+                {"first_frame_image": "minimax_h3_references", "last_frame_image": "minimax_h3_references"},
+            ),
+            (
+                {
+                    "first_frame_image": {"image_name": "first.png"},
+                    "source_video": {"video_name": "clip.mp4"},
+                    "source_video_start_frame": 0,
+                    "source_video_end_frame": 8,
+                    "minimax_h3_references": [{"kind": "image", "image_name": "ref.png"}],
+                    "ltx2_conditioning_video": {"video_name": "song.mp4"},
+                    "ltx2_conditioning_role": "audio",
+                },
+                {"ltx2_conditioning_video", "ltx2_conditioning_role"},
+                {
+                    "first_frame_image": "ltx2_conditioning_video",
+                    "source_video": "ltx2_conditioning_video",
+                    "source_video_start_frame": "ltx2_conditioning_video",
+                    "source_video_end_frame": "ltx2_conditioning_video",
+                    "minimax_h3_references": "ltx2_conditioning_video",
+                },
+            ),
+            (
+                {"first_frame_image": {"image_name": "first.png"}, "minimax_h3_references": []},
+                {"first_frame_image", "minimax_h3_references"},
+                {},
+            ),
+            (
+                {
+                    "ltx2_conditioning_video": {"video_name": "song.mp4"},
+                    "ltx2_conditioning_role": "audio",
+                    "minimax_h3_references": [],
+                },
+                {"ltx2_conditioning_video", "ltx2_conditioning_role", "minimax_h3_references"},
+                {},
+            ),
+        ],
+        ids=[
+            "initial-video-over-first-frame",
+            "references-over-frames",
+            "conditioning-clip-over-all",
+            "empty-list-beside-a-frame",
+            "empty-list-beside-a-clip",
+        ],
+    )
+    def test_media_a_higher_precedence_medium_excludes_is_reported_not_sent(
+        self,
+        invoker: Invoker,
+        client: TestClient,
+        body: dict[str, Any],
+        sent: set[str],
+        overridden: dict[str, str],
+    ) -> None:
+        """The Video panel reads media in this precedence; sending a loser would be silently ignored there."""
+        for image_name in ("first.png", "last.png", "ref.png"):
+            _save_image(invoker, image_name)
+        for video_name in ("clip.mp4", "song.mp4"):
+            _save_video(invoker, video_name)
+
+        response = client.post("/api/v1/recall/video/default", json=body)
+
+        assert response.json()["overridden"] == overridden
+        assert response.json()["skipped"] == []
+        assert set(_only_recall_event(invoker).parameters) == sent
+
+    def test_a_missing_winner_overrides_nothing(self, invoker: Invoker, client: TestClient) -> None:
+        _save_image(invoker, "first.png")
+
+        response = client.post(
+            "/api/v1/recall/video/default",
+            json={"first_frame_image": {"image_name": "first.png"}, "source_video": {"video_name": "gone.mp4"}},
+        )
+
+        assert response.json()["skipped"] == ["source_video"]
+        assert response.json()["overridden"] == {}
+        assert _only_recall_event(invoker).parameters == {"first_frame_image": {"image_name": "first.png"}}
+
+    def test_every_swagger_example_is_a_valid_request(self) -> None:
+        from invokeai.app.api.routers.video_recall import VIDEO_RECALL_EXAMPLES, VideoRecallParameter
+
+        for example in VIDEO_RECALL_EXAMPLES.values():
+            VideoRecallParameter.model_validate(example["value"])
+
     def test_an_empty_request_emits_nothing(self, invoker: Invoker, client: TestClient) -> None:
         response = client.post("/api/v1/recall/video/default", json={})
 
@@ -457,6 +551,7 @@ class TestParameterRecall:
             "queue_id": "default",
             "parameters": {},
             "skipped": ["model"],
+            "overridden": {},
         }
         assert _recall_events(invoker) == []
 
