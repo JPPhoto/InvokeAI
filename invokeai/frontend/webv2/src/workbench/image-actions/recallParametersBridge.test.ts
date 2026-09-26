@@ -51,6 +51,7 @@ const createDeps = () => {
     commands: {
       generation: {} as WorkbenchCommands['generation'],
       notifications: { reportError } as unknown as WorkbenchCommands['notifications'],
+      widgets: {} as WorkbenchCommands['widgets'],
     },
     createRecallParametersRuntime,
     dispose,
@@ -59,6 +60,7 @@ const createDeps = () => {
       getSnapshot: () => ({ activeProject: active }),
     } as unknown as Pick<WorkbenchQueries, 'getProject' | 'getSnapshot'>,
     received,
+    reveal: { getWidgetsForRegion: () => [], isEditingText: () => false },
     t: ((key: string) => key) as unknown as TFunction,
     reportError,
   };
@@ -166,14 +168,11 @@ describe('attachVideoRecallRuntime', () => {
     });
     const load = vi.fn(() => Promise.resolve({ createVideoRecallRuntime }));
     const getSessionUserId = () => 'owner';
-    const openVideoWidget = vi.fn();
     const bridge = attachVideoRecallRuntime({
       ...deps,
-      commands: { ...deps.commands, widgets: {} as WorkbenchCommands['widgets'] },
       getSessionUserId,
       hub: socket.hub,
       load,
-      openVideoWidget,
     });
 
     socket.emit('recall_parameters_updated', event({ steps: 1 }));
@@ -184,7 +183,7 @@ describe('attachVideoRecallRuntime', () => {
 
     expect(load).toHaveBeenCalledTimes(1);
     expect(createVideoRecallRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ getSessionUserId, openVideoWidget })
+      expect.objectContaining({ getSessionUserId, reveal: deps.reveal })
     );
     expect(deps.received).toEqual([{ payload: { action: 'initial_video', user_id: 'owner' }, projectId: 'project-1' }]);
 

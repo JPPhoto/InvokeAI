@@ -1,5 +1,6 @@
 import type { ModelConfig, ModelsSnapshot } from '@features/models';
 import type { SocketHub } from '@platform/transport/socketHub';
+import type { RegisteredWidget } from '@workbench/widgetContracts';
 import type { TFunction } from 'i18next';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
@@ -94,10 +95,16 @@ const placementEvent = (action: 'initial_video' | 'reference_video', video: Reco
 
 const heldFrame = { height: 480, image_name: 'held.png', width: 832 };
 
+/** The registry's view of the Video widget: placeable on the left, nothing to preload. */
+const videoWidget = {
+  implementation: { preload: () => undefined },
+  manifest: { allowedRegions: ['left'], id: 'video' },
+  status: 'enabled',
+} as unknown as RegisteredWidget;
+
 const setup = (panelModel: ModelConfig = WAN_I2V) => {
   const store = createWorkbenchStore();
   const socket = createFakeSocketHub();
-  const openVideoWidget = vi.fn();
   const projectId = store.queries.getSnapshot().activeProject.id;
 
   store.commands.widgets.patchValues(
@@ -112,10 +119,24 @@ const setup = (panelModel: ModelConfig = WAN_I2V) => {
   const runtime = createVideoRecallRuntime({
     commands: store.commands,
     hub: socket.hub,
-    openVideoWidget,
     queries: store.queries,
+    reveal: {
+      getWidgetsForRegion: (region) => (region === 'left' ? [videoWidget] : []),
+      isEditingText: () => false,
+    },
     t,
   });
+  /** Whether the Video widget is the visible tab of the project's left region. */
+  const videoShown = (id = projectId) => {
+    const project = store.queries.getProject(id)!;
+    const left = project.widgetRegions.left;
+
+    return (
+      !left.isCollapsed &&
+      left.activeInstanceId !== null &&
+      project.widgetInstances[left.activeInstanceId]?.typeId === 'video'
+    );
+  };
   const videoValues = (id = projectId) => {
     const project = store.queries.getProject(id);
     return project ? getProjectWidgetValues(project, 'video') : {};
@@ -123,7 +144,7 @@ const setup = (panelModel: ModelConfig = WAN_I2V) => {
   // Newest first.
   const lastNotice = () => store.queries.getSnapshot().notifications[0];
 
-  return { lastNotice, openVideoWidget, projectId, runtime, socket, store, videoValues };
+  return { lastNotice, projectId, runtime, socket, store, videoShown, videoValues };
 };
 
 describe('createVideoRecallRuntime', () => {
@@ -148,14 +169,14 @@ describe('createVideoRecallRuntime', () => {
   });
 
   it('applies a non-strict recall on top of the panel and reveals the Video widget', async () => {
-    const { lastNotice, openVideoWidget, runtime, socket, videoValues } = setup();
+    const { lastNotice, videoShown, runtime, socket, videoValues } = setup();
 
     socket.emit(parametersEvent({ positive_prompt: 'a heron', seed: 99 }));
     await flush();
 
     expect(videoValues()).toMatchObject({ firstFrameImage: heldFrame, positivePrompt: 'a heron', seed: 99 });
     expect(lastNotice()).toEqual(expect.objectContaining({ kind: 'success', title: 'Recalled video data' }));
-    expect(openVideoWidget).toHaveBeenCalledTimes(1);
+    expect(videoShown()).toBe(true);
 
     runtime.dispose();
   });
@@ -183,7 +204,7 @@ describe('createVideoRecallRuntime', () => {
   });
 
   it('applies to the project it arrived for, without pulling a different project to the front', async () => {
-    const { openVideoWidget, projectId, runtime, socket, store, videoValues } = setup();
+    const { videoShown, projectId, runtime, socket, store, videoValues } = setup();
     let releaseModels: () => void = () => {};
     modelsApi.ensureModelsLoaded.mockImplementation(
       () =>
@@ -200,13 +221,13 @@ describe('createVideoRecallRuntime', () => {
 
     expect(videoValues(projectId).positivePrompt).toBe('for the first project');
     expect(videoValues(second.id).positivePrompt).toBeUndefined();
-    expect(openVideoWidget).not.toHaveBeenCalled();
+    expect(videoShown()).toBe(false);
 
     runtime.dispose();
   });
 
   it('sets the initial video as the Initial Video field would', async () => {
-    const { lastNotice, openVideoWidget, runtime, socket, videoValues } = setup();
+    const { lastNotice, videoShown, runtime, socket, videoValues } = setup();
 
     socket.emit(placementEvent('initial_video'));
     await flush();
@@ -215,13 +236,13 @@ describe('createVideoRecallRuntime', () => {
     expect(lastNotice()).toEqual(
       expect.objectContaining({ kind: 'success', title: 'widgets.video.placement.initialVideoSet' })
     );
-    expect(openVideoWidget).toHaveBeenCalledTimes(1);
+    expect(videoShown()).toBe(true);
 
     runtime.dispose();
   });
 
   it('declines a reference video the panel model cannot take, leaving the panel alone', async () => {
-    const { lastNotice, openVideoWidget, runtime, socket, videoValues } = setup();
+    const { lastNotice, videoShown, runtime, socket, videoValues } = setup();
     const before = videoValues();
 
     socket.emit(placementEvent('reference_video'));
@@ -235,7 +256,7 @@ describe('createVideoRecallRuntime', () => {
         title: 'widgets.video.placement.referenceNotAdded',
       })
     );
-    expect(openVideoWidget).not.toHaveBeenCalled();
+    expect(videoShown()).toBe(false);
 
     runtime.dispose();
   });
@@ -246,7 +267,7 @@ describe('createVideoRecallRuntime', () => {
     ['a placement whose video has no size', { ...placementEvent('initial_video'), video: { video_name: 'clip.mp4' } }],
     ['an unknown action', { ...placementEvent('initial_video'), action: 'delete_video' }],
   ])('ignores %s', async (_label, payload) => {
-    const { openVideoWidget, runtime, socket, store, videoValues } = setup();
+    const { videoShown, runtime, socket, store, videoValues } = setup();
     const before = videoValues();
     const notices = store.queries.getSnapshot().notifications.length;
 
@@ -255,7 +276,7 @@ describe('createVideoRecallRuntime', () => {
 
     expect(videoValues()).toBe(before);
     expect(store.queries.getSnapshot().notifications).toHaveLength(notices);
-    expect(openVideoWidget).not.toHaveBeenCalled();
+    expect(videoShown()).toBe(false);
 
     runtime.dispose();
   });
@@ -355,27 +376,19 @@ describe('createVideoRecallRuntime', () => {
     });
   });
 
-  it.each(['placed', 'floating'] as const)(
-    'leaves the layout alone when the Video widget is already %s there',
-    async (where) => {
-      const { openVideoWidget, projectId, runtime, socket, store, videoValues } = setup();
+  it('brings a Video widget in a background tab to the front', async () => {
+    const { projectId, runtime, socket, store, videoShown } = setup();
+    store.commands.widgets.open({ projectId, region: 'left', widgetId: 'video' });
+    store.commands.widgets.open({ projectId, region: 'left', widgetId: 'generate' });
+    expect(videoShown()).toBe(false);
 
-      store.commands.widgets.open({ projectId, region: 'left', widgetId: 'video' });
-      const project = store.queries.getProject(projectId)!;
-      const instanceId = Object.values(project.widgetInstances).find((instance) => instance.typeId === 'video')!.id;
-      if (where === 'floating') {
-        store.commands.widgets.float(instanceId);
-      }
+    socket.emit(parametersEvent({ positive_prompt: 'a heron' }));
+    await flush();
 
-      socket.emit(parametersEvent({ positive_prompt: 'a heron' }));
-      await flush();
+    expect(videoShown()).toBe(true);
 
-      expect(videoValues().positivePrompt).toBe('a heron');
-      expect(openVideoWidget).not.toHaveBeenCalled();
-
-      runtime.dispose();
-    }
-  );
+    runtime.dispose();
+  });
 
   describe('placements', () => {
     it('appends a reference video with the defaults its wire facts imply', async () => {

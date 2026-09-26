@@ -102,9 +102,12 @@ webv2 applies each event, in arrival order, to the Video panel of the project th
 was active when the event arrived. Video recall events are ordered among themselves;
 image recall events (`POST /api/v1/recall`) are ordered separately. A notification
 reports each change applied or declined. An event whose project was closed before it
-could be applied is dropped. When something was applied and the project is on screen
-without a Video widget anywhere in its layout, the widget is opened; a Video widget
-that is already there, docked or floating, is left where it is.
+could be applied is dropped. When something was applied and that project is still on
+screen, the Video widget is brought to the front: its tab is selected (expanding its
+region and opening its panel), a floating window is raised (and unrolled if shaded)
+rather than docked, and
+the widget is opened if the layout has none. Nothing moves while the user is typing
+in a text field; the notification still reports the change.
 
 - **Recall / Remix** runs the same mapping as the gallery's *Recall All* and
   *Remix Video*: the model is resolved against the installed catalog (switching

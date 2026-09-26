@@ -2,7 +2,7 @@ import type { SocketHub } from '@platform/transport/socketHub';
 import type { WorkbenchCommands, WorkbenchQueries } from '@workbench/workbenchStore';
 import type { TFunction } from 'i18next';
 
-import type { PendingRecallEvent, RecallRuntime } from './recallEventRuntime';
+import type { PendingRecallEvent, RecallRevealContext, RecallRuntime } from './recallEventRuntime';
 import type { createRecallParametersRuntime } from './recallParametersRuntime';
 import type { createVideoRecallRuntime } from './videoRecallRuntime';
 
@@ -88,20 +88,22 @@ export const attachRecallParametersRuntime = ({
   hub,
   load = () => import('./recallParametersRuntime'),
   queries,
+  reveal,
   t,
 }: {
-  commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
+  commands: Pick<WorkbenchCommands, 'generation' | 'notifications' | 'widgets'>;
   getSessionUserId?: () => string | null;
   hub: Pick<SocketHub, 'on'>;
   load?: () => Promise<RecallParametersRuntimeModule>;
   queries: Pick<WorkbenchQueries, 'getProject' | 'getSnapshot'>;
+  reveal: RecallRevealContext;
   t: TFunction;
 }): RecallRuntime =>
   attachLazyRecallRuntime({
     area: 'recall-parameters',
     commands,
     create: (module, replay) =>
-      module.createRecallParametersRuntime({ commands, getSessionUserId, hub, queries, replay, t }),
+      module.createRecallParametersRuntime({ commands, getSessionUserId, hub, queries, replay, reveal, t }),
     eventName: 'recall_parameters_updated',
     hub,
     load,
@@ -118,23 +120,23 @@ export const attachVideoRecallRuntime = ({
   getSessionUserId,
   hub,
   load = () => import('./videoRecallRuntime'),
-  openVideoWidget,
   queries,
+  reveal,
   t,
 }: {
   commands: Pick<WorkbenchCommands, 'notifications' | 'widgets'>;
   getSessionUserId?: () => string | null;
   hub: Pick<SocketHub, 'on'>;
   load?: () => Promise<VideoRecallRuntimeModule>;
-  openVideoWidget: () => void;
   queries: Pick<WorkbenchQueries, 'getProject' | 'getSnapshot'>;
+  reveal: RecallRevealContext;
   t: TFunction;
 }): RecallRuntime =>
   attachLazyRecallRuntime({
     area: 'video-recall',
     commands,
     create: (module, replay) =>
-      module.createVideoRecallRuntime({ commands, getSessionUserId, hub, openVideoWidget, queries, replay, t }),
+      module.createVideoRecallRuntime({ commands, getSessionUserId, hub, queries, replay, reveal, t }),
     eventName: 'video_recall_requested',
     hub,
     load,

@@ -4,17 +4,16 @@ import type { SocketHub } from '@platform/transport/socketHub';
 import type { WorkbenchCommands, WorkbenchQueries } from '@workbench/workbenchStore';
 import type { TFunction } from 'i18next';
 
-import { isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 
 import type { PlaceableVideo } from './index';
-import type { PendingRecallEvent, RecallRuntime } from './recallEventRuntime';
+import type { PendingRecallEvent, RecallRevealContext, RecallRuntime } from './recallEventRuntime';
 
 // Through the package entry, not the modules themselves: the gallery's actions share these modules, and importing
 // them from this lazy runtime directly would split them out of the image-actions chunk into one more request on
 // every editor route.
 import { appendReferenceVideo, applyVideoRecallMetadata, placeInitialVideo } from './index';
-import { createRecallEventRuntime } from './recallEventRuntime';
+import { bringRecallWidgetToFront, createRecallEventRuntime } from './recallEventRuntime';
 
 /** The `video` of a `video_recall_requested` event: a gallery video, as the backend describes it. */
 interface VideoRecallEventVideo {
@@ -89,38 +88,20 @@ export const createVideoRecallRuntime = ({
   commands,
   getSessionUserId,
   hub,
-  openVideoWidget,
   queries,
   replay,
+  reveal,
   t,
 }: {
   commands: Pick<WorkbenchCommands, 'notifications' | 'widgets'>;
   getSessionUserId?: () => string | null;
   hub: Pick<SocketHub, 'on'>;
-  openVideoWidget: () => void;
   queries: Pick<WorkbenchQueries, 'getProject' | 'getSnapshot'>;
   replay?: readonly PendingRecallEvent[];
+  reveal: RecallRevealContext;
   /** Resolves against the current language at call time; captured once, at attach. */
   t: TFunction;
 }): RecallRuntime => {
-  // An external event arrives unprompted, so it only brings the Video widget into a layout that lacks it. Where the
-  // widget already sits (floating, or a tab of any region), revealing it would dock a floating window or switch the
-  // tab under whatever the user is doing; the notification reports the change instead.
-  const shouldRevealVideoWidget = (projectId: string, owner: AccountScope) => {
-    const project = queries.getSnapshot().activeProject;
-
-    if (!isAccountScopeCurrent(owner) || project.id !== projectId) {
-      return false;
-    }
-
-    const isVideo = (instanceId: string) => project.widgetInstances[instanceId]?.typeId === 'video';
-
-    return !(
-      Object.keys(project.floatingWidgets ?? {}).some(isVideo) ||
-      Object.values(project.widgetRegions).some((region) => region.instanceIds.some(isVideo))
-    );
-  };
-
   const apply = async (
     event: VideoRecallRequestedEvent,
     { models, owner, projectId }: { models: ModelConfig[]; owner: AccountScope; projectId: string }
@@ -197,8 +178,8 @@ export const createVideoRecallRuntime = ({
     }
 
     // The value patch itself routes the project's invocation to Video, where the user lets edits route it.
-    if (applied && shouldRevealVideoWidget(projectId, owner)) {
-      openVideoWidget();
+    if (applied) {
+      bringRecallWidgetToFront({ commands, owner, projectId, queries, reveal, typeId: 'video' });
     }
   };
 
