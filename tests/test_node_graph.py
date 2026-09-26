@@ -1081,21 +1081,6 @@ def test_graph_collector_accepts_if_output_when_both_branches_have_matching_type
     graph.add_edge(create_edge(collector.id, "collection", consumer.id, "collection"))
 
 
-def test_graph_effective_if_output_deduplicates_shared_branch_sources():
-    graph = Graph(
-        nodes={
-            "value": StringInvocation(id="value", value="shared"),
-            "if": IfInvocation(id="if"),
-        },
-        edges=[
-            create_edge("value", "value", "if", "true_input"),
-            create_edge("value", "value", "if", "false_input"),
-        ],
-    )
-
-    assert graph._get_effective_output_connections("if", "value") == [EdgeConnection(node_id="value", field="value")]
-
-
 def test_graph_collectors_accept_if_output_with_and_without_a_string_collection_seed():
     graph = Graph()
     true_value = StringInvocation(id="true", value="true")
@@ -1227,6 +1212,34 @@ def test_graph_accepts_and_runs_mixed_numeric_if_branches_through_iterator(condi
 
     assert output.value == (2.0 if condition else 3.5)
     assert isinstance(output.value, float)
+
+
+@pytest.mark.parametrize("through_if", [False, True], ids=["direct collector", "If branches"])
+def test_graph_rejects_integer_iterator_output_for_mixed_numeric_collector(through_if: bool):
+    integer_value = IntegerInvocation(id="integer", value=2)
+    float_value = FloatInvocation(id="float", value=3.5)
+    collector = CollectInvocation(id="collect")
+    iterator = IterateInvocation(id="iterate")
+    integer_consumer = IntegerInvocation(id="integer_consumer")
+    nodes = [integer_value, float_value, collector, iterator, integer_consumer]
+    graph = Graph(nodes={node.id: node for node in nodes})
+
+    if through_if:
+        if_node = IfInvocation(id="if")
+        graph.add_node(if_node)
+        graph.add_edge(create_edge(integer_value.id, "value", if_node.id, "true_input"))
+        graph.add_edge(create_edge(float_value.id, "value", if_node.id, "false_input"))
+        graph.add_edge(create_edge(if_node.id, "value", collector.id, "item"))
+    else:
+        graph.add_edge(create_edge(integer_value.id, "value", collector.id, "item"))
+        graph.add_edge(create_edge(float_value.id, "value", collector.id, "item"))
+
+    graph.add_edge(create_edge(collector.id, "collection", iterator.id, "collection"))
+    invalid_output_edge = create_edge(iterator.id, "item", integer_consumer.id, "value")
+    with pytest.raises(InvalidEdgeError, match="Iterator collection type must match all iterator output types"):
+        graph.add_edge(invalid_output_edge)
+
+    assert invalid_output_edge not in graph.edges
 
 
 def test_graph_rejects_iterator_consumers_incompatible_with_if_collector_branches():

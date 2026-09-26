@@ -2044,16 +2044,14 @@ class Graph(BaseModel):
 
     def _get_collector_input_root_type(self, node_id: str) -> Any | None:
         input_types = self._resolve_collector_input_types(node_id)
-        non_any_input_types = {t for t in input_types if t != Any}
-        if len(non_any_input_types) == 0 and Any in input_types:
+        has_multiple_root_types, input_root_type = self._get_collector_input_root_type_from_resolved_types(input_types)
+        if has_multiple_root_types:
             return Any
-        if len(non_any_input_types) == 0:
-            return None
-
-        root_types = self._get_type_tree_root_types(non_any_input_types)
-        if len(root_types) != 1:
+        if input_root_type is not None:
+            return input_root_type
+        if Any in input_types:
             return Any
-        return root_types[0]
+        return None
 
     def _get_collector_connections(
         self,
