@@ -13,7 +13,6 @@ import {
   Icon,
   Image,
   Input,
-  NumberInput,
   SimpleGrid,
   Stack,
   Switch,
@@ -63,8 +62,10 @@ import { useWorkflowProjectSelector, useWorkflowUi } from '@features/workflow/ui
 import {
   getResolvedWorkflowEdges,
   isLoraFieldCollectionEntry,
+  isLoraFieldWeightValid,
   isWorkflowCollectionItemValid,
   isWorkflowGeneratorFieldTypeName,
+  LORA_FIELD_WEIGHT_RANGE,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
 import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
@@ -186,8 +187,11 @@ const useFocusedDraft = () => {
   return [draft, setDraft, clearDraft] as const;
 };
 
-/** A row of a list names itself by position; a scalar field is named by its title. */
-type ScalarInputProps = WorkflowFieldInputProps & { ariaLabel?: string };
+/**
+ * A row of a list names itself by position; a scalar field is named by its title. `step` is the arrow-key
+ * increment when the template declares no `multipleOf`.
+ */
+type ScalarInputProps = WorkflowFieldInputProps & { ariaLabel?: string; step?: number };
 
 const StringInput = ({ ariaLabel, id, invalid, onChange, template, value }: ScalarInputProps) => {
   const [draft, setDraft, clearDraft] = useFocusedDraft();
@@ -238,12 +242,11 @@ const StringInput = ({ ariaLabel, id, invalid, onChange, template, value }: Scal
 /** A double-click anywhere in the box selects the whole value, not just the word under the pointer. */
 const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTarget.select();
 
-/** Chromium steps a focused number input on wheel and swallows the scroll; unfocused, the panel scrolls instead. */
-const blurOnWheel = (event: WheelEvent<HTMLInputElement>) => event.currentTarget.blur();
-
-const NumericInput = ({ ariaLabel, id, invalid, onChange, template, value }: ScalarInputProps) => {
+const NumericInput = ({ ariaLabel, id, invalid, onChange, step, template, value }: ScalarInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
   const [draft, setDraft, clearDraft] = useFocusedDraft();
+  // Set while a wheel event passes through: the blur it causes must not end the draft.
+  const wheelRefocus = useRef(false);
   // Chromium keeps an unparseable partial entry (`-`, `1e`) on screen but reports it as empty, so the empty commit
   // alone cannot tell the field apart from a cleared one.
   const [hasBadInput, setHasBadInput] = useState(false);
@@ -265,8 +268,38 @@ const NumericInput = ({ ariaLabel, id, invalid, onChange, template, value }: Sca
   );
   const onBlur = useCallback(
     (event: FocusEvent<HTMLInputElement>) => {
+      if (wheelRefocus.current) {
+        return;
+      }
+
       setHasBadInput(event.currentTarget.validity.badInput);
       clearDraft();
+    },
+    [clearDraft]
+  );
+  // Chromium steps a focused number input on wheel and swallows the scroll. Dropping focus for the event lets the
+  // panel scroll instead; focus returns, with the draft and caret, once the scroll has been dispatched.
+  const onWheel = useCallback(
+    (event: WheelEvent<HTMLInputElement>) => {
+      const input = event.currentTarget;
+
+      if (document.activeElement !== input || wheelRefocus.current) {
+        return;
+      }
+
+      wheelRefocus.current = true;
+      input.blur();
+      requestAnimationFrame(() => {
+        wheelRefocus.current = false;
+
+        if (input.isConnected && document.activeElement === document.body) {
+          input.focus({ preventScroll: true });
+        } else {
+          // Focus went elsewhere within the frame (momentum wheel plus a click): finish the blur that was skipped.
+          setHasBadInput(input.validity.badInput);
+          clearDraft();
+        }
+      });
     },
     [clearDraft]
   );
@@ -285,7 +318,8 @@ const NumericInput = ({ ariaLabel, id, invalid, onChange, template, value }: Sca
       max={max !== undefined ? String(max) : undefined}
       min={min !== undefined ? String(min) : undefined}
       size="xs"
-      step={multipleOf !== undefined ? String(multipleOf) : isInteger ? '1' : 'any'}
+      fontVariantNumeric="tabular-nums"
+      step={multipleOf !== undefined ? String(multipleOf) : step !== undefined ? String(step) : isInteger ? '1' : 'any'}
       type="number"
       value={text}
       w="full"
@@ -293,7 +327,7 @@ const NumericInput = ({ ariaLabel, id, invalid, onChange, template, value }: Sca
       onBlur={onBlur}
       onChange={onInputChange}
       onDoubleClick={selectInputText}
-      onWheel={blurOnWheel}
+      onWheel={onWheel}
     />
   );
 };
@@ -1427,7 +1461,7 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
     [commit, entries]
   );
   const onWeightChange = useCallback(
-    (index: number, weight: number) =>
+    (index: number, weight: number | null) =>
       commit(
         entries.map((entry, entryIndex) =>
           entryIndex === index && isLoraFieldCollectionEntry(entry) ? { ...entry, weight } : entry
@@ -1470,6 +1504,31 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
   );
 };
 
+/** The weight column edits a bounded float; the range is the same one the Generate LoRA controls use. */
+const LORA_WEIGHT_TEMPLATE: FieldInputTemplate = {
+  default: undefined,
+  description: '',
+  exclusiveMaximum: null,
+  exclusiveMinimum: null,
+  fieldKind: 'input',
+  input: 'direct',
+  maximum: LORA_FIELD_WEIGHT_RANGE.max,
+  minimum: LORA_FIELD_WEIGHT_RANGE.min,
+  multipleOf: null,
+  name: 'weight',
+  options: null,
+  required: true,
+  title: 'Weight',
+  type: { batch: false, cardinality: 'SINGLE', name: 'FloatField' },
+  uiChoiceLabels: null,
+  uiComponent: null,
+  uiHidden: false,
+  uiModelBase: null,
+  uiModelFormat: null,
+  uiModelType: null,
+  uiOrder: null,
+};
+
 const LoRACollectionRow = ({
   entry,
   id,
@@ -1481,28 +1540,16 @@ const LoRACollectionRow = ({
   id?: string;
   index: number;
   onRemove: (index: number) => void;
-  onWeightChange: (index: number, weight: number) => void;
+  onWeightChange: (index: number, weight: number | null) => void;
 }) => {
   const label = entry ? entry.lora.name : 'Unreadable entry';
-  // Keep raw weight drafts through typing so trailing decimals survive numeric commits; blur returns to the
-  // clamped committed value.
-  const [draft, setDraft] = useState<string | null>(null);
   const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
+  // The shared numeric control commits as typed; a cleared or out-of-range weight stays on screen and blocks
+  // invoking through the field's own reason instead of being clamped.
   const onValueChange = useCallback(
-    ({ value: valueAsText, valueAsNumber }: NumberInput.ValueChangeDetails) => {
-      setDraft(valueAsText);
-
-      if (Number.isFinite(valueAsNumber)) {
-        onWeightChange(index, valueAsNumber);
-      }
-    },
+    (weight: unknown) => onWeightChange(index, typeof weight === 'number' ? weight : null),
     [index, onWeightChange]
   );
-  const onFocusChange = useCallback(({ focused }: NumberInput.FocusChangeDetails) => {
-    if (!focused) {
-      setDraft(null);
-    }
-  }, []);
 
   return (
     <HStack gap="1" minW="0" w="full">
@@ -1510,28 +1557,17 @@ const LoRACollectionRow = ({
         <MiddleTruncate color={entry ? undefined : 'fg.error'} flex="1" fontSize="2xs" minW="0" text={label} />
       </Tooltip>
       {entry ? (
-        <NumberInput.Root
-          className="nodrag"
-          // Stated rather than left to the default: `min`/`max` are otherwise advisory here, and a
-          // mistyped 999 would run — the backend takes an unbounded float and nothing downstream
-          // rejects it.
-          clampValueOnBlur
-          flexShrink="0"
-          max={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMax}
-          min={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMin}
-          size="xs"
-          step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
-          value={draft ?? String(entry.weight)}
-          w="16"
-          onFocusChange={onFocusChange}
-          onValueChange={onValueChange}
-        >
-          <NumberInput.Input
-            aria-label={`${label} weight`}
-            fontVariantNumeric="tabular-nums"
-            id={id ? `${id}-lora-${index}-weight` : undefined}
+        <Box flexShrink="0" w="16">
+          <NumericInput
+            ariaLabel={`${label} weight`}
+            id={id ? `${id}-lora-${index}` : undefined}
+            invalid={!isLoraFieldWeightValid(entry.weight)}
+            step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
+            template={LORA_WEIGHT_TEMPLATE}
+            value={entry.weight ?? undefined}
+            onChange={onValueChange}
           />
-        </NumberInput.Root>
+        </Box>
       ) : null}
       <IconButton
         aria-label={`Remove ${label}`}

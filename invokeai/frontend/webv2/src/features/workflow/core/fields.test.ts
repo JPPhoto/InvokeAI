@@ -1,3 +1,4 @@
+import { DEFAULT_LORA_WEIGHT_CONFIG } from '@features/generation/settings';
 import { describe, expect, it } from 'vitest';
 
 import type { FieldInputTemplate, FieldType } from './types';
@@ -8,12 +9,14 @@ import {
   getWorkflowFieldInvalidReason,
   isDirectInputField,
   isLoraFieldCollectionEntry,
+  isLoraFieldWeightValid,
   isModelFieldType,
   isWorkflowCollectionItemValid,
   isWorkflowFieldValueValid,
   toLoraFieldCollectionList,
   getRandomWorkflowFieldValue,
   isShuffleableField,
+  LORA_FIELD_WEIGHT_RANGE,
 } from './fields';
 
 const single = (name: string): FieldType => ({ batch: false, cardinality: 'SINGLE', name });
@@ -266,6 +269,38 @@ describe('workflow field validation', () => {
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: loras, value: [] })).toBe(null);
   });
 
+  it('keeps a cleared or out-of-range LoRA weight as a readable entry that names its own reason', () => {
+    const loras = input({
+      required: false,
+      type: { batch: false, cardinality: 'SINGLE_OR_COLLECTION', name: 'LoRAField' },
+    });
+    const reasonFor = (value: unknown) => getWorkflowFieldInvalidReason({ isConnected: false, template: loras, value });
+
+    // The range is restated from the Generate LoRA config rather than imported; keep the two together.
+    expect(LORA_FIELD_WEIGHT_RANGE).toEqual({
+      max: DEFAULT_LORA_WEIGHT_CONFIG.numberInputMax,
+      min: DEFAULT_LORA_WEIGHT_CONFIG.numberInputMin,
+    });
+    expect(isLoraFieldWeightValid(LORA_FIELD_WEIGHT_RANGE.max)).toBe(true);
+    expect(isLoraFieldWeightValid(LORA_FIELD_WEIGHT_RANGE.min)).toBe(true);
+    expect(isLoraFieldWeightValid(LORA_FIELD_WEIGHT_RANGE.max + 0.01)).toBe(false);
+    expect(isLoraFieldWeightValid(null)).toBe(false);
+
+    // A cleared weight keeps its identity (the row still renders) but cannot run.
+    expect(isLoraFieldCollectionEntry({ ...LORA_ENTRY, weight: null })).toBe(true);
+    expect(isWorkflowFieldValueValid(loras, [LORA_ENTRY, { ...LORA_ENTRY, weight: null }])).toBe(false);
+    expect(reasonFor([LORA_ENTRY, { ...LORA_ENTRY, weight: null }])).toBe('Item 2 has no weight.');
+    expect(reasonFor([{ ...LORA_ENTRY, weight: 999 }])).toBe('Item 1 needs a weight from -10 to 10.');
+    expect(reasonFor({ ...LORA_ENTRY, weight: -10.5 })).toBe('Item 1 needs a weight from -10 to 10.');
+    expect(reasonFor([LORA_ENTRY, { lora: { key: 'ghost' }, weight: 1 }])).toBe('Item 2 is not a readable LoRA.');
+    expect(
+      reasonFor([
+        { ...LORA_ENTRY, weight: -10 },
+        { ...LORA_ENTRY, weight: 10 },
+      ])
+    ).toBeNull();
+  });
+
   it('rejects a LoRA identifier missing the fields the backend requires, rather than enqueuing a 422', () => {
     const loras = input({
       required: false,
@@ -276,7 +311,7 @@ describe('workflow field validation', () => {
     expect(isWorkflowFieldValueValid(loras, [{ lora: { key: 'lora-key' }, weight: 0.75 }])).toBe(false);
     expect(isWorkflowFieldValueValid(loras, [{ ...LORA_ENTRY, lora: { ...LORA_ENTRY.lora, hash: '' } }])).toBe(false);
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: loras, value: [{ weight: 1 }] })).toBe(
-      'Invalid value.'
+      'Item 1 is not a readable LoRA.'
     );
   });
 

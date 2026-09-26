@@ -147,11 +147,23 @@ const hasNonEmptyStringProp = (value: unknown, prop: string): boolean =>
 export const getFieldRecordId = (value: unknown, prop: string): string | null =>
   hasNonEmptyStringProp(value, prop) ? ((value as Record<string, string>)[prop] as string) : null;
 
-/** A LoRA model identifier paired with its weight — one entry of a LoRA collection field. */
+/** A LoRA model identifier paired with its weight — one entry of a LoRA collection field. `null` is a cleared weight. */
 export interface LoraFieldCollectionEntry {
   lora: { base: string; hash: string; key: string; name: string; type: string };
-  weight: number;
+  weight: number | null;
 }
+
+/**
+ * The Generate LoRA weight bounds, restated: `@features/generation/settings` is side-effectful and would pull the
+ * Generate settings core into the workflow boot graph. A core test pins the two together.
+ */
+export const LORA_FIELD_WEIGHT_RANGE = { max: 10, min: -10 } as const;
+
+export const isLoraFieldWeightValid = (weight: unknown): weight is number =>
+  typeof weight === 'number' &&
+  Number.isFinite(weight) &&
+  weight >= LORA_FIELD_WEIGHT_RANGE.min &&
+  weight <= LORA_FIELD_WEIGHT_RANGE.max;
 
 /** Require complete backend model identifiers; key-only entries cannot render meaningfully or enqueue successfully. */
 export const isLoraFieldCollectionEntry = (value: unknown): value is LoraFieldCollectionEntry => {
@@ -163,9 +175,26 @@ export const isLoraFieldCollectionEntry = (value: unknown): value is LoraFieldCo
 
   return (
     ['base', 'hash', 'key', 'name', 'type'].every((prop) => hasNonEmptyStringProp(entry.lora, prop)) &&
-    typeof entry.weight === 'number' &&
-    Number.isFinite(entry.weight)
+    (entry.weight === null || (typeof entry.weight === 'number' && Number.isFinite(entry.weight)))
   );
+};
+
+const getLoraCollectionInvalidReason = (items: readonly unknown[]): string | null => {
+  for (const [index, item] of items.entries()) {
+    if (!isLoraFieldCollectionEntry(item)) {
+      return `Item ${index + 1} is not a readable LoRA.`;
+    }
+
+    if (item.weight === null) {
+      return `Item ${index + 1} has no weight.`;
+    }
+
+    if (!isLoraFieldWeightValid(item.weight)) {
+      return `Item ${index + 1} needs a weight from ${LORA_FIELD_WEIGHT_RANGE.min} to ${LORA_FIELD_WEIGHT_RANGE.max}.`;
+    }
+  }
+
+  return null;
 };
 
 /**
@@ -333,7 +362,10 @@ export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: u
     case 'LoRAField':
       // An empty list is a legitimate value: a collection loader with no LoRAs passes its
       // models through untouched.
-      return Array.isArray(value) ? value.every(isLoraFieldCollectionEntry) : isLoraFieldCollectionEntry(value);
+      return (
+        (Array.isArray(value) || isLoraFieldCollectionEntry(value)) &&
+        getLoraCollectionInvalidReason(toLoraFieldCollectionList(value)) === null
+      );
     case 'SchedulerField':
       return isNonEmptyString(value);
     case 'StylePresetField':
@@ -387,6 +419,10 @@ export const getWorkflowFieldInvalidReason = ({
   // An editable list reports which count or entry rule it breaks; the generic reasons cannot say.
   if (template.type.cardinality === 'COLLECTION' && Array.isArray(value) && isDirectInputField(template)) {
     return getCollectionInvalidReason(template, value);
+  }
+
+  if (template.type.name === 'LoRAField' && isDirectInputField(template) && !isEmptyOptionalValue(value)) {
+    return getLoraCollectionInvalidReason(toLoraFieldCollectionList(value));
   }
 
   if (!template.required) {

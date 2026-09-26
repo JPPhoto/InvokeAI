@@ -9,9 +9,15 @@ import { system } from '@theme/system';
 import { act, cloneElement, startTransition, useCallback, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import { server, userEvent } from 'vitest/browser';
 
 import { WorkflowFieldInput, type WorkflowFieldInputProps } from './WorkflowFieldInput';
+
+declare module 'vitest/browser' {
+  interface BrowserCommands {
+    imeCompose: (steps: readonly { kind: 'commit' | 'compose'; text: string }[]) => Promise<void>;
+  }
+}
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -254,10 +260,7 @@ const renderField = async (
   });
 };
 
-/**
- * Use real keystrokes because the number-input state machine ignores direct DOM writes and the regression occurs
- * between inputs.
- */
+/** Real keystrokes: the weight regressions live between inputs, where a direct DOM write never goes. */
 const typeWeight = async (input: HTMLInputElement, keys: string) => {
   await act(async () => {
     await userEvent.click(input);
@@ -950,7 +953,9 @@ describe('WorkflowFieldInput LoRA collection', () => {
     await typeWeight(weight, '0');
     await pressKey('.');
 
-    expect(weight.value).toBe('0.');
+    // A number input reports the trailing `.` as absent; the next digit landing after it is the proof.
+    expect(weight.value).toBe('0');
+    expect(onChange).toHaveBeenLastCalledWith([loraEntry({ weight: 0 })]);
 
     await pressKey('5');
 
@@ -958,9 +963,14 @@ describe('WorkflowFieldInput LoRA collection', () => {
     expect(onChange).toHaveBeenLastCalledWith([loraEntry({ weight: 0.5 })]);
     // Nothing on the way there was ever an order of magnitude out.
     expect(onChange.mock.calls.every(([value]) => (value as { weight: number }[])[0]!.weight <= 0.5)).toBe(true);
+
+    // The arrow keys step by the LoRA coarse step, not the number input's default of 1.
+    await pressKey('{ArrowUp}');
+    expect(weight.value).toBe('0.55');
+    expect(onChange).toHaveBeenLastCalledWith([loraEntry({ weight: 0.55 })]);
   });
 
-  it('clamps a typed weight to the configured range on blur', async () => {
+  it('keeps an out-of-range or cleared weight on screen and invalid instead of clamping or restoring it', async () => {
     const onChange = vi.fn();
 
     await renderStatefulLoras([loraEntry()], onChange);
@@ -968,11 +978,25 @@ describe('WorkflowFieldInput LoRA collection', () => {
     const weight = host.querySelector<HTMLInputElement>('input')!;
 
     await typeWeight(weight, '999');
+    expect(onChange).toHaveBeenLastCalledWith([loraEntry({ weight: 999 })]);
+    expect(weight.getAttribute('aria-invalid')).toBe('true');
     await blurWeight(weight);
+    expect(weight.value).toBe('999');
+    expect(weight.getAttribute('aria-invalid')).toBe('true');
 
-    await vi.waitFor(() => {
-      expect(onChange).toHaveBeenLastCalledWith([loraEntry({ weight: 10 })]);
-    });
+    await typeWeight(weight, '2');
+    expect(onChange).toHaveBeenLastCalledWith([loraEntry({ weight: 2 })]);
+    expect(weight.getAttribute('aria-invalid')).toBeNull();
+
+    // Clearing keeps the row (and its input) and reports through the field, not by snapping back to 2.
+    await typeWeight(weight, '{Backspace}');
+    expect(onChange).toHaveBeenLastCalledWith([loraEntry({ weight: null })]);
+    expect(weight.value).toBe('');
+    expect(weight.getAttribute('aria-invalid')).toBe('true');
+    await blurWeight(weight);
+    expect(host.querySelector<HTMLInputElement>('input')).toBe(weight);
+    expect(weight.value).toBe('');
+    expect(weight.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('keeps an unreadable entry in the list and lets the user remove it', async () => {
@@ -1353,6 +1377,43 @@ describe('WorkflowFieldInput text and number entry', () => {
       expect(onCommit).toHaveBeenLastCalledWith('world, again.  ');
     });
 
+    it('keeps a composed entry intact while each update echoes back, in the input and the textarea', async () => {
+      const TEXTAREA = fullTemplate('StringField', { uiComponent: 'textarea' });
+
+      for (const [template, echo] of [
+        [TEXT, 'sync'],
+        [TEXT, 'deferred'],
+        [TEXTAREA, 'deferred'],
+      ] as const) {
+        const { input, onCommit } = await renderStateful(template, 'hello world', echo);
+
+        await keys('{Home}{ArrowRight}{ArrowRight}');
+        // Kana-style entry: every update replaces the candidate text; the commit inserts the converted form.
+        await act(async () => {
+          await server.commands.imeCompose([
+            { kind: 'compose', text: 'n' },
+            { kind: 'compose', text: 'に' },
+            { kind: 'compose', text: 'にh' },
+            { kind: 'compose', text: 'にほ' },
+            { kind: 'compose', text: 'にほん' },
+          ]);
+        });
+        expect(input.value).toBe('heにほんllo world');
+        expect(caret(input)).toEqual([5, 5]);
+
+        await act(async () => {
+          await server.commands.imeCompose([{ kind: 'commit', text: '日本' }]);
+        });
+        expect(input.value).toBe('he日本llo world');
+        expect(caret(input)).toEqual([4, 4]);
+        expect(onCommit).toHaveBeenLastCalledWith('he日本llo world');
+
+        await keys('!');
+        expect(input.value).toBe('he日本!llo world');
+        expect(onCommit).toHaveBeenLastCalledWith('he日本!llo world');
+      }
+    });
+
     it('keeps newlines and cross-line replacements in a textarea', async () => {
       const { input, onCommit } = await renderStateful(
         fullTemplate('StringField', { uiComponent: 'textarea' }),
@@ -1547,13 +1608,20 @@ describe('WorkflowFieldInput text and number entry', () => {
       expect(stepped.onCommit).toHaveBeenLastCalledWith(0.25);
       expect(document.activeElement).toBe(stepped.input);
 
-      // Chromium would step the focused value on wheel; the field gives up focus so the panel scrolls instead.
+      // Chromium would step the focused value on wheel; the field lets the event through unfocused, then takes
+      // focus back with the draft intact.
+      await keys('{Control>}a{/Control}0.');
+      expect(stepped.onCommit).toHaveBeenLastCalledWith(0);
       await act(async () => {
         await userEvent.wheel(stepped.input, { delta: { y: 100 } });
       });
-      expect(stepped.input.value).toBe('0.25');
-      expect(stepped.onCommit).toHaveBeenLastCalledWith(0.25);
-      expect(document.activeElement).not.toBe(stepped.input);
+      await vi.waitFor(() => {
+        expect(document.activeElement).toBe(stepped.input);
+      });
+      expect(stepped.onCommit).toHaveBeenLastCalledWith(0);
+      await keys('5');
+      expect(stepped.input.value).toBe('0.5');
+      expect(stepped.onCommit).toHaveBeenLastCalledWith(0.5);
 
       const integer = await renderStateful(INTEGER, 3);
 
