@@ -428,6 +428,60 @@ VIDEO_RECALL_EXAMPLES: dict[str, Example] = {
             ],
         },
     ),
+    "every_field": Example(
+        summary="Every field (a reference, not a request to send as-is)",
+        description=(
+            "Every accepted field with a placeholder value. Delete the ones you do not mean to set: media fields "
+            "override one another (conditioning video, then references, then source video, then frames), so as-is "
+            "only the conditioning video would apply, and the placeholder names would be skipped as not found."
+        ),
+        value={
+            "positive_prompt": "a heron takes flight over a misty lake",
+            "negative_prompt": "blurry, low quality",
+            "seed": 1234,
+            "num_frames": 81,
+            "fps": 16,
+            "width": 832,
+            "height": 480,
+            "steps": 30,
+            "cfg_scale": 5.0,
+            "wan_guidance_scale_low_noise": 4.0,
+            "ltx2_audio_cfg_scale": 7.0,
+            "ltx2_stg_scale": 1.0,
+            "ltx2_modality_scale": 3.0,
+            "ltx2_context_frames": 49,
+            "minimax_h3_hybrid_start_block": 25,
+            "model": "<video model name or key>",
+            "vae": "<Wan VAE name or key>",
+            "wan_t5_encoder_model": "<Wan UMT5 encoder name or key>",
+            "wan_transformer_low_noise": "<Wan low-noise expert name or key>",
+            "wan_component_source": "<Wan Diffusers install name or key>",
+            "minimax_h3_transformer_model": "<MiniMax H3 transformer name or key>",
+            "minimax_h3_component_source": "<MiniMax H3 Diffusers install name or key>",
+            "minimax_h3_text_encoder_model": "<MiniMax H3 Qwen3-VL encoder name or key>",
+            "minimax_h3_hybrid_base_model": "<MiniMax H3 FL2VA transformer name or key>",
+            "ltx2_component_source": "<LTX-2 components name or key>",
+            "ltx2_text_encoder_model": "<LTX-2 Gemma-4 encoder name or key>",
+            "loras": [{"model_name": "<LoRA name or key>", "weight": 1.0}],
+            "first_frame_image": {"image_name": "<gallery image name>.png"},
+            "last_frame_image": {"image_name": "<gallery image name>.png"},
+            "source_video": {"video_name": "<gallery video name>.mp4"},
+            "source_video_start_frame": 0,
+            "source_video_end_frame": 80,
+            "ltx2_conditioning_video": {"video_name": "<gallery video name>.mp4"},
+            "ltx2_conditioning_role": "audio",
+            "minimax_h3_references": [
+                {"kind": "image", "image_name": "<gallery image name>.png", "detail": "max"},
+                {
+                    "kind": "video",
+                    "video_name": "<gallery video name>.mp4",
+                    "conditioning": "video_audio",
+                    "start_frame": 0,
+                    "end_frame": 48,
+                },
+            ],
+        },
+    ),
 }
 
 
