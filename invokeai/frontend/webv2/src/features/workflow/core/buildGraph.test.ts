@@ -1029,6 +1029,15 @@ describe('batch nodes', () => {
       canInvoke: true,
       reasons: [],
     });
+
+    // A cleared or off-rule setting is readable, so the field names it and the planner reports nothing more.
+    const cleared = build([], { count: null, start: 1, step: 1, type: 'float_generator_arithmetic_sequence' });
+
+    expect(getProjectGraphReadiness(cleared.doc, snapshot)).toEqual({
+      batch: { size: null },
+      canInvoke: false,
+      reasons: ['"float_generator" has invalid input "generator".'],
+    });
   });
 
   it("compiles the executable graph without batch or generator nodes and keeps the fed input's static value", () => {
