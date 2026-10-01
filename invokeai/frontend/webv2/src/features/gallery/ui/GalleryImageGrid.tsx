@@ -38,6 +38,7 @@ import {
   getGalleryCellSizePx,
   getGalleryColumnCount,
   getGalleryGridRowIndexForItemKey,
+  getGalleryGridWindowIndexForItemKey,
   getGalleryGridWindowRowIndexForItemKey,
   getGalleryPinnedHeightPx,
   getGalleryProgressLayout,
@@ -276,6 +277,13 @@ export const GalleryImageGrid = () => {
   const [viewportWidth, setViewportWidth] = useState(() => viewportWidthCache.get(region) ?? 0);
   const dragDepthRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const viewportAnchorRef = useRef<{
+    accountEpoch: number;
+    filterIdentity: string;
+    itemKey: string;
+    scrollTop: number;
+    top: number;
+  } | null>(null);
   const {
     imageDensityPercent,
     paginationMode,
@@ -386,6 +394,7 @@ export const GalleryImageGrid = () => {
   const estimateRowSize = useCallback(() => rowHeightPx, [rowHeightPx]);
   const getRowKey = useCallback((index: number) => `regular:${index}`, []);
   const getScrollElement = useCallback(() => viewportRef.current, []);
+  const listingIndices = listing?.itemsByIndex;
   const lastAlignedAnchorRef = useRef<string | null>(null);
   const filterIdentity = JSON.stringify(filter);
 
@@ -403,6 +412,39 @@ export const GalleryImageGrid = () => {
     tileSize: cellSizePx,
   });
   const pinnedHeight = getGalleryPinnedHeightPx(progressLayout.height, starredLayout.height);
+  const captureViewportAnchor = useEffectEvent(() => {
+    if (paginationMode !== 'infinite' || listingIndices === undefined) {
+      viewportAnchorRef.current = null;
+      return;
+    }
+
+    const viewport = viewportRef.current;
+    const viewportRect = viewport?.getBoundingClientRect();
+    const visibleAnchor =
+      viewport && viewportRect
+        ? [...viewport.querySelectorAll<HTMLElement>('[data-gallery-item-key]')]
+            .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+            .filter(({ rect }) => rect.bottom > viewportRect.top && rect.top < viewportRect.bottom)
+            .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left)
+            .find(({ element }) => {
+              const itemKey = element.dataset.galleryItemKey;
+              return itemKey !== undefined && getGalleryGridWindowIndexForItemKey(listingIndices, itemKey) >= 0;
+            })
+        : undefined;
+    const itemKey = visibleAnchor?.element.dataset.galleryItemKey;
+    const index = itemKey === undefined ? -1 : getGalleryGridWindowIndexForItemKey(listingIndices, itemKey);
+
+    viewportAnchorRef.current =
+      itemKey === undefined || index < 0 || visibleAnchor === undefined || viewport === null
+        ? null
+        : {
+            accountEpoch: accountScope.epoch,
+            filterIdentity,
+            itemKey,
+            scrollTop: viewport.scrollTop,
+            top: visibleAnchor.rect.top - (viewportRect?.top ?? 0),
+          };
+  });
   const virtualizer = useVirtualizer({
     count: rowCount,
     scrollMargin: pinnedHeight,
@@ -428,7 +470,7 @@ export const GalleryImageGrid = () => {
 
         if (lastAlignedAnchorRef.current !== anchorIdentity) {
           lastAlignedAnchorRef.current = anchorIdentity;
-          instance.scrollToIndex(Math.floor(listing.offset / columnCount));
+          instance.scrollToIndex(Math.floor((listing.virtualOffset ?? listing.offset) / columnCount));
           return;
         }
       }
@@ -448,7 +490,6 @@ export const GalleryImageGrid = () => {
   const measureVirtualizer = useEffectEvent(() => {
     virtualizer.measure();
   });
-
   // The hotkey callback reads current state when invoked; stabilizing its identity adds no value and interferes
   // with compiler memoization.
   /** Returns whether the item had somewhere to scroll to — a collapsed strip has none. */
@@ -561,7 +602,9 @@ export const GalleryImageGrid = () => {
       ) {
         lastPageFollowedRevealToken = pending.token;
         if (listing && paginationMode === 'infinite') {
-          const first = gallery.revealTargetPage * GALLERY_PAGE_SIZE;
+          const backendFirst = gallery.revealTargetPage * GALLERY_PAGE_SIZE;
+          const first =
+            listing.getDisplayIndexForBackendIndex?.(backendFirst) ?? backendFirst + (listing.leadingOverlayCount ?? 0);
           listing.loadRange(first, first + GALLERY_PAGE_SIZE - 1);
         } else {
           galleryCommands.setPage(gallery.revealTargetPage);
@@ -621,11 +664,56 @@ export const GalleryImageGrid = () => {
   );
   const rowsByIndex = useMemo(() => new Map(rows.map((row) => [row.index, row])), [rows]);
 
-  // Measure before paint after row-model changes: unchanged visible indices otherwise leave stale offsets despite
-  // new row estimates.
+  // Refresh row measurements before anchoring against the committed item positions.
   useLayoutEffect(() => {
     measureVirtualizer();
   }, [rowCount, rowHeightPx, pinnedHeight]);
+
+  // Keep the last committed visible tile at the same viewport position when new completions shift display indices.
+  useLayoutEffect(() => {
+    if (paginationMode !== 'infinite' || listingIndices === undefined) {
+      viewportAnchorRef.current = null;
+      return;
+    }
+
+    const viewport = viewportRef.current;
+    const previousAnchor = viewportAnchorRef.current;
+
+    if (
+      viewport &&
+      previousAnchor &&
+      previousAnchor.accountEpoch === accountScope.epoch &&
+      previousAnchor.filterIdentity === filterIdentity &&
+      previousAnchor.scrollTop > pinnedHeight &&
+      viewport.scrollTop > pinnedHeight
+    ) {
+      const nextIndex = getGalleryGridWindowIndexForItemKey(listingIndices, previousAnchor.itemKey);
+
+      if (nextIndex >= 0) {
+        const nextRowStart = pinnedHeight + Math.floor(nextIndex / columnCount) * rowHeightPx;
+        const correction = nextRowStart - (previousAnchor.scrollTop + previousAnchor.top);
+
+        if (Math.abs(correction) > 0.5) {
+          viewport.scrollTop += correction;
+        }
+      }
+    }
+
+    captureViewportAnchor();
+  }, [accountScope.epoch, columnCount, filterIdentity, listingIndices, paginationMode, pinnedHeight, rowHeightPx]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+
+    if (!viewport) {
+      return;
+    }
+
+    const handleScroll = () => captureViewportAnchor();
+    viewport.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => viewport.removeEventListener('scroll', handleScroll);
+  }, []);
 
   const handleDragEnter = useCallback((event: DragEvent) => {
     if (!dragEventContainsFiles(event)) {
@@ -752,7 +840,7 @@ export const GalleryImageGrid = () => {
     ]
   );
 
-  const anchoredWindowFirstItem = (listing?.offset ?? 0) + 1;
+  const anchoredWindowFirstItem = (listing?.virtualOffset ?? listing?.offset ?? 0) + 1;
 
   return (
     <Stack flex="1" gap="0" h="full" minH="0" minW="0" w="full">

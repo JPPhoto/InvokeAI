@@ -1,5 +1,6 @@
 /* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/contracts';
+import type { GeneratedImageContract } from '@features/gallery/core/types';
 import type { ImageIndexAvailability } from '@features/gallery/data/backend';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 import type { QueueProgressSession } from '@features/queue/contracts';
@@ -32,7 +33,7 @@ import { workbenchAutoScroll } from '@workbench/widgetDnd';
 import { PreviewFilmstrip } from '@workbench/widgets/preview/PreviewFilmstrip';
 import { PreviewFrame } from '@workbench/widgets/preview/PreviewFrame';
 import { createInstance } from 'i18next';
-import { act, Activity, type ReactNode } from 'react';
+import { act, Activity, useEffect, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +55,9 @@ const mocks = vi.hoisted(() => ({
   fetchNames: vi.fn(),
   fetchGalleryPage: vi.fn(),
   queryItems: [] as GalleryItem[],
+  galleryItemsByIndex: null as Map<number, GalleryItem> | null,
+  galleryTotal: null as number | null,
+  galleryLoadRange: null as GalleryListing['loadRange'] | null,
   getItemLabel: vi.fn<GalleryUiAdapter['getItemLabel']>(),
   indexAvailability: { modelName: null, state: 'disabled' } as ImageIndexAvailability,
   measure: vi.fn(),
@@ -227,6 +231,18 @@ const createItem = (kind: GalleryItem['kind'], name: string, overrides: Partial<
       } as GalleryItem)
     : ({ ...base, kind } as GalleryItem);
 };
+
+const createRecentImage = (imageName: string): GeneratedImageContract => ({
+  boardId: 'board-a',
+  createdAt: '2026-07-31T00:00:00.000Z',
+  height: 96,
+  imageName,
+  imageUrl: `/full/image/${imageName}`,
+  queuedAt: '2026-07-30T23:59:00.000Z',
+  sourceQueueItemId: `queue-${imageName}`,
+  thumbnailUrl: `/thumbnail/image/${imageName}`,
+  width: 128,
+});
 
 const previewSource: StreamingImageSource = {
   alt: 'shared',
@@ -519,23 +535,32 @@ const Harness = ({
 
 const QueryBackedGallery = ({
   anchoredWindowPage = 0,
+  paginationMode = 'infinite',
   revealTargetPage = null,
   selectedItemKeys = [],
+  recentImages = [],
 }: {
   anchoredWindowPage?: number;
+  paginationMode?: 'infinite' | 'paginated';
   revealTargetPage?: number | null;
   selectedItemKeys?: GalleryStateView['selectedItemKeys'];
+  recentImages?: GeneratedImageContract[];
 }) => {
   const data = useGalleryData({
     galleryView: 'images',
     page: anchoredWindowPage,
     projectBoardId: null,
-    recentImages: [],
+    recentImages,
     searchTerm: '',
     selectedBoardId: board.id,
-    settings: { ...DENSE_SETTINGS, paginationMode: 'infinite' },
+    settings: { ...DENSE_SETTINGS, paginationMode },
     starred: false,
   });
+  useEffect(() => {
+    mocks.galleryItemsByIndex = new Map(data.listing.itemsByIndex);
+    mocks.galleryTotal = data.listing.total;
+    mocks.galleryLoadRange = data.listing.loadRange;
+  }, [data.listing]);
   const gallery = createGallery({
     anchoredWindowPage,
     boards: data.boards,
@@ -546,7 +571,7 @@ const QueryBackedGallery = ({
     selectedBoardId: data.selectedBoardId,
     selectedItemKey: null,
     selectedItemKeys,
-    settings: { ...DENSE_SETTINGS, paginationMode: 'infinite' },
+    settings: { ...DENSE_SETTINGS, paginationMode },
   });
 
   return (
@@ -562,17 +587,23 @@ const QueryBackedGallery = ({
 
 const QueryBackedGalleryProvider = ({
   anchoredWindowPage,
+  paginationMode,
   revealTargetPage,
   selectedItemKeys,
+  recentImages,
 }: {
   anchoredWindowPage?: number;
+  paginationMode?: 'infinite' | 'paginated';
   revealTargetPage?: number | null;
   selectedItemKeys?: GalleryStateView['selectedItemKeys'];
+  recentImages?: GeneratedImageContract[];
 } = {}) => (
   <QueryClientProvider client={queryClient!}>
     <QueryBackedGallery
       anchoredWindowPage={anchoredWindowPage}
+      paginationMode={paginationMode}
       revealTargetPage={revealTargetPage}
+      recentImages={recentImages}
       selectedItemKeys={selectedItemKeys}
     />
   </QueryClientProvider>
@@ -641,6 +672,9 @@ beforeEach(() => {
   mocks.progressFrame = null;
   currentStrip = EMPTY_GALLERY_STARRED_STRIP;
   currentListing = undefined;
+  mocks.galleryItemsByIndex = null;
+  mocks.galleryTotal = null;
+  mocks.galleryLoadRange = null;
   mocks.useActualVirtualizer = false;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
@@ -660,6 +694,74 @@ afterEach(async () => {
 });
 
 describe('GalleryImageGrid mixed item cells', () => {
+  it('uses backend page coordinates for multi-selection after a local recent shifts display indices', async () => {
+    const recent = createItem('image', 'recent-prefix.png', { createdAt: '2026-07-31T00:00:00.000Z' });
+    const backend = createItem('image', 'backend-last.png', { createdAt: '2026-07-30T00:00:00.000Z' });
+    currentListing = {
+      backendTotal: 120,
+      error: null,
+      itemsByIndex: new Map([
+        [0, recent],
+        [60, backend],
+      ]),
+      leadingOverlayCount: 1,
+      loadRange: vi.fn(),
+      offset: 0,
+      retry: vi.fn(),
+      selectionPageByItemKey: new Map([
+        ['image:recent-prefix.png', 0],
+        ['image:backend-last.png', 0],
+      ]),
+      total: 121,
+      virtualOffset: 1,
+    };
+    const gallery = createGallery({
+      items: [recent, backend],
+      primarySelectedItemKey: null,
+      selectedItemKey: null,
+      selectedItemKeys: [],
+      settings: { ...DENSE_SETTINGS, paginationMode: 'infinite' },
+    });
+    await renderGallery(gallery);
+
+    await click(getButton('Select backend-last.png for preview'), { ctrlKey: true });
+
+    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(backend, null, 0);
+  });
+
+  it('keeps recent completions out of paginated page positions', async () => {
+    const recentImage = createRecentImage('recent.png');
+    const recentItem = createItem('image', recentImage.imageName, { createdAt: recentImage.createdAt });
+    const pageItems = Array.from({ length: 60 }, (_, index) => createItem('image', `page-${index}.png`));
+    mocks.queryItems = [recentItem, ...pageItems];
+    let failRefresh = false;
+    mocks.fetchGalleryPage.mockImplementation((_offset: number, items: GalleryItem[]) => {
+      if (failRefresh) {
+        throw new Error('The infinite listing refresh failed');
+      }
+
+      return { items, total: mocks.queryItems.length };
+    });
+    await interact(
+      () => root?.render(<QueryBackedGalleryProvider paginationMode="paginated" recentImages={[recentImage]} />),
+      250
+    );
+
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('recent.png');
+    expect(mocks.galleryTotal).toBe(61);
+    expect(host!.querySelectorAll('[aria-label="Select recent.png for preview"]')).toHaveLength(1);
+
+    failRefresh = true;
+    mocks.queryItems = pageItems;
+    await interact(
+      () => root?.render(<QueryBackedGalleryProvider paginationMode="infinite" recentImages={[recentImage]} />),
+      250
+    );
+
+    expect(getButton('Select recent.png for preview')).not.toBeNull();
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('recent.png');
+  });
+
   it('keeps the gallery scroll position when an image is dragged upward out of a long grid', async () => {
     const items = Array.from({ length: 60 }, (_, index) => createItem('image', `image-${index}.png`));
     await renderGallery(createGallery({ items, settings: DENSE_SETTINGS }));
@@ -820,6 +922,57 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(actionMocks.selectItem).not.toHaveBeenCalledWith(items[60]);
   });
 
+  it('does not resolve pending backend navigation with a local recent at the same display index', async () => {
+    const backendItems = Array.from({ length: 61 }, (_, index) => createItem('image', `pending-overlay-${index}.png`));
+    const recentItem = createItem('image', 'pending-overlay-recent.png');
+    const loadRange = vi.fn();
+    const backendIndexByItemKey = new Map(
+      backendItems.slice(0, 60).map((item, index) => [`image:${item.name}`, index])
+    );
+    currentListing = {
+      backendIndexByItemKey,
+      backendTotal: 120,
+      error: null,
+      getBackendIndexAtDisplayIndex: (index) => index,
+      getDisplayIndexForBackendIndex: (index) => index,
+      itemsByIndex: new Map(backendItems.slice(0, 60).map((item, index) => [index, item])),
+      loadRange,
+      offset: 0,
+      retry: vi.fn(),
+      total: 120,
+    };
+    const gallery = createGallery({
+      items: backendItems.slice(0, 60),
+      primarySelectedItemKey: 'image:pending-overlay-59.png',
+      selectedItemKey: 'image:pending-overlay-59.png',
+      selectedItemKeys: ['image:pending-overlay-59.png'],
+      settings: { ...DENSE_SETTINGS, paginationMode: 'infinite' },
+    });
+    await renderGallery(gallery);
+    await interact(() => registeredCommands.get('gallery.galleryNavRight')?.());
+    expect(loadRange).toHaveBeenCalledWith(60, 60);
+    actionMocks.selectItem.mockClear();
+
+    const shiftedItemsByIndex = new Map<number, GalleryItem>([
+      ...backendItems.slice(0, 60).map((item, index) => [index, item] as const),
+      [60, recentItem],
+      [61, backendItems[60]!],
+    ]);
+    currentListing = {
+      ...currentListing,
+      backendIndexByItemKey: new Map(backendItems.map((item, index) => [`image:${item.name}`, index])),
+      getBackendIndexAtDisplayIndex: (index) => (index === 60 ? undefined : index > 60 ? index - 1 : index),
+      getDisplayIndexForBackendIndex: (index) => (index > 59 ? index + 1 : index),
+      itemsByIndex: shiftedItemsByIndex,
+      leadingOverlayCount: 0,
+      total: 121,
+    };
+    await renderGallery({ ...gallery, items: [...backendItems.slice(0, 60), recentItem, backendItems[60]!] });
+
+    expect(actionMocks.selectItem).not.toHaveBeenCalledWith(recentItem);
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(backendItems[60]);
+  });
+
   it('steps through an unloaded absolute slot instead of skipping to the next compact item', async () => {
     const item7 = createItem('image', 'sparse-7.png');
     const item8 = createItem('image', 'sparse-8.png');
@@ -901,6 +1054,60 @@ describe('GalleryImageGrid mixed item cells', () => {
       itemsByIndex: new Map([...itemsByIndex, [60, nextPageItem]]),
     };
     await renderGallery({ ...gallery, items: [...items, nextPageItem] });
+
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(nextPageItem);
+  });
+
+  it('requests the next backend page across a terminal hydration hole after recent rows shift display indices', async () => {
+    const recentItem = createItem('image', 'recent-prefix.png');
+    const addedRecentItem = createItem('image', 'recent-prefix-added.png');
+    const items = Array.from({ length: 59 }, (_, index) => createItem('image', `shifted-hole-${index}.png`));
+    const nextPageItem = createItem('image', 'shifted-hole-60.png');
+    const loadRange = vi.fn();
+    const itemsByIndex = new Map<number, GalleryItem>([
+      [0, recentItem],
+      ...items.map((item, index) => [index + 1, item] as const),
+    ]);
+    currentListing = {
+      backendTotal: 120,
+      error: null,
+      itemsByIndex,
+      leadingOverlayCount: 1,
+      loadRange,
+      offset: 0,
+      retry: vi.fn(),
+      total: 121,
+      virtualOffset: 1,
+    };
+    const gallery = createGallery({
+      items: [recentItem, ...items],
+      primarySelectedItemKey: 'image:shifted-hole-58.png',
+      selectedItemKey: 'image:shifted-hole-58.png',
+      selectedItemKeys: ['image:shifted-hole-58.png'],
+      settings: { ...DENSE_SETTINGS, paginationMode: 'infinite' },
+    });
+    await renderGallery(gallery);
+    loadRange.mockClear();
+    actionMocks.selectItem.mockClear();
+
+    await interact(() => registeredCommands.get('gallery.galleryNavRight')?.());
+
+    expect(loadRange).toHaveBeenCalledWith(61, 61);
+    expect(actionMocks.selectItem).not.toHaveBeenCalledWith(nextPageItem);
+
+    const shiftedItemsByIndex = new Map<number, GalleryItem>([
+      [0, recentItem],
+      [1, addedRecentItem],
+      ...items.map((item, index) => [index + 2, item] as const),
+      [62, nextPageItem],
+    ]);
+    currentListing = {
+      ...currentListing,
+      itemsByIndex: shiftedItemsByIndex,
+      leadingOverlayCount: 2,
+      total: 122,
+    };
+    await renderGallery({ ...gallery, items: [recentItem, addedRecentItem, ...items, nextPageItem] });
 
     expect(actionMocks.selectItem).toHaveBeenLastCalledWith(nextPageItem);
   });
@@ -1057,6 +1264,210 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(mocks.fetchGalleryPage.mock.calls.filter(([offset]) => offset === 0).length).toBeGreaterThan(1);
     expect(host!.querySelector('[aria-label="Select queried-0.png for preview"]')).not.toBeNull();
     expect(host!.querySelectorAll('[role="listitem"]').length).toBeLessThan(80);
+  });
+
+  it('keeps a completed recent visible through failed refresh and shifts rows until the backend reconciles it', async () => {
+    const staleItems = Array.from({ length: 1200 }, (_, index) => createItem('image', `cached-${index}.png`));
+    const recentImage = createRecentImage('completed.png');
+    const recentItem = createItem('image', 'completed.png', { createdAt: recentImage.createdAt });
+    let failRefresh = false;
+    mocks.useActualVirtualizer = true;
+    mocks.queryItems = staleItems;
+    mocks.fetchGalleryPage.mockImplementation((offset: number, items: GalleryItem[]) => {
+      if (failRefresh) {
+        throw new Error('The gallery refresh failed');
+      }
+
+      return { items, total: mocks.queryItems.length };
+    });
+
+    await interact(() => root?.render(<QueryBackedGalleryProvider />), 250);
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('cached-0.png');
+    expect(mocks.galleryTotal).toBe(1200);
+    const queryKey = queryClient!
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey[0] === 'test-gallery-items')?.queryKey;
+    expect(queryKey).toBeDefined();
+
+    await interact(() => root?.render(<QueryBackedGalleryProvider recentImages={[recentImage]} />), 80);
+
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('completed.png');
+    expect(mocks.galleryItemsByIndex?.get(1)?.name).toBe('cached-0.png');
+    expect(mocks.galleryTotal).toBe(1201);
+    expect(getButton('Select completed.png for preview')).not.toBeNull();
+
+    mocks.galleryLoadRange!(61, 61);
+    await interact(() => {}, 100);
+    expect(mocks.fetchGalleryPage).toHaveBeenCalledWith(60, expect.any(Array));
+    expect(mocks.galleryItemsByIndex?.get(61)?.name).toBe('cached-60.png');
+
+    failRefresh = true;
+    await act(async () => {
+      await queryClient!.invalidateQueries({ exact: true, queryKey: queryKey! });
+    });
+    const query = queryClient!
+      .getQueryCache()
+      .getAll()
+      .find((candidate) => candidate.queryKey === queryKey);
+    expect(query?.state.error).toMatchObject({ message: 'The gallery refresh failed' });
+    expect(getButton('Select completed.png for preview')).not.toBeNull();
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('completed.png');
+    expect(mocks.galleryItemsByIndex?.get(1)?.name).toBe('cached-0.png');
+
+    mocks.queryItems = [recentItem, ...staleItems];
+    failRefresh = false;
+    await act(async () => {
+      await queryClient!.invalidateQueries({ exact: true, queryKey: queryKey! });
+    });
+
+    expect(mocks.galleryTotal).toBe(1201);
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('completed.png');
+    expect(mocks.galleryItemsByIndex?.get(1)?.name).toBe('cached-0.png');
+    expect(mocks.galleryItemsByIndex?.get(60)?.name).toBe('cached-59.png');
+    expect(mocks.galleryItemsByIndex?.get(61)?.name).toBe('cached-60.png');
+    expect(host!.querySelectorAll('[aria-label="Select completed.png for preview"]')).toHaveLength(1);
+
+    const viewport = host!.querySelector<HTMLElement>('[data-part="viewport"]')!;
+    await interact(() => {
+      viewport.scrollTop = viewport.scrollHeight * 0.75;
+      viewport.dispatchEvent(new Event('scroll', { bubbles: true }));
+    }, 300);
+    expect(mocks.fetchGalleryPage.mock.calls.some(([offset]) => offset > 600)).toBe(true);
+    expect(mocks.galleryItemsByIndex?.has(0)).toBe(false);
+
+    await interact(() => {
+      viewport.scrollTop = 0;
+      viewport.dispatchEvent(new Event('scroll', { bubbles: true }));
+    }, 300);
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('completed.png');
+    expect(host!.querySelectorAll('[aria-label="Select completed.png for preview"]')).toHaveLength(1);
+  });
+
+  it('keeps a confirmed recent visible when deletions shrink its cached listing', async () => {
+    const backendItems = Array.from({ length: 120 }, (_, index) =>
+      createItem('image', `shrink-${index}.png`, {
+        createdAt: new Date(Date.UTC(2026, 6, 30, 0, 0, 120 - index)).toISOString(),
+      })
+    );
+    const recentImage = {
+      ...createRecentImage('delayed.png'),
+      createdAt: '2026-07-30T00:01:00.500Z',
+    };
+    mocks.queryItems = backendItems;
+    mocks.fetchGalleryPage.mockImplementation((_offset: number, items: GalleryItem[]) => ({
+      items,
+      total: mocks.queryItems.length,
+    }));
+
+    await interact(() => root?.render(<QueryBackedGalleryProvider recentImages={[recentImage]} />), 250);
+    expect(mocks.galleryItemsByIndex?.get(60)?.name).toBe('delayed.png');
+
+    mocks.galleryLoadRange!(60, 61);
+    await interact(() => {}, 100);
+    expect(mocks.galleryItemsByIndex?.get(60)?.name).toBe('delayed.png');
+    expect(mocks.galleryItemsByIndex?.get(61)?.name).toBe('shrink-60.png');
+
+    const queryKey = queryClient!
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey[0] === 'test-gallery-items')?.queryKey;
+    expect(queryKey).toBeDefined();
+    mocks.queryItems = backendItems.slice(0, 10);
+    await act(async () => {
+      await queryClient!.invalidateQueries({ exact: true, queryKey: queryKey! });
+    });
+
+    expect(mocks.galleryTotal).toBe(11);
+    expect(mocks.galleryItemsByIndex?.get(10)?.name).toBe('delayed.png');
+    expect(mocks.galleryItemsByIndex?.has(60)).toBe(false);
+  });
+
+  it('keeps the deep viewport item anchored when completed images are added', async () => {
+    const staleItems = Array.from({ length: 1200 }, (_, index) => createItem('image', `anchor-${index}.png`));
+    const recentItems = Array.from({ length: 4 }, (_, index) => createItem('image', `anchor-completed-${index}.png`));
+    const itemsByIndex = new Map(staleItems.map((item, index) => [index, item]));
+    const loadRange = vi.fn();
+    mocks.useActualVirtualizer = true;
+    currentListing = {
+      backendTotal: staleItems.length,
+      error: null,
+      itemsByIndex,
+      leadingOverlayCount: 0,
+      loadRange,
+      offset: 0,
+      retry: vi.fn(),
+      total: staleItems.length,
+    };
+    const gallery = createGallery({
+      items: staleItems.slice(0, 60),
+      primarySelectedItemKey: 'image:anchor-840.png',
+      selectedItemKey: 'image:anchor-840.png',
+      selectedItemKeys: ['image:anchor-840.png'],
+      settings: { ...DENSE_SETTINGS, paginationMode: 'infinite' },
+    });
+    await renderGallery(gallery);
+    const viewport = host!.querySelector<HTMLElement>('[data-part="viewport"]')!;
+    await interact(() => {
+      viewport.scrollTop = 56_095;
+      viewport.dispatchEvent(new Event('scroll', { bubbles: true }));
+    }, 300);
+    expect(viewport.scrollTop).toBeGreaterThan(10_000);
+
+    const getVisibleAnchor = () => {
+      const viewportRect = viewport.getBoundingClientRect();
+      const indexedItemKeys = new Set([...currentListing!.itemsByIndex.values()].map((item) => `image:${item.name}`));
+      const tile = [...viewport.querySelectorAll<HTMLElement>('[data-gallery-item-key]')]
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(
+          ({ element, rect }) =>
+            rect.bottom > viewportRect.top &&
+            rect.top < viewportRect.bottom &&
+            indexedItemKeys.has(element.dataset.galleryItemKey ?? '')
+        )
+        .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left)[0];
+
+      if (!tile) {
+        throw new Error('Expected a visible gallery tile');
+      }
+
+      return { itemKey: tile.element.dataset.galleryItemKey, top: tile.rect.top - viewportRect.top };
+    };
+    const initialAnchor = getVisibleAnchor();
+    const initialItemKey = initialAnchor.itemKey;
+
+    if (!initialItemKey) {
+      throw new Error('Expected a stable visible gallery item key');
+    }
+
+    expect(initialItemKey).toMatch(/^image:anchor-/);
+
+    const getItemTop = (itemKey: string) => {
+      const currentViewport = host!.querySelector<HTMLElement>('[data-part="viewport"]')!;
+      const element = [...currentViewport.querySelectorAll<HTMLElement>('[data-gallery-item-key]')].find(
+        (candidate) => candidate.dataset.galleryItemKey === itemKey
+      );
+
+      if (!element) {
+        throw new Error(`Expected visible gallery item ${itemKey}`);
+      }
+
+      return element.getBoundingClientRect().top - currentViewport.getBoundingClientRect().top;
+    };
+
+    const shiftedItemsByIndex = new Map<number, GalleryItem>([
+      ...recentItems.map((item, index) => [index, item] as const),
+      ...staleItems.map((item, index) => [index + recentItems.length, item] as const),
+    ]);
+    currentListing = {
+      ...currentListing!,
+      itemsByIndex: shiftedItemsByIndex,
+      leadingOverlayCount: recentItems.length,
+      total: staleItems.length + recentItems.length,
+    };
+    await renderGallery({ ...gallery, items: [...recentItems, ...staleItems.slice(0, 60)] });
+    expect(currentListing.itemsByIndex.get(recentItems.length + 840)?.name).toBe('anchor-840.png');
+    expect(getItemTop(initialItemKey)).toBeCloseTo(initialAnchor.top, 0);
   });
 
   it('restores an evicted window and viewport after the Gallery Activity pauses its subscriptions', async () => {

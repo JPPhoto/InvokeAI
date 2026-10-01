@@ -4,7 +4,7 @@ import type { GalleryImage, GeneratedImageContract } from '@features/gallery/cor
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import { describe, expect, it } from 'vitest';
 
-import { indexGalleryWindowPages, mergeGalleryItemWindow } from './useGalleryData';
+import { indexGalleryWindowPages, indexGalleryWindowWithRecentOverlay, mergeGalleryItemWindow } from './useGalleryData';
 
 const createImage = (index: number, overrides: Partial<GalleryImage> = {}): GalleryImage => ({
   boardId: 'none',
@@ -72,6 +72,200 @@ describe('indexGalleryWindowPages', () => {
       [62, 'c'],
     ]);
     expect(indexedItems.has(61)).toBe(false);
+  });
+
+  it('shifts sparse backend indices without compacting rows when newest local images are prepended', () => {
+    const indexedItems = indexGalleryWindowPages(
+      [
+        {
+          offset: 0,
+          items: [createBackendItem('a', '2026-01-01'), createBackendItem('c', '2026-01-03')],
+          itemIndices: [0, 2],
+        },
+        { offset: 60, items: [createBackendItem('d', '2026-01-04')] },
+      ],
+      2
+    );
+
+    expect([...indexedItems.entries()].map(([index, item]) => [index, item.name])).toEqual([
+      [2, 'a'],
+      [4, 'c'],
+      [62, 'd'],
+    ]);
+    expect(indexedItems.has(3)).toBe(false);
+  });
+});
+
+describe('indexGalleryWindowWithRecentOverlay', () => {
+  it('prepends newest-first recents while keeping backend selection pages unshifted', () => {
+    const first = createBackendItem('first', '2026-01-01');
+    const lastOfPage = createBackendItem('last-of-page', '2026-01-02');
+    const recent = createBackendItem('recent', '2026-01-03');
+    const result = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 120,
+      orderDir: 'DESC',
+      pages: [{ offset: 0, itemIndices: [0, 59], items: [first, lastOfPage] }],
+      recentItems: [recent],
+    });
+
+    expect([...result.itemsByIndex.entries()].map(([index, item]) => [index, item.name])).toEqual([
+      [0, 'recent'],
+      [1, 'first'],
+      [60, 'last-of-page'],
+    ]);
+    expect(result.selectionPageByItemKey.get('image:last-of-page')).toBe(0);
+  });
+
+  it('places oldest-first recents after a retained prefix while its next page is unknown', () => {
+    const first = createBackendItem('first', '2026-01-01');
+    const recent = createBackendItem('recent', '2026-01-03');
+    const result = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 120,
+      orderDir: 'ASC',
+      pages: [{ offset: 0, items: [first] }],
+      recentItems: [recent],
+    });
+
+    expect([...result.itemsByIndex.entries()].map(([index, item]) => [index, item.name])).toEqual([
+      [0, 'first'],
+      [1, 'recent'],
+    ]);
+    expect(result.selectionPageByItemKey.get('image:first')).toBe(0);
+    expect(result.selectionPageByItemKey.get('image:recent')).toBe(0);
+  });
+
+  it('maps an appended oldest-first recent to the last backend page at exact page boundaries', () => {
+    const backendItems = Array.from({ length: 60 }, (_, index) => createBackendItem(`backend-${index}`, '2026-01-01'));
+    const recent = createBackendItem('recent', '2026-01-03');
+    const result = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 60,
+      orderDir: 'ASC',
+      pages: [{ offset: 0, items: backendItems }],
+      recentItems: [recent],
+    });
+
+    expect(result.itemsByIndex.get(60)?.name).toBe('recent');
+    expect(result.selectionPageByItemKey.get('image:recent')).toBe(0);
+  });
+
+  it.each([
+    { orderDir: 'DESC' as const, recentDate: '2026-01-03', first: 'newer', second: 'older' },
+    { orderDir: 'ASC' as const, recentDate: '2026-01-02', first: 'older', second: 'newer' },
+  ])('inserts a recent between sparse $orderDir backend indices by its timestamp', (scenario) => {
+    const older = createBackendItem('older', '2026-01-01');
+    const newer = createBackendItem('newer', '2026-01-04');
+    const recent = createBackendItem('recent', scenario.recentDate);
+    const pages = [
+      {
+        offset: 20,
+        itemIndices: [20, 22],
+        items: scenario.orderDir === 'DESC' ? [newer, older] : [older, newer],
+      },
+    ];
+    const result = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 60,
+      orderDir: scenario.orderDir,
+      pages,
+      recentItems: [recent],
+    });
+
+    expect(result.itemsByIndex.get(20)?.name).toBe(scenario.first);
+    expect(result.itemsByIndex.get(22)?.name).toBe('recent');
+    expect(result.itemsByIndex.get(23)?.name).toBe(scenario.second);
+    expect(result.backendIndexByItemKey.get(`image:${scenario.first}`)).toBe(20);
+    expect(result.selectionPageByItemKey.get(`image:${scenario.second}`)).toBe(0);
+  });
+
+  it('keeps a confirmed insertion rank when its page leaves the retained window', () => {
+    const newest = createBackendItem('newest', '2026-01-03');
+    const oldest = createBackendItem('oldest', '2026-01-01');
+    const recent = createBackendItem('recent', '2026-01-02');
+    const firstWindow = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 120,
+      orderDir: 'DESC',
+      pages: [{ offset: 0, items: [newest, oldest] }],
+      recentItems: [recent],
+    });
+    const reloadedWindow = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 120,
+      knownRecentPositions: firstWindow.confirmedRecentPositions,
+      orderDir: 'DESC',
+      pages: [{ offset: 60, items: [createBackendItem('later-page', '2025-12-01')] }],
+      recentItems: [recent],
+    });
+
+    expect(firstWindow.confirmedRecentPositions.get('image:recent')).toBe(1);
+    expect(reloadedWindow.itemsByIndex.get(1)?.name).toBe('recent');
+    expect(reloadedWindow.itemsByIndex.get(61)?.name).toBe('later-page');
+  });
+
+  it('rebases a confirmed insertion rank after the listing changes', () => {
+    const newest = createBackendItem('newest', '2026-01-03');
+    const oldest = createBackendItem('oldest', '2026-01-01');
+    const recent = createBackendItem('recent', '2026-01-02');
+    const firstWindow = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 120,
+      orderDir: 'DESC',
+      pages: [{ offset: 0, items: [newest, oldest] }],
+      recentItems: [recent],
+    });
+    const updatedWindow = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 121,
+      knownRecentPositions: firstWindow.confirmedRecentPositions,
+      orderDir: 'DESC',
+      pages: [{ offset: 0, items: [createBackendItem('new-item', '2026-01-04'), newest, oldest] }],
+      recentItems: [recent],
+    });
+
+    expect(firstWindow.confirmedRecentPositions.get('image:recent')).toBe(1);
+    expect(updatedWindow.confirmedRecentPositions.get('image:recent')).toBe(2);
+    expect(updatedWindow.itemsByIndex.get(2)?.name).toBe('recent');
+    expect(updatedWindow.itemsByIndex.get(3)?.name).toBe('oldest');
+  });
+
+  it('clamps a persisted insertion rank when deletions shorten the listing', () => {
+    const recent = createBackendItem('recent', '2026-01-01');
+    const remainingItems = Array.from({ length: 10 }, (_, index) =>
+      createBackendItem(`remaining-${index}`, `2026-01-${String(20 - index).padStart(2, '0')}`)
+    );
+    const result = indexGalleryWindowWithRecentOverlay({
+      backendTotal: remainingItems.length,
+      knownRecentPositions: new Map([['image:recent', 60]]),
+      orderDir: 'DESC',
+      pages: [{ offset: 0, items: remainingItems }],
+      recentItems: [recent],
+    });
+
+    expect(result.confirmedRecentPositions.get('image:recent')).toBe(10);
+    expect(result.itemsByIndex.get(10)?.name).toBe('recent');
+    expect(result.itemsByIndex.has(60)).toBe(false);
+  });
+
+  it.each([
+    { orderDir: 'DESC' as const, recentDate: '2026-07-31', expectedIndex: 0, emptyExpectedIndex: 0 },
+    { orderDir: 'DESC' as const, recentDate: '2026-07-29', expectedIndex: 1200, emptyExpectedIndex: 0 },
+    { orderDir: 'ASC' as const, recentDate: '2026-07-29', expectedIndex: 0, emptyExpectedIndex: 1200 },
+    { orderDir: 'ASC' as const, recentDate: '2026-07-31', expectedIndex: 1200, emptyExpectedIndex: 1200 },
+  ])('uses absolute listing boundaries for $orderDir overlays outside a deep window', (scenario) => {
+    const backend = createBackendItem('deep', '2026-07-30');
+    const recent = createBackendItem('recent', scenario.recentDate);
+    const deepWindow = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 1200,
+      fallbackInsertionIndex: 600,
+      orderDir: scenario.orderDir,
+      pages: [{ offset: 600, items: [backend] }],
+      recentItems: [recent],
+    });
+    const emptyReanchor = indexGalleryWindowWithRecentOverlay({
+      backendTotal: 1200,
+      fallbackInsertionIndex: 600,
+      orderDir: scenario.orderDir,
+      pages: [],
+      recentItems: [recent],
+    });
+
+    expect(deepWindow.itemsByIndex.get(scenario.expectedIndex)?.name).toBe('recent');
+    expect(emptyReanchor.itemsByIndex.get(scenario.emptyExpectedIndex)?.name).toBe('recent');
   });
 });
 

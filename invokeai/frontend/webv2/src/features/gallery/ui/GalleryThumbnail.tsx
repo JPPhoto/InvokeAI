@@ -4,7 +4,7 @@ import type { GalleryThumbnailFit } from '@features/gallery/core/settings';
 import { Badge, chakra } from '@chakra-ui/react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { formatGalleryVideoDuration, toGalleryItemRef } from '@features/gallery/core/items';
+import { formatGalleryVideoDuration, toGalleryItemKey, toGalleryItemRef } from '@features/gallery/core/items';
 import { IconButton } from '@platform/ui/Button';
 import { StarIcon } from 'lucide-react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
@@ -200,6 +200,7 @@ const GalleryThumbnail = ({
       css={isDragging ? THUMBNAIL_DRAG_CSS : THUMBNAIL_ARMED_CSS}
       isSelected={isSelected || isCompared}
       item={item}
+      data-gallery-item-key={toGalleryItemKey(item)}
       opacity={isDragging ? 0.4 : undefined}
       role="listitem"
       // Allow touch panning; the hold sensor yields to scrolling and arms drag only after a sustained hold.

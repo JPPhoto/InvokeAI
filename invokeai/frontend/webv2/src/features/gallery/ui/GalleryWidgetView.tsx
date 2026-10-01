@@ -161,11 +161,18 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   const itemActionFilterIdentity = useMemo(() => JSON.stringify(data.filter), [data.filter]);
   const getItemSelectionPage = useCallback(
     (item: GalleryItem) => {
-      const index = getGalleryGridWindowIndexForItemKey(data.listing.itemsByIndex, toGalleryItemKey(item));
+      const itemKey = toGalleryItemKey(item);
+      const selectionPage = data.listing.selectionPageByItemKey?.get(itemKey);
+
+      if (selectionPage !== undefined) {
+        return selectionPage;
+      }
+
+      const index = getGalleryGridWindowIndexForItemKey(data.listing.itemsByIndex, itemKey);
 
       return index < 0 ? undefined : Math.floor(index / GALLERY_PAGE_SIZE);
     },
-    [data.listing.itemsByIndex]
+    [data.listing.itemsByIndex, data.listing.selectionPageByItemKey]
   );
   const getItemSelectionPageAfterRemoval = useCallback(
     (item: GalleryItem, orderedRefs: GalleryItemRef[], removedRefs: GalleryItemRef[]) =>

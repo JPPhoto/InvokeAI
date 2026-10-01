@@ -35,6 +35,8 @@ The range loader serializes requests toward the latest viewport range. A distant
 
 Selection records the item's actual page so Preview and explicit reveals can start near it. Paginated mode continues to address its selected 60-item page. The regression tests cover traversal beyond ten pages, backward reload, bounded retained data, and fixed viewport positions.
 
+Infinite Gallery projects up to 60 matching local completions into the displayed listing until an authoritative page contains them. Each completion is inserted by the active timestamp/kind/name sort relative to retained backend rows; when adjacent rows confirm its rank, that rank is retained in small per-listing overlay state across page eviction and rebased when a listing change shifts it. If its neighboring page has not loaded yet, a row beyond a deep window uses the absolute listing head or tail; a partial prefix keeps it at the next loaded slot until more rows arrive. Stored positions clamp to the current backend total after deletions. The display total and sparse indices include overlay rows, and range requests translate display coordinates back to backend offsets. Reconciled keys stay recorded for the current filter/account window so evicting their page does not add a duplicate local row when it is reloaded. Query pages and page parameters remain in backend coordinates.
+
 ## Type generation
 
 The shared `invokeai/frontend/api` package owns OpenAPI/type generation for backend contracts. CI checks these artifacts independently of either UI package. We use [openapi-typescript] to generate types from the app's OpenAPI schema. The generated types are committed to the repo in [schema.ts].

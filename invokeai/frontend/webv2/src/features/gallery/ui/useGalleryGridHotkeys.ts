@@ -55,6 +55,9 @@ export const useGalleryGridHotkeys = ({
   const { t } = useTranslation();
   const { actions, filter, gallery, itemActions, listing, runtime } = useGalleryWidget();
   const { followProgressSession, gallery: galleryCommands, projectId } = useGalleryUi();
+  const backendIndexByItemKey = listing?.backendIndexByItemKey;
+  const getBackendIndexAtDisplayIndex = listing?.getBackendIndexAtDisplayIndex;
+  const leadingOverlayCount = listing?.leadingOverlayCount;
   const cursorPositionRef = useRef<{
     accountScope: AccountScope;
     filterIdentity: string;
@@ -67,7 +70,7 @@ export const useGalleryGridHotkeys = ({
     accountScope: AccountScope;
     cursorKey: string | null;
     filterIdentity: string;
-    index: number;
+    backendIndex: number;
     projectId: string;
   } | null>(null);
   const filterIdentity = JSON.stringify(filter);
@@ -103,13 +106,27 @@ export const useGalleryGridHotkeys = ({
         return;
       }
 
-      if (pending.index === index) {
+      const backendIndex = backendIndexByItemKey
+        ? backendIndexByItemKey.get(itemKey)
+        : (getBackendIndexAtDisplayIndex?.(index) ?? index - (leadingOverlayCount ?? 0));
+
+      if (backendIndex !== undefined && pending.backendIndex === backendIndex) {
         pendingNavigationRef.current = null;
         actions.selectItem(item);
         scrollToEntry({ item, kind: 'item' });
       }
     },
-    [actions, cursorKey, filterIdentity, listing?.total, projectId, scrollToEntry]
+    [
+      actions,
+      cursorKey,
+      filterIdentity,
+      backendIndexByItemKey,
+      getBackendIndexAtDisplayIndex,
+      leadingOverlayCount,
+      listing?.total,
+      projectId,
+      scrollToEntry,
+    ]
   );
 
   const navigate = useEffectEvent((direction: GalleryNavigationDirection) => {
@@ -180,17 +197,28 @@ export const useGalleryGridHotkeys = ({
               // A short final page can leave its last absolute slot empty after a deletion. Asking
               // for that slot is a no-op while the containing page is retained, so step to the
               // next page boundary when the gap is exactly at the end of this page.
-              const isTerminalPageSlot = (targetIndex + 1) % GALLERY_PAGE_SIZE === 0;
-              const nextPageIndex = targetIndex + 1;
-              const requestIndex =
-                delta > 0 && isTerminalPageSlot && (listing.total === null || nextPageIndex < listing.total)
-                  ? nextPageIndex
-                  : targetIndex;
+              const leadingOverlayCount = listing.leadingOverlayCount ?? 0;
+              const backendTargetIndex =
+                listing.getBackendIndexAtDisplayIndex?.(targetIndex) ?? targetIndex - leadingOverlayCount;
+              const isTerminalPageSlot = backendTargetIndex >= 0 && (backendTargetIndex + 1) % GALLERY_PAGE_SIZE === 0;
+              const nextBackendPageIndex = backendTargetIndex + 1;
+              const shouldRequestNextPage =
+                delta > 0 &&
+                isTerminalPageSlot &&
+                (listing.backendTotal === null ||
+                  listing.backendTotal === undefined ||
+                  nextBackendPageIndex < listing.backendTotal);
+              const requestIndex = shouldRequestNextPage
+                ? (listing.getDisplayIndexForBackendIndex?.(nextBackendPageIndex) ??
+                  nextBackendPageIndex + leadingOverlayCount)
+                : targetIndex;
               pendingNavigationRef.current = {
                 accountScope: captureAccountScope(),
+                backendIndex: shouldRequestNextPage
+                  ? nextBackendPageIndex
+                  : (listing.getBackendIndexAtDisplayIndex?.(requestIndex) ?? requestIndex - leadingOverlayCount),
                 cursorKey,
                 filterIdentity,
-                index: requestIndex,
                 projectId,
               };
               listing.loadRange(requestIndex, requestIndex);

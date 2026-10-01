@@ -152,17 +152,26 @@ export const useGalleryGridSelection = () => {
               ) ?? null)
             : null;
 
+        const selectionPage = listing?.selectionPageByItemKey?.get(itemKey);
         const index = listingItemsByIndex ? getGalleryGridWindowIndexForItemKey(listingItemsByIndex, itemKey) : -1;
         actions.toggleItemInSelection(
           item,
           nextPrimaryItem,
-          index < 0 ? undefined : Math.floor(index / GALLERY_PAGE_SIZE)
+          selectionPage ?? (index < 0 ? undefined : Math.floor(index / GALLERY_PAGE_SIZE))
         );
       } else {
         actions.selectItem(item);
       }
     },
-    [actions, gallery.selectedItemKey, gallery.selectedItemKeys, loadedItems, listingItemsByIndex, selectItemRange]
+    [
+      actions,
+      gallery.selectedItemKey,
+      gallery.selectedItemKeys,
+      loadedItems,
+      listing?.selectionPageByItemKey,
+      listingItemsByIndex,
+      selectItemRange,
+    ]
   );
 
   const handleThumbnailContextMenu = useCallback(
