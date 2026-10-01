@@ -2,6 +2,8 @@ import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 
 import type { GalleryImage, GalleryOrderDir, GeneratedImageContract, GeneratedVideoContract } from './types';
 
+import { GALLERY_PAGE_SIZE } from './paging';
+
 export type GalleryItemKind = 'image' | 'video';
 
 export type GalleryItemCategory = GalleryImage['imageCategory'];
@@ -43,6 +45,8 @@ export type GalleryItem = GalleryImageItem | GalleryVideoItem;
 
 export interface GalleryItemsPage {
   items: GalleryItem[];
+  /** Absolute listing indices aligned with `items` when hydration can omit missing refs. */
+  itemIndices?: number[];
   total: number;
 }
 
@@ -77,6 +81,36 @@ export const parseGalleryItemKey = (key: string): GalleryItemRef => {
 };
 
 export const toGalleryItemRef = ({ kind, name }: GalleryItem): GalleryItemRef => ({ kind, name });
+
+/** Resolves the post-removal page for a listing successor; leading strip entries do not consume listing rows. */
+export const getGallerySelectionPageAfterRemoval = ({
+  item,
+  orderedRefs,
+  removedRefs,
+  listingOffset,
+}: {
+  item: GalleryItemRef;
+  orderedRefs: readonly GalleryItemRef[];
+  removedRefs: readonly GalleryItemRef[];
+  listingOffset: number;
+}): number | undefined => {
+  const itemKey = toGalleryItemKey(item);
+  const itemIndex = orderedRefs.findIndex((ref) => toGalleryItemKey(ref) === itemKey);
+
+  if (itemIndex < 0) {
+    return undefined;
+  }
+  if (itemIndex < listingOffset) {
+    return 0;
+  }
+
+  const removedKeys = new Set(removedRefs.map(toGalleryItemKey));
+  const removedBefore = orderedRefs
+    .slice(listingOffset, itemIndex)
+    .filter((ref) => removedKeys.has(toGalleryItemKey(ref))).length;
+
+  return Math.floor((itemIndex - listingOffset - removedBefore) / GALLERY_PAGE_SIZE);
+};
 
 export const isGalleryImageItem = (item: GalleryItem): item is GalleryImageItem => item.kind === 'image';
 

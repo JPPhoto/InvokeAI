@@ -101,7 +101,6 @@ const createContextValue = () =>
 const contextBase = {
   actions: {
     createBoard: vi.fn(),
-    loadMore: vi.fn(),
     selectBoard: vi.fn(),
     selectProjectBoard: vi.fn(),
     setSearchTerm: vi.fn(),
@@ -112,7 +111,6 @@ const contextBase = {
   },
   filter: { boardId: 'dogs', galleryView: 'images', searchTerm: '' },
   gallery,
-  isWindowTruncated: false,
   starredStrip: EMPTY_GALLERY_STARRED_STRIP,
   itemActions: {
     deleteItems: vi.fn(),

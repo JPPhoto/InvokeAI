@@ -113,3 +113,66 @@ describe('Gallery settings adapter ownership', () => {
     expect(values(previous.projectId).showImageDimensions).toBe(true);
   });
 });
+
+describe('Gallery selection adapter ownership', () => {
+  it('forwards absolute selection pages with the captured project to Workbench commands', () => {
+    const owner = renderAdapter();
+    const item = {
+      boardId: 'board-1',
+      category: 'general',
+      createdAt: '2026-07-30T12:00:00.000Z',
+      fullUrl: '/full/deep.png',
+      height: 64,
+      isIntermediate: false,
+      kind: 'image',
+      name: 'deep.png',
+      starred: false,
+      thumbnailUrl: '/thumbnail/deep.png',
+      width: 64,
+    } as const;
+
+    owner.gallery.selectItem(item, 10);
+    expect(values(owner.projectId)).toMatchObject({
+      selectedImagePage: 10,
+      selectedImageQuery: { page: 10 },
+    });
+
+    owner.gallery.setItemMultiSelection(['image:deep.png'], item, 11);
+    expect(values(owner.projectId)).toMatchObject({
+      selectedImagePage: 11,
+      selectedImageQuery: { page: 11 },
+    });
+
+    owner.gallery.toggleItemSelection({ ...item, name: 'toggled.png' }, null, 12);
+    expect(values(owner.projectId)).toMatchObject({
+      selectedImagePage: 12,
+      selectedImageQuery: { page: 12 },
+    });
+  });
+
+  it('ignores retained selection callbacks after the account lifetime changes', () => {
+    const previous = renderAdapter();
+    const projectId = previous.projectId;
+    const before = values(projectId);
+    accountLifecycle.activate('gallery-adapter-test');
+
+    previous.gallery.selectItem(
+      {
+        boardId: 'board-1',
+        category: 'general',
+        createdAt: '2026-07-30T12:00:00.000Z',
+        fullUrl: '/full/deep.png',
+        height: 64,
+        isIntermediate: false,
+        kind: 'image',
+        name: 'deep.png',
+        starred: false,
+        thumbnailUrl: '/thumbnail/deep.png',
+        width: 64,
+      },
+      10
+    );
+
+    expect(values(projectId)).toEqual(before);
+  });
+});

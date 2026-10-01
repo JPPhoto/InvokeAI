@@ -19,6 +19,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { GalleryItemActionContext } from './GalleryUiContext';
 import type { GalleryActions } from './GalleryWidgetContext';
 
 import { useGalleryUi } from './GalleryUiContext';
@@ -28,13 +29,13 @@ const toErrorMessage = (error: unknown): string => (error instanceof Error ? err
 
 export const useGalleryActions = ({
   boards,
+  getItemActionContext,
   getCurrentGalleryLocation,
-  loadMore,
   selectedBoardId,
 }: {
   boards: GalleryBoard[];
+  getItemActionContext?(): GalleryItemActionContext | null;
   getCurrentGalleryLocation: () => { galleryView: GalleryView; selectedBoardId: string };
-  loadMore: () => void;
   selectedBoardId: string;
 }): GalleryActions => {
   const { exportProject, gallery, notifications, widgets } = useGalleryUi();
@@ -175,7 +176,6 @@ export const useGalleryActions = ({
         }
       },
       exportProject,
-      loadMore,
       refresh,
       renameBoard: async (boardId, boardName) => {
         const owner = captureAccountScope();
@@ -197,8 +197,25 @@ export const useGalleryActions = ({
         }
       },
       selectBoard: gallery.selectBoard,
-      selectItem: gallery.selectItem,
-      selectItemRange: (items, primaryItem) => gallery.setItemMultiSelection(items.map(toGalleryItemKey), primaryItem),
+      selectItem: (item) => {
+        const selectionPage = getItemActionContext?.()?.getItemSelectionPage?.(item);
+
+        if (selectionPage === undefined) {
+          gallery.selectItem(item);
+        } else {
+          gallery.selectItem(item, selectionPage);
+        }
+      },
+      selectItemRange: (items, primaryItem) => {
+        const selectionPage = getItemActionContext?.()?.getItemSelectionPage?.(primaryItem);
+        const itemKeys = items.map(toGalleryItemKey);
+
+        if (selectionPage === undefined) {
+          gallery.setItemMultiSelection(itemKeys, primaryItem);
+        } else {
+          gallery.setItemMultiSelection(itemKeys, primaryItem, selectionPage);
+        }
+      },
       setCompareItem: gallery.setCompareItem,
       setSearchTerm: gallery.setSearchTerm,
       setStarredOnly: gallery.setStarredOnly,
@@ -216,7 +233,8 @@ export const useGalleryActions = ({
           semanticSearchText: null,
         }),
       setView: gallery.setView,
-      toggleItemInSelection: gallery.toggleItemSelection,
+      toggleItemInSelection: (item, nextPrimaryItem, selectionPage) =>
+        gallery.toggleItemSelection(item, nextPrimaryItem, selectionPage),
       updateSettings: gallery.updateSettings,
       uploadFiles,
     };
@@ -224,8 +242,8 @@ export const useGalleryActions = ({
     boards,
     exportProject,
     gallery,
+    getItemActionContext,
     getCurrentGalleryLocation,
-    loadMore,
     notifications,
     queryClient,
     selectedBoardId,

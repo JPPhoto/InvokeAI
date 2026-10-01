@@ -419,6 +419,7 @@ type WorkbenchReducerAction =
       item: GalleryItem;
       nextPrimaryItem: GalleryItem | null;
       projectId?: string;
+      selectionPage?: number;
     }
   | {
       type: 'setGalleryMultiSelection';
@@ -4629,9 +4630,11 @@ export const __workbenchReducerInternal = (
           if (!selectedItemKeys.includes(itemKey)) {
             const settings = getGallerySettings(values);
             const selectedImagePage =
-              typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
-                ? Math.max(0, Math.floor(values.galleryPage))
-                : 0;
+              typeof action.selectionPage === 'number' && Number.isFinite(action.selectionPage)
+                ? Math.max(0, Math.floor(action.selectionPage))
+                : typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
+                  ? Math.max(0, Math.floor(values.galleryPage))
+                  : 0;
 
             return {
               ...values,

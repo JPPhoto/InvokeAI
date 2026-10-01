@@ -25,6 +25,16 @@ Run these in `invokeai/frontend/webv2`:
 
 The legacy package has its own scripts and lockfile. Frontend CI runs webv2's checks and release gate; legacy lint and tests remain available locally. See each package's `AGENTS.md` for its commands and ownership rules.
 
+## Gallery paging
+
+The Gallery and media picker virtualize rows at absolute listing indices. An unloaded page leaves empty tile slots in the scroll geometry, so page eviction and backward reload do not regroup rows or move the viewport, including when the column count does not divide the 60-item page size.
+
+Each mounted consumer owns a transient, account-scoped TanStack Query window. The paging core and query-cache owner hold the window geometry and lifecycle; mounted Gallery and picker consumers construct its observers. Its normal retention budget is ten pages of 60 items. Forward fetches evict the oldest retained page; backward fetches evict the newest. A viewport that requires more than this budget uses a capacity derived from its visible range, rather than a larger listing cutoff. Only virtual rows mount thumbnail resources. Inactive query entries are collected immediately. A retained widget paused by React Activity keeps its last bounded immutable snapshot for rendering on resume, while its observer is stopped; resuming reloads the visible range. Evicted images remain accessible through backend offsets, without retaining their tile data.
+
+The range loader serializes requests toward the latest viewport range. A distant scrollbar jump loads directly at the requested page instead of replaying all preceding pages. Boundary-fetch failures preserve the retained pages and offer retry. A distant reload releases the old pages while preserving the last known listing size, so loading and retry leave the viewport geometry intact. Listing invalidation rebuilds the retained span atomically, using the same sort and filters. Offset pagination follows the backend's live listing: additions or removals can change an image's index; page eviction alone cannot. Semantic and date-board queries retain their existing ordered-name metadata for hydration and range selection, separate from loaded thumbnail data.
+
+Selection records the item's actual page so Preview and explicit reveals can start near it. Paginated mode continues to address its selected 60-item page. The regression tests cover traversal beyond ten pages, backward reload, bounded retained data, and fixed viewport positions.
+
 ## Type generation
 
 The shared `invokeai/frontend/api` package owns OpenAPI/type generation for backend contracts. CI checks these artifacts independently of either UI package. We use [openapi-typescript] to generate types from the app's OpenAPI schema. The generated types are committed to the repo in [schema.ts].

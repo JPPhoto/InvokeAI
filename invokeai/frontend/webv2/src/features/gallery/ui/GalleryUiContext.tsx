@@ -21,7 +21,13 @@ export interface GalleryItemActionContext {
    * Stamp selections with the host window's page; using the grid's unrelated page would break navigation from deep
    * Preview windows.
    */
-  getItemSelectionPage?(item: GalleryItem): number;
+  getItemSelectionPage?(item: GalleryItem): number | undefined;
+  /** Recompute a successor's page after confirmed removals ahead of it in the listing. */
+  getItemSelectionPageAfterRemoval?(
+    item: GalleryItem,
+    orderedRefs: GalleryItemRef[],
+    removedRefs: GalleryItemRef[]
+  ): number | undefined;
   items: GalleryItem[];
   loadOrderedRefs(signal: AbortSignal): Promise<GalleryItemRef[]>;
   selectedItemKey: GalleryItemKey | null;
@@ -51,11 +57,11 @@ export interface GalleryCommandsPort {
   clearSelection(): void;
   reconcileDeletedBoardOutcome(outcome: GalleryBoardDeletionResult): void;
   selectBoard(boardId: string): void;
-  selectItem(item: GalleryItem): void;
+  selectItem(item: GalleryItem, selectionPage?: number): void;
   selectImage(image: GalleryImage): void;
   setCompareItem(image: GalleryImageItem | null): void;
   setCompareImage(image: GalleryImage | null): void;
-  setItemMultiSelection(itemKeys: GalleryItemKey[], primaryItem: GalleryItem): void;
+  setItemMultiSelection(itemKeys: GalleryItemKey[], primaryItem: GalleryItem, selectionPage?: number): void;
   setPage(page: number): void;
   setPageInfo(totalImages: number): void;
   setSearchTerm(searchTerm: string): void;
@@ -65,7 +71,7 @@ export interface GalleryCommandsPort {
   commitSemanticSearch(text: string): void;
   clearSearch(): void;
   setView(view: GalleryView): void;
-  toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null): void;
+  toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null, selectionPage?: number): void;
   updateSettings(settings: Partial<GallerySettings>): void;
 }
 

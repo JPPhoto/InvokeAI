@@ -13,17 +13,21 @@ import { toGalleryItemKey } from '@features/gallery/core/items';
 import { pruneImageClusterMembers } from '@features/gallery/core/semanticImageQuery';
 import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { rollBackUnclaimedEntries } from '@platform/state/compareAndSwapRollback';
-import { hashKey } from '@tanstack/react-query';
+import { hashKey, InfiniteQueryObserver } from '@tanstack/react-query';
 
 import { ALL_READABLE_BOARDS_ID, isDateBoardId } from './backend';
 import {
   fetchGalleryItemsRange,
+  GALLERY_MAX_INFINITE_PAGES,
   GALLERY_PAGE_SIZE,
   galleryKeys,
+  galleryItemsInfiniteOptions,
   getGalleryItemListQueries,
   getGalleryItemsFilterFromKey,
   isGalleryStarredStripQueryKey,
   type CanonicalGalleryItemsFilter,
+  type GalleryItemsFilter,
+  type GalleryItemsListQueryKey,
 } from './queries';
 
 export type GalleryItemCachePatch =
@@ -74,8 +78,9 @@ const mapPageItems = (
 ): GalleryItemsPage => {
   let changed = false;
   const items: GalleryItem[] = [];
+  const itemIndices: number[] = [];
 
-  for (const item of page.items) {
+  for (const [index, item] of page.items.entries()) {
     const nextItem = mapItem(item);
 
     if (nextItem !== item) {
@@ -83,6 +88,9 @@ const mapPageItems = (
     }
     if (nextItem) {
       items.push(nextItem);
+      if (page.itemIndices) {
+        itemIndices.push(page.itemIndices[index]!);
+      }
     }
   }
 
@@ -93,6 +101,7 @@ const mapPageItems = (
   return {
     ...page,
     items: changed ? items : page.items,
+    ...(page.itemIndices ? { itemIndices: changed ? itemIndices : page.itemIndices } : {}),
     total: Math.max(0, page.total - totalDelta),
   };
 };
@@ -420,12 +429,33 @@ const rebuildGalleryItemWindow = async (client: QueryClient, owner: AccountScope
   if (liveQuery?.state.data !== before || liveQuery.state.fetchStatus !== 'idle') {
     return false;
   }
-
-  const pages: GalleryItemsPage[] = [];
-
-  for (let index = 0; index < result.items.length; index += GALLERY_PAGE_SIZE) {
-    pages.push({ items: result.items.slice(index, index + GALLERY_PAGE_SIZE), total: result.total });
+  if (!result.itemIndices && result.items.length < span.rowCount && span.offset + result.items.length < result.total) {
+    return false;
   }
+
+  const pages: GalleryItemsPage[] =
+    result.items.length === 0
+      ? [{ items: [], total: result.total }]
+      : Array.from({ length: span.rowCount / GALLERY_PAGE_SIZE }, (_, pageIndex) => {
+          const pageOffset = span.offset + pageIndex * GALLERY_PAGE_SIZE;
+          const pageItems: GalleryItem[] = [];
+          const itemIndices: number[] = [];
+
+          result.items.forEach((item, itemIndex) => {
+            const absoluteIndex = result.itemIndices?.[itemIndex] ?? span.offset + itemIndex;
+
+            if (absoluteIndex >= pageOffset && absoluteIndex < pageOffset + GALLERY_PAGE_SIZE) {
+              pageItems.push(item);
+              itemIndices.push(absoluteIndex);
+            }
+          });
+
+          return {
+            items: pageItems,
+            ...(result.itemIndices ? { itemIndices } : {}),
+            total: result.total,
+          };
+        });
 
   // TanStack never stores zero pages; an emptied span keeps one empty page.
   if (pages.length === 0) {
@@ -569,3 +599,443 @@ export const invalidateGalleryItems = (
 
 export const invalidateGallery = (client: QueryClient, owner: AccountScope = captureAccountScope()): Promise<void> =>
   scheduleGalleryInvalidation(client, owner, true);
+
+export type GalleryWindowLoadAction =
+  | { kind: 'none' }
+  | { kind: 'next' }
+  | { kind: 'previous' }
+  | { kind: 'reanchor'; offset: number };
+
+const pageOffsetForIndex = (index: number): number =>
+  Math.floor(Math.max(0, index) / GALLERY_PAGE_SIZE) * GALLERY_PAGE_SIZE;
+
+/** Chooses one bounded request step that moves a retained page window toward a visible index range. */
+export const getGalleryWindowLoadAction = (input: {
+  first: number;
+  last: number;
+  pageOffsets: readonly number[];
+  /** Defaults to the retained query budget; oversized viewports may request a larger bounded window. */
+  maxPages?: number;
+}): GalleryWindowLoadAction => {
+  const { first, last, pageOffsets } = input;
+  const firstOffset = pageOffsetForIndex(first);
+  const lastOffset = pageOffsetForIndex(Math.max(first, last));
+  const requestedPages = (lastOffset - firstOffset) / GALLERY_PAGE_SIZE + 1;
+  const maxPages = Math.max(GALLERY_MAX_INFINITE_PAGES, Math.floor(input.maxPages ?? GALLERY_MAX_INFINITE_PAGES));
+
+  if (requestedPages > maxPages) {
+    return { kind: 'reanchor', offset: firstOffset };
+  }
+
+  if (pageOffsets.length === 0) {
+    return { kind: 'reanchor', offset: firstOffset };
+  }
+
+  const firstLoadedOffset = pageOffsets[0];
+  const lastLoadedOffset = pageOffsets[pageOffsets.length - 1];
+
+  if (firstOffset < firstLoadedOffset) {
+    if (lastOffset >= firstLoadedOffset && lastOffset <= lastLoadedOffset) {
+      return { kind: 'previous' };
+    }
+    const gapPages = (firstLoadedOffset - firstOffset) / GALLERY_PAGE_SIZE;
+    return gapPages > 1 ? { kind: 'reanchor', offset: firstOffset } : { kind: 'previous' };
+  }
+
+  if (lastOffset > lastLoadedOffset) {
+    if (firstOffset >= firstLoadedOffset && firstOffset <= lastLoadedOffset) {
+      return { kind: 'next' };
+    }
+    const gapPages = (lastOffset - lastLoadedOffset) / GALLERY_PAGE_SIZE;
+    return gapPages > 1 ? { kind: 'reanchor', offset: firstOffset } : { kind: 'next' };
+  }
+
+  return { kind: 'none' };
+};
+
+type GalleryQueryResult = ReturnType<GalleryObserver['getCurrentResult']>;
+type GalleryObserver = InfiniteQueryObserver<
+  GalleryItemsPage,
+  Error,
+  InfiniteData<GalleryItemsPage, number>,
+  GalleryItemsListQueryKey,
+  number
+>;
+
+export interface GalleryWindowSnapshot {
+  /** Keep the absolute spacer stable while a distant window is loading. */
+  total: number | null;
+  offset: number;
+  result: GalleryQueryResult;
+}
+
+export interface GalleryWindowRuntime {
+  getSnapshot: () => GalleryWindowSnapshot;
+  subscribe: (listener: () => void) => () => void;
+  loadRange: (first: number, last: number) => void;
+  retry: () => void;
+}
+
+interface GalleryWindowRange {
+  first: number;
+  last: number;
+}
+
+interface CreateGalleryWindowRuntimeArgs {
+  consumerId: string;
+  filter: GalleryItemsFilter;
+  initialOffset: number;
+  isPaginated: boolean;
+  queryClient: QueryClient;
+}
+
+const normalizeRange = (first: number, last: number): GalleryWindowRange => {
+  const start = Math.max(0, Math.floor(first));
+  return { first: start, last: Math.max(start, Math.floor(last)) };
+};
+
+export const createGalleryWindowRuntime = ({
+  consumerId,
+  filter,
+  initialOffset,
+  isPaginated,
+  queryClient,
+}: CreateGalleryWindowRuntimeArgs): GalleryWindowRuntime => {
+  const listeners = new Set<() => void>();
+  let anchorOffset = Math.max(0, Math.floor(initialOffset / GALLERY_PAGE_SIZE) * GALLERY_PAGE_SIZE);
+  let observer: GalleryObserver | null = null;
+  let observerUnsubscribe: (() => void) | null = null;
+  let snapshot: GalleryWindowSnapshot | null = null;
+  let knownTotal: number | null = null;
+  let latestRange: GalleryWindowRange | null = null;
+  let pendingRange: GalleryWindowRange | null = null;
+  let failedRange: GalleryWindowRange | null = null;
+  let activeOperation: object | null = null;
+  let retryRequested = false;
+  let generation = 0;
+  let disposed = false;
+  let invalidationPending = false;
+  let invalidationFingerprint: string | null = null;
+  let invalidationToken: object | null = null;
+  const owner = captureAccountScope();
+
+  const getObserverOptions = (offset: number, maxPages = GALLERY_MAX_INFINITE_PAGES) => {
+    const options = galleryItemsInfiniteOptions(
+      filter,
+      {
+        kind: isPaginated ? 'anchor' : 'infinite',
+        offset,
+      },
+      `${consumerId}:${generation}`
+    );
+
+    return { ...options, maxPages };
+  };
+
+  const notify = (): void => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+
+  const isOwnerCurrent = (): boolean => !owner.signal.aborted;
+
+  const updateSnapshot = (result: GalleryQueryResult): void => {
+    const firstPageOffset = result.data?.pageParams[0];
+    knownTotal = result.data?.pages[0]?.total ?? knownTotal;
+    snapshot = { offset: firstPageOffset ?? anchorOffset, result, total: knownTotal };
+    notify();
+  };
+
+  const stopObserver = (): void => {
+    generation += 1;
+    activeOperation = null;
+    observerUnsubscribe?.();
+    observerUnsubscribe = null;
+    observer?.destroy();
+    observer = null;
+  };
+
+  let runRangeLoader: () => void = () => undefined;
+
+  const reconcilePageTotals = (): void => {
+    const pages = snapshot?.result.data?.pages;
+    if (!pages || pages.length < 2) {
+      return;
+    }
+
+    const pageTotals = new Set(pages.map((page) => page.total));
+    if (pageTotals.size < 2 || invalidationPending) {
+      return;
+    }
+
+    const fingerprint = `${anchorOffset}:${pages[0]?.total}:${pages.at(-1)?.total}`;
+    if (fingerprint === invalidationFingerprint) {
+      return;
+    }
+
+    invalidationFingerprint = fingerprint;
+    invalidationPending = true;
+    const operation = {};
+    invalidationToken = operation;
+    void invalidateGalleryItems(queryClient, owner)
+      .then(() => {
+        if (disposed || invalidationToken !== operation) {
+          return;
+        }
+        invalidationPending = false;
+        invalidationToken = null;
+        const range = latestRange;
+        if (range) {
+          pendingRange = range;
+          runRangeLoader();
+        }
+      })
+      .catch(() => {
+        if (disposed || invalidationToken !== operation) {
+          return;
+        }
+        invalidationPending = false;
+        invalidationToken = null;
+        invalidationFingerprint = null;
+        failedRange = latestRange;
+      });
+  };
+
+  const startObserver = (maxPages = GALLERY_MAX_INFINITE_PAGES): void => {
+    if (disposed || !isOwnerCurrent()) {
+      return;
+    }
+
+    observer = new InfiniteQueryObserver(queryClient, getObserverOptions(anchorOffset, maxPages)) as GalleryObserver;
+    updateSnapshot(observer.getCurrentResult());
+  };
+
+  const attachObserver = (): void => {
+    if (!observer || observerUnsubscribe || disposed) {
+      return;
+    }
+
+    const observerGeneration = generation;
+    observerUnsubscribe = observer.subscribe((result) => {
+      if (disposed || observerGeneration !== generation) {
+        return;
+      }
+
+      updateSnapshot(result);
+      if (pendingRange && !activeOperation) {
+        runRangeLoader();
+      }
+    });
+  };
+
+  const setObserverWindow = (offset: number, maxPages: number): void => {
+    if (!isOwnerCurrent()) {
+      return;
+    }
+    stopObserver();
+    anchorOffset = offset;
+    snapshot = null;
+    startObserver(maxPages);
+    attachObserver();
+  };
+
+  runRangeLoader = () => {
+    if (disposed || !isOwnerCurrent() || isPaginated || activeOperation || invalidationPending) {
+      return;
+    }
+
+    const range = pendingRange;
+    const currentObserver = observer;
+    const currentResult = currentObserver?.getCurrentResult();
+
+    if (!range || !currentObserver || !currentResult) {
+      return;
+    }
+
+    if (currentResult.isError && !retryRequested) {
+      failedRange = latestRange ?? range;
+      return;
+    }
+
+    if (!currentResult.data) {
+      return;
+    }
+
+    const requestedPages =
+      Math.floor(Math.max(range.first, range.last) / GALLERY_PAGE_SIZE) -
+      Math.floor(range.first / GALLERY_PAGE_SIZE) +
+      1;
+    const maxPages = Math.max(GALLERY_MAX_INFINITE_PAGES, requestedPages + 2);
+    const action = getGalleryWindowLoadAction({
+      first: range.first,
+      last: range.last,
+      maxPages,
+      pageOffsets: currentResult.data.pageParams,
+    });
+
+    if (currentResult.data.pages.length > maxPages && requestedPages <= maxPages) {
+      const pageOffsets = currentResult.data.pageParams;
+      const startOffset = pageOffsets[0] ?? anchorOffset;
+      const endOffset = pageOffsets.at(-1) ?? startOffset;
+      const firstRequestedOffset = Math.floor(range.first / GALLERY_PAGE_SIZE) * GALLERY_PAGE_SIZE;
+      const lastRequestedOffset = Math.floor(range.last / GALLERY_PAGE_SIZE) * GALLERY_PAGE_SIZE;
+      const startIndex =
+        firstRequestedOffset < startOffset
+          ? 0
+          : lastRequestedOffset > endOffset
+            ? pageOffsets.length - maxPages
+            : Math.min(pageOffsets.indexOf(firstRequestedOffset), pageOffsets.length - maxPages);
+      const boundedStart = Math.max(0, startIndex);
+      pendingRange = range;
+      queryClient.setQueryData<InfiniteData<GalleryItemsPage, number>>(currentObserver.options.queryKey, (data) =>
+        data
+          ? {
+              pageParams: data.pageParams.slice(boundedStart, boundedStart + maxPages),
+              pages: data.pages.slice(boundedStart, boundedStart + maxPages),
+            }
+          : data
+      );
+      return;
+    }
+
+    pendingRange = null;
+
+    if (action.kind === 'none') {
+      return;
+    }
+
+    if (action.kind === 'reanchor') {
+      pendingRange = latestRange ?? range;
+      // Returning to the original anchor after eviction still needs a fresh window. The generation suffix keeps
+      // a new observer from picking up the old anchor's slid cache before its immediate collection runs.
+      setObserverWindow(action.offset, maxPages);
+      return;
+    }
+
+    if (
+      (action.kind === 'next' && !currentResult.hasNextPage) ||
+      (action.kind === 'previous' && !currentResult.hasPreviousPage)
+    ) {
+      return;
+    }
+
+    currentObserver.setOptions(getObserverOptions(anchorOffset, maxPages));
+    const operation = {};
+    const operationGeneration = generation;
+    activeOperation = operation;
+    retryRequested = false;
+    const fetch = action.kind === 'next' ? currentObserver.fetchNextPage : currentObserver.fetchPreviousPage;
+
+    void fetch
+      .call(currentObserver, { cancelRefetch: false, throwOnError: true })
+      .then((result) => {
+        if (disposed || operationGeneration !== generation || activeOperation !== operation) {
+          return;
+        }
+
+        if (result.isError) {
+          failedRange = latestRange ?? range;
+          return;
+        }
+
+        reconcilePageTotals();
+        pendingRange = latestRange;
+      })
+      .catch(() => {
+        if (!disposed && operationGeneration === generation && activeOperation === operation) {
+          failedRange = latestRange ?? range;
+        }
+      })
+      .finally(() => {
+        if (disposed || operationGeneration !== generation || activeOperation !== operation) {
+          return;
+        }
+
+        activeOperation = null;
+        runRangeLoader();
+      });
+  };
+
+  const start = (): void => {
+    if (!isOwnerCurrent()) {
+      return;
+    }
+    if (disposed) {
+      disposed = false;
+    }
+    if (!observer) {
+      startObserver();
+    }
+    attachObserver();
+  };
+
+  const dispose = (): void => {
+    if (listeners.size !== 0) {
+      return;
+    }
+
+    disposed = true;
+    pendingRange = null;
+    latestRange = null;
+    failedRange = null;
+    retryRequested = false;
+    invalidationPending = false;
+    invalidationToken = null;
+    stopObserver();
+  };
+
+  const getSnapshot = (): GalleryWindowSnapshot => {
+    return snapshot!;
+  };
+
+  startObserver();
+
+  return {
+    getSnapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      start();
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) {
+          dispose();
+        }
+      };
+    },
+    loadRange: (first, last) => {
+      if (disposed || !isOwnerCurrent()) {
+        return;
+      }
+      const range = normalizeRange(first, last);
+      latestRange = range;
+      pendingRange = range;
+      failedRange = null;
+      runRangeLoader();
+    },
+    retry: () => {
+      if (disposed || !isOwnerCurrent()) {
+        return;
+      }
+      const range = failedRange ?? latestRange;
+      const currentObserver = observer;
+      if (!currentObserver) {
+        return;
+      }
+
+      failedRange = null;
+      retryRequested = true;
+      if (range) {
+        latestRange = range;
+        pendingRange = range;
+      }
+      const result = currentObserver.getCurrentResult();
+      if (result.data) {
+        runRangeLoader();
+        return;
+      }
+
+      void queryClient.resetQueries({ exact: true, queryKey: currentObserver.options.queryKey });
+    },
+  };
+};

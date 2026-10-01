@@ -1,7 +1,7 @@
 ---
 title: Gallery Reference
 description: Details of the Gallery — the board menu, archiving, downloading and deleting boards, the media menu, Gallery settings and keyboard shortcuts.
-lastUpdated: 2026-09-30
+lastUpdated: 2026-10-01
 sidebar:
   order: 2
 ---
@@ -85,9 +85,15 @@ The gear button in the Gallery header opens its settings:
 * **Thumbnails** — **Square** crops thumbnails to squares; **Aspect** shows each item's full shape.
 * **Always show dimensions** — shows each item's width and height on its thumbnail, not only on hover.
 * **Show in-progress section** — shows generations that are still running at the top of the grid.
-* **Pagination** — **Infinite** scrolling or numbered **Pages**.
+* **Pagination** — **Infinite** scrolling or numbered **Pages** of 60 items.
 
 **All Gallery settings…** at the bottom opens the full settings. They also include **Send new results to the selected board** (under **Destination**), which is on by default; turn it off to keep sending results to the current destination board, which then becomes the **Auto** board. The full settings also include the sort order and the board visibility and sorting options from the [Filter & sort boards](/users-guide/gallery/introduction/#finding-filtering-and-sorting-boards) menu. All Gallery settings are saved with the project.
+
+### Browsing large galleries
+
+In **Infinite** mode, scroll to browse every item matching the current board and filters; there is no 600-item browsing cutoff. The grid keeps a bounded loaded window, fetching pages again in their original listing positions as you scroll back. Loading placeholders preserve the grid's space while requests finish, and failed requests can be retried.
+
+Changing the board, sort order or filters starts a new listing. Revealing an item from another panel opens its page directly, including items far down a board, and you can then browse in either direction.
 
 ## Keyboard shortcuts
 
@@ -104,4 +110,3 @@ These work while the Gallery has focus:
 | **R** | Remix the selected image: recall its settings, except the seed |
 
 On macOS, use **Cmd** in place of **Ctrl**. See [Hotkeys](/users-guide/workbench/hotkeys/) for all shortcuts.
-

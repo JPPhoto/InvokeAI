@@ -49,12 +49,14 @@ export interface GalleryStateView {
   page: number;
   projectBoardId: string | null;
   /**
-   * The selection's stamped paginated page, when the stamp names the listing
-   * the grid is showing; null otherwise. Reveals follow it across pages.
+   * The selection's stamped page, when the stamp names the listing the grid
+   * is showing; null otherwise. Reveals follow it across pages or window anchors.
    */
   revealTargetPage: number | null;
   searchTerm: string;
   selectedBoardId: string;
+  /** Persisted primary cursor, including items outside the retained page window. */
+  primarySelectedItemKey: GalleryItemKey | null;
   selectedItemKey: GalleryItemKey | null;
   selectedItemKeys: GalleryItemKey[];
   /** Active image-similarity query, rendered as a chip in place of the search text. */
@@ -260,8 +262,7 @@ export const getGalleryStateView = (
   const page = getGalleryPage(values);
   const selectedImageQuery = getGallerySelectedImageQuery(values);
   const revealTargetPage =
-    settings.paginationMode === 'paginated' &&
-    selectedImageQuery.paginationMode === 'paginated' &&
+    settings.paginationMode === selectedImageQuery.paginationMode &&
     semanticImageQuery === null &&
     selectedImageQuery.boardId === selectedBoardId &&
     selectedImageQuery.galleryView === galleryView &&
@@ -287,6 +288,7 @@ export const getGalleryStateView = (
     revealTargetPage,
     searchTerm,
     selectedBoardId,
+    primarySelectedItemKey: persistedSelectedItemKey,
     selectedItemKey: visibleSelectedItemKey,
     selectedItemKeys:
       visibleSelectedItemKey && !selectedItemKeys.includes(visibleSelectedItemKey)

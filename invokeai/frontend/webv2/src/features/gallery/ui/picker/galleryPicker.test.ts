@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getGalleryPickerDefaultIndex,
-  getGalleryPickerNeighborIndex,
+  getGalleryPickerNeighborAbsoluteIndex,
   getGalleryPickerRemaining,
   getGalleryPickerSelectionAfterPick,
   getGalleryPickerStatus,
@@ -135,38 +135,6 @@ describe('getGalleryPickerSelectionAfterPick', () => {
   });
 });
 
-describe('getGalleryPickerNeighborIndex', () => {
-  // 4 columns, 10 tiles: rows [0..3] [4..7] [8,9]
-  const count = 10;
-  const columns = 4;
-
-  it('walks reading order across row ends and clamps at both ends', () => {
-    expect(getGalleryPickerNeighborIndex(3, count, columns, 'ArrowRight')).toBe(4);
-    expect(getGalleryPickerNeighborIndex(4, count, columns, 'ArrowLeft')).toBe(3);
-    expect(getGalleryPickerNeighborIndex(0, count, columns, 'ArrowLeft')).toBe(0);
-    expect(getGalleryPickerNeighborIndex(9, count, columns, 'ArrowRight')).toBe(9);
-  });
-
-  it('moves by a column up and down and holds still over a ragged row', () => {
-    expect(getGalleryPickerNeighborIndex(1, count, columns, 'ArrowDown')).toBe(5);
-    expect(getGalleryPickerNeighborIndex(5, count, columns, 'ArrowUp')).toBe(1);
-    expect(getGalleryPickerNeighborIndex(6, count, columns, 'ArrowDown')).toBe(6);
-    expect(getGalleryPickerNeighborIndex(2, count, columns, 'ArrowUp')).toBe(2);
-  });
-
-  it('jumps with Home and End', () => {
-    expect(getGalleryPickerNeighborIndex(5, count, columns, 'Home')).toBe(0);
-    expect(getGalleryPickerNeighborIndex(5, count, columns, 'End')).toBe(9);
-  });
-
-  it('enters the grid at an edge when nothing is active, and yields -1 for an empty grid', () => {
-    expect(getGalleryPickerNeighborIndex(-1, count, columns, 'ArrowDown')).toBe(0);
-    expect(getGalleryPickerNeighborIndex(-1, count, columns, 'End')).toBe(9);
-    expect(getGalleryPickerNeighborIndex(42, count, columns, 'ArrowUp')).toBe(0);
-    expect(getGalleryPickerNeighborIndex(0, 0, columns, 'ArrowDown')).toBe(-1);
-  });
-});
-
 describe('isGalleryPickerNavKey', () => {
   it('recognises the six navigation keys only', () => {
     expect(isGalleryPickerNavKey('ArrowDown')).toBe(true);
@@ -214,8 +182,6 @@ describe('getGalleryPickerStatus', () => {
     accept: ['image'] as const,
     activeItem: image('a.png'),
     isSearching: false,
-    isWindowTruncated: false,
-    loadedCount: 12,
     pane: 'items' as const,
     remaining: null,
     total: 48,
@@ -237,7 +203,7 @@ describe('getGalleryPickerStatus', () => {
     ]);
   });
 
-  it('composes capacity with the window cap or the listing count', () => {
+  it('composes capacity with the listing count', () => {
     expect(getGalleryPickerStatus({ ...base, remaining: 2 })).toEqual([
       { count: 2, kind: 'remainingCount' },
       { count: 48, kind: 'itemCount' },
@@ -246,8 +212,23 @@ describe('getGalleryPickerStatus', () => {
       { kind: 'remainingNone' },
       { count: 48, kind: 'matchCount' },
     ]);
-    expect(getGalleryPickerStatus({ ...base, isWindowTruncated: true })).toEqual([{ count: 12, kind: 'windowLimit' }]);
     expect(getGalleryPickerStatus({ ...base, total: null })).toEqual([]);
+  });
+});
+
+describe('getGalleryPickerNeighborAbsoluteIndex', () => {
+  it('moves beyond a retained range and clamps only at known listing bounds', () => {
+    expect(getGalleryPickerNeighborAbsoluteIndex(599, 900, 6, 'ArrowRight')).toBe(600);
+    expect(getGalleryPickerNeighborAbsoluteIndex(599, 900, 6, 'ArrowDown')).toBe(605);
+    expect(getGalleryPickerNeighborAbsoluteIndex(899, 900, 6, 'ArrowRight')).toBe(899);
+    expect(getGalleryPickerNeighborAbsoluteIndex(5, 900, 6, 'ArrowDown')).toBe(11);
+    expect(getGalleryPickerNeighborAbsoluteIndex(899, 900, 6, 'ArrowDown')).toBe(899);
+    expect(getGalleryPickerNeighborAbsoluteIndex(6, 10, 6, 'ArrowDown')).toBe(6);
+    expect(getGalleryPickerNeighborAbsoluteIndex(2, 10, 6, 'ArrowUp')).toBe(2);
+    expect(getGalleryPickerNeighborAbsoluteIndex(599, 900, 6, 'Home')).toBe(0);
+    expect(getGalleryPickerNeighborAbsoluteIndex(599, 900, 6, 'End')).toBe(899);
+    expect(getGalleryPickerNeighborAbsoluteIndex(599, null, 6, 'ArrowRight')).toBe(600);
+    expect(getGalleryPickerNeighborAbsoluteIndex(599, null, 6, 'End')).toBe(599);
   });
 });
 

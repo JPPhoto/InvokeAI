@@ -1,18 +1,11 @@
 import type { GalleryView } from '@features/gallery';
 import type { GalleryItemRef } from '@features/gallery/contracts';
-import type { GalleryItemsFilter } from '@features/gallery/queries';
 import type { QueryClient } from '@tanstack/react-query';
 import type { WorkbenchCommands, WorkbenchQueries } from '@workbench/workbenchStore';
 
 import { galleryItems, toGalleryItemKey } from '@features/gallery';
 import { getGallerySettings, isGalleryNavigationCurrent, requestGalleryItemReveal } from '@features/gallery/contracts';
-import {
-  GALLERY_MAX_ROWS,
-  GALLERY_PAGE_SIZE,
-  galleryBoardsOptions,
-  galleryItemNamesOptions,
-  galleryItemsInfiniteOptions,
-} from '@features/gallery/queries';
+import { GALLERY_PAGE_SIZE, galleryBoardsOptions, galleryItemNamesOptions } from '@features/gallery/queries';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 
 /** Inject workbench dependencies so reveal loads on demand without adding gallery transfer code to editor boot. */
@@ -34,32 +27,6 @@ export interface GalleryRevealTicket {
   /** This navigation's place in the global ordering; see `claimGalleryNavigationSequence`. */
   sequence: number;
 }
-
-/**
- * Extends the infinite window until it covers `pagesNeeded` pages. This must
- * NOT be a plain prefetch: the mounted gallery keeps the query fresh, and
- * `fetchQuery` returns fresh cache without honoring the `pages` option — the
- * reveal has to force the fetch (staleTime 0) or the window never grows. Two
- * passes because a concurrent fetch already in flight (a second rapid click)
- * absorbs the call without extending; the retry runs after it settles.
- */
-const ensureGalleryPagesLoaded = async (
-  queryClient: QueryClient,
-  listingFilter: GalleryItemsFilter,
-  pagesNeeded: number
-): Promise<void> => {
-  const options = galleryItemsInfiniteOptions(listingFilter, { kind: 'infinite' });
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const data = queryClient.getQueryData<{ pages: unknown[] }>(options.queryKey);
-
-    if ((data?.pages.length ?? 0) >= pagesNeeded) {
-      return;
-    }
-
-    await queryClient.fetchInfiniteQuery({ ...options, pages: pagesNeeded, staleTime: 0 });
-  }
-};
 
 /**
  * Reveal a freshly resolved item in its board/view with filters cleared and its page loaded; selection drives grid
@@ -170,18 +137,10 @@ export const revealGalleryItem = (
       commands.gallery.setPage(page);
     }
 
-    if (boardIndex !== null && page !== null && settingsNow.paginationMode === 'infinite') {
-      if (boardIndex < GALLERY_MAX_ROWS) {
-        // Load pages through the item without delaying selection; the grid completes its reveal when the item
-        // arrives.
-        void ensureGalleryPagesLoaded(queryClient, listingFilter, page + 1).catch(() => {});
-      } else {
-        // Deeper than the base window can ever load: anchor the
-        // infinite window at the image's page instead (the mounted
-        // gallery query fetches it on its own). Any board, search, or
-        // view change resets the anchor back to the top.
-        commands.gallery.setPage(page);
-      }
+    if (page !== null && settingsNow.paginationMode === 'infinite') {
+      // The Gallery view owns a bounded sliding query. Reanchor it at the requested page and let its viewport load
+      // the item, regardless of whether the page falls inside the first ten-page window.
+      commands.gallery.setPage(page);
     }
 
     commands.gallery.selectItem(image, projectId, page ?? undefined);

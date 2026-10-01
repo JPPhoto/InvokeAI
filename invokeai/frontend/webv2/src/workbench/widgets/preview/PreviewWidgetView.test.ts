@@ -1,5 +1,6 @@
 import type { GalleryItem } from '@features/gallery';
 
+import { GALLERY_RECENT_IMAGE_LIMIT } from '@features/gallery/contracts';
 import { GALLERY_MAX_ROWS } from '@features/gallery/queries';
 import { describe, expect, it } from 'vitest';
 
@@ -92,7 +93,7 @@ describe('mergePreviewBoardItems', () => {
     ]);
   });
 
-  it('keeps same-name media independent and bounds the merged Gallery window', () => {
+  it('keeps same-name media independent and bounds the merged Gallery window plus its local overlay', () => {
     const backend = Array.from({ length: GALLERY_MAX_ROWS }, (_, index) =>
       item('image', `backend-${index}`, new Date(index * 1_000).toISOString())
     );
@@ -104,10 +105,25 @@ describe('mergePreviewBoardItems', () => {
 
     const merged = mergePreviewBoardItems(backend, optimistic, 'DESC');
 
-    expect(merged).toHaveLength(GALLERY_MAX_ROWS);
+    expect(merged).toHaveLength(GALLERY_MAX_ROWS + GALLERY_RECENT_IMAGE_LIMIT);
     expect(merged[0]?.name).toBe('optimistic-59');
+    expect(merged).toContainEqual(expect.objectContaining({ kind: 'image', name: 'backend-0' }));
     expect(merged).toContainEqual(expect.objectContaining({ kind: 'image', name: 'shared' }));
     expect(merged).toContainEqual(expect.objectContaining({ kind: 'video', name: 'shared' }));
+  });
+
+  it('retains the final backend item when a missing recent image joins a full sliding window', () => {
+    const backend = Array.from({ length: GALLERY_MAX_ROWS }, (_, index) =>
+      item('image', `backend-${index}`, new Date(index * 1_000).toISOString())
+    );
+    const recent = item('image', 'recent', new Date(GALLERY_MAX_ROWS * 1_000).toISOString());
+
+    const merged = mergePreviewBoardItems(backend, [recent], 'DESC');
+
+    expect(merged).toHaveLength(GALLERY_MAX_ROWS + 1);
+    expect(merged[0]).toBe(recent);
+    expect(merged.at(-1)).toBe(backend[0]);
+    expect(merged.filter((candidate) => candidate !== recent)).toHaveLength(GALLERY_MAX_ROWS);
   });
 });
 

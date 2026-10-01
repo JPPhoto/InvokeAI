@@ -1,4 +1,4 @@
-import type { GalleryItem, GalleryItemKey } from '@features/gallery/core/items';
+import type { GalleryItem } from '@features/gallery/core/items';
 import type { KeyboardEvent, RefObject } from 'react';
 
 import { Box, HStack, Icon, Stack, Text } from '@chakra-ui/react';
@@ -25,7 +25,7 @@ import { useTranslation } from 'react-i18next';
 import {
   GALLERY_PICKER_MIN_COLUMNS,
   getGalleryPickerDefaultIndex,
-  getGalleryPickerNeighborIndex,
+  getGalleryPickerNeighborAbsoluteIndex,
   getGalleryPickerRemaining,
   getGalleryPickerSelectionAfterPick,
   getGalleryPickerStatus,
@@ -42,8 +42,8 @@ import { useGalleryPickerScope } from './useGalleryPickerScope';
 
 const BOARD_BUTTON_EXPANDED_PROPS = { bg: 'bg.emphasized' } as const;
 
-/** Unseeded until the first page loads; then the Gallery's selection if it is on that page, else nothing. */
-type ActiveKeyState = GalleryItemKey | null | undefined;
+/** The key follows an item across listing revisions; index preserves its absolute window position while evicted. */
+type ActiveCursor = { index: number; key: string | null } | undefined;
 
 export const GalleryPickerView = ({
   accept,
@@ -70,19 +70,19 @@ export const GalleryPickerView = ({
   const currentKey = gallerySelectedItem ? toGalleryItemKey(gallerySelectedItem) : null;
   const seedKey = gallerySelectedItem && accept.includes(gallerySelectedItem.kind) ? currentKey : null;
 
-  const [activeKey, setActiveKey] = useState<ActiveKeyState>(undefined);
+  const [activeCursor, setActiveCursor] = useState<ActiveCursor>(undefined);
   const [columnCount, setColumnCount] = useState(GALLERY_PICKER_MIN_COLUMNS);
   const [isUploading, setIsUploading] = useState(false);
-  // Async uploads need current selection capacity; the sentinel needs a stable callback across page fetches.
+  // Async uploads need current selection capacity.
   const selectionRef = useRef(selection);
-  const loadMoreRef = useRef(data.loadMore);
+  const dataScopeKey = JSON.stringify(data.filter);
+  const [activeScope, setActiveScope] = useState(dataScopeKey);
   // Keep prior items dimmed during scope changes; show skeletons only before the first result.
   const [lastItems, setLastItems] = useState<GalleryItem[] | null>(null);
 
   // eslint-disable-next-line react/refs
   selectionRef.current = selection;
   // eslint-disable-next-line react/refs
-  loadMoreRef.current = data.loadMore;
 
   if (data.items !== null && data.items !== lastItems) {
     setLastItems(data.items);
@@ -91,16 +91,39 @@ export const GalleryPickerView = ({
   const isStale = data.items === null && lastItems !== null;
   const items = data.items ?? lastItems;
 
-  // Seed once the first page is in, so a selection past it never yanks the
-  // highlight (and the scroll) when a later page happens to contain it.
-  if (activeKey === undefined && data.items !== null) {
-    setActiveKey(seedKey && data.items.some((item) => toGalleryItemKey(item) === seedKey) ? seedKey : null);
+  if (activeScope !== dataScopeKey) {
+    setActiveScope(dataScopeKey);
+    setActiveCursor(undefined);
   }
-
-  const activeIndex = activeKey && items ? items.findIndex((item) => toGalleryItemKey(item) === activeKey) : -1;
-  const resolvedActiveIndex =
-    activeIndex >= 0 ? activeIndex : items ? getGalleryPickerDefaultIndex(items, accept, selection) : -1;
-  const activeItem = resolvedActiveIndex >= 0 ? items?.[resolvedActiveIndex] : undefined;
+  // Seed once the first range lands, keeping the highlighted key authoritative if a same-filter listing changes.
+  const seededEntry = seedKey
+    ? [...data.listing.itemsByIndex.entries()].find(([, item]) => toGalleryItemKey(item) === seedKey)
+    : undefined;
+  const defaultItem = items?.[getGalleryPickerDefaultIndex(items, accept, selection)];
+  const defaultEntry = defaultItem
+    ? [...data.listing.itemsByIndex.entries()].find(
+        ([, item]) => toGalleryItemKey(item) === toGalleryItemKey(defaultItem)
+      )
+    : undefined;
+  const initialEntry = seededEntry ?? defaultEntry;
+  if (activeCursor === undefined && data.items !== null && initialEntry) {
+    setActiveCursor({ index: initialEntry[0], key: toGalleryItemKey(initialEntry[1]) });
+  }
+  const cursor =
+    activeCursor ?? (initialEntry ? { index: initialEntry[0], key: toGalleryItemKey(initialEntry[1]) } : undefined);
+  const matchingActiveEntry = cursor?.key
+    ? [...data.listing.itemsByIndex.entries()].find(([, item]) => toGalleryItemKey(item) === cursor.key)
+    : undefined;
+  const resolvedActiveIndex = matchingActiveEntry?.[0] ?? cursor?.index ?? -1;
+  if (matchingActiveEntry && cursor && matchingActiveEntry[0] !== cursor.index) {
+    setActiveCursor({ ...cursor, index: matchingActiveEntry[0] });
+  }
+  // An evicted active key must not fall through to the different item now occupying its old index.
+  const activeItem = cursor?.key
+    ? matchingActiveEntry?.[1]
+    : cursor
+      ? data.listing.itemsByIndex.get(cursor.index)
+      : undefined;
   const resolvedActiveKey = activeItem ? toGalleryItemKey(activeItem) : null;
   const selectedBoard = data.boards.find((board) => board.id === data.selectedBoardId);
   const boardName = selectedBoard ? getGalleryBoardLabel(selectedBoard, t) : t('widgets.gallery.selectedBoardFallback');
@@ -249,13 +272,22 @@ export const GalleryPickerView = ({
       }
 
       if (isGalleryPickerNavKey(event.key) && isGalleryPickerNavKeyForField(event.key, event.currentTarget.value)) {
-        const next = items[getGalleryPickerNeighborIndex(resolvedActiveIndex, items.length, columnCount, event.key)];
+        const nextIndex = getGalleryPickerNeighborAbsoluteIndex(
+          resolvedActiveIndex,
+          data.listing.total,
+          columnCount,
+          event.key
+        );
 
         event.preventDefault();
         event.stopPropagation();
 
-        if (next) {
-          setActiveKey(toGalleryItemKey(next));
+        if (nextIndex >= 0) {
+          const nextItem = data.listing.itemsByIndex.get(nextIndex);
+          setActiveCursor({ index: nextIndex, key: nextItem ? toGalleryItemKey(nextItem) : null });
+          if (!data.listing.itemsByIndex.has(nextIndex)) {
+            data.listing.loadRange(nextIndex, nextIndex + 1);
+          }
         }
       } else if (event.key === 'Enter') {
         event.preventDefault();
@@ -271,6 +303,7 @@ export const GalleryPickerView = ({
       boardGroups,
       boardsId,
       columnCount,
+      data.listing,
       handleSelectBoard,
       isSearching,
       items,
@@ -281,13 +314,12 @@ export const GalleryPickerView = ({
   );
 
   const handleActivate = useCallback(
-    (item: GalleryItem) => {
-      setActiveKey(toGalleryItemKey(item));
+    (item: GalleryItem, index: number) => {
+      setActiveCursor({ index, key: toGalleryItemKey(item) });
       pickItem(item);
     },
     [pickItem]
   );
-  const handleLoadMore = useCallback(() => loadMoreRef.current(), []);
   const handleClearSearch = useCallback(() => setSearchTerm(''), [setSearchTerm]);
 
   const openGallery = useCallback(() => {
@@ -303,8 +335,6 @@ export const GalleryPickerView = ({
     accept,
     activeItem,
     isSearching,
-    isWindowTruncated: data.isWindowTruncated,
-    loadedCount: items?.length ?? 0,
     pane: scope.pane,
     remaining: getGalleryPickerRemaining(accept, selection),
     total: data.total,
@@ -424,7 +454,7 @@ export const GalleryPickerView = ({
           />
         ) : showsGrid ? (
           <GalleryPickerGrid
-            activeKey={resolvedActiveKey}
+            activeIndex={resolvedActiveIndex}
             columnCount={columnCount}
             currentKey={currentKey}
             getTileState={getTileState}
@@ -432,10 +462,10 @@ export const GalleryPickerView = ({
             isMultiple={isMultiple}
             isStale={isStale}
             items={items}
+            listing={data.listing}
             label={t('widgets.gallery.picker.itemsLabel')}
             onActivate={handleActivate}
             onColumnCountChange={setColumnCount}
-            onLoadMore={handleLoadMore}
           />
         ) : (
           <Stack align="center" color="fg.muted" gap="2" justify="center" minH="7rem" px="4" py="6">
@@ -455,9 +485,21 @@ export const GalleryPickerView = ({
         )}
       </Stack>
       <HStack borderColor="border.subtle" borderTopWidth="1px" gap="2" justify="space-between" pe="1" ps="2" py="1">
-        <Text color="fg.subtle" fontSize="2xs" fontVariantNumeric="tabular-nums" minW="0" role="status" truncate>
-          {status}
+        <Text
+          color={data.listing.error && items !== null ? 'fg' : 'fg.subtle'}
+          fontSize="2xs"
+          fontVariantNumeric="tabular-nums"
+          minW="0"
+          role={data.listing.error && items !== null ? 'alert' : 'status'}
+          truncate
+        >
+          {data.listing.error && items !== null ? data.listing.error.message : status}
         </Text>
+        {data.listing.error && items !== null ? (
+          <Button flexShrink={0} size="2xs" variant="outline" onClick={data.listing.retry}>
+            {t('common.retry')}
+          </Button>
+        ) : null}
         {isMultiple ? (
           <Button flexShrink={0} size="2xs" variant="subtle" onClick={onClose}>
             {t('common.done')}

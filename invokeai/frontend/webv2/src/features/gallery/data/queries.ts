@@ -83,8 +83,7 @@ export interface CanonicalGalleryItemsFilter {
 }
 
 /**
- * Offset anchors a page-aligned infinite window with GALLERY_MAX_ROWS reach. Board, search, and view changes reset
- * it to zero.
+ * Offset chooses the initial page. Infinite windows slide in either direction with a default ten-page budget.
  */
 export type GalleryItemsWindow = { kind: 'anchor'; offset: number } | { kind: 'infinite'; offset?: number };
 
@@ -102,6 +101,11 @@ type GalleryItemsInfiniteQueryKey = readonly [
 ];
 
 type GalleryItemsAnchorQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'anchor' | 'infinite', number];
+type GalleryItemsViewQueryKey = readonly [
+  ...(GalleryItemsInfiniteQueryKey | GalleryItemsAnchorQueryKey),
+  'view',
+  string,
+];
 
 /** The bounded starred strip: one `GalleryItemsPage`, not an infinite window. */
 type GalleryItemsStripQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'strip'];
@@ -109,6 +113,7 @@ type GalleryItemsStripQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'str
 export type GalleryItemsListQueryKey =
   | GalleryItemsAnchorQueryKey
   | GalleryItemsInfiniteQueryKey
+  | GalleryItemsViewQueryKey
   | GalleryItemsStripQueryKey;
 
 const canonicalizeBoardsQuery = (query: GalleryBoardsQuery): CanonicalGalleryBoardsQuery => ({
@@ -178,8 +183,8 @@ export const galleryKeys = {
     owner: AccountScope,
     filter: CanonicalGalleryItemsFilter,
     window: GalleryItemsWindow = { kind: 'infinite' }
-  ): GalleryItemsListQueryKey =>
-    [...galleryKeys.itemListsForAccount(owner), filter, ...getWindowKey(window)] as GalleryItemsListQueryKey,
+  ): GalleryItemsInfiniteQueryKey | GalleryItemsAnchorQueryKey =>
+    [...galleryKeys.itemListsForAccount(owner), filter, ...getWindowKey(window)] as const,
   starredStrip: (owner: AccountScope, filter: CanonicalGalleryItemsFilter): GalleryItemsStripQueryKey =>
     [...galleryKeys.itemListsForAccount(owner), filter, 'strip'] as const,
   itemNamesRoot: () => [...galleryKeys.itemsRoot(), 'names'] as const,
@@ -323,7 +328,13 @@ export const fetchGalleryItemsRange = async (
   assertAccountScopeCurrent(owner);
   signal.throwIfAborted();
 
-  return result.items.length <= limit ? result : { ...result, items: result.items.slice(0, limit) };
+  return result.items.length <= limit
+    ? result
+    : {
+        ...result,
+        items: result.items.slice(0, limit),
+        ...(result.itemIndices ? { itemIndices: result.itemIndices.slice(0, limit) } : {}),
+      };
 };
 
 /**
@@ -383,21 +394,10 @@ export const getGalleryListingBoardsQuery = (settings: GallerySettings): Gallery
   orderDir: settings.boardOrderDir,
 });
 
-const getNextPageParam = (
-  window: GalleryItemsWindow,
-  lastPage: Pick<GalleryItemsPage, 'total'>,
-  lastPageParam: number
-): number | undefined => {
-  const nextOffset = lastPageParam + GALLERY_PAGE_SIZE;
-  const isInsideWindow =
-    window.kind === 'anchor' || nextOffset < normalizePageOffset(window.offset ?? 0) + GALLERY_MAX_ROWS;
-
-  return isInsideWindow && nextOffset < lastPage.total ? nextOffset : undefined;
-};
-
 export const galleryItemsInfiniteOptions = (
   inputFilter: GalleryItemsFilter,
-  window: GalleryItemsWindow = { kind: 'infinite' }
+  window: GalleryItemsWindow = { kind: 'infinite' },
+  consumerId?: string
 ) => {
   const owner = captureAccountScope();
   const filter = canonicalizeGalleryItemsFilter(inputFilter);
@@ -406,7 +406,7 @@ export const galleryItemsInfiniteOptions = (
       ? ({ kind: 'infinite', offset: normalizePageOffset(window.offset ?? 0) } as const)
       : ({ ...window, offset: normalizePageOffset(window.offset) } as const);
   const initialPageParam = normalizedWindow.offset;
-  const isBaseInfiniteWindow = normalizedWindow.kind === 'infinite' && normalizedWindow.offset === 0;
+  const windowKey = galleryKeys.items(owner, filter, normalizedWindow);
 
   return infiniteQueryOptions<
     GalleryItemsPage,
@@ -415,22 +415,13 @@ export const galleryItemsInfiniteOptions = (
     GalleryItemsListQueryKey,
     number
   >({
-    // Anchored windows (paginated pages and deep infinite reveals) are
-    // transient views; only the base window's cache is worth keeping around.
-    ...(isBaseInfiniteWindow ? {} : { gcTime: 0 }),
-    getNextPageParam: (lastPage, allPages, lastPageParam) =>
-      allPages.length >= GALLERY_MAX_INFINITE_PAGES
-        ? undefined
-        : getNextPageParam(normalizedWindow, lastPage, lastPageParam),
-    getPreviousPageParam: (_firstPage, allPages, firstPageParam) => {
-      // Infinite windows cannot prepend above their anchor without shifting the viewport. Paginated windows may
-      // prepend because consumers select by pageParam.
-      const lowestPageParam = normalizedWindow.kind === 'infinite' ? normalizedWindow.offset : 0;
-
-      return allPages.length < GALLERY_MAX_INFINITE_PAGES && firstPageParam - GALLERY_PAGE_SIZE >= lowestPageParam
-        ? firstPageParam - GALLERY_PAGE_SIZE
-        : undefined;
-    },
+    // View-owned windows release on exit. Preview retains its current window for keep-alive scroll restoration and
+    // removes the previous window whenever it reanchors.
+    ...(consumerId === undefined ? {} : { gcTime: 0 }),
+    getNextPageParam: (lastPage, _allPages, lastPageParam) =>
+      lastPageParam + GALLERY_PAGE_SIZE < lastPage.total ? lastPageParam + GALLERY_PAGE_SIZE : undefined,
+    getPreviousPageParam: (_firstPage, _allPages, firstPageParam) =>
+      firstPageParam > 0 ? Math.max(0, firstPageParam - GALLERY_PAGE_SIZE) : undefined,
     initialPageParam,
     maxPages: GALLERY_MAX_INFINITE_PAGES,
     queryFn: ({ client, pageParam, signal }) =>
@@ -439,7 +430,7 @@ export const galleryItemsInfiniteOptions = (
         offset: pageParam,
         signal: AbortSignal.any([signal, owner.signal]),
       }),
-    queryKey: galleryKeys.items(owner, filter, normalizedWindow),
+    queryKey: consumerId === undefined ? windowKey : ([...windowKey, 'view', consumerId] as const),
     staleTime: 60_000,
   });
 };
@@ -485,10 +476,6 @@ export const flattenGalleryItemsData = (data: InfiniteData<GalleryItemsPage, num
 
       itemKeys.add(key);
       items.push(item);
-
-      if (items.length === GALLERY_MAX_ROWS) {
-        return items;
-      }
     }
   }
 

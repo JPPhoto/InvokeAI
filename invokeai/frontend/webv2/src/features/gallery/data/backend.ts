@@ -675,13 +675,19 @@ export const hydrateGalleryDateBoardItemPage = async ({
     hydrateVideoRefs(refs, signal),
   ]);
   const imagesByName = new Map(images.map((image) => [image.name, image]));
-  const hydrated = refs.flatMap((ref, index) => {
+  const hydrated: GalleryItem[] = [];
+  const itemIndices: number[] = [];
+
+  refs.forEach((ref, index) => {
     const item = ref.kind === 'image' ? imagesByName.get(ref.name) : videosByIndex.get(index);
 
-    return item ? [item] : [];
+    if (item) {
+      hydrated.push(item);
+      itemIndices.push(offset + index);
+    }
   });
 
-  return { items: hydrated, total };
+  return { items: hydrated, itemIndices, total };
 };
 
 const hydratePaletteDateBoardImagePage = async ({

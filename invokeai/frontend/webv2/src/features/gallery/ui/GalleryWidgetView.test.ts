@@ -1,7 +1,7 @@
 import i18n from 'i18next';
 import { describe, expect, it } from 'vitest';
 
-import { shouldPublishGalleryTotal } from './GalleryWidgetView';
+import { shouldEnableGalleryStarredStrip, shouldPublishGalleryTotal } from './GalleryWidgetView';
 
 const englishCatalogModules = import.meta.glob('../../../../public/locales/en.json', {
   eager: true,
@@ -25,6 +25,30 @@ describe('shouldPublishGalleryTotal', () => {
     expect(shouldPublishGalleryTotal({ knownTotalImages: null, lastPublishedTotal: null, total: Number.NaN })).toBe(
       false
     );
+  });
+});
+
+describe('shouldEnableGalleryStarredStrip', () => {
+  const base = {
+    anchoredWindowPage: 0,
+    infiniteListingOffset: 0,
+    isInfinite: true,
+    semanticSearchActive: false,
+    starredOnly: false,
+  };
+
+  it('hides the strip at a deep infinite anchor and restores it when backward traversal returns to zero', () => {
+    expect(shouldEnableGalleryStarredStrip({ ...base, anchoredWindowPage: 15, infiniteListingOffset: 900 })).toBe(
+      false
+    );
+    // The explicit reveal anchor can remain on page 15 after the window has slid back to the top.
+    expect(shouldEnableGalleryStarredStrip({ ...base, anchoredWindowPage: 15, infiniteListingOffset: 0 })).toBe(true);
+  });
+
+  it('uses the persisted anchor in paginated mode and suppresses the strip for search or starred-only views', () => {
+    expect(shouldEnableGalleryStarredStrip({ ...base, anchoredWindowPage: 2, isInfinite: false })).toBe(false);
+    expect(shouldEnableGalleryStarredStrip({ ...base, semanticSearchActive: true })).toBe(false);
+    expect(shouldEnableGalleryStarredStrip({ ...base, starredOnly: true })).toBe(false);
   });
 });
 

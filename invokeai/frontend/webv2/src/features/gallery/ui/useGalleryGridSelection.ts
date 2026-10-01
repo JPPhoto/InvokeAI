@@ -1,19 +1,20 @@
-import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
-
 import {
   isGalleryImageItem,
   parseGalleryItemKey,
   toGalleryItemKey,
   toGalleryItemRef,
+  type GalleryItem,
+  type GalleryItemRef,
 } from '@features/gallery/core/items';
 import { isDateBoardId, type GalleryItemNames } from '@features/gallery/data/backend';
-import { galleryItemNamesOptions } from '@features/gallery/data/queries';
+import { GALLERY_PAGE_SIZE, galleryItemNamesOptions } from '@features/gallery/data/queries';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react';
 
 import type { GalleryItemContextMenuTarget } from './GalleryUiContext';
 
+import { getGalleryGridWindowIndexForItemKey } from './galleryGridLayout';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
 const getGalleryItemRange = (
@@ -41,7 +42,8 @@ const getGalleryItemRange = (
 export const useGalleryGridSelection = () => {
   // `loadedItems` includes the strip, whose starred items the listing window
   // may not hold; the context menu and ctrl-toggle must resolve those too.
-  const { actions, filter, gallery, loadedItems, starredStrip } = useGalleryWidget();
+  const { actions, filter, gallery, loadedItems, listing, starredStrip } = useGalleryWidget();
+  const listingItemsByIndex = listing?.itemsByIndex;
   const queryClient = useQueryClient();
   const [contextMenuTarget, setContextMenuTarget] = useState<GalleryItemContextMenuTarget | null>(null);
 
@@ -150,12 +152,17 @@ export const useGalleryGridSelection = () => {
               ) ?? null)
             : null;
 
-        actions.toggleItemInSelection(item, nextPrimaryItem);
+        const index = listingItemsByIndex ? getGalleryGridWindowIndexForItemKey(listingItemsByIndex, itemKey) : -1;
+        actions.toggleItemInSelection(
+          item,
+          nextPrimaryItem,
+          index < 0 ? undefined : Math.floor(index / GALLERY_PAGE_SIZE)
+        );
       } else {
         actions.selectItem(item);
       }
     },
-    [actions, gallery.selectedItemKey, gallery.selectedItemKeys, loadedItems, selectItemRange]
+    [actions, gallery.selectedItemKey, gallery.selectedItemKeys, loadedItems, listingItemsByIndex, selectItemRange]
   );
 
   const handleThumbnailContextMenu = useCallback(

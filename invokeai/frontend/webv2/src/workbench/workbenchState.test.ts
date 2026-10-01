@@ -5041,6 +5041,24 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(values.galleryPage).toBe(0);
   });
 
+  it('stamps an explicit absolute page when a multi-select toggle adds the primary item', () => {
+    let state = createInitialWorkbenchState();
+    const item = createGalleryImageItem('deep-toggle.png');
+
+    state = workbenchReducer(state, {
+      item,
+      nextPrimaryItem: null,
+      selectionPage: 30,
+      type: 'toggleGalleryItemInSelection',
+    });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    const query = values.selectedImageQuery as { page: number };
+
+    expect(values.selectedImagePage).toBe(30);
+    expect(query.page).toBe(30);
+  });
+
   it('pauses live-follow for saved Gallery multi-selection and comparison intents', () => {
     const primaryImage = createGalleryImageItem('primary.png');
     const compareImage = createGalleryImageItem('compare.png');

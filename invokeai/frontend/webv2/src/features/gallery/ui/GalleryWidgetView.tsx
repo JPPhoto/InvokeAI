@@ -1,7 +1,7 @@
-import type { GalleryItem } from '@features/gallery/core/items';
+import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 
-import { toGalleryItemRef } from '@features/gallery/core/items';
+import { getGallerySelectionPageAfterRemoval, toGalleryItemKey, toGalleryItemRef } from '@features/gallery/core/items';
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import { getGallerySettings } from '@features/gallery/core/settings';
 import { GALLERY_PAGE_SIZE, galleryItemNamesOptions } from '@features/gallery/data/queries';
@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next';
 import type { GalleryStateView } from './galleryStateView';
 
 import { GalleryBoardDragMonitor } from './GalleryBoardDragMonitor';
-import { mergeGalleryLoadedItems } from './galleryGridLayout';
+import { getGalleryGridWindowIndexForItemKey, mergeGalleryLoadedItems } from './galleryGridLayout';
 import { GalleryLayout } from './GalleryLayout';
 import {
   getGalleryAnchoredWindowPage,
@@ -55,6 +55,21 @@ export const shouldPublishGalleryTotal = ({
   total: number | null;
 }): boolean =>
   typeof total === 'number' && Number.isFinite(total) && total !== knownTotalImages && total !== lastPublishedTotal;
+
+export const shouldEnableGalleryStarredStrip = ({
+  anchoredWindowPage,
+  infiniteListingOffset,
+  isInfinite,
+  semanticSearchActive,
+  starredOnly,
+}: {
+  anchoredWindowPage: number;
+  infiniteListingOffset: number;
+  isInfinite: boolean;
+  semanticSearchActive: boolean;
+  starredOnly: boolean;
+}): boolean =>
+  !semanticSearchActive && !starredOnly && (isInfinite ? infiniteListingOffset === 0 : anchoredWindowPage === 0);
 
 export const GalleryStatusChip = ({ count }: { count: number }) => {
   const { t } = useTranslation();
@@ -119,12 +134,19 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     });
   }, [notifications, semanticError]);
 
-  const { loadMore, selectedBoardId, total } = data;
-  // No strip under a ranked result (no starred filter applies), under the
-  // starred-only listing (it would repeat the grid), or in a window anchored
-  // mid-board (the banner promises a slice, not the top of the board).
+  const { selectedBoardId, total } = data;
+  // No strip under a ranked result (no starred filter applies) or a
+  // starred-only listing (it would repeat the grid). Infinite windows use
+  // their retained offset because backward loading can return to zero while
+  // the persisted deep-reveal anchor remains unchanged.
   const starredStrip = useGalleryStarredStrip({
-    enabled: semanticQuery === null && !starredOnly && getGalleryAnchoredWindowPage(galleryValues) === 0,
+    enabled: shouldEnableGalleryStarredStrip({
+      anchoredWindowPage: getGalleryAnchoredWindowPage(galleryValues),
+      infiniteListingOffset: data.listing.offset,
+      isInfinite: settings.paginationMode === 'infinite',
+      semanticSearchActive: semanticQuery !== null,
+      starredOnly,
+    }),
     filter: data.filter,
   });
   const gallery = useMemo(
@@ -137,6 +159,24 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   );
   const lastPublishedTotalRef = useRef<number | null>(null);
   const itemActionFilterIdentity = useMemo(() => JSON.stringify(data.filter), [data.filter]);
+  const getItemSelectionPage = useCallback(
+    (item: GalleryItem) => {
+      const index = getGalleryGridWindowIndexForItemKey(data.listing.itemsByIndex, toGalleryItemKey(item));
+
+      return index < 0 ? undefined : Math.floor(index / GALLERY_PAGE_SIZE);
+    },
+    [data.listing.itemsByIndex]
+  );
+  const getItemSelectionPageAfterRemoval = useCallback(
+    (item: GalleryItem, orderedRefs: GalleryItemRef[], removedRefs: GalleryItemRef[]) =>
+      getGallerySelectionPageAfterRemoval({
+        item,
+        orderedRefs,
+        removedRefs,
+        listingOffset: starredStrip.items.length,
+      }),
+    [starredStrip.items.length]
+  );
   const loadOrderedItemRefs = useCallback(
     async (signal: AbortSignal) => {
       signal.throwIfAborted();
@@ -155,6 +195,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   // eslint-disable-next-line react/refs
   itemActionContextRef.current = {
     filterIdentity: itemActionFilterIdentity,
+    getItemSelectionPage,
+    getItemSelectionPageAfterRemoval,
     items: gallery.items,
     loadOrderedRefs: loadOrderedItemRefs,
     selectedItemKey: gallery.selectedItemKey,
@@ -168,8 +210,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
 
   const actions = useGalleryActions({
     boards: data.boards,
+    getItemActionContext,
     getCurrentGalleryLocation,
-    loadMore,
     selectedBoardId,
   });
 
@@ -223,7 +265,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
         actions={actions}
         filter={data.filter}
         gallery={gallery}
-        isWindowTruncated={data.isWindowTruncated}
+        listing={gallery.settings.paginationMode === 'infinite' ? data.listing : undefined}
         loadedItems={loadedItems}
         projectName={projectName}
         region={region}
@@ -238,7 +280,7 @@ const GalleryWidgetContent = ({
   actions,
   filter,
   gallery,
-  isWindowTruncated,
+  listing,
   loadedItems,
   projectName,
   region,
@@ -248,7 +290,7 @@ const GalleryWidgetContent = ({
   actions: GalleryActions;
   filter: GalleryItemsFilter;
   gallery: GalleryStateView;
-  isWindowTruncated: boolean;
+  listing: GalleryWidgetContextValue['listing'];
   loadedItems: GalleryItem[];
   projectName: string;
   region: GalleryWidgetProps['region'];
@@ -261,7 +303,7 @@ const GalleryWidgetContent = ({
       actions,
       filter,
       gallery,
-      isWindowTruncated,
+      listing,
       itemActions,
       loadedItems,
       projectName,
@@ -269,7 +311,7 @@ const GalleryWidgetContent = ({
       runtime,
       starredStrip,
     }),
-    [actions, filter, gallery, isWindowTruncated, itemActions, loadedItems, projectName, region, runtime, starredStrip]
+    [actions, filter, gallery, itemActions, listing, loadedItems, projectName, region, runtime, starredStrip]
   );
 
   return (

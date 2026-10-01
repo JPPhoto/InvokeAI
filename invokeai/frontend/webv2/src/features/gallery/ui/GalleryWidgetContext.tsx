@@ -8,6 +8,7 @@ import { createContext, use } from 'react';
 
 import type { GalleryStateView } from './galleryStateView';
 import type { GalleryItemActions, GalleryWidgetProps, GalleryWidgetRuntime } from './GalleryUiContext';
+import type { GalleryListing } from './useGalleryData';
 
 /**
  * The provider maps widget intents to workbench/backend actions; shared ImageActions owns cross-widget item
@@ -20,7 +21,6 @@ export interface GalleryActions {
   downloadBoard: (boardId: string) => Promise<void>;
   /** Export the project that owns this board as a complete `.invk` archive. */
   exportProject: (projectId: string, projectName: string) => void;
-  loadMore: () => void;
   refresh: () => void;
   renameBoard: (boardId: string, boardName: string) => Promise<void>;
   selectBoard: (boardId: string) => void;
@@ -41,7 +41,7 @@ export interface GalleryActions {
   /** The semantic field's live text, ahead of the debounced commit. */
   setSemanticSearchText: (text: string) => void;
   setView: (galleryView: GalleryView) => void;
-  toggleItemInSelection: (item: GalleryItem, nextPrimaryItem: GalleryItem | null) => void;
+  toggleItemInSelection: (item: GalleryItem, nextPrimaryItem: GalleryItem | null, selectionPage?: number) => void;
   updateSettings: (settings: Partial<GallerySettings>) => void;
   /** Resolves with the confirmed uploads; empty when nothing landed. */
   uploadFiles: (files: File[]) => Promise<GalleryItem[]>;
@@ -65,7 +65,8 @@ export interface GalleryWidgetContextValue {
   filter: GalleryItemsFilter;
   itemActions: GalleryItemActions;
   /** The infinite window is full and the board holds images it cannot reach. */
-  isWindowTruncated: boolean;
+  /** Present for infinite mode; omitted only by older UI fixtures and paginated grids. */
+  listing?: GalleryListing;
   /** Everything on hand — strip first, then the listing, without repeats — for lookups by key. */
   loadedItems: GalleryItem[];
   starredStrip: GalleryStarredStrip;

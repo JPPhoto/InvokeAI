@@ -232,6 +232,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const {
     boardItems,
     getSelectionPage,
+    getSelectionPageAfterRemoval,
     handleNavigationKeyDown,
     isLoadingBoard,
     navigate,
@@ -266,6 +267,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     () => ({
       filterIdentity: navigationQueryKey,
       getItemSelectionPage: getSelectionPage,
+      getItemSelectionPageAfterRemoval: getSelectionPageAfterRemoval,
       items: boardItems,
       loadOrderedRefs: (signal: AbortSignal) => {
         signal.throwIfAborted();
@@ -273,7 +275,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       },
       selectedItemKey,
     }),
-    [boardItems, getSelectionPage, navigationQueryKey, selectedItemKey]
+    [boardItems, getSelectionPage, getSelectionPageAfterRemoval, navigationQueryKey, selectedItemKey]
   );
   const projectId = useActiveProjectId();
   const { dialog: deletionConfirmationDialog, requestDeletionConfirmation } = useDeletionConfirmation();

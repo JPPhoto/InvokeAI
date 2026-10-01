@@ -1,6 +1,7 @@
 import type { GalleryImage, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery';
 import type { CreateCanvasFromImagesResult } from '@workbench/canvas-operations/api';
 
+import { getGallerySelectionPageAfterRemoval } from '@features/gallery/core/items';
 import {
   resetArchitectureCapabilities,
   setArchitectureCapabilities,
@@ -204,6 +205,11 @@ let root: Root | null = null;
 const actionsRef = createRef<ImageActions>();
 interface ItemActionContext {
   getItemSelectionPage?: (item: GalleryItem) => number;
+  getItemSelectionPageAfterRemoval?: (
+    item: GalleryItem,
+    orderedRefs: GalleryItemRef[],
+    removedRefs: GalleryItemRef[]
+  ) => number | undefined;
   filterIdentity: string;
   items: GalleryItem[];
   loadOrderedRefs(): Promise<GalleryItemRef[]>;
@@ -1192,6 +1198,33 @@ describe('primary successor after confirmed deletion', () => {
     });
 
     expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1', 30, true);
+  });
+
+  it('stamps a deletion successor with its shifted page after the preceding row is removed', async () => {
+    const items = Array.from({ length: 62 }, (_, index) => galleryItem('image', `row-${index}.png`));
+    const primary = items[59]!;
+    const successor = items[60]!;
+    const refs = items.map(({ kind, name }) => ({ kind, name }));
+    currentItemActionContext = {
+      filterIdentity: 'filter-a',
+      getItemSelectionPage: () => 1,
+      getItemSelectionPageAfterRemoval: (item, orderedRefs, removedRefs) =>
+        getGallerySelectionPageAfterRemoval({ item, orderedRefs, removedRefs, listingOffset: 0 }),
+      items,
+      loadOrderedRefs: () => Promise.resolve(refs),
+      selectedItemKey: `image:${primary.name}`,
+    };
+    mocks.itemDelete.mockResolvedValue({
+      affectedBoardIds: ['board-1'],
+      failed: [],
+      succeeded: [{ kind: 'image', name: primary.name }],
+    });
+
+    await act(async () => {
+      await getItemActions().deleteItems([{ kind: 'image', name: primary.name }]);
+    });
+
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(successor, 'project-1', 0, true);
   });
 
   it('opens an item in Preview at the page the host navigates from', () => {

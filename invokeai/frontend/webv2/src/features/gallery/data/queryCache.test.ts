@@ -600,6 +600,35 @@ describe('Gallery window rebuild', () => {
     unsubscribe();
   });
 
+  it('refreshes a slid window atomically at its retained offset after listing changes', async () => {
+    const client = createClient();
+    const options = galleryItemsInfiniteOptions(listFilter);
+    const data: GalleryItemsData = {
+      pageParams: Array.from({ length: 10 }, (_, index) => 420 + index * 60),
+      pages: Array.from({ length: 10 }, (_, index) => ({
+        items: createPageItems(`old-${420 + index * 60}`, 60),
+        total: 1_400,
+      })),
+    };
+    client.setQueryData(options.queryKey, data);
+    const observer = new InfiniteQueryObserver(client, options);
+    const unsubscribe = observer.subscribe(() => undefined);
+    const freshItems = createPageItems('after-insert-and-delete', 600);
+    vi.mocked(listGalleryItems).mockResolvedValue({ items: freshItems, total: 1_401 });
+    try {
+      await invalidateGalleryItems(client);
+      const refreshed = client.getQueryData<GalleryItemsData>(options.queryKey);
+      expect(vi.mocked(listGalleryItems)).toHaveBeenCalledWith(expect.objectContaining({ limit: 600, offset: 420 }));
+      expect(refreshed?.pageParams).toEqual(data.pageParams);
+      expect(refreshed?.pages.flatMap((page) => page.items)).toEqual(freshItems);
+      expect(refreshed?.pages.every((page) => page.total === 1_401)).toBe(true);
+      expect(client.getQueryState(options.queryKey)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+      observer.destroy();
+    }
+  });
+
   it('still collapses an unobserved multi-page window to its anchor page', async () => {
     const { client, key, pages } = setUpStaleWindow();
 
@@ -678,6 +707,33 @@ describe('Gallery window rebuild', () => {
     expect(data.pageParams).toEqual([0, 60]);
     expect(data.pages[1]?.items).toHaveLength(60);
     expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+    unsubscribe();
+  });
+
+  it('keeps hydrated missing-ref holes on their original absolute rows after rebuilding a span', async () => {
+    const { client, key } = setUpStaleWindow(dateFilter);
+    const unsubscribe = observeItems(client, dateFilter);
+    const hydratedItems = [createItem('row-0.png'), createItem('row-2.png'), createItem('row-62.png')];
+
+    vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({
+      items: createPageItems('fresh-ref', 120).map(({ kind, name }) => ({ kind, name })),
+      total: 130,
+    });
+    vi.mocked(hydrateGalleryDateBoardItemPage).mockResolvedValue({
+      items: hydratedItems,
+      itemIndices: [0, 2, 62],
+      total: 130,
+    });
+
+    await invalidateGalleryItems(client);
+
+    const data = getData(client, key);
+
+    expect(data.pageParams).toEqual([0, 60]);
+    expect(data.pages[0]?.items.map((item) => item.name)).toEqual(['row-0.png', 'row-2.png']);
+    expect(data.pages[0]?.itemIndices).toEqual([0, 2]);
+    expect(data.pages[1]?.items.map((item) => item.name)).toEqual(['row-62.png']);
+    expect(data.pages[1]?.itemIndices).toEqual([62]);
     unsubscribe();
   });
 

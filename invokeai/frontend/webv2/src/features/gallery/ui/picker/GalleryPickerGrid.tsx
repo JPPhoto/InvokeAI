@@ -2,13 +2,15 @@ import type { SystemStyleObject } from '@chakra-ui/react';
 import type { GalleryItem, GalleryItemKey } from '@features/gallery/core/items';
 import type { CSSProperties, MouseEvent } from 'react';
 
-import { Box, Icon, Skeleton } from '@chakra-ui/react';
+import { Box, Icon, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { toGalleryItemKey } from '@features/gallery/core/items';
 import { getGalleryColumnCountForCell } from '@features/gallery/ui/galleryGridLayout';
 import { GalleryTileFrame } from '@features/gallery/ui/GalleryTileFrame';
+import { Button } from '@platform/ui/Button';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { CheckIcon } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { defaultRangeExtractor, useVirtualizer, type Range } from 'react-hook-tanstack-virtual';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -20,6 +22,8 @@ import {
 
 const GRID_GAP_PX = 4;
 const SKELETON_TILE_COUNT = 8;
+const VIRTUAL_OVERSCAN_ROWS = 3;
+const UNKNOWN_TOTAL_TAIL = 60;
 
 const IMG_STYLE: CSSProperties = {
   display: 'block',
@@ -53,6 +57,10 @@ const GalleryPickerTile = memo(function GalleryPickerTile({
   isActive,
   isCurrent,
   isMultiple,
+  listingIndex,
+  listingTotal,
+  onReveal,
+  shouldReveal,
   item,
   state,
 }: {
@@ -61,6 +69,10 @@ const GalleryPickerTile = memo(function GalleryPickerTile({
   /** The Gallery widget's own selection, ringed so it reads as the default. */
   isCurrent: boolean;
   isMultiple: boolean;
+  listingIndex: number;
+  listingTotal: number | null;
+  onReveal: () => void;
+  shouldReveal: boolean;
   item: GalleryItem;
   state: GalleryPickerTileState;
 }) {
@@ -72,14 +84,14 @@ const GalleryPickerTile = memo(function GalleryPickerTile({
       ? t(item.kind === 'video' ? 'widgets.gallery.picker.unsupportedVideo' : 'widgets.gallery.picker.unsupportedImage')
       : undefined;
 
-  // Active-state ref callbacks reveal keyboard highlights; pointer hover must not scroll.
   const scrollIntoView = useCallback(
     (node: HTMLDivElement | null) => {
-      if (node && isActive) {
+      if (node && shouldReveal) {
         node.scrollIntoView({ block: 'nearest' });
+        onReveal();
       }
     },
-    [isActive]
+    [onReveal, shouldReveal]
   );
 
   return (
@@ -93,9 +105,12 @@ const GalleryPickerTile = memo(function GalleryPickerTile({
       aria-selected={isMultiple ? state === 'added' : isActive}
       css={css}
       data-item-key={key}
+      data-item-index={listingIndex}
       id={galleryPickerOptionId(idBase, key)}
       isSelected={isCurrent || state === 'added'}
       item={item}
+      aria-posinset={listingIndex + 1}
+      aria-setsize={listingTotal ?? -1}
       role="option"
       title={unsupportedLabel}
     >
@@ -130,11 +145,10 @@ const GalleryPickerTile = memo(function GalleryPickerTile({
 });
 
 /**
- * The bounded infinite window limits nonvirtualized rows; lazy images defer requests and the sentinel loads
- * further pages.
+ * Absolute virtual rows preserve the listing geometry while the range loader replaces distant pages.
  */
 export const GalleryPickerGrid = ({
-  activeKey,
+  activeIndex,
   columnCount,
   currentKey,
   getTileState,
@@ -142,12 +156,12 @@ export const GalleryPickerGrid = ({
   isMultiple,
   isStale,
   items,
+  listing,
   label,
   onActivate,
   onColumnCountChange,
-  onLoadMore,
 }: {
-  activeKey: GalleryItemKey | null;
+  activeIndex: number;
   columnCount: number;
   currentKey: GalleryItemKey | null;
   getTileState: (item: GalleryItem) => GalleryPickerTileState;
@@ -157,14 +171,41 @@ export const GalleryPickerGrid = ({
   isStale: boolean;
   /** Null while nothing has loaded yet. */
   items: GalleryItem[] | null;
+  listing: {
+    error: Error | null;
+    itemsByIndex: ReadonlyMap<number, GalleryItem>;
+    loadRange: (first: number, last: number) => void;
+    offset: number;
+    retry: () => void;
+    total: number | null;
+  };
   label: string;
-  onActivate: (item: GalleryItem) => void;
+  onActivate: (item: GalleryItem, index: number) => void;
   onColumnCountChange: (columnCount: number) => void;
-  onLoadMore: () => void;
 }) => {
+  const { t } = useTranslation();
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
-  const loadMoreObserverRef = useRef<IntersectionObserver | null>(null);
-  const itemsByKey = useMemo(() => new Map(items?.map((item) => [toGalleryItemKey(item), item])), [items]);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [lastIndexItems, setLastIndexItems] = useState<ReadonlyMap<number, GalleryItem>>(() => new Map());
+  const [rowPitch, setRowPitch] = useState(100);
+  const [revealState, setRevealState] = useState({ activeIndex, pendingIndex: null as number | null });
+  const itemsByIndex = isStale ? lastIndexItems : listing.itemsByIndex;
+
+  // Preserve the dimmed previous scope while a new board/search is loading.
+  if (!isStale && lastIndexItems !== listing.itemsByIndex) {
+    setLastIndexItems(listing.itemsByIndex);
+  }
+  if (revealState.activeIndex !== activeIndex) {
+    setRevealState({ activeIndex, pendingIndex: activeIndex >= 0 ? activeIndex : null });
+  }
+  const pendingRevealIndex = revealState.activeIndex === activeIndex ? revealState.pendingIndex : null;
+  const finishReveal = useCallback(() => {
+    setRevealState((current) => ({ ...current, pendingIndex: null }));
+  }, []);
+
+  const attachViewport = useCallback((node: HTMLDivElement | null) => {
+    viewportRef.current = node;
+  }, []);
 
   const measureRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -179,14 +220,14 @@ export const GalleryPickerGrid = ({
         const widthPx = entry?.contentRect.width ?? 0;
 
         if (widthPx > 0) {
-          onColumnCountChange(
-            getGalleryColumnCountForCell({
-              max: GALLERY_PICKER_MAX_COLUMNS,
-              min: GALLERY_PICKER_MIN_COLUMNS,
-              targetCellPx: GALLERY_PICKER_CELL_PX,
-              widthPx,
-            })
-          );
+          const columns = getGalleryColumnCountForCell({
+            max: GALLERY_PICKER_MAX_COLUMNS,
+            min: GALLERY_PICKER_MIN_COLUMNS,
+            targetCellPx: GALLERY_PICKER_CELL_PX,
+            widthPx,
+          });
+          onColumnCountChange(columns);
+          setRowPitch((widthPx - GRID_GAP_PX * (columns - 1)) / columns + GRID_GAP_PX);
         }
       });
 
@@ -196,82 +237,157 @@ export const GalleryPickerGrid = ({
     [onColumnCountChange]
   );
 
-  // The scroll viewport is found from the DOM rather than a ref: the sentinel
-  // can mount in the same commit as the viewport, before any parent ref is set.
-  const sentinelRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      loadMoreObserverRef.current?.disconnect();
-      loadMoreObserverRef.current = null;
+  const itemCount = useMemo(() => {
+    if (listing.total !== null) {
+      return listing.total;
+    }
 
-      if (!node) {
+    let loadedEnd = listing.offset;
+    for (const index of itemsByIndex.keys()) {
+      loadedEnd = Math.max(loadedEnd, index + 1);
+    }
+
+    return Math.max(loadedEnd + UNKNOWN_TOTAL_TAIL, UNKNOWN_TOTAL_TAIL);
+  }, [itemsByIndex, listing.offset, listing.total]);
+  const rowCount = Math.ceil(itemCount / columnCount);
+  const estimateRowSize = useCallback(() => rowPitch, [rowPitch]);
+  const getRowKey = useCallback((index: number) => index, []);
+  const getScrollElement = useCallback(() => viewportRef.current, []);
+  // Keep the active descendant mounted; only a pending focus change scrolls it into view.
+  const rangeExtractor = useCallback(
+    (range: Range) => {
+      const indexes = defaultRangeExtractor(range);
+      const activeRow = activeIndex < 0 ? -1 : Math.floor(activeIndex / columnCount);
+
+      if (activeRow < 0 || activeRow >= rowCount || indexes.includes(activeRow)) {
+        return indexes;
+      }
+
+      return [...indexes, activeRow].sort((a, b) => a - b);
+    },
+    [activeIndex, columnCount, rowCount]
+  );
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    estimateSize: estimateRowSize,
+    getItemKey: getRowKey,
+    getScrollElement,
+    overscan: VIRTUAL_OVERSCAN_ROWS,
+    rangeExtractor,
+    onChange: (instance) => {
+      const range = instance.range;
+      if (!range || isStale || itemCount === 0) {
         return;
       }
 
-      const observer = new IntersectionObserver(
-        ([entry]) => {
-          if (entry?.isIntersecting) {
-            onLoadMore();
-          }
-        },
-        { root: node.closest('[data-scope="scroll-area"][data-part="viewport"]'), rootMargin: '160px' }
+      listing.loadRange(
+        range.startIndex * columnCount,
+        Math.min(itemCount - 1, (range.endIndex + 1) * columnCount - 1)
       );
-
-      observer.observe(node);
-      loadMoreObserverRef.current = observer;
     },
-    [onLoadMore]
-  );
-
-  const handleClick = useCallback(
+    useFlushSync: false,
+  });
+  const virtualRows = virtualizer.virtualItems;
+  const virtualHeight = virtualizer.totalSize;
+  const handleRangeClick = useCallback(
     (event: MouseEvent<HTMLDivElement>) => {
-      const key = (event.target as HTMLElement).closest<HTMLElement>('[data-item-key]')?.dataset.itemKey;
-      const item = key ? itemsByKey.get(key as GalleryItemKey) : undefined;
+      const index = Number((event.target as HTMLElement).closest<HTMLElement>('[data-item-index]')?.dataset.itemIndex);
+      const item = Number.isInteger(index) ? itemsByIndex.get(index) : undefined;
 
       if (item) {
-        onActivate(item);
+        onActivate(item, index);
       }
     },
-    [itemsByKey, onActivate]
+    [itemsByIndex, onActivate]
   );
 
   return (
-    <Scrollable flex="1" minH="0">
-      <Box
-        ref={measureRef}
-        aria-busy={items === null || isStale || undefined}
-        aria-label={label}
-        aria-multiselectable={isMultiple || undefined}
-        display="grid"
-        gap={`${GRID_GAP_PX}px`}
-        gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
-        id={idBase}
-        opacity={isStale ? 0.6 : undefined}
-        p="2"
-        role="listbox"
-        transition="opacity var(--wb-motion-duration-fast) ease"
-        onClick={handleClick}
-      >
-        {items === null
-          ? Array.from({ length: SKELETON_TILE_COUNT }, (_, index) => (
+    <Scrollable flex="1" minH="0" viewportRef={attachViewport}>
+      <Box p="2" opacity={isStale ? 0.6 : undefined} transition="opacity var(--wb-motion-duration-fast) ease">
+        {items === null && listing.error ? (
+          <Stack align="center" color="fg.muted" gap="2" justify="center" minH="7rem" px="4" py="6" role="alert">
+            <Text fontSize="xs" textAlign="center">
+              {listing.error.message}
+            </Text>
+            <Button size="xs" variant="outline" onClick={listing.retry}>
+              {t('common.retry')}
+            </Button>
+          </Stack>
+        ) : items === null ? (
+          <Box
+            ref={measureRef}
+            aria-busy
+            aria-label={label}
+            aria-multiselectable={isMultiple || undefined}
+            display="grid"
+            gap={`${GRID_GAP_PX}px`}
+            gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
+            id={idBase}
+            role="listbox"
+          >
+            {Array.from({ length: SKELETON_TILE_COUNT }, (_, index) => (
               <Skeleton key={index} aspectRatio={1} rounded="md" />
-            ))
-          : items.map((item) => {
-              const key = toGalleryItemKey(item);
+            ))}
+          </Box>
+        ) : (
+          <Box
+            ref={measureRef}
+            aria-busy={isStale || undefined}
+            aria-label={label}
+            aria-multiselectable={isMultiple || undefined}
+            id={idBase}
+            role="listbox"
+            display="grid"
+            gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
+            position="relative"
+            height={`${virtualHeight}px`}
+            onClick={handleRangeClick}
+          >
+            {virtualRows.map((row) => (
+              <Box
+                key={row.key}
+                display="grid"
+                gap={`${GRID_GAP_PX}px`}
+                gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
+                insetInline={0}
+                position="absolute"
+                role="presentation"
+                top={`${row.start}px`}
+              >
+                {Array.from({ length: columnCount }, (_, column) => {
+                  const index = row.index * columnCount + column;
+                  const item = itemsByIndex.get(index);
 
-              return (
-                <GalleryPickerTile
-                  key={key}
-                  idBase={idBase}
-                  isActive={key === activeKey}
-                  isCurrent={key === currentKey}
-                  isMultiple={isMultiple}
-                  item={item}
-                  state={getTileState(item)}
-                />
-              );
-            })}
+                  if (index >= itemCount) {
+                    return null;
+                  }
+
+                  if (!item) {
+                    return <Skeleton key={index} aspectRatio={1} rounded="md" />;
+                  }
+
+                  const key = toGalleryItemKey(item);
+                  return (
+                    <GalleryPickerTile
+                      key={index}
+                      idBase={idBase}
+                      isActive={index === activeIndex}
+                      isCurrent={key === currentKey}
+                      isMultiple={isMultiple}
+                      item={item}
+                      state={getTileState(item)}
+                      listingIndex={index}
+                      listingTotal={listing.total}
+                      shouldReveal={pendingRevealIndex === index}
+                      onReveal={finishReveal}
+                    />
+                  );
+                })}
+              </Box>
+            ))}
+          </Box>
+        )}
       </Box>
-      {items && items.length > 0 && !isStale ? <Box ref={sentinelRef} aria-hidden="true" h="1px" /> : null}
     </Scrollable>
   );
 };

@@ -9,6 +9,7 @@ import {
   getGalleryUploadAccept,
   formatGalleryVideoDuration,
   galleryImageItemToGalleryImage,
+  getGallerySelectionPageAfterRemoval,
   isGalleryImageItem,
   legacyGeneratedImageToGalleryItem,
   parseGalleryItemKey,
@@ -60,6 +61,26 @@ describe('gallery item keys', () => {
 
     expect(toGalleryItemKey(item)).toBe('image:folder:example.png');
     expect(toGalleryItemRef(item)).toEqual({ kind: 'image', name: 'folder:example.png' });
+  });
+
+  it('moves a successor to its post-removal page without counting the leading starred strip', () => {
+    const starred = { kind: 'image' as const, name: 'starred.png' };
+    const orderedRefs = [
+      starred,
+      ...Array.from({ length: 61 }, (_, index) => ({ kind: 'image' as const, name: `row-${index}.png` })),
+    ];
+
+    expect(
+      getGallerySelectionPageAfterRemoval({
+        item: { kind: 'image', name: 'row-60.png' },
+        orderedRefs,
+        removedRefs: [{ kind: 'image', name: 'row-59.png' }, starred],
+        listingOffset: 1,
+      })
+    ).toBe(0);
+    expect(
+      getGallerySelectionPageAfterRemoval({ item: starred, orderedRefs, removedRefs: [starred], listingOffset: 1 })
+    ).toBe(0);
   });
 
   it('parses only non-empty exact media prefixes while retaining legacy names', () => {

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildGalleryGridRows,
+  buildGalleryGridWindowRows,
   GALLERY_GRID_GAP_PX,
   GALLERY_PINNED_FOOTER_PX,
   GALLERY_STARRED_HEADER_HEIGHT_PX,
@@ -125,6 +126,45 @@ describe('buildGalleryGridRows', () => {
 
     expect(getGalleryStarredStripItems(starredItems, 2).map((item) => item.name)).not.toContain('starred-6');
     expect(getGalleryStarredStripItems(starredItems, 2)).toHaveLength(6);
+  });
+});
+
+describe('buildGalleryGridWindowRows', () => {
+  it('keeps absolute rows and columns across a non-aligned window and a short interior page', () => {
+    const items = new Map([
+      [7, createImageItem('before-eviction')],
+      [8, createImageItem('after-eviction')],
+      [10, createImageItem('next-row')],
+    ]);
+
+    expect(buildGalleryGridWindowRows(items, 3, 2, 3)).toEqual([
+      {
+        cells: [null, createImageItem('before-eviction'), createImageItem('after-eviction')],
+        index: 2,
+        key: 'regular:2',
+        kind: 'cells',
+        section: 'regular',
+      },
+      {
+        cells: [null, createImageItem('next-row'), null],
+        index: 3,
+        key: 'regular:3',
+        kind: 'cells',
+        section: 'regular',
+      },
+    ]);
+  });
+
+  it('does not build rows outside the current virtual range', () => {
+    const items = new Map([
+      [0, createImageItem('top')],
+      [50, createImageItem('visible')],
+      [99, createImageItem('bottom')],
+    ]);
+
+    expect(buildGalleryGridWindowRows(items, 2, 25, 25).map((row) => row.cells.map((item) => item?.name))).toEqual([
+      ['visible', undefined],
+    ]);
   });
 });
 

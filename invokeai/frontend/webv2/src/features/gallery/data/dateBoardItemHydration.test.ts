@@ -190,7 +190,37 @@ describe('Gallery item names and date hydration', () => {
     });
 
     expect(page.items.map(({ kind, name }) => `${kind}:${name}`)).toEqual(['video:first', 'image:still', 'video:last']);
+    expect(page.itemIndices).toEqual([0, 2, 3]);
     expect(page.total).toBe(4);
+  });
+
+  it('keeps absolute indices across a missing middle ref at a nonzero page offset', async () => {
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url === '/api/v1/images/images_by_names') {
+        return Promise.resolve([imageDto('still')]);
+      }
+      if (url.endsWith('/missing')) {
+        return Promise.reject(new MockApiError('missing', 404));
+      }
+      return Promise.resolve(videoDto(url.split('/').at(-1) ?? ''));
+    });
+
+    const page = await hydrateGalleryDateBoardItemPage({
+      items: [
+        { kind: 'image', name: 'before' },
+        { kind: 'video', name: 'first' },
+        { kind: 'video', name: 'missing' },
+        { kind: 'image', name: 'still' },
+        { kind: 'video', name: 'last' },
+      ],
+      limit: 4,
+      offset: 1,
+      total: 5,
+    });
+
+    expect(page.items.map(({ kind, name }) => `${kind}:${name}`)).toEqual(['video:first', 'image:still', 'video:last']);
+    expect(page.itemIndices).toEqual([1, 3, 4]);
+    expect(page.total).toBe(5);
   });
 
   it.each([

@@ -107,16 +107,14 @@ export const getGalleryPickerDefaultIndex = (
 };
 
 export type GalleryPickerStatusPart =
-  | { count: number; kind: 'boardCount' | 'itemCount' | 'matchCount' | 'remainingCount' | 'windowLimit' }
+  | { count: number; kind: 'boardCount' | 'itemCount' | 'matchCount' | 'remainingCount' }
   | { kind: 'remainingNone' | 'unsupportedImage' | 'unsupportedVideo' };
 
-/** Footer priority: board count, incompatible-highlight explanation, capacity, then window cap or listing size. */
+/** Footer priority: board count, incompatible-highlight explanation, capacity, then listing size. */
 export const getGalleryPickerStatus = ({
   accept,
   activeItem,
   isSearching,
-  isWindowTruncated,
-  loadedCount,
   pane,
   remaining,
   total,
@@ -125,8 +123,6 @@ export const getGalleryPickerStatus = ({
   accept: GalleryPickerAccept;
   activeItem: GalleryItem | undefined;
   isSearching: boolean;
-  isWindowTruncated: boolean;
-  loadedCount: number;
   pane: 'boards' | 'items';
   remaining: number | null;
   total: number | null;
@@ -146,9 +142,7 @@ export const getGalleryPickerStatus = ({
     parts.push(remaining > 0 ? { count: remaining, kind: 'remainingCount' } : { kind: 'remainingNone' });
   }
 
-  if (isWindowTruncated) {
-    parts.push({ count: loadedCount, kind: 'windowLimit' });
-  } else if (total !== null) {
+  if (total !== null) {
     parts.push({ count: total, kind: isSearching ? 'matchCount' : 'itemCount' });
   }
 
@@ -172,37 +166,35 @@ const NAV_KEYS: ReadonlySet<string> = new Set<GalleryPickerNavKey>([
 
 export const isGalleryPickerNavKey = (key: string): key is GalleryPickerNavKey => NAV_KEYS.has(key);
 
-/**
- * Keyboard movement over a row-major grid. Left/right walk reading order
- * across row ends; up/down stay in the column and hold still when no tile
- * sits there (a ragged last row). No active tile resolves to an edge.
- */
-export const getGalleryPickerNeighborIndex = (
+/** Keyboard movement over the complete listing while only a bounded range is held in memory. */
+export const getGalleryPickerNeighborAbsoluteIndex = (
   index: number,
-  count: number,
+  total: number | null,
   columnCount: number,
   key: GalleryPickerNavKey
 ): number => {
-  if (count <= 0) {
+  const lastIndex = total === null ? Number.POSITIVE_INFINITY : total - 1;
+
+  if (total === 0) {
     return -1;
   }
 
-  if (index < 0 || index >= count) {
-    return key === 'End' ? count - 1 : 0;
+  if (index < 0) {
+    return key === 'End' && total !== null ? lastIndex : 0;
   }
 
   switch (key) {
     case 'Home':
       return 0;
     case 'End':
-      return count - 1;
+      return total === null ? index : lastIndex;
     case 'ArrowLeft':
       return Math.max(0, index - 1);
     case 'ArrowRight':
-      return Math.min(count - 1, index + 1);
+      return Math.min(lastIndex, index + 1);
     case 'ArrowUp':
       return index - columnCount >= 0 ? index - columnCount : index;
     case 'ArrowDown':
-      return index + columnCount < count ? index + columnCount : index;
+      return total === null || index + columnCount < total ? index + columnCount : index;
   }
 };

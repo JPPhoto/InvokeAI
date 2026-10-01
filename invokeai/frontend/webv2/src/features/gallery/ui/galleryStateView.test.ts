@@ -231,6 +231,8 @@ describe('gallery state view', () => {
         { starredOnly: true }
       )
     ).toBe(2);
+    expect(pageOf({ paginationMode: 'infinite' }, { paginationMode: 'infinite' })).toBe(2);
+    expect(pageOf({ paginationMode: 'infinite' }, { paginationMode: 'infinite', starredOnly: true })).toBeNull();
     expect(pageOf({ semanticImageQuery: { imageName: 'ref.png', kind: 'image' } })).toBeNull();
   });
 
@@ -279,6 +281,18 @@ describe('gallery state view', () => {
 
     expect(gallery.selectedItemKey).toBe('image:selected.png');
     expect(gallery.selectedItemKeys).toEqual(['image:selected.png']);
+  });
+
+  it('keeps the primary navigation cursor when its page is evicted', () => {
+    const gallery = getGalleryStateView(
+      { selectedImageName: 'video:evicted', selectedImageNames: ['image:other', 'video:evicted'] },
+      boards,
+      [createImageItem('other')],
+      false
+    );
+    expect(gallery.selectedItemKey).toBeNull();
+    expect(gallery.primarySelectedItemKey).toBe('video:evicted');
+    expect(gallery.selectedItemKeys).toEqual(['image:other', 'video:evicted']);
   });
 
   it('treats a selection in the starred strip as visible, though the listing does not hold it', () => {

@@ -1,3 +1,4 @@
+import type { GalleryItem } from '@features/gallery/contracts';
 import type { GalleryUiAdapter } from '@features/gallery/react';
 
 import { GalleryUiProvider } from '@features/gallery/react';
@@ -88,6 +89,7 @@ const selectBoard = vi.fn();
 const selectItem = vi.fn();
 const setItemMultiSelection = vi.fn();
 const patchGalleryValues = vi.fn();
+let getItemSelectionPage: ((item: GalleryItem) => number | undefined) | undefined;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const Probe = ({
@@ -105,6 +107,19 @@ const Probe = ({
   // eslint-disable-next-line react/refs
   currentGalleryLocationRef.current = { galleryView, selectedBoardId };
   const getCurrentGalleryLocation = useCallback(() => currentGalleryLocationRef.current, []);
+  const getItemActionContext = useCallback(
+    () =>
+      getItemSelectionPage
+        ? {
+            filterIdentity: 'active-listing',
+            getItemSelectionPage,
+            items: [],
+            loadOrderedRefs: () => Promise.resolve([]),
+            selectedItemKey: null,
+          }
+        : null,
+    []
+  );
   const actions = useGalleryActions({
     boards: [
       {
@@ -130,9 +145,9 @@ const Probe = ({
         videoCount: 0,
       },
     ],
-    loadMore: vi.fn(),
     selectedBoardId,
     getCurrentGalleryLocation,
+    getItemActionContext,
   });
 
   useImperativeHandle(ref, () => actions, [actions]);
@@ -203,6 +218,7 @@ const renderProbe = async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  getItemSelectionPage = undefined;
   accountLifecycle.activate('user-a');
   selectedBoardId = 'board-1';
   galleryView = 'images';
@@ -424,6 +440,40 @@ describe('board image archive omission', () => {
       boardId: 'board-1',
       signal: expect.any(AbortSignal),
     });
+  });
+});
+
+describe('selection page stamping', () => {
+  it('stamps the mapped page for direct and range selection while preserving items outside the listing', async () => {
+    const item = {
+      boardId: 'board-1',
+      category: 'general',
+      createdAt: '2026-07-30T12:00:00.000Z',
+      fullUrl: '/full/deep.png',
+      height: 64,
+      isIntermediate: false,
+      kind: 'image',
+      name: 'deep.png',
+      starred: false,
+      thumbnailUrl: '/thumbnail/deep.png',
+      width: 64,
+    } as const as GalleryItem;
+    getItemSelectionPage = () => 10;
+    await renderProbe();
+
+    actionsRef.current?.selectItem(item);
+    actionsRef.current?.selectItemRange([{ kind: 'image', name: item.name }], item);
+
+    expect(selectItem).toHaveBeenCalledExactlyOnceWith(item, 10);
+    expect(setItemMultiSelection).toHaveBeenCalledExactlyOnceWith(['image:deep.png'], item, 10);
+
+    getItemSelectionPage = () => undefined;
+    await renderProbe();
+    actionsRef.current?.selectItem(item);
+    actionsRef.current?.selectItemRange([{ kind: 'image', name: item.name }], item);
+
+    expect(selectItem).toHaveBeenLastCalledWith(item);
+    expect(setItemMultiSelection).toHaveBeenLastCalledWith(['image:deep.png'], item);
   });
 });
 

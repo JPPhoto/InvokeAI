@@ -3971,7 +3971,6 @@
         "unsupportedImage": "Images can't be used here",
         "unsupportedVideo": "Videos can't be used here",
         "upload": "Upload",
-        "windowLimit": "Showing the first {{count}} items. Narrow the search to reach the rest.",
         "working": "Working…"
       },
       "preparingDownload": "Preparing download",
@@ -4043,8 +4042,6 @@
       "videoCount_other": "{{count}} videos",
       "windowAnchored": "Showing this board from item {{index}}.",
       "backToBoardTop": "Back to top",
-      "windowLimit": "Showing the first {{count}} items. Narrow the search or switch to Pages to reach the rest.",
-      "windowLimitFrom": "Showing {{count}} items from item {{index}}. Narrow the search or switch to Pages to reach the rest.",
       "boardOrder": "Board order",
       "inProgress": "In progress",
       "progressSession": "{{name}} · {{index}} of {{total}}",

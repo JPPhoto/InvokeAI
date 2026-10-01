@@ -10,12 +10,12 @@ import {
 } from '@features/gallery/core/selection';
 import { isDateBoardId } from '@features/gallery/data/backend';
 import { GALLERY_PAGE_SIZE, imageIndexAvailabilityOptions } from '@features/gallery/data/queries';
+import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { Button, DropZone } from '@platform/ui';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRightIcon, StarIcon, UploadIcon } from 'lucide-react';
 import {
   useCallback,
-  useEffect,
   useEffectEvent,
   useLayoutEffect,
   useMemo,
@@ -30,7 +30,7 @@ import { useVirtualizer } from 'react-hook-tanstack-virtual';
 import { useTranslation } from 'react-i18next';
 
 import {
-  buildGalleryGridRows,
+  buildGalleryGridWindowRows,
   chunkGalleryCellsIntoRows,
   GALLERY_GRID_GAP_PX,
   GALLERY_PINNED_FOOTER_PX,
@@ -38,10 +38,12 @@ import {
   getGalleryCellSizePx,
   getGalleryColumnCount,
   getGalleryGridRowIndexForItemKey,
+  getGalleryGridWindowRowIndexForItemKey,
   getGalleryPinnedHeightPx,
   getGalleryProgressLayout,
   getGalleryStarredLayout,
   getGalleryStarredStripItems,
+  type GalleryGridWindowRow,
 } from './galleryGridLayout';
 import { GalleryProgressSection } from './GalleryProgressSection';
 import { GalleryThumbnailCell } from './GalleryThumbnail';
@@ -195,10 +197,70 @@ const GalleryStarredSection = ({
   );
 };
 
+const GalleryVirtualRow = ({
+  cellSizePx,
+  columnCount,
+  onItemMounted,
+  renderCell,
+  row,
+  startPx,
+}: {
+  cellSizePx: number;
+  columnCount: number;
+  onItemMounted: (item: GalleryItem, index: number) => void;
+  renderCell: (item: GalleryItem) => ReactNode;
+  row: GalleryGridWindowRow;
+  startPx: number;
+}) => {
+  const setRowRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node) {
+        row.cells.forEach((item, columnIndex) => {
+          if (item) {
+            onItemMounted(item, row.index * columnCount + columnIndex);
+          }
+        });
+      }
+    },
+    [columnCount, onItemMounted, row]
+  );
+
+  return (
+    <Box
+      ref={setRowRef}
+      data-gallery-section={row.section}
+      display="grid"
+      gap={`${GALLERY_GRID_GAP_PX}px`}
+      gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
+      h={`${cellSizePx}px`}
+      left="0"
+      position="absolute"
+      role="presentation"
+      top="0"
+      transform={`translateY(${startPx}px)`}
+      w="full"
+    >
+      {row.cells.map((item, columnIndex) =>
+        item ? (
+          renderCell(item)
+        ) : (
+          <Box
+            key={`placeholder:${row.index}:${columnIndex}`}
+            aria-hidden="true"
+            aspectRatio="1"
+            gridColumn={columnIndex + 1}
+            role="presentation"
+          />
+        )
+      )}
+    </Box>
+  );
+};
+
 /** Measure viewport width for columns so both layouts share the same grid. */
 export const GalleryImageGrid = () => {
   const { t } = useTranslation();
-  const { actions, gallery, isWindowTruncated, itemActions, region, starredStrip } = useGalleryWidget();
+  const { actions, filter, gallery, itemActions, listing, region, starredStrip } = useGalleryWidget();
   const {
     gallery: galleryCommands,
     getItemLabel,
@@ -207,6 +269,8 @@ export const GalleryImageGrid = () => {
     progressSessions,
   } = useGalleryUi();
   const { data: indexAvailability } = useQuery(imageIndexAvailabilityOptions());
+  const accountScope = captureAccountScope();
+  const revealRequest = useSyncExternalStore(subscribeGalleryRevealRequests, getGalleryRevealRequest);
   const getReadyItemLabel = indexAvailability?.state === 'ready' ? getItemLabel : null;
   const [isDropActive, setIsDropActive] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => viewportWidthCache.get(region) ?? 0);
@@ -244,13 +308,19 @@ export const GalleryImageGrid = () => {
     : t('widgets.gallery.selectedBoardFallback');
   // The listing is unstarred-only, so a board whose items are all starred
   // still has the strip to show.
-  const isEmpty = gallery.items.length === 0 && starredStrip.items.length === 0;
+  const isEmpty = (listing ? listing.total === 0 : gallery.items.length === 0) && starredStrip.items.length === 0;
   // A ranking that matched nothing is still a search result, never an empty
   // board inviting an upload.
   const hasActiveSearch = gallery.searchTerm.trim() !== '' || gallery.semanticImageQuery !== null;
   const isVirtualBoard = isDateBoardId(gallery.selectedBoardId);
 
-  const rows = useMemo(() => buildGalleryGridRows(gallery.items, columnCount), [columnCount, gallery.items]);
+  const itemsByIndex = useMemo(() => {
+    if (listing) {
+      return listing.itemsByIndex;
+    }
+
+    return new Map(gallery.items.map((item, index) => [index, item]));
+  }, [gallery.items, listing]);
   const starredCells = useMemo(
     () => getGalleryStarredStripItems(starredStrip.items, columnCount),
     [columnCount, starredStrip.items]
@@ -295,14 +365,29 @@ export const GalleryImageGrid = () => {
   const cursorKey =
     followedProgressSessionId !== null
       ? getGallerySessionNavigationKey(followedProgressSessionId)
-      : gallery.selectedItemKey;
+      : (gallery.selectedItemKey ?? gallery.primarySelectedItemKey);
 
-  const rowCount = rows.length;
+  const itemCount = useMemo(() => {
+    if (listing?.total !== null && listing?.total !== undefined) {
+      return listing.total;
+    }
+
+    let maxIndex = 0;
+
+    for (const index of itemsByIndex.keys()) {
+      maxIndex = Math.max(maxIndex, index + 1);
+    }
+
+    return maxIndex;
+  }, [itemsByIndex, listing?.total]);
+  const rowCount = Math.ceil(itemCount / columnCount);
   const cellSizePx = getGalleryCellSizePx({ columnCount, widthPx: viewportWidth });
   const rowHeightPx = cellSizePx + GALLERY_GRID_GAP_PX;
   const estimateRowSize = useCallback(() => rowHeightPx, [rowHeightPx]);
-  const getRowKey = useCallback((index: number) => rows[index]?.key ?? index, [rows]);
+  const getRowKey = useCallback((index: number) => `regular:${index}`, []);
   const getScrollElement = useCallback(() => viewportRef.current, []);
+  const lastAlignedAnchorRef = useRef<string | null>(null);
+  const filterIdentity = JSON.stringify(filter);
 
   const progressLayout = getGalleryProgressLayout({
     columns: columnCount,
@@ -325,6 +410,39 @@ export const GalleryImageGrid = () => {
     getItemKey: getRowKey,
     getScrollElement,
     overscan: 4,
+    onChange: (instance) => {
+      if (!listing || paginationMode !== 'infinite' || itemCount === 0) {
+        return;
+      }
+
+      // Explicit deep reveals begin at the anchor page. The first fetched
+      // page makes the full absolute spacer possible; move to that page before
+      // asking the range loader for the viewport at zero.
+      if (
+        gallery.anchoredWindowPage > 0 &&
+        listing.offset > 0 &&
+        listing.itemsByIndex.size > 0 &&
+        (viewportRef.current?.scrollTop ?? 0) === 0
+      ) {
+        const anchorIdentity = `${accountScope.epoch}:${filterIdentity}:${gallery.anchoredWindowPage}:${revealRequest?.token ?? 'initial'}`;
+
+        if (lastAlignedAnchorRef.current !== anchorIdentity) {
+          lastAlignedAnchorRef.current = anchorIdentity;
+          instance.scrollToIndex(Math.floor(listing.offset / columnCount));
+          return;
+        }
+      }
+
+      const indexes = instance.getVirtualIndexes();
+      const firstRow = indexes[0];
+      const lastRow = indexes[indexes.length - 1];
+
+      if (firstRow === undefined || lastRow === undefined) {
+        return;
+      }
+
+      listing.loadRange(firstRow * columnCount, Math.min(itemCount - 1, (lastRow + 1) * columnCount - 1));
+    },
   });
 
   const measureVirtualizer = useEffectEvent(() => {
@@ -334,109 +452,135 @@ export const GalleryImageGrid = () => {
   // The hotkey callback reads current state when invoked; stabilizing its identity adds no value and interferes
   // with compiler memoization.
   /** Returns whether the item had somewhere to scroll to — a collapsed strip has none. */
-  const scrollToItemKey = (itemKey: GalleryItemKey): boolean => {
-    const rowIndex = getGalleryGridRowIndexForItemKey(gallery.items, itemKey, columnCount);
+  const scrollToItemKey = useCallback(
+    (itemKey: GalleryItemKey): boolean => {
+      const rowIndex = listing
+        ? getGalleryGridWindowRowIndexForItemKey(itemsByIndex, itemKey, columnCount)
+        : getGalleryGridRowIndexForItemKey(gallery.items, itemKey, columnCount);
 
-    if (rowIndex >= 0) {
-      virtualizer.scrollToIndex(rowIndex);
-      return true;
-    }
-
-    // Strip cells sit in the pinned block at the top of the scroll content.
-    if (isStarredOpen && starredCells.some((item) => toGalleryItemKey(item) === itemKey)) {
-      viewportRef.current?.scrollTo({ top: 0 });
-      return true;
-    }
-
-    return false;
-  };
-  const scrollToEntry = (entry: GalleryNavigationEntry) => {
-    if (entry.kind === 'session') {
-      // In-progress tiles sit below the starred strip; scroll only when the target tile's row is out of view.
-      const viewport = viewportRef.current;
-      const sessionIndex = progressSessions.findIndex((session) => session.id === entry.id);
-
-      if (viewport && sessionIndex >= 0) {
-        const rowTop =
-          starredLayout.height +
-          progressLayout.headerHeight +
-          Math.floor(sessionIndex / progressLayout.columns) * progressLayout.rowHeight;
-        const rowBottom = rowTop + progressLayout.rowHeight;
-
-        if (rowTop < viewport.scrollTop) {
-          viewport.scrollTo({ top: rowTop - progressLayout.headerHeight });
-        } else if (rowBottom > viewport.scrollTop + viewport.clientHeight) {
-          viewport.scrollTo({ top: rowBottom - viewport.clientHeight });
-        }
+      if (rowIndex >= 0) {
+        virtualizer.scrollToIndex(rowIndex);
+        return true;
       }
-    } else {
-      scrollToItemKey(toGalleryItemKey(entry.item));
-    }
-  };
 
-  useGalleryGridHotkeys({
+      // Strip cells sit in the pinned block at the top of the scroll content.
+      if (isStarredOpen && starredCells.some((item) => toGalleryItemKey(item) === itemKey)) {
+        viewportRef.current?.scrollTo({ top: 0 });
+        return true;
+      }
+
+      return false;
+    },
+    [columnCount, gallery.items, isStarredOpen, itemsByIndex, listing, starredCells, virtualizer]
+  );
+  const scrollToAbsoluteIndex = useCallback(
+    (index: number) => virtualizer.scrollToIndex(Math.floor(index / columnCount)),
+    [columnCount, virtualizer]
+  );
+  const scrollToEntry = useCallback(
+    (entry: GalleryNavigationEntry) => {
+      if (entry.kind === 'session') {
+        // In-progress tiles sit below the starred strip; scroll only when the target tile's row is out of view.
+        const viewport = viewportRef.current;
+        const sessionIndex = progressSessions.findIndex((session) => session.id === entry.id);
+
+        if (viewport && sessionIndex >= 0) {
+          const rowTop =
+            starredLayout.height +
+            progressLayout.headerHeight +
+            Math.floor(sessionIndex / progressLayout.columns) * progressLayout.rowHeight;
+          const rowBottom = rowTop + progressLayout.rowHeight;
+
+          if (rowTop < viewport.scrollTop) {
+            viewport.scrollTo({ top: rowTop - progressLayout.headerHeight });
+          } else if (rowBottom > viewport.scrollTop + viewport.clientHeight) {
+            viewport.scrollTo({ top: rowBottom - viewport.clientHeight });
+          }
+        }
+      } else {
+        scrollToItemKey(toGalleryItemKey(entry.item));
+      }
+    },
+    [progressLayout, progressSessions, scrollToItemKey, starredLayout.height]
+  );
+
+  const onListingItemMounted = useGalleryGridHotkeys({
     actionSelectionRefs,
     columnCount,
     cursorKey,
     loadedItems,
     navigationSections,
+    scrollToAbsoluteIndex,
     scrollToEntry,
   });
 
   // Only explicit reveals scroll. Retry while the item loads; retire the request when another selection supersedes
   // it.
-  const revealRequest = useSyncExternalStore(subscribeGalleryRevealRequests, getGalleryRevealRequest);
   const pendingRevealRef = useRef<GalleryRevealRequest | null>(null);
   // Honor requests preceding mount; selection mismatch, rather than request age, determines staleness.
   const consumedRevealTokenRef = useRef(0);
-  const settlePendingReveal = useEffectEvent(() => {
-    const pending = pendingRevealRef.current;
+  const handleGridRowsCommitted = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) {
+        return;
+      }
 
-    if (!pending) {
-      return;
-    }
+      if (revealRequest && revealRequest.token !== consumedRevealTokenRef.current) {
+        consumedRevealTokenRef.current = revealRequest.token;
+        pendingRevealRef.current = revealRequest;
+      }
 
-    // Another selection retires the reveal; the persisted set catches
-    // off-page selections whose visible key is null.
-    if (
-      (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) ||
-      (gallery.selectedItemKeys.length > 0 && !gallery.selectedItemKeys.includes(pending.itemKey))
-    ) {
-      pendingRevealRef.current = null;
+      const pending = pendingRevealRef.current;
 
-      return;
-    }
+      if (!pending) {
+        return;
+      }
 
-    // Consumed only once it actually scrolled, so a reveal whose row has not
-    // been built yet (a strip under a collapsed disclosure, a page still
-    // loading) is honored on the next row-model change.
-    if (scrollToItemKey(pending.itemKey)) {
-      pendingRevealRef.current = null;
+      // Another selection retires the reveal; the persisted set catches off-page selections whose visible key is null.
+      if (
+        (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) ||
+        (gallery.selectedItemKeys.length > 0 && !gallery.selectedItemKeys.includes(pending.itemKey))
+      ) {
+        pendingRevealRef.current = null;
+        return;
+      }
 
-      return;
-    }
+      // The row is committed after the indexed window changes, so a reveal
+      // retries when the requested item arrives without a render effect.
+      if (scrollToItemKey(pending.itemKey)) {
+        pendingRevealRef.current = null;
+        return;
+      }
 
-    // The item may live on another paginated page: follow once per reveal, so
-    // a reveal whose item never materializes cannot keep pulling the user back.
-    if (
-      !loadedItems.some((item) => toGalleryItemKey(item) === pending.itemKey) &&
-      gallery.revealTargetPage !== null &&
-      gallery.revealTargetPage !== gallery.page &&
-      lastPageFollowedRevealToken !== pending.token
-    ) {
-      lastPageFollowedRevealToken = pending.token;
-      galleryCommands.setPage(gallery.revealTargetPage);
-    }
-  });
-
-  useEffect(() => {
-    if (revealRequest && revealRequest.token !== consumedRevealTokenRef.current) {
-      consumedRevealTokenRef.current = revealRequest.token;
-      pendingRevealRef.current = revealRequest;
-    }
-
-    settlePendingReveal();
-  }, [revealRequest, navigationSections]);
+      // Follow an off-window target once; a target that never materializes cannot keep pulling the user back.
+      if (
+        !loadedItems.some((item) => toGalleryItemKey(item) === pending.itemKey) &&
+        gallery.revealTargetPage !== null &&
+        gallery.revealTargetPage !== gallery.page &&
+        lastPageFollowedRevealToken !== pending.token
+      ) {
+        lastPageFollowedRevealToken = pending.token;
+        if (listing && paginationMode === 'infinite') {
+          const first = gallery.revealTargetPage * GALLERY_PAGE_SIZE;
+          listing.loadRange(first, first + GALLERY_PAGE_SIZE - 1);
+        } else {
+          galleryCommands.setPage(gallery.revealTargetPage);
+        }
+      }
+    },
+    [
+      gallery.page,
+      gallery.revealTargetPage,
+      gallery.selectedItemKey,
+      gallery.selectedItemKeys,
+      galleryCommands,
+      listing,
+      loadedItems,
+      paginationMode,
+      revealRequest,
+      scrollToItemKey,
+    ]
+  );
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -468,20 +612,20 @@ export const GalleryImageGrid = () => {
     return () => observer.disconnect();
   }, [isEmpty, region]);
 
+  const virtualRows = virtualizer.virtualItems;
+  const firstVirtualRow = virtualRows[0]?.index ?? 0;
+  const lastVirtualRow = virtualRows[virtualRows.length - 1]?.index ?? firstVirtualRow;
+  const rows = useMemo(
+    () => buildGalleryGridWindowRows(itemsByIndex, columnCount, firstVirtualRow, lastVirtualRow),
+    [columnCount, firstVirtualRow, itemsByIndex, lastVirtualRow]
+  );
+  const rowsByIndex = useMemo(() => new Map(rows.map((row) => [row.index, row])), [rows]);
+
   // Measure before paint after row-model changes: unchanged visible indices otherwise leave stale offsets despite
   // new row estimates.
   useLayoutEffect(() => {
     measureVirtualizer();
-  }, [rowHeightPx, rows, pinnedHeight]);
-
-  const virtualRows = virtualizer.virtualItems;
-  const lastVisibleRowIndex = virtualRows[virtualRows.length - 1]?.index ?? 0;
-
-  useEffect(() => {
-    if (paginationMode === 'infinite' && rowCount > 0 && lastVisibleRowIndex >= rowCount - 2) {
-      actions.loadMore();
-    }
-  }, [actions, lastVisibleRowIndex, paginationMode, rowCount]);
+  }, [rowCount, rowHeightPx, pinnedHeight]);
 
   const handleDragEnter = useCallback((event: DragEvent) => {
     if (!dragEventContainsFiles(event)) {
@@ -608,7 +752,7 @@ export const GalleryImageGrid = () => {
     ]
   );
 
-  const anchoredWindowFirstItem = gallery.anchoredWindowPage * GALLERY_PAGE_SIZE + 1;
+  const anchoredWindowFirstItem = (listing?.offset ?? 0) + 1;
 
   return (
     <Stack flex="1" gap="0" h="full" minH="0" minW="0" w="full">
@@ -701,62 +845,46 @@ export const GalleryImageGrid = () => {
                     </DropZone>
                   </Flex>
                 )
-              ) : (
-                <>
-                  <Box h={`${virtualizer.totalSize}px`} position="relative" w="full">
-                    <Box
-                      aria-label={t('widgets.gallery.itemsAriaLabel')}
-                      h="full"
-                      inset="0"
-                      position="absolute"
-                      role="list"
-                      w="full"
-                    >
-                      {virtualRows.map((virtualRow) => {
-                        const row = rows[virtualRow.index];
+              ) : rowCount > 0 ? (
+                <Box flexShrink={0} h={`${virtualizer.totalSize}px`} position="relative" w="full">
+                  <Box
+                    ref={handleGridRowsCommitted}
+                    aria-label={t('widgets.gallery.itemsAriaLabel')}
+                    h="full"
+                    inset="0"
+                    position="absolute"
+                    role="list"
+                    w="full"
+                  >
+                    {virtualRows.map((virtualRow) => {
+                      const row = rowsByIndex.get(virtualRow.index);
 
-                        if (!row) {
-                          return null;
-                        }
+                      if (!row) {
+                        return null;
+                      }
 
-                        return (
-                          <Box
-                            key={virtualRow.key}
-                            data-gallery-section={row.section}
-                            display="grid"
-                            gap={`${GALLERY_GRID_GAP_PX}px`}
-                            gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
-                            left="0"
-                            position="absolute"
-                            role="presentation"
-                            top="0"
-                            transform={`translateY(${virtualRow.start - pinnedHeight}px)`}
-                            w="full"
-                          >
-                            {row.cells.map(renderCell)}
-                          </Box>
-                        );
-                      })}
-                    </Box>
+                      return (
+                        <GalleryVirtualRow
+                          key={virtualRow.key}
+                          cellSizePx={cellSizePx}
+                          columnCount={columnCount}
+                          onItemMounted={onListingItemMounted}
+                          renderCell={renderCell}
+                          row={row}
+                          startPx={virtualRow.start - pinnedHeight}
+                        />
+                      );
+                    })}
                   </Box>
-                  {paginationMode === 'infinite' && gallery.isLoading && gallery.items.length > 0 && (
-                    <Flex align="center" justify="center" py="2">
-                      <Spinner color="fg.subtle" size="xs" />
-                    </Flex>
+                </Box>
+              ) : (
+                <Flex align="center" color="fg.muted" flex="1" justify="center" minH="8rem">
+                  {gallery.isLoading ? (
+                    <Spinner color="fg.subtle" size="xs" />
+                  ) : (
+                    <Text fontSize="xs">{t('widgets.gallery.noImagesMatch')}</Text>
                   )}
-                  {paginationMode === 'infinite' && !gallery.isLoading && isWindowTruncated && (
-                    <Flex align="center" justify="center" py="3">
-                      <Text color="fg.subtle" fontSize="xs" textAlign="center">
-                        {gallery.anchoredWindowPage > 0
-                          ? t('widgets.gallery.windowLimitFrom', {
-                              count: gallery.items.length,
-                              index: anchoredWindowFirstItem,
-                            })
-                          : t('widgets.gallery.windowLimit', { count: gallery.items.length })}
-                      </Text>
-                    </Flex>
-                  )}
-                </>
+                </Flex>
               )}
             </ScrollArea.Content>
           </ScrollArea.Viewport>
@@ -764,6 +892,34 @@ export const GalleryImageGrid = () => {
             <ScrollArea.Thumb />
           </ScrollArea.Scrollbar>
         </ScrollArea.Root>
+        {listing && (listing.error || (gallery.isLoading && itemCount > 0)) ? (
+          <Flex
+            align="center"
+            aria-label={listing.error ? undefined : t('widgets.gallery.loadingBackendGallery')}
+            bg="bg.panel"
+            gap="2"
+            insetX="0"
+            justify="center"
+            position="absolute"
+            py="1"
+            role={listing.error ? 'alert' : 'status'}
+            top={gallery.anchoredWindowPage > 0 ? '2rem' : '0'}
+            zIndex="2"
+          >
+            {listing.error ? (
+              <>
+                <Text color="fg.error" fontSize="xs" textAlign="center">
+                  {listing.error.message}
+                </Text>
+                <Button disabled={gallery.isLoading} flexShrink={0} size="2xs" variant="ghost" onClick={listing.retry}>
+                  {t('common.retry')}
+                </Button>
+              </>
+            ) : (
+              <Spinner color="fg.subtle" size="xs" />
+            )}
+          </Flex>
+        ) : null}
         {isDropActive && (
           <DropZone
             alignItems="center"

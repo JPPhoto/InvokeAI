@@ -6,6 +6,7 @@ import type { WidgetViewProps } from '@workbench/widgetContracts';
 import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext, useSensor, useSensors, type DndContextProps } from '@dnd-kit/core';
 import { requestGalleryItemReveal } from '@features/gallery/contracts';
+import { GALLERY_MAX_ROWS } from '@features/gallery/queries';
 import { createQueueCoordinator, type QueueCoordinatorBackendPort } from '@features/queue/runtime/coordinator';
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import { system } from '@theme/system';
@@ -118,6 +119,7 @@ const mocks = vi.hoisted(() => {
     galleryStripItems: [] as Array<GalleryImageItem | GalleryVideoItem>,
     galleryItemPageOffsets: [] as number[],
     galleryItemWindowOffsets: [] as number[],
+    galleryItemInitialPageCount: 1,
     galleryItemPages: [] as GalleryItemsPage[],
     imageActionOptions: null as null | {
       getItemActionContext?: () => {
@@ -207,7 +209,11 @@ vi.mock('@features/gallery/queries', () => ({
       };
     });
     const initialOffset = window.offset ?? 0;
-    const initialPage = pages[initialOffset / 60] ?? { items: [], total: 0 };
+    const initialPageParams = Array.from(
+      { length: mocks.galleryItemInitialPageCount },
+      (_unused, index) => initialOffset + index * 60
+    );
+    const initialPages = initialPageParams.map((pageParam) => pages[pageParam / 60] ?? { items: [], total: 0 });
 
     mocks.galleryItemWindowOffsets.push(initialOffset);
 
@@ -215,12 +221,10 @@ vi.mock('@features/gallery/queries', () => ({
       getNextPageParam: (_lastPage: GalleryItemsPage, _allPages: GalleryItemsPage[], lastPageParam: number) =>
         pages[lastPageParam / 60 + 1] ? lastPageParam + 60 : undefined,
       getPreviousPageParam: (_firstPage: GalleryItemsPage, _allPages: GalleryItemsPage[], firstPageParam: number) =>
-        // An anchored infinite window cannot grow upward past its anchor.
-        firstPageParam >= 60 && (window.kind !== 'infinite' || firstPageParam - 60 >= initialOffset)
-          ? firstPageParam - 60
-          : undefined,
-      initialData: { pageParams: [initialOffset], pages: [initialPage] },
+        firstPageParam >= 60 ? firstPageParam - 60 : undefined,
+      initialData: { pageParams: initialPageParams, pages: initialPages },
       initialPageParam: initialOffset,
+      maxPages: 10,
       queryFn: ({ pageParam }: { pageParam: number }) => {
         mocks.galleryItemPageOffsets.push(pageParam);
         return Promise.resolve(pages[pageParam / 60] ?? { items: [], total: 0 });
@@ -547,6 +551,7 @@ beforeEach(() => {
   mocks.galleryStripItems = [];
   mocks.galleryItemPageOffsets.length = 0;
   mocks.galleryItemWindowOffsets.length = 0;
+  mocks.galleryItemInitialPageCount = 1;
   mocks.imageActionOptions = null;
   mocks.galleryItemPages = [
     {
@@ -916,9 +921,7 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
-  it('holds a deep window still while the cursor walks across a page boundary and back', async () => {
-    // Preserve the original infinite-window anchor across boundary steps so earlier traversed pages remain
-    // reachable.
+  it('stamps the absolute page while the sliding window crosses a page boundary and back', async () => {
     const deepA = createImageItem('deep-a', '2026-07-20T00:00:04.000Z');
     const deepB = createImageItem('deep-b', '2026-07-20T00:00:03.000Z');
     const deepC = createImageItem('deep-c', '2026-07-20T00:00:02.000Z');
@@ -949,12 +952,12 @@ describe('preview keyboard navigation boundary', () => {
     ]);
 
     expect(selected).toEqual([
-      ['deep-c', 30],
-      ['deep-d', 30],
-      ['deep-c', 30],
+      ['deep-c', 31],
+      ['deep-d', 31],
+      ['deep-c', 31],
       ['deep-b', 30],
     ]);
-    expect(mocks.galleryItemWindowOffsets).not.toContain(1860);
+    expect(mocks.galleryItemWindowOffsets).toContain(1800);
     expect(mocks.galleryItemWindowOffsets).not.toContain(0);
   });
 
@@ -994,6 +997,175 @@ describe('preview keyboard navigation boundary', () => {
       0,
       true
     );
+  });
+
+  it('anchors an infinite Preview selection inside the first ten pages and stamps its actual page', async () => {
+    const pageFive = createImageItem('page-five', '2026-07-20T00:00:02.000Z');
+    const pageSix = createImageItem('page-six', '2026-07-20T00:00:01.000Z');
+    const pages = Array.from({ length: 7 }, (_unused, index) =>
+      index === 5
+        ? { items: [pageFive], total: 7 * 60 }
+        : index === 6
+          ? { items: [pageSix], total: 7 * 60 }
+          : { items: [], total: 7 * 60 }
+    );
+
+    setGalleryValues({
+      galleryPage: 5,
+      recentImages: [],
+      selectedImage: legacyImage('page-five', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'page-five',
+      selectedImageQuery: { ...deepQuery, page: 5 },
+    });
+    mocks.galleryItemPages = pages;
+
+    await render();
+    expect(mocks.galleryItemWindowOffsets).toContain(300);
+    expect(mocks.galleryItemWindowOffsets).not.toContain(0);
+
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'page-six' }),
+      undefined,
+      6,
+      true
+    );
+    await commitLastSelection();
+
+    // The selection's actual page changes while the sliding navigation query keeps its original anchor.
+    expect(mocks.galleryItemWindowOffsets).toEqual([300]);
+  });
+
+  it('retains only the current anchored Preview window for keep-alive restoration', async () => {
+    const pageFive = createImageItem('page-five', '2026-07-20T00:00:02.000Z');
+    const pageThirty = { ...createImageItem('page-thirty', '2026-07-20T00:00:01.000Z'), boardId: 'board-2' };
+    const pages = Array.from({ length: 31 }, (_unused, index) =>
+      index === 5
+        ? { items: [pageFive], total: 31 * 60 }
+        : index === 30
+          ? { items: [pageThirty], total: 31 * 60 }
+          : { items: [], total: 31 * 60 }
+    );
+
+    setGalleryValues({
+      galleryPage: 5,
+      recentImages: [],
+      selectedImage: legacyImage('page-five', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'page-five',
+      selectedImageQuery: { ...deepQuery, page: 5 },
+    });
+    mocks.galleryItemPages = pages;
+
+    await render();
+
+    const firstWindowKey = ['test-items', 'none', 'DESC', 'infinite', 300] as const;
+    const deepWindowKey = ['test-items', 'board-2', 'DESC', 'infinite', 1800] as const;
+    expect(queryClient?.getQueryCache().find({ exact: true, queryKey: firstWindowKey })).toBeDefined();
+
+    setGalleryValues({
+      selectedImage: legacyImage('page-thirty', '2026-07-20T00:00:01.000Z'),
+      selectedImageName: 'page-thirty',
+      selectedImageQuery: { ...deepQuery, boardId: 'board-2', page: 30 },
+    });
+    await rerender();
+
+    expect(mocks.galleryItemFilters.at(-1)?.boardId).toBe('board-2');
+    expect(mocks.galleryItemWindowOffsets.at(-1)).toBe(1800);
+    expect(queryClient?.getQueryCache().find({ exact: true, queryKey: firstWindowKey })).toBeUndefined();
+    expect(queryClient?.getQueryCache().find({ exact: true, queryKey: deepWindowKey })).toBeDefined();
+
+    await act(async () => {
+      root?.unmount();
+      root = null;
+      await Promise.resolve();
+    });
+
+    expect(queryClient?.getQueryCache().find({ exact: true, queryKey: deepWindowKey })).toBeDefined();
+  });
+
+  it('navigates through absolute rows past 600 and reaches the end with a recent overlay', async () => {
+    const backendPages = Array.from({ length: 20 }, (_unused, pageIndex) => ({
+      items: Array.from({ length: 60 }, (_pageUnused, itemIndex) => {
+        const absoluteIndex = pageIndex * 60 + itemIndex;
+
+        return createImageItem(`backend-${absoluteIndex}`, new Date((2_000 - absoluteIndex) * 1_000).toISOString());
+      }),
+      total: GALLERY_MAX_ROWS * 2,
+    }));
+
+    mocks.galleryItemPages = backendPages;
+    mocks.galleryItemInitialPageCount = 10;
+    setGalleryValues({
+      galleryPage: 10,
+      recentImages: [legacyImage('recent-overlay', '1970-01-01T00:33:21.000Z')],
+      selectedImage: legacyImage('backend-600', new Date((2_000 - 600) * 1_000).toISOString()),
+      selectedImageName: 'backend-600',
+      selectedImageQuery: { ...deepQuery, page: 10 },
+    });
+
+    await render();
+
+    // The current sliding query holds all ten pages (absolute rows 600–1199). Move the cursor to its final page.
+    setGalleryValues({
+      selectedImage: legacyImage('backend-1198', new Date((2_000 - 1_198) * 1_000).toISOString()),
+      selectedImageName: 'backend-1198',
+      selectedImageQuery: { ...deepQuery, page: 19 },
+    });
+    await rerender();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'backend-1199' }),
+      undefined,
+      19,
+      true
+    );
+    await commitLastSelection();
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'backend-1199' }),
+      undefined,
+      19,
+      true
+    );
+  });
+
+  it('restores completed recent items when an infinite Preview window traverses back to page zero', async () => {
+    const backendPages = Array.from({ length: 31 }, (_unused, pageIndex) => ({
+      items: Array.from({ length: 60 }, (_pageUnused, itemIndex) => {
+        const absoluteIndex = pageIndex * 60 + itemIndex;
+
+        return createImageItem(`backend-${absoluteIndex}`, new Date((2_000 - absoluteIndex) * 1_000).toISOString());
+      }),
+      total: 31 * 60,
+    }));
+    const recentImage = legacyImage('completed-recent', '2026-07-24T00:00:00.000Z');
+
+    mocks.galleryItemPages = backendPages;
+    mocks.galleryItemInitialPageCount = 1;
+    setGalleryValues({
+      galleryPage: 30,
+      recentImages: [recentImage],
+      selectedImage: legacyImage('backend-1800', new Date((2_000 - 1_800) * 1_000).toISOString()),
+      selectedImageName: 'backend-1800',
+      selectedImageQuery: { ...deepQuery, page: 30 },
+    });
+    await render();
+
+    const deepWindowKey = ['test-items', 'none', 'DESC', 'infinite', 1800] as const;
+    expect(host?.querySelector('[data-preview-filmstrip] button[aria-label="completed-recent"]')).toBeNull();
+    queryClient?.setQueryData(deepWindowKey, {
+      pageParams: Array.from({ length: 10 }, (_unused, index) => index * 60),
+      pages: backendPages.slice(0, 10),
+    });
+    setGalleryValues({
+      selectedImage: legacyImage('backend-0', new Date(2_000_000).toISOString()),
+      selectedImageName: 'backend-0',
+      selectedImageQuery: { ...deepQuery, page: 0 },
+    });
+    await rerender();
+
+    expect(host?.querySelector('[data-preview-filmstrip] button[aria-label="completed-recent"]')).not.toBeNull();
   });
 
   it('hands image actions a page that keeps a deletion successor in the deep window', async () => {
@@ -1137,10 +1309,8 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
-  it('hands image actions the window anchor for an item on a later page of the window', async () => {
-    // The stamp is the anchor of the window holding the item, not the page
-    // the item happens to sit on: a successor from page 31 of a window
-    // anchored at page 30 is stamped 30.
+  it('hands image actions the absolute page for an item on a later page of the window', async () => {
+    // The window remains anchored at page 30, while an item from its page 31 is stamped with its absolute page.
     const deepA = createImageItem('deep-a', '2026-07-20T00:00:04.000Z');
     const deepB = createImageItem('deep-b', '2026-07-20T00:00:03.000Z');
     const deepC = createImageItem('deep-c', '2026-07-20T00:00:02.000Z');
@@ -1162,7 +1332,7 @@ describe('preview keyboard navigation boundary', () => {
     const context = mocks.imageActionOptions?.getItemActionContext?.();
 
     expect(context?.items.map((item) => item.name)).toContain('deep-c');
-    expect(context?.getItemSelectionPage?.(deepC)).toBe(30);
+    expect(context?.getItemSelectionPage?.(deepC)).toBe(31);
   });
 
   it('does not restore a remembered page for an item since moved to another board', async () => {

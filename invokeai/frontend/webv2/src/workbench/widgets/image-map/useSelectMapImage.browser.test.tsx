@@ -6,10 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   activeProjectId: 'project-1',
-  /** Simulated page count of the cached infinite window; null = no cache. */
-  cachedPageCount: null as number | null,
   fetchBoards: vi.fn(),
-  fetchInfiniteQuery: vi.fn(),
   fetchNames: vi.fn(),
   galleryValues: {} as Record<string, unknown>,
   patchValues: vi.fn(),
@@ -38,25 +35,15 @@ vi.mock('@features/gallery/contracts', async (importOriginal) => ({
 }));
 
 vi.mock('@features/gallery/queries', () => ({
-  GALLERY_MAX_ROWS: 600,
   GALLERY_PAGE_SIZE: 60,
   galleryBoardsOptions: (query: unknown) => ({ kind: 'boards', query, queryKey: ['boards', query] }),
   galleryItemNamesOptions: (filter: unknown) => ({ filter, kind: 'names', queryKey: ['names', filter] }),
-  galleryItemsInfiniteOptions: (filter: unknown, window: unknown) => ({
-    filter,
-    kind: 'items',
-    queryKey: ['items', filter, window],
-    window,
-  }),
 }));
 
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({
-    fetchInfiniteQuery: (options: { pages: number }) => mocks.fetchInfiniteQuery(options),
     fetchQuery: (options: { kind: string }) =>
       options.kind === 'boards' ? mocks.fetchBoards(options) : mocks.fetchNames(options),
-    getQueryData: () =>
-      mocks.cachedPageCount === null ? undefined : { pages: Array.from({ length: mocks.cachedPageCount }) },
   }),
 }));
 
@@ -160,17 +147,11 @@ const namesWithImageAt = (imageName: string, index: number) => ({
 
 beforeEach(() => {
   mocks.activeProjectId = 'project-1';
-  mocks.cachedPageCount = null;
   mocks.galleryValues = {};
   mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
   // Empty boards read as "still loading" — the reveal gives the board the
   // benefit of the doubt, matching the gallery's own fallback rules.
   mocks.fetchBoards.mockResolvedValue([]);
-  mocks.fetchInfiniteQuery.mockImplementation((options: { pages: number }) => {
-    mocks.cachedPageCount = options.pages;
-
-    return Promise.resolve();
-  });
   mocks.fetchNames.mockResolvedValue({ items: [], total: 0 });
   mocks.registerImageCluster.mockReturnValue('cluster-key-1');
 });
@@ -180,7 +161,6 @@ afterEach(async () => {
     await unmount();
   }
   mocks.fetchBoards.mockReset();
-  mocks.fetchInfiniteQuery.mockReset();
   mocks.fetchNames.mockReset();
   mocks.patchValues.mockReset();
   mocks.registerImageCluster.mockReset();
@@ -307,10 +287,7 @@ describe('useMapSelection', () => {
       });
     });
 
-    it('force-fetches the pages down to the image in infinite mode', async () => {
-      // A plain prefetch is not enough: the mounted gallery keeps the query
-      // fresh, and a fresh cache short-circuits the fetch WITHOUT honoring
-      // the `pages` option — the window would never grow.
+    it('anchors an infinite reveal directly at its matching page', async () => {
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
       mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
@@ -318,27 +295,11 @@ describe('useMapSelection', () => {
 
       await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
-      expect(mocks.setPage).not.toHaveBeenCalled();
-      expect(mocks.fetchInfiniteQuery).toHaveBeenCalledTimes(1);
-      expect(mocks.fetchInfiniteQuery.mock.calls[0]?.[0]).toMatchObject({ pages: 3, staleTime: 0 });
+      expect(mocks.setPage).toHaveBeenCalledWith(2);
       expect(mocks.selectItem.mock.calls[0]?.[2]).toBe(2);
     });
 
-    it('skips the fetch when the window already covers the image', async () => {
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
-      mocks.cachedPageCount = 5;
-      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
-      mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
-      await mount();
-
-      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
-
-      expect(mocks.fetchInfiniteQuery).not.toHaveBeenCalled();
-      expect(mocks.selectItem).toHaveBeenCalledTimes(1);
-    });
-
-    it('anchors the infinite window at the page of an image past the base reach', async () => {
-      // Anchor deep reveals at their page when loading from the base would exceed GALLERY_MAX_ROWS.
+    it('anchors an infinite reveal beyond the first ten pages', async () => {
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
       mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 700));
@@ -346,7 +307,6 @@ describe('useMapSelection', () => {
 
       await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
-      expect(mocks.fetchInfiniteQuery).not.toHaveBeenCalled();
       expect(mocks.setPage).toHaveBeenCalledWith(11);
       expect(mocks.selectItem).toHaveBeenCalledTimes(1);
       expect(mocks.selectItem.mock.calls[0]?.[2]).toBe(11);

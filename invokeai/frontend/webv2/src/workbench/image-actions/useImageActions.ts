@@ -371,6 +371,7 @@ export const useImageActions = ({
       // failures restore widget snapshots directly.
       const deletionContext = getItemActionContext?.() ?? null;
       let orderedRefs: GalleryItemRef[] | null = null;
+      let hasCompleteOrderedRefs = false;
       const isDeletionContextCurrent = (): boolean => {
         if (!deletionContext || !getItemActionContext) {
           return false;
@@ -454,7 +455,11 @@ export const useImageActions = ({
             // The successor was chosen from the host's own list, so it is
             // stamped the way the host would stamp it — in the window it
             // came from, not the grid's.
-            const selectionPage = deletionContext?.getItemSelectionPage?.(successor);
+            const selectionPage =
+              hasCompleteOrderedRefs && orderedRefs
+                ? (deletionContext?.getItemSelectionPageAfterRemoval?.(successor, orderedRefs, result.succeeded) ??
+                  deletionContext?.getItemSelectionPage?.(successor))
+                : deletionContext?.getItemSelectionPage?.(successor);
 
             if (retainedFailedKeys.length > 0) {
               const itemKeys = [...retainedFailedKeys, toGalleryItemKey(successor)];
@@ -479,6 +484,7 @@ export const useImageActions = ({
           ) {
             try {
               orderedRefs = await deletionContext.loadOrderedRefs(signal);
+              hasCompleteOrderedRefs = true;
             } catch {
               orderedRefs = deletionContext.items.map(toGalleryItemRef);
             }

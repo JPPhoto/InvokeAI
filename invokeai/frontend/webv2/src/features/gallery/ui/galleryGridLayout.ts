@@ -58,6 +58,15 @@ export type GalleryGridSection = 'regular' | 'starred';
 
 export type GalleryGridRow = { cells: GalleryItem[]; key: string; kind: 'cells'; section: GalleryGridSection };
 
+export type GalleryIndexedItem = { index: number; item: GalleryItem };
+export type GalleryGridWindowRow = {
+  cells: Array<GalleryItem | null>;
+  index: number;
+  key: string;
+  kind: 'cells';
+  section: 'regular';
+};
+
 /** The starred strip shows at most this many rows at the current column count. */
 const GALLERY_STARRED_STRIP_MAX_ROWS = 3;
 
@@ -107,6 +116,46 @@ export const chunkGalleryCellsIntoRows = (
 export const buildGalleryGridRows = (items: readonly GalleryItem[], columnCount: number): GalleryGridRow[] =>
   chunkGalleryCellsIntoRows(items, columnCount, 'regular');
 
+/**
+ * Builds only rows requested by the virtualizer. Empty slots preserve absolute column placement when an evicted
+ * page leaves a short interior page or the current window starts mid-row.
+ */
+export const buildGalleryGridWindowRows = (
+  itemsByIndex: ReadonlyMap<number, GalleryItem>,
+  columnCount: number,
+  firstRow: number,
+  lastRow: number
+): GalleryGridWindowRow[] => {
+  const rows = new Map<number, Array<GalleryItem | null>>();
+
+  for (const [index, item] of itemsByIndex) {
+    const rowIndex = Math.floor(index / columnCount);
+
+    if (rowIndex < firstRow || rowIndex > lastRow) {
+      continue;
+    }
+
+    let cells = rows.get(rowIndex);
+
+    if (!cells) {
+      cells = Array.from({ length: columnCount }, () => null);
+      rows.set(rowIndex, cells);
+    }
+
+    cells[index % columnCount] = item;
+  }
+
+  return [...rows.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([index, cells]) => ({
+      cells,
+      index,
+      key: `regular:${index}`,
+      kind: 'cells',
+      section: 'regular',
+    }));
+};
+
 /** The listing row holding `itemKey`; -1 for an item the listing does not hold (a strip item). */
 export const getGalleryGridRowIndexForItemKey = (
   items: readonly GalleryItem[],
@@ -116,6 +165,35 @@ export const getGalleryGridRowIndexForItemKey = (
   const index = items.findIndex((item) => toGalleryItemKey(item) === itemKey);
 
   return index < 0 ? -1 : Math.floor(index / columnCount);
+};
+
+/** Finds the absolute virtual row for an item held anywhere in the bounded window. */
+export const getGalleryGridWindowRowIndexForItemKey = (
+  itemsByIndex: ReadonlyMap<number, GalleryItem>,
+  itemKey: string,
+  columnCount: number
+): number => {
+  for (const [index, item] of itemsByIndex) {
+    if (toGalleryItemKey(item) === itemKey) {
+      return Math.floor(index / columnCount);
+    }
+  }
+
+  return -1;
+};
+
+/** Returns the absolute listing index for an item held anywhere in the bounded window. */
+export const getGalleryGridWindowIndexForItemKey = (
+  itemsByIndex: ReadonlyMap<number, GalleryItem>,
+  itemKey: string
+): number => {
+  for (const [index, item] of itemsByIndex) {
+    if (toGalleryItemKey(item) === itemKey) {
+      return index;
+    }
+  }
+
+  return -1;
 };
 
 export const getGalleryProgressLayout = ({

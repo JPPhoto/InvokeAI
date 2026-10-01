@@ -1,11 +1,14 @@
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
 import type { GalleryNavigationDirection, GalleryNavigationEntry } from '@features/gallery/core/selection';
 
-import { shouldStarSelection, toGalleryItemRef } from '@features/gallery/core/items';
+import { shouldStarSelection, toGalleryItemKey, toGalleryItemRef } from '@features/gallery/core/items';
 import { getGalleryNavigationStep } from '@features/gallery/core/selection';
-import { useEffect, useEffectEvent } from 'react';
+import { GALLERY_PAGE_SIZE } from '@features/gallery/data/queries';
+import { captureAccountScope, isAccountScopeCurrent, type AccountScope } from '@platform/state/accountLifecycle';
+import { useCallback, useEffect, useEffectEvent, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { getGalleryGridWindowIndexForItemKey } from './galleryGridLayout';
 import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
@@ -35,6 +38,7 @@ export const useGalleryGridHotkeys = ({
   cursorKey,
   loadedItems,
   navigationSections,
+  scrollToAbsoluteIndex,
   scrollToEntry,
 }: {
   actionSelectionRefs: GalleryItemRef[];
@@ -45,14 +49,158 @@ export const useGalleryGridHotkeys = ({
   loadedItems: readonly GalleryItem[];
   /** The arrow-key sections in visual order: the starred strip, in progress, the listing. */
   navigationSections: readonly (readonly GalleryNavigationEntry[])[];
+  scrollToAbsoluteIndex: (index: number) => void;
   scrollToEntry: (entry: GalleryNavigationEntry) => void;
 }) => {
   const { t } = useTranslation();
-  const { actions, gallery, itemActions, runtime } = useGalleryWidget();
-  const { followProgressSession, gallery: galleryCommands } = useGalleryUi();
+  const { actions, filter, gallery, itemActions, listing, runtime } = useGalleryWidget();
+  const { followProgressSession, gallery: galleryCommands, projectId } = useGalleryUi();
+  const cursorPositionRef = useRef<{
+    accountScope: AccountScope;
+    filterIdentity: string;
+    index: number;
+    key: string;
+    projectId: string;
+    total: number | null;
+  } | null>(null);
+  const pendingNavigationRef = useRef<{
+    accountScope: AccountScope;
+    cursorKey: string | null;
+    filterIdentity: string;
+    index: number;
+    projectId: string;
+  } | null>(null);
+  const filterIdentity = JSON.stringify(filter);
+
+  const onListingItemMounted = useCallback(
+    (item: GalleryItem, index: number) => {
+      const itemKey = toGalleryItemKey(item);
+
+      if (itemKey === cursorKey) {
+        cursorPositionRef.current = {
+          accountScope: captureAccountScope(),
+          filterIdentity,
+          index,
+          key: itemKey,
+          projectId,
+          total: listing?.total ?? null,
+        };
+      }
+
+      const pending = pendingNavigationRef.current;
+
+      if (!pending) {
+        return;
+      }
+
+      if (
+        pending.cursorKey !== cursorKey ||
+        pending.filterIdentity !== filterIdentity ||
+        pending.projectId !== projectId ||
+        !isAccountScopeCurrent(pending.accountScope)
+      ) {
+        pendingNavigationRef.current = null;
+        return;
+      }
+
+      if (pending.index === index) {
+        pendingNavigationRef.current = null;
+        actions.selectItem(item);
+        scrollToEntry({ item, kind: 'item' });
+      }
+    },
+    [actions, cursorKey, filterIdentity, listing?.total, projectId, scrollToEntry]
+  );
 
   const navigate = useEffectEvent((direction: GalleryNavigationDirection) => {
-    const entry = getGalleryNavigationStep(navigationSections, cursorKey, direction, columnCount);
+    pendingNavigationRef.current = null;
+    const cursorExistsInSections = navigationSections.some((section) =>
+      section.some((entry) =>
+        entry.kind === 'item' ? toGalleryItemKey(entry.item) === cursorKey : `session:${entry.id}` === cursorKey
+      )
+    );
+    const entry =
+      cursorKey !== null && !cursorExistsInSections
+        ? null
+        : getGalleryNavigationStep(navigationSections, cursorKey, direction, columnCount);
+
+    if (listing && cursorKey !== null) {
+      const indexedCurrentItem = getGalleryGridWindowIndexForItemKey(listing.itemsByIndex, cursorKey);
+      const cursorPosition = cursorPositionRef.current;
+      const hasCurrentListingPosition =
+        cursorPosition?.key === cursorKey &&
+        isAccountScopeCurrent(cursorPosition.accountScope) &&
+        cursorPosition.filterIdentity === filterIdentity &&
+        cursorPosition.projectId === projectId &&
+        cursorPosition.total === listing.total;
+      const currentIndex =
+        indexedCurrentItem >= 0 ? indexedCurrentItem : hasCurrentListingPosition ? cursorPosition.index : -1;
+      const isCursorInListing =
+        indexedCurrentItem >= 0 ||
+        hasCurrentListingPosition ||
+        (navigationSections
+          .at(-1)
+          ?.some((sectionEntry) => sectionEntry.kind === 'item' && toGalleryItemKey(sectionEntry.item) === cursorKey) ??
+          false);
+      const delta =
+        direction === 'left' ? -1 : direction === 'right' ? 1 : direction === 'up' ? -columnCount : columnCount;
+      if (isCursorInListing && currentIndex >= 0) {
+        const targetIndex = currentIndex + delta;
+
+        if (targetIndex >= 0 && (listing.total === null || targetIndex < listing.total)) {
+          const targetItem = listing.itemsByIndex.get(targetIndex);
+
+          if (targetItem) {
+            actions.selectItem(targetItem);
+            scrollToEntry({ item: targetItem, kind: 'item' });
+          } else {
+            let hasLoadedBeforeTarget = false;
+            let hasLoadedAfterTarget = false;
+            let nearestLoadedItem: { index: number; item: GalleryItem } | undefined;
+
+            for (const [index, item] of listing.itemsByIndex) {
+              if (index < targetIndex) {
+                hasLoadedBeforeTarget = true;
+                if (delta < 0 && (nearestLoadedItem === undefined || index > nearestLoadedItem.index)) {
+                  nearestLoadedItem = { index, item };
+                }
+              } else if (index > targetIndex) {
+                hasLoadedAfterTarget = true;
+
+                if (delta > 0 && (nearestLoadedItem === undefined || index < nearestLoadedItem.index)) {
+                  nearestLoadedItem = { index, item };
+                }
+              }
+            }
+
+            if (hasLoadedBeforeTarget && hasLoadedAfterTarget && nearestLoadedItem) {
+              actions.selectItem(nearestLoadedItem.item);
+              scrollToEntry({ item: nearestLoadedItem.item, kind: 'item' });
+            } else {
+              // A short final page can leave its last absolute slot empty after a deletion. Asking
+              // for that slot is a no-op while the containing page is retained, so step to the
+              // next page boundary when the gap is exactly at the end of this page.
+              const isTerminalPageSlot = (targetIndex + 1) % GALLERY_PAGE_SIZE === 0;
+              const nextPageIndex = targetIndex + 1;
+              const requestIndex =
+                delta > 0 && isTerminalPageSlot && (listing.total === null || nextPageIndex < listing.total)
+                  ? nextPageIndex
+                  : targetIndex;
+              pendingNavigationRef.current = {
+                accountScope: captureAccountScope(),
+                cursorKey,
+                filterIdentity,
+                index: requestIndex,
+                projectId,
+              };
+              listing.loadRange(requestIndex, requestIndex);
+              scrollToAbsoluteIndex(requestIndex);
+            }
+          }
+          return;
+        }
+      }
+    }
 
     if (!entry) {
       return;
@@ -116,4 +264,6 @@ export const useGalleryGridHotkeys = ({
       disposers.forEach((dispose) => dispose());
     };
   }, [runtime.commands, runtime.hotkeys, t]);
+
+  return onListingItemMounted;
 };

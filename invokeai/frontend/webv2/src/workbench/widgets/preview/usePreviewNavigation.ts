@@ -1,16 +1,17 @@
-import type { GalleryImageItem, GalleryItem, GalleryItemKey, GalleryView } from '@features/gallery';
+import type { GalleryImageItem, GalleryItem, GalleryItemKey, GalleryItemRef, GalleryView } from '@features/gallery';
 import type {
   GalleryItemsPage,
   GalleryNavigationEntry,
   GallerySemanticReference,
   getGallerySelectedImageQuery,
 } from '@features/gallery/contracts';
-import type { GalleryItemsFilter } from '@features/gallery/queries';
+import type { GalleryItemsFilter, GalleryItemsWindow } from '@features/gallery/queries';
 import type { QueueItem, QueueProgressSession } from '@features/queue/contracts';
 import type { InfiniteData } from '@tanstack/react-query';
 import type { KeyboardEvent } from 'react';
 
 import {
+  GALLERY_RECENT_IMAGE_LIMIT,
   compareGalleryItems,
   gallerySemanticReferenceKey,
   getGalleryNavigationStep,
@@ -25,7 +26,7 @@ import {
   galleryStarredStripOptions,
 } from '@features/gallery/queries';
 import { parseDateTokens } from '@platform/search/dateTokens';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { hashKey, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 /**
@@ -35,6 +36,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
  */
 
 const EMPTY_PREVIEW_ITEMS: GalleryItem[] = [];
+const MAX_PREVIEW_BOARD_ITEMS = GALLERY_MAX_ROWS + GALLERY_RECENT_IMAGE_LIMIT;
 
 const flattenPreviewItems = (data: InfiniteData<GalleryItemsPage, number> | undefined): GalleryItem[] =>
   flattenGalleryItemsData(data);
@@ -94,18 +96,18 @@ export const mergePreviewBoardItems = (
   if (isRanked) {
     const anchors = localItems.filter((item) => !backendKeys.has(toGalleryItemKey(item)));
 
-    return [...anchors, ...backendItems].slice(0, GALLERY_MAX_ROWS);
+    return [...anchors, ...backendItems].slice(0, MAX_PREVIEW_BOARD_ITEMS);
   }
 
   const missingLocalItems = localItems.filter((item) => !backendKeys.has(toGalleryItemKey(item)));
 
   if (missingLocalItems.length === 0) {
-    return backendItems.slice(0, GALLERY_MAX_ROWS);
+    return backendItems.slice(0, MAX_PREVIEW_BOARD_ITEMS);
   }
 
   return getOrderedPreviewItems([...backendItems, ...missingLocalItems], imageOrderDir, 'display').slice(
     0,
-    GALLERY_MAX_ROWS
+    MAX_PREVIEW_BOARD_ITEMS
   );
 };
 
@@ -150,6 +152,11 @@ export interface PreviewNavigationState {
   navigationQueryKey: string;
   /** The page a selection of `item` is stamped with — see the action context's `getItemSelectionPage`. */
   getSelectionPage: (item: GalleryItem) => number;
+  getSelectionPageAfterRemoval: (
+    item: GalleryItem,
+    orderedRefs: GalleryItemRef[],
+    removedRefs: GalleryItemRef[]
+  ) => number;
   selectPreviewItem: (item: GalleryItem) => void;
 }
 
@@ -217,7 +224,8 @@ export const usePreviewNavigation = ({
     navigationContextKeyRef.current = navigationContextKey;
   }, [navigationContextKey]);
 
-  // Keep paginated navigation anchored until query identity changes; expose the dependency as derived state.
+  // Keep navigation windows anchored until the query identity changes. Infinite selections carry their actual
+  // backend page, so the query must not rekey on every Preview step; the window slides around this anchor instead.
   const [navigationAnchor, setNavigationAnchor] = useState({
     page: selectedImageQuery.page,
     queryKey: navigationQueryKey,
@@ -228,35 +236,31 @@ export const usePreviewNavigation = ({
     setNavigationAnchor({ page: selectedImageQuery.page, queryKey: navigationQueryKey });
   }
 
-  // Only paginated anchors are sticky. Infinite steps preserve their anchor, while external selections must
-  // immediately reanchor the window.
-  const navigationAnchorPage =
-    selectedImageQuery.paginationMode === 'paginated'
-      ? hasStaleNavigationAnchor
-        ? selectedImageQuery.page
-        : navigationAnchor.page
-      : selectedImageQuery.page;
+  const navigationAnchorPage = hasStaleNavigationAnchor ? selectedImageQuery.page : navigationAnchor.page;
   const isPaginatedWindow = selectedImageQuery.paginationMode === 'paginated';
-  // Anchor deep navigation at the selection page. Shared infinite windows cannot grow upward without shifting grid
-  // content, so retain that anchor and derive mid-board exclusions from it.
-  const deepAnchorOffset =
-    !isPaginatedWindow &&
-    navigationSemanticQuery === null &&
-    navigationAnchorPage * GALLERY_PAGE_SIZE >= GALLERY_MAX_ROWS
-      ? navigationAnchorPage * GALLERY_PAGE_SIZE
-      : 0;
+  const navigationAnchorOffset = navigationAnchorPage * GALLERY_PAGE_SIZE;
 
   // Rankings follow grid paging, not stamped board pages, which can address unrelated or empty ranking slices.
-  const navigationWindow =
-    navigationSemanticQuery !== null
-      ? galleryPaginationMode === 'paginated'
-        ? ({ kind: 'anchor', offset: galleryPage * GALLERY_PAGE_SIZE } as const)
-        : // In infinite mode the grid's page IS its window offset, so mirroring
-          // it covers the deep-reveal case below without a separate test.
-          ({ kind: 'infinite', offset: galleryPage * GALLERY_PAGE_SIZE } as const)
-      : selectedImageQuery.paginationMode === 'paginated'
-        ? ({ kind: 'anchor', offset: navigationAnchorPage * GALLERY_PAGE_SIZE } as const)
-        : ({ kind: 'infinite', offset: deepAnchorOffset } as const);
+  const navigationWindow = useMemo(
+    (): GalleryItemsWindow =>
+      navigationSemanticQuery !== null
+        ? galleryPaginationMode === 'paginated'
+          ? { kind: 'anchor', offset: galleryPage * GALLERY_PAGE_SIZE }
+          : // In infinite mode the grid's page IS its window offset, so mirroring
+            // it covers the deep-reveal case below without a separate test.
+            { kind: 'infinite', offset: galleryPage * GALLERY_PAGE_SIZE }
+        : selectedImageQuery.paginationMode === 'paginated'
+          ? { kind: 'anchor', offset: navigationAnchorPage * GALLERY_PAGE_SIZE }
+          : { kind: 'infinite', offset: navigationAnchorOffset },
+    [
+      galleryPage,
+      galleryPaginationMode,
+      navigationAnchorOffset,
+      navigationAnchorPage,
+      navigationSemanticQuery,
+      selectedImageQuery.paginationMode,
+    ]
+  );
 
   const listingFilter = useMemo(
     (): GalleryItemsFilter => ({
@@ -271,6 +275,32 @@ export const usePreviewNavigation = ({
     [navigationBoardId, navigationGalleryView, navigationOrderDir, navigationSemanticQuery, selectedImageSearch]
   );
 
+  const queryClient = useQueryClient();
+  const navigationItemsOptions = galleryItemsInfiniteOptions(
+    { ...listingFilter, starred: navigationStarredOnly },
+    navigationWindow
+  );
+  const navigationItemsKeyHash = hashKey(navigationItemsOptions.queryKey);
+  const previousNavigationItemsKeyHashRef = useRef(navigationItemsKeyHash);
+
+  // Preview keeps the current window cached while its Activity is hidden so the filmstrip can restore its scroll
+  // position. Reanchoring removes the previous inactive window, keeping Preview's retained page data bounded.
+  useEffect(() => {
+    const previousKeyHash = previousNavigationItemsKeyHashRef.current;
+
+    if (previousKeyHash !== navigationItemsKeyHash) {
+      previousNavigationItemsKeyHashRef.current = navigationItemsKeyHash;
+      // Let useInfiniteQuery detach from the old entry before checking that it is inactive.
+      queueMicrotask(() => {
+        const previousQuery = queryClient.getQueryCache().get(previousKeyHash);
+
+        if (previousQuery) {
+          queryClient.removeQueries({ exact: true, queryKey: previousQuery.queryKey, type: 'inactive' });
+        }
+      });
+    }
+  }, [navigationItemsKeyHash, queryClient]);
+
   const {
     data: boardItemsData,
     fetchNextPage: fetchNextBoardItemsPage,
@@ -280,14 +310,29 @@ export const usePreviewNavigation = ({
     isFetching: isFetchingBoardItems,
     isFetchingNextPage: isFetchingNextBoardItemsPage,
     isFetchingPreviousPage: isFetchingPreviousBoardItemsPage,
-  } = useInfiniteQuery({
-    ...galleryItemsInfiniteOptions({ ...listingFilter, starred: navigationStarredOnly }, navigationWindow),
-    enabled: hasNavigationContext,
-  });
+  } = useInfiniteQuery({ ...navigationItemsOptions, enabled: hasNavigationContext });
+
+  // A selection made outside Preview may move to a page the current sliding window does not hold. Reanchor only
+  // when its stamped absolute page is absent; Preview steps inside the window keep their stable query key.
+  const selectedPageIsLoaded = boardItemsData?.pageParams.some(
+    (pageParam) => Math.floor(pageParam / GALLERY_PAGE_SIZE) === selectedImageQuery.page
+  );
+
+  if (
+    !hasStaleNavigationAnchor &&
+    !isPaginatedWindow &&
+    navigationSemanticQuery === null &&
+    hasNavigationContext &&
+    selectedItem?.starred !== true &&
+    boardItemsData !== undefined &&
+    !selectedPageIsLoaded
+  ) {
+    setNavigationAnchor({ page: selectedImageQuery.page, queryKey: navigationQueryKey });
+  }
 
   // Share Gallery's bounded starred strip except for ranked, starred-only, or mid-board windows.
-  const hasStrip =
-    hasNavigationContext && !navigationStarredOnly && navigationSemanticQuery === null && deepAnchorOffset === 0;
+  const hasTopPage = boardItemsData?.pageParams.includes(0) ?? navigationAnchorOffset === 0;
+  const hasStrip = hasNavigationContext && !navigationStarredOnly && navigationSemanticQuery === null && hasTopPage;
   const { data: stripData } = useQuery({ ...galleryStarredStripOptions(listingFilter), enabled: hasStrip });
   const stripItems = useMemo(() => {
     if (!hasStrip) {
@@ -304,26 +349,51 @@ export const usePreviewNavigation = ({
       : items;
   }, [hasStrip, selectedItem, selectedItemKey, stripData]);
 
-  const getSelectionPageIn = useCallback(
-    (item: GalleryItem, data: typeof boardItemsData): number => {
+  const getSelectionIndexIn = useCallback(
+    (item: GalleryItem, data: typeof boardItemsData): number | undefined => {
+      if (navigationSemanticQuery !== null) {
+        return undefined;
+      }
+
       const itemKey = toGalleryItemKey(item);
       const pageIndex = data?.pages.findIndex((page) =>
         page.items.some((candidate) => toGalleryItemKey(candidate) === itemKey)
       );
+      const page = pageIndex === undefined || pageIndex < 0 ? undefined : data?.pages[pageIndex];
       const pageParam = pageIndex === undefined || pageIndex < 0 ? undefined : data?.pageParams[pageIndex];
-      // Stamp ranked picks with board page zero, never ranking offsets. Infinite picks retain their window anchor
-      // to preserve prior pages; items outside the window use the top-of-board context.
+      const itemIndex = page?.items.findIndex((candidate) => toGalleryItemKey(candidate) === itemKey);
+
+      return typeof pageParam === 'number' && itemIndex !== undefined && itemIndex >= 0
+        ? (page?.itemIndices?.[itemIndex] ?? pageParam + itemIndex)
+        : undefined;
+    },
+    [navigationSemanticQuery]
+  );
+  const getSelectionPageIn = useCallback(
+    (item: GalleryItem, data: typeof boardItemsData): number => {
+      const itemKey = toGalleryItemKey(item);
+      const itemIndex = getSelectionIndexIn(item, data);
+      // Ranked picks use board page zero, never ranking offsets. Listing picks use the absolute backend page, even
+      // when a sliding window has evicted earlier pages.
       return navigationSemanticQuery !== null
         ? 0
         : selectedImageQuery.paginationMode === 'paginated'
-          ? typeof pageParam === 'number'
-            ? Math.floor(pageParam / GALLERY_PAGE_SIZE)
+          ? typeof itemIndex === 'number'
+            ? Math.floor(itemIndex / GALLERY_PAGE_SIZE)
             : selectedImageQuery.page
-          : typeof pageParam === 'number'
-            ? deepAnchorOffset / GALLERY_PAGE_SIZE
-            : 0;
+          : typeof itemIndex === 'number'
+            ? Math.floor(itemIndex / GALLERY_PAGE_SIZE)
+            : item.starred || itemKey === selectedItemKey
+              ? selectedImageQuery.page
+              : 0;
     },
-    [deepAnchorOffset, navigationSemanticQuery, selectedImageQuery.page, selectedImageQuery.paginationMode]
+    [
+      getSelectionIndexIn,
+      navigationSemanticQuery,
+      selectedImageQuery.page,
+      selectedImageQuery.paginationMode,
+      selectedItemKey,
+    ]
   );
   const stampSelection = useCallback(
     (item: GalleryItem, data: typeof boardItemsData) => selectGalleryItem(item, getSelectionPageIn(item, data)),
@@ -332,6 +402,27 @@ export const usePreviewNavigation = ({
   const getSelectionPage = useCallback(
     (item: GalleryItem) => getSelectionPageIn(item, boardItemsData),
     [boardItemsData, getSelectionPageIn]
+  );
+  const getSelectionPageAfterRemoval = useCallback(
+    (item: GalleryItem, _orderedRefs: GalleryItemRef[], removedRefs: GalleryItemRef[]) => {
+      const itemIndex = getSelectionIndexIn(item, boardItemsData);
+
+      if (itemIndex === undefined) {
+        return getSelectionPageIn(item, boardItemsData);
+      }
+
+      const removedBefore = removedRefs.reduce((count, ref) => {
+        const removedItem = boardItemsData?.pages
+          .flatMap((page) => page.items)
+          .find((candidate) => toGalleryItemKey(candidate) === toGalleryItemKey(ref));
+        const removedIndex = removedItem ? getSelectionIndexIn(removedItem, boardItemsData) : undefined;
+
+        return count + (removedIndex !== undefined && removedIndex < itemIndex ? 1 : 0);
+      }, 0);
+
+      return Math.floor((itemIndex - removedBefore) / GALLERY_PAGE_SIZE);
+    },
+    [boardItemsData, getSelectionIndexIn, getSelectionPageIn]
   );
   const selectPreviewItem = useCallback(
     (item: GalleryItem) => stampSelection(item, boardItemsData),
@@ -351,7 +442,7 @@ export const usePreviewNavigation = ({
     const hasActiveSearch =
       navigationStarredOnly || selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined;
 
-    if (!hasActiveSearch && !isPaginatedWindow && deepAnchorOffset === 0) {
+    if (!hasActiveSearch && !isPaginatedWindow && hasTopPage) {
       return localItems;
     }
 
@@ -364,7 +455,7 @@ export const usePreviewNavigation = ({
         item.sourceQueueItemId === refreshingSelectedSourceId
     );
   }, [
-    deepAnchorOffset,
+    hasTopPage,
     isFetchingBoardItems,
     isPaginatedWindow,
     localItems,
@@ -486,7 +577,7 @@ export const usePreviewNavigation = ({
       const fetchBoundaryPage = offset === 1 ? fetchNextBoardItemsPage : fetchPreviousBoardItemsPage;
 
       return fetchBoundaryPage().then((result) => {
-        if (result.isError || navigationContextKeyRef.current !== navigationContextKey) {
+        if (result.isError || result.data === undefined || navigationContextKeyRef.current !== navigationContextKey) {
           return false;
         }
 
@@ -583,6 +674,7 @@ export const usePreviewNavigation = ({
     navigationCursor,
     navigationQueryKey,
     getSelectionPage,
+    getSelectionPageAfterRemoval,
     selectPreviewItem,
   };
 };

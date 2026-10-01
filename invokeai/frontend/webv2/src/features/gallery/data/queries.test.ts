@@ -122,10 +122,10 @@ describe('Gallery item query read model', () => {
     expect(backend.listGalleryDateBoards).toHaveBeenCalledOnce();
   });
 
-  it('loads ten fixed pages into one bounded logical query', async () => {
+  it('traverses beyond ten pages, evicts distant data, and reloads back to the start', async () => {
     const queryClient = createQueryClient();
     backend.listGalleryItems.mockImplementation(({ offset }: { offset: number }) =>
-      Promise.resolve(createPage({ offset, total: 1_000 }))
+      Promise.resolve(createPage({ count: Math.min(60, 1_000 - offset), offset, total: 1_000 }))
     );
     const options = galleryItemsInfiniteOptions(baseFilter);
     const observer = new InfiniteQueryObserver(queryClient, options);
@@ -144,8 +144,52 @@ describe('Gallery item query read model', () => {
       expect(data?.pages.flatMap((page) => page.items)).toHaveLength(GALLERY_MAX_ROWS);
       expect(flattenGalleryItemsData(data)).toHaveLength(GALLERY_MAX_ROWS);
       expect(flattenGalleryItemsData(cachedData)).toHaveLength(GALLERY_MAX_ROWS);
+      expect(observer.getCurrentResult().hasNextPage).toBe(true);
+      for (let page = 10; page < 17; page += 1) {
+        await observer.fetchNextPage();
+        expect(observer.getCurrentResult().data?.pages.length).toBeLessThanOrEqual(10);
+      }
+      expect(observer.getCurrentResult().data?.pageParams).toEqual([420, 480, 540, 600, 660, 720, 780, 840, 900, 960]);
       expect(observer.getCurrentResult().hasNextPage).toBe(false);
+      for (let page = 0; page < 7; page += 1) {
+        await observer.fetchPreviousPage();
+        expect(observer.getCurrentResult().data?.pages.length).toBeLessThanOrEqual(10);
+      }
+      expect(observer.getCurrentResult().data?.pageParams).toEqual(OFFSETS);
+      expect(flattenGalleryItemsData(observer.getCurrentResult().data).map((item) => item.name)).toEqual(
+        Array.from({ length: 600 }, (_, index) => `image-${index}`)
+      );
+      expect(observer.getCurrentResult().hasPreviousPage).toBe(false);
       expect(getGalleryItemListQueries(queryClient)).toHaveLength(1);
+    } finally {
+      observer.destroy();
+    }
+  });
+
+  it('retains the visible window on a failed boundary request and retries the same offset', async () => {
+    const client = createQueryClient();
+    backend.listGalleryItems.mockImplementation(({ offset }: { offset: number }) =>
+      Promise.resolve(createPage({ offset, total: 1_200 }))
+    );
+    const observer = new InfiniteQueryObserver(client, galleryItemsInfiniteOptions(baseFilter));
+    try {
+      await observer.refetch();
+      for (let page = 1; page < 11; page += 1) {
+        await observer.fetchNextPage();
+      }
+      const before = observer.getCurrentResult().data;
+      backend.listGalleryItems.mockRejectedValueOnce(new Error('offline'));
+      const failed = await observer.fetchNextPage();
+      expect(failed.isFetchNextPageError).toBe(true);
+      expect(failed.data).toEqual(before);
+      expect(failed.data?.pageParams).toEqual([60, 120, 180, 240, 300, 360, 420, 480, 540, 600]);
+      const retried = await observer.fetchNextPage();
+      expect(retried.isError).toBe(false);
+      expect(retried.data?.pageParams).toEqual([120, 180, 240, 300, 360, 420, 480, 540, 600, 660]);
+      expect(flattenGalleryItemsData(retried.data).map(({ name }) => name)).toEqual(
+        Array.from({ length: 600 }, (_, index) => `image-${index + 120}`)
+      );
+      expect(backend.listGalleryItems.mock.calls.slice(-2).map(([request]) => request.offset)).toEqual([660, 660]);
     } finally {
       observer.destroy();
     }
@@ -227,19 +271,35 @@ describe('Gallery item query read model', () => {
     }
   });
 
-  it('releases inactive anchor windows immediately', async () => {
+  it('releases inactive view-owned anchor windows immediately', async () => {
     const queryClient = createQueryClient();
     backend.listGalleryItems.mockImplementation(({ offset }: { offset: number }) =>
       Promise.resolve(createPage({ offset, total: 1_000 }))
     );
 
     for (const offset of Array.from({ length: 11 }, (_, index) => index * GALLERY_PAGE_SIZE)) {
-      await queryClient.fetchInfiniteQuery(galleryItemsInfiniteOptions(baseFilter, { kind: 'anchor', offset }));
+      await queryClient.fetchInfiniteQuery(
+        galleryItemsInfiniteOptions(baseFilter, { kind: 'anchor', offset }, 'anchor-window-test')
+      );
     }
 
     await vi.waitFor(() => {
       expect(getGalleryItemListQueries(queryClient).length).toBeLessThanOrEqual(1);
     });
+  });
+
+  it('retains unowned Preview windows for restoration while view-owned windows release immediately', () => {
+    const previewAnchor = galleryItemsInfiniteOptions(baseFilter, { kind: 'anchor', offset: GALLERY_PAGE_SIZE });
+    const previewInfinite = galleryItemsInfiniteOptions(baseFilter, { kind: 'infinite', offset: 30_000 });
+    const viewOwned = galleryItemsInfiniteOptions(
+      baseFilter,
+      { kind: 'infinite', offset: 30_000 },
+      'gallery-view-test'
+    );
+
+    expect(previewAnchor.gcTime).toBeUndefined();
+    expect(previewInfinite.gcTime).toBeUndefined();
+    expect(viewOwned.gcTime).toBe(0);
   });
 
   it('anchors an infinite window at its offset, sharing the base key only at offset 0', async () => {
@@ -262,30 +322,29 @@ describe('Gallery item query read model', () => {
       await observer.refetch();
       expect(observer.getCurrentResult().data?.pageParams).toEqual([6000]);
 
-      // The GALLERY_MAX_ROWS reach applies from the anchor, not from 0.
+      // Anchors are starting positions, not browsing boundaries.
       for (let fetches = 0; fetches < 12; fetches += 1) {
         await observer.fetchNextPage();
       }
 
       const pageParams = observer.getCurrentResult().data?.pageParams ?? [];
 
-      expect(pageParams[0]).toBe(6000);
-      expect(pageParams[pageParams.length - 1]).toBe(6000 + GALLERY_MAX_ROWS - GALLERY_PAGE_SIZE);
+      expect(pageParams[0]).toBe(6180);
+      expect(pageParams[pageParams.length - 1]).toBe(6720);
     } finally {
       observer.destroy();
     }
   });
 
-  it('never grows an anchored infinite window above its anchor, but still lets paginated anchors', () => {
-    // Infinite windows must not prepend and shift the viewport. Paginated consumers select by pageParam, allowing
-    // Preview to load backward safely.
+  it('allows backward traversal from any infinite or paginated anchor', () => {
+    // Absolute grid indices and paginated pageParams both permit backward loading after eviction.
     const page: GalleryItemsPage = { items: [], total: 20_000 };
     const onePage = [page];
     const anchored = galleryItemsInfiniteOptions(baseFilter, { kind: 'infinite', offset: 6000 });
     const base = galleryItemsInfiniteOptions(baseFilter);
     const paginated = galleryItemsInfiniteOptions(baseFilter, { kind: 'anchor', offset: 6000 });
 
-    expect(anchored.getPreviousPageParam?.(page, onePage, 6000, [6000])).toBeUndefined();
+    expect(anchored.getPreviousPageParam?.(page, onePage, 6000, [6000])).toBe(5940);
     expect(anchored.getPreviousPageParam?.(page, onePage, 6060, [6060])).toBe(6000);
     expect(base.getPreviousPageParam?.(page, onePage, 0, [0])).toBeUndefined();
     expect(base.getPreviousPageParam?.(page, onePage, GALLERY_PAGE_SIZE, [GALLERY_PAGE_SIZE])).toBe(0);

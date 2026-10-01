@@ -20,6 +20,7 @@ import { GalleryPickerPopover } from './GalleryPickerPopover';
 const mocks = vi.hoisted(() => ({
   invalidateGallery: vi.fn(),
   listItems: vi.fn(),
+  failNextNonzeroPage: false,
   uploadGalleryImage: vi.fn(),
   uploadGalleryVideo: vi.fn(),
 }));
@@ -44,11 +45,26 @@ vi.mock('@features/gallery/data/queries', async (importOriginal) => ({
     queryKey: ['test-picker-boards'],
     staleTime: Infinity,
   }),
-  galleryItemsInfiniteOptions: (filter: { boardId: string; galleryView: string; searchTerm: string }) => ({
-    getNextPageParam: () => undefined,
-    initialPageParam: 0,
-    queryFn: () => Promise.resolve(mocks.listItems(filter)),
-    queryKey: ['test-picker-items', filter.boardId, filter.galleryView, filter.searchTerm],
+  galleryItemsInfiniteOptions: (
+    filter: { boardId: string; galleryView: string; searchTerm: string },
+    window: { offset: number } = { offset: 0 }
+  ) => ({
+    getNextPageParam: (lastPage: { total: number }, _pages: unknown[], lastPageParam: number) =>
+      lastPageParam + 60 < lastPage.total ? lastPageParam + 60 : undefined,
+    getPreviousPageParam: (_firstPage: unknown, _pages: unknown[], firstPageParam: number) =>
+      firstPageParam > 0 ? Math.max(0, firstPageParam - 60) : undefined,
+    initialPageParam: window.offset,
+    maxPages: 10,
+    queryFn: async ({ pageParam }: { pageParam: number }) => {
+      if (pageParam > 0 && mocks.failNextNonzeroPage) {
+        mocks.failNextNonzeroPage = false;
+        throw new Error('deep page failed');
+      }
+
+      const result = await mocks.listItems(filter);
+      return { ...result, items: result.items.slice(pageParam, pageParam + 60) };
+    },
+    queryKey: ['test-picker-items', filter.boardId, filter.galleryView, filter.searchTerm, window.offset],
     staleTime: Infinity,
   }),
 }));
@@ -261,6 +277,7 @@ const typeSearch = async (input: HTMLInputElement, value: string) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.failNextNonzeroPage = false;
   mocks.listItems.mockImplementation((filter: { boardId: string; searchTerm: string }) => {
     const items = filter.boardId === 'none' ? uncategorizedItems : dogItems;
     const matching = items.filter((item) => item.name.includes(filter.searchTerm));
@@ -306,6 +323,42 @@ describe('GalleryPickerPopover', () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
+  it('keeps the active item key when the same listing inserts an item before it', async () => {
+    const { dialog } = await openPicker();
+    const input = getSearchInput(dialog);
+    const query = queryClient!.getQueryCache().findAll({ queryKey: ['test-picker-items', 'dogs'] })[0];
+
+    expect(query).toBeDefined();
+    expect(getActiveOption(dialog)).toBe(getOption(dialog, 'image:b.png'));
+
+    await act(() => {
+      queryClient!.setQueryData<{ pages: { items: GalleryItem[]; total: number }[]; pageParams: number[] }>(
+        query!.queryKey,
+        (previous) => {
+          if (!previous) {
+            throw new Error('picker listing query missing');
+          }
+
+          const [firstPage, ...rest] = previous.pages;
+
+          return {
+            ...previous,
+            pages: [
+              { ...firstPage!, items: [image('0.png'), ...firstPage!.items], total: firstPage!.total + 1 },
+              ...rest,
+            ],
+          };
+        }
+      );
+    });
+    await settle();
+
+    expect(getActiveOption(dialog)).toBe(getOption(dialog, 'image:b.png'));
+    await pressKey(input, 'Enter');
+
+    expect(onPick).toHaveBeenCalledExactlyOnceWith(dogItems[1]);
+  });
+
   it('moves the highlight with the arrow keys, by column for up and down, and picks with a click', async () => {
     const { dialog } = await openPicker();
     const input = getSearchInput(dialog);
@@ -331,6 +384,85 @@ describe('GalleryPickerPopover', () => {
     await act(() => getOption(dialog, 'image:cat.png').click());
     expect(onPick).toHaveBeenCalledExactlyOnceWith(dogItems[3]);
     expect(document.querySelector(OPEN_DIALOG)).toBeNull();
+  });
+
+  it('loads and renders an absolute range beyond the retained ten-page window', async () => {
+    const manyItems = Array.from({ length: 720 }, (_, index) => image(`item-${index}.png`));
+    mocks.listItems.mockReturnValue({ items: manyItems, total: manyItems.length });
+
+    const { dialog } = await openPicker();
+    const listbox = dialog.querySelector<HTMLElement>('[role="listbox"]');
+    const viewport = dialog.querySelector<HTMLElement>('[data-scope="scroll-area"][data-part="viewport"]');
+    const columns = getColumnCount(dialog);
+    const virtualRowPitch = listbox!.scrollHeight / Math.ceil(manyItems.length / columns);
+
+    expect(listbox).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(mocks.listItems).toHaveBeenCalled();
+    expect(getOptions(dialog).length).toBeLessThan(100);
+
+    await act(() => {
+      viewport!.scrollTop = Math.floor(30 / columns) * virtualRowPitch;
+      viewport!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await settle();
+    const activeDescendantId = getSearchInput(dialog).getAttribute('aria-activedescendant');
+    expect(activeDescendantId).not.toBeNull();
+    expect(document.getElementById(activeDescendantId!)).not.toBeNull();
+
+    await act(() => {
+      viewport!.scrollTop = (Math.floor(650 / columns) - 2) * virtualRowPitch;
+      viewport!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await settle();
+
+    const deepOption = getOption(dialog, 'image:item-650.png');
+    expect(deepOption.getAttribute('aria-posinset')).toBe('651');
+    expect(getOptions(dialog).length).toBeLessThan(100);
+    expect(listbox!.scrollHeight).toBeGreaterThan(0);
+
+    await act(() => {
+      viewport!.scrollTop = 0;
+      viewport!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await settle();
+
+    expect(getOption(dialog, 'image:item-0.png')).toBeDefined();
+    expect(viewport!.scrollTop).toBe(0);
+
+    await pressKey(getSearchInput(dialog), 'End');
+    expect(getActiveOption(dialog)?.getAttribute('data-item-key')).toBe('image:item-719.png');
+    expect(getActiveOption(dialog)?.getAttribute('aria-posinset')).toBe('720');
+
+    await pressKey(getSearchInput(dialog), 'ArrowLeft');
+    expect(getActiveOption(dialog)?.getAttribute('data-item-key')).toBe('image:item-718.png');
+  });
+
+  it('keeps a failed deep-range retry available in the picker footer', async () => {
+    const manyItems = Array.from({ length: 720 }, (_, index) => image(`retry-${index}.png`));
+    mocks.listItems.mockReturnValue({ items: manyItems, total: manyItems.length });
+    mocks.failNextNonzeroPage = true;
+
+    const { dialog } = await openPicker();
+    const listbox = dialog.querySelector<HTMLElement>('[role="listbox"]');
+    const viewport = dialog.querySelector<HTMLElement>('[data-scope="scroll-area"][data-part="viewport"]');
+    const columns = getColumnCount(dialog);
+    const virtualRowPitch = listbox!.scrollHeight / Math.ceil(manyItems.length / columns);
+
+    await act(() => {
+      viewport!.scrollTop = (Math.floor(650 / columns) - 2) * virtualRowPitch;
+      viewport!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+
+    await vi.waitFor(() => expect(dialog.querySelector('[role="alert"]')?.textContent).toContain('deep page failed'));
+    const retryButton = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('common.retry')
+    );
+    expect(retryButton).toBeDefined();
+    expect(retryButton!.getBoundingClientRect().bottom).toBeLessThanOrEqual(dialog.getBoundingClientRect().bottom);
+
+    await act(() => retryButton?.click());
+    await vi.waitFor(() => expect(dialog.querySelector('[data-item-key="image:retry-650.png"]')).not.toBeNull());
   });
 
   it('closes on Escape and returns focus to the trigger', async () => {
