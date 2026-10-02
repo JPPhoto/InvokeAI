@@ -254,6 +254,71 @@ describe('gallery window runtime', () => {
     }
   });
 
+  it('rebuilds again when the same page-total mismatch recurs after a successful repair', async () => {
+    backend.listGalleryItems.mockImplementation(({ limit, offset }: { limit: number; offset: number }) =>
+      Promise.resolve(createPage(offset, limit === 60 && offset > 0 ? 2_000 : 2_001, limit))
+    );
+    const runtime = createGalleryWindowRuntime({
+      consumerId: 'recurring-total-mismatch',
+      filter,
+      initialOffset: 0,
+      isPaginated: false,
+      queryClient,
+    });
+    const unsubscribe = runtime.subscribe(() => undefined);
+    try {
+      await waitFor(() => runtime.getSnapshot().result.isSuccess);
+      for (const offset of [60, 120]) {
+        runtime.loadRange(offset, offset + 10);
+        await waitFor(() => {
+          const data = runtime.getSnapshot().result.data;
+          return Boolean(data?.pageParams.includes(offset) && data.pages.every((page) => page.total === 2_001));
+        });
+      }
+
+      expect(runtime.getSnapshot().total).toBe(2_001);
+      expect(runtime.getSnapshot().result.data?.pageParams).toEqual([0, 60, 120]);
+      expect(
+        backend.listGalleryItems.mock.calls.filter(([request]) => request.limit > 60).map(([request]) => request.limit)
+      ).toEqual([120, 180]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('does not repeatedly refetch an unchanged mismatch when the span rebuild falls back', async () => {
+    let boundaryReads = 0;
+    backend.listGalleryItems.mockImplementation(({ limit, offset }: { limit: number; offset: number }) => {
+      if (offset === 60 && limit === 60 && ++boundaryReads > 2) {
+        return Promise.reject(new Error('Unexpected repeated boundary fetch'));
+      }
+      // An incomplete span cannot replace the retained window, so invalidation collapses and refetches it.
+      return Promise.resolve(createPage(offset, offset === 60 ? 2_000 : 2_001));
+    });
+    const runtime = createGalleryWindowRuntime({
+      consumerId: 'unrepaired-total-mismatch',
+      filter,
+      initialOffset: 0,
+      isPaginated: false,
+      queryClient,
+    });
+    const unsubscribe = runtime.subscribe(() => undefined);
+    try {
+      await waitFor(() => runtime.getSnapshot().result.isSuccess);
+      runtime.loadRange(60, 70);
+      await waitFor(() => {
+        const { result } = runtime.getSnapshot();
+        return result.isError || (boundaryReads === 2 && result.data?.pages.length === 2 && !result.isFetching);
+      });
+
+      expect(runtime.getSnapshot().result.isError).toBe(false);
+      expect(boundaryReads).toBe(2);
+      expect(backend.listGalleryItems.mock.calls.filter(([request]) => request.limit > 60)).toHaveLength(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('retains a viewport-derived window when the visible range exceeds ten pages', async () => {
     const runtime = createGalleryWindowRuntime({
       consumerId: 'wide-grid',

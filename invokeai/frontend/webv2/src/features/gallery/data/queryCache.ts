@@ -742,6 +742,16 @@ export const createGalleryWindowRuntime = ({
 
   const updateSnapshot = (result: GalleryQueryResult): void => {
     const firstPageOffset = result.data?.pageParams[0];
+    const pages = result.data?.pages;
+    // A consistent multi-page window proves repair; a collapsed fallback alone must not allow a refetch loop.
+    if (
+      invalidationFingerprint !== null &&
+      pages &&
+      pages.length > 1 &&
+      pages.every((page) => page.total === pages[0]?.total)
+    ) {
+      invalidationFingerprint = null;
+    }
     knownTotal = result.data?.pages[0]?.total ?? knownTotal;
     snapshot = { offset: firstPageOffset ?? anchorOffset, result, total: knownTotal };
     notify();
