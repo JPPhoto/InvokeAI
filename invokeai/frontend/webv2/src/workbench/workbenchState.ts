@@ -70,6 +70,7 @@ import {
   type GalleryImageItem,
   type GalleryItem,
   type GalleryItemKey,
+  type GallerySelectionCursor,
   type GalleryBoardDeletionResult,
   type GallerySettings,
   type GeneratedImageContract,
@@ -413,6 +414,7 @@ type WorkbenchReducerAction =
       preserveNavigationQuery?: boolean;
       projectId?: string;
       selectionPage?: number;
+      cursor?: GallerySelectionCursor | null;
     }
   | {
       type: 'toggleGalleryItemInSelection';
@@ -420,6 +422,7 @@ type WorkbenchReducerAction =
       nextPrimaryItem: GalleryItem | null;
       projectId?: string;
       selectionPage?: number;
+      cursor?: GallerySelectionCursor | null;
     }
   | {
       type: 'setGalleryMultiSelection';
@@ -429,6 +432,7 @@ type WorkbenchReducerAction =
       selectionPage?: number;
       /** Keep the existing navigation listing while stamping the host's absolute selection page. */
       preserveNavigationQuery?: boolean;
+      cursor?: GallerySelectionCursor | null;
     }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
@@ -1074,6 +1078,15 @@ const getGallerySelectionPage = (
   return typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
     ? Math.max(0, Math.floor(values.galleryPage))
     : 0;
+};
+
+const withGallerySelectionCursor = (
+  query: Record<string, unknown>,
+  cursor: GallerySelectionCursor | null | undefined
+): Record<string, unknown> => {
+  const { cursor: _previousCursor, ...queryWithoutCursor } = query;
+
+  return cursor ? { ...queryWithoutCursor, cursor } : queryWithoutCursor;
 };
 
 /**
@@ -4619,11 +4632,12 @@ export const __workbenchReducerInternal = (
               : null;
           const selectedImageQuery =
             action.preserveNavigationQuery && existingNavigationQuery
-              ? { ...existingNavigationQuery, page: selectedImagePage }
+              ? { ...withGallerySelectionCursor(existingNavigationQuery, action.cursor), page: selectedImagePage }
               : {
                   boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
                   galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
                   imageOrderDir: settings.imageOrderDir,
+                  ...(action.cursor ? { cursor: action.cursor } : {}),
                   page: selectedImagePage,
                   paginationMode: settings.paginationMode,
                   searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
@@ -4671,6 +4685,7 @@ export const __workbenchReducerInternal = (
                 boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
                 galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
                 imageOrderDir: settings.imageOrderDir,
+                ...(action.cursor ? { cursor: action.cursor } : {}),
                 page: selectedImagePage,
                 paginationMode: settings.paginationMode,
                 searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
@@ -4712,7 +4727,10 @@ export const __workbenchReducerInternal = (
             selectedImagePage,
             selectedImageQuery:
               nextPrimaryItem && values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
-                ? { ...values.selectedImageQuery, page: selectedImagePage }
+                ? {
+                    ...withGallerySelectionCursor(values.selectedImageQuery as Record<string, unknown>, action.cursor),
+                    page: selectedImagePage,
+                  }
                 : null,
             selectedImage: nextPrimaryItem,
             selectedImageName: nextPrimaryKey,
@@ -4746,11 +4764,12 @@ export const __workbenchReducerInternal = (
             selectedImagePage,
             selectedImageQuery:
               action.preserveNavigationQuery && existingNavigationQuery
-                ? { ...existingNavigationQuery, page: selectedImagePage }
+                ? { ...withGallerySelectionCursor(existingNavigationQuery, action.cursor), page: selectedImagePage }
                 : {
                     boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
                     galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
                     imageOrderDir: settings.imageOrderDir,
+                    ...(action.cursor ? { cursor: action.cursor } : {}),
                     page: selectedImagePage,
                     paginationMode: settings.paginationMode,
                     searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
@@ -4861,6 +4880,12 @@ export const __workbenchReducerInternal = (
             searchTerm: semanticText,
             semanticImageQuery: null,
             semanticSearchText: null,
+            ...(values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+              ? {
+                  selectedImagePage: 0,
+                  selectedImageQuery: { ...values.selectedImageQuery, page: 0 },
+                }
+              : {}),
           };
         },
         action.projectId
@@ -4900,12 +4925,31 @@ export const __workbenchReducerInternal = (
     case 'clearGallerySearch': {
       return updateGalleryValues(
         state,
-        (values) =>
-          values.searchTerm === '' &&
-          (values.semanticImageQuery === null || values.semanticImageQuery === undefined) &&
-          (values.semanticSearchText === null || values.semanticSearchText === undefined)
-            ? values
-            : { ...values, galleryPage: 0, searchTerm: '', semanticImageQuery: null, semanticSearchText: null },
+        (values) => {
+          const hasQuery =
+            values.searchTerm !== '' ||
+            (values.semanticImageQuery !== null && values.semanticImageQuery !== undefined) ||
+            (values.semanticSearchText !== null && values.semanticSearchText !== undefined);
+          const isRanked = values.semanticImageQuery !== null && values.semanticImageQuery !== undefined;
+
+          if (!hasQuery) {
+            return values;
+          }
+
+          return {
+            ...values,
+            galleryPage: 0,
+            searchTerm: '',
+            semanticImageQuery: null,
+            semanticSearchText: null,
+            ...(isRanked && values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+              ? {
+                  selectedImagePage: 0,
+                  selectedImageQuery: { ...values.selectedImageQuery, page: 0 },
+                }
+              : {}),
+          };
+        },
         action.projectId
       );
     }

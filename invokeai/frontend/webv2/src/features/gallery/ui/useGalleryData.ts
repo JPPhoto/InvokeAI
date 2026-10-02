@@ -54,6 +54,8 @@ export interface GalleryListing {
   itemsByIndex: ReadonlyMap<number, GalleryItem>;
   /** Selection pages use backend coordinates even when visible row indices are shifted by recent items. */
   selectionPageByItemKey?: ReadonlyMap<string, number>;
+  /** Selection cursors use exact backend coordinates, including similarity rank. */
+  selectionIndexByItemKey?: ReadonlyMap<string, number>;
   loadRange: (first: number, last: number) => void;
   retry: () => void;
   error: Error | null;
@@ -96,12 +98,14 @@ export const indexGalleryWindowWithRecentOverlay = ({
   leadingOverlayCount: number;
   overlayDisplayIndices: ReadonlySet<number>;
   selectionPageByItemKey: ReadonlyMap<string, number>;
+  selectionIndexByItemKey: ReadonlyMap<string, number>;
   confirmedRecentPositions: ReadonlyMap<string, number>;
 } => {
   const backendIndexMap = indexGalleryWindowPages(pages);
   const itemsByIndex = new Map<number, GalleryItem>();
   const backendIndexByItemKey = new Map<string, number>();
   const selectionPageByItemKey = new Map<string, number>();
+  const selectionIndexByItemKey = new Map<string, number>();
   const confirmedRecentPositions = new Map<string, number>();
   const backendEntries = [...backendIndexMap.entries()].sort(([a], [b]) => a - b);
   const compare = (a: GalleryItem, b: GalleryItem) => compareGalleryItems(a, b, { orderDir });
@@ -178,6 +182,7 @@ export const indexGalleryWindowWithRecentOverlay = ({
       insertion.key,
       Math.floor(Math.min(insertion.backendIndex, lastSelectableBackendIndex) / GALLERY_PAGE_SIZE)
     );
+    selectionIndexByItemKey.set(insertion.key, Math.min(insertion.backendIndex, lastSelectableBackendIndex));
     precedingOverlayCount += 1;
   }
 
@@ -185,6 +190,7 @@ export const indexGalleryWindowWithRecentOverlay = ({
     itemsByIndex.set(getDisplayIndexForBackendIndex(backendIndex), item);
     backendIndexByItemKey.set(toGalleryItemKey(item), backendIndex);
     selectionPageByItemKey.set(toGalleryItemKey(item), Math.floor(backendIndex / GALLERY_PAGE_SIZE));
+    selectionIndexByItemKey.set(toGalleryItemKey(item), backendIndex);
   }
 
   const getBackendIndexAtDisplayIndex = (displayIndex: number): number | undefined => {
@@ -205,6 +211,7 @@ export const indexGalleryWindowWithRecentOverlay = ({
     leadingOverlayCount: recentInsertions.filter((insertion) => insertion.backendIndex === 0).length,
     overlayDisplayIndices,
     selectionPageByItemKey,
+    selectionIndexByItemKey,
   };
 };
 
@@ -475,7 +482,7 @@ export const useGalleryData = ({
       runtimeSnapshot.total,
     ]
   );
-  const { itemsByIndex, selectionPageByItemKey } = indexedWindow;
+  const { itemsByIndex, selectionIndexByItemKey, selectionPageByItemKey } = indexedWindow;
   const leadingOverlayCount = indexedWindow.leadingOverlayCount;
   const virtualOffset = indexedWindow.getDisplayIndexForBackendIndex(requestedAnchorOffset);
   useEffect(() => {
@@ -543,6 +550,7 @@ export const useGalleryData = ({
       getDisplayIndexForBackendIndex: indexedWindow.getDisplayIndexForBackendIndex,
       itemsByIndex,
       selectionPageByItemKey,
+      selectionIndexByItemKey,
       loadRange,
       retry: runtime.retry,
       error: queryError,

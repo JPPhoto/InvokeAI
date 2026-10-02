@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GalleryImageItem, GalleryItem, GalleryVideoItem } from './items';
+import type { GallerySelectionCursor } from './selection';
 import type { GeneratedImageContract } from './types';
 
 import * as selection from './selection';
@@ -264,5 +265,59 @@ describe('getGalleryNavigationStep', () => {
     expect(step(null, 'down')).toBe('p0');
     expect(step('image:gone', 'left')).toBe('p0');
     expect(step(null, 'right')).toBe('p0');
+  });
+});
+
+describe('resolveGallerySelectionCursor', () => {
+  it('resolves item against current listing identity before reusing a saved rank', () => {
+    const savedCursor: GallerySelectionCursor = {
+      itemKey: 'image:newest',
+      listingId: 'similarity-ranking',
+      section: 'listing',
+      index: 61,
+    };
+
+    expect(
+      selection.resolveGallerySelectionCursor({
+        itemKey: 'image:newest',
+        listingId: 'chronological-board',
+        listingIndex: 0,
+        savedCursor,
+      })
+    ).toEqual({
+      itemKey: 'image:newest',
+      listingId: 'chronological-board',
+      section: 'listing',
+      index: 0,
+    });
+  });
+
+  it('uses strip membership as section, even when item is starred', () => {
+    expect(
+      selection.resolveGallerySelectionCursor({
+        itemKey: 'image:starred',
+        listingId: 'board-listing',
+        listingIndex: 42,
+        starredStripIndex: 2,
+      })
+    ).toEqual({
+      itemKey: 'image:starred',
+      listingId: 'board-listing',
+      section: 'starred-strip',
+      index: 2,
+    });
+  });
+
+  it('rejects saved positions from another listing or item', () => {
+    const savedCursor: GallerySelectionCursor = {
+      itemKey: 'image:other',
+      listingId: 'old-listing',
+      section: 'listing',
+      index: 61,
+    };
+
+    expect(
+      selection.resolveGallerySelectionCursor({ itemKey: 'image:newest', listingId: 'new-listing', savedCursor })
+    ).toBeNull();
   });
 });

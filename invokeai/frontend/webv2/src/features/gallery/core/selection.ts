@@ -11,6 +11,58 @@ import {
   type GalleryItemRef,
 } from './items';
 
+export type GalleryPositionSection = 'listing' | 'starred-strip';
+
+/** Selected item's coordinate in one account-scoped Gallery listing. */
+export interface GallerySelectionCursor {
+  listingId: string;
+  section: GalleryPositionSection;
+  itemKey: GalleryItemKey;
+  /** Absolute listing index or index within the starred strip. */
+  index: number;
+}
+
+/** Prefer current ordered data; reuse saved cursor only for the same listing and item. */
+export const resolveGallerySelectionCursor = ({
+  itemKey,
+  listingId,
+  listingIndex,
+  savedCursor,
+  starredStripIndex,
+}: {
+  itemKey: GalleryItemKey;
+  listingId: string;
+  listingIndex?: number;
+  savedCursor?: GallerySelectionCursor | null;
+  starredStripIndex?: number;
+}): GallerySelectionCursor | null => {
+  if (typeof starredStripIndex === 'number' && Number.isInteger(starredStripIndex) && starredStripIndex >= 0) {
+    return { itemKey, listingId, section: 'starred-strip', index: starredStripIndex };
+  }
+
+  if (typeof listingIndex === 'number' && Number.isInteger(listingIndex) && listingIndex >= 0) {
+    return { itemKey, listingId, section: 'listing', index: listingIndex };
+  }
+
+  return savedCursor?.listingId === listingId && savedCursor.itemKey === itemKey ? savedCursor : null;
+};
+
+export const isGallerySelectionCursor = (value: unknown): value is GallerySelectionCursor => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const cursor = value as Partial<GallerySelectionCursor>;
+
+  return (
+    typeof cursor.listingId === 'string' &&
+    (cursor.section === 'listing' || cursor.section === 'starred-strip') &&
+    typeof cursor.itemKey === 'string' &&
+    Number.isInteger(cursor.index) &&
+    (cursor.index ?? -1) >= 0
+  );
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object';
 
 const isGeneratedImage = (value: unknown): value is GeneratedImageContract =>

@@ -12,6 +12,8 @@ import {
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,
+  isGallerySelectionCursor,
+  type GallerySelectionCursor,
 } from '@features/gallery/core/selection';
 import {
   parseGallerySemanticReference,
@@ -41,6 +43,7 @@ export interface GalleryStateView {
   boards: GalleryBoard[];
   compareImageKey: GalleryItemKey | null;
   galleryView: GalleryView;
+  listingId?: string | null;
   /** A compare image is set and differs from the visible image selection. */
   isComparisonActive: boolean;
   items: GalleryItem[];
@@ -154,6 +157,7 @@ export interface GallerySelectedImageQuery {
   paginationMode: 'infinite' | 'paginated';
   searchTerm: string;
   starredOnly: boolean;
+  cursor?: GallerySelectionCursor;
 }
 
 export const getGallerySelectedImageQuery = (values: Record<string, unknown>): GallerySelectedImageQuery => {
@@ -188,6 +192,7 @@ export const getGallerySelectedImageQuery = (values: Record<string, unknown>): G
         : settings.paginationMode,
     searchTerm: query && typeof query.searchTerm === 'string' ? query.searchTerm : String(values.searchTerm ?? ''),
     starredOnly: query && typeof query.starredOnly === 'boolean' ? query.starredOnly : getGalleryStarredOnly(values),
+    ...(isGallerySelectionCursor(query?.cursor) ? { cursor: query.cursor } : {}),
   };
 };
 
@@ -219,7 +224,8 @@ export const getGalleryStateView = (
   backendBoards: GalleryBoard[],
   backendItems: GalleryItem[] | null,
   isLoading: boolean,
-  starredStripItems: readonly GalleryItem[] = []
+  starredStripItems: readonly GalleryItem[] = [],
+  listingId?: string
 ): GalleryStateView => {
   const localItems = getBoundedRecentImages(values.recentImages).map(legacyGeneratedImageToGalleryItem);
   const items = backendItems ?? (isLoading ? [] : localItems);
@@ -261,6 +267,11 @@ export const getGalleryStateView = (
   const semanticImageQuery = getGallerySemanticImageQuery(values);
   const page = getGalleryPage(values);
   const selectedImageQuery = getGallerySelectedImageQuery(values);
+  const selectedCursor = selectedImageQuery.cursor;
+  const selectedCursorMatchesListing =
+    selectedCursor !== undefined &&
+    selectedCursor.listingId === listingId &&
+    selectedCursor.itemKey === persistedSelectedItemKey;
   const revealTargetPage =
     settings.paginationMode === selectedImageQuery.paginationMode &&
     semanticImageQuery === null &&
@@ -269,9 +280,10 @@ export const getGalleryStateView = (
     selectedImageQuery.imageOrderDir === settings.imageOrderDir &&
     selectedImageQuery.searchTerm === searchTerm &&
     selectedImageQuery.starredOnly === starredOnly &&
-    // A starred item lives in the strip, never on a page of the unstarred
-    // listing; Preview stamps its starred-list page, which the grid must not follow.
-    (starredOnly || selectedItem?.starred !== true)
+    // Cursor section separates starred-only rows from starred-strip rows.
+    (selectedCursor === undefined
+      ? starredOnly || selectedItem?.starred !== true
+      : selectedCursorMatchesListing && selectedCursor.section === 'listing')
       ? selectedImageQuery.page
       : null;
 
@@ -280,6 +292,7 @@ export const getGalleryStateView = (
     boards,
     compareImageKey,
     galleryView,
+    ...(listingId ? { listingId } : {}),
     isComparisonActive,
     items,
     isLoading,

@@ -2323,6 +2323,36 @@ describe('GalleryImageGrid range selection', () => {
 
     await vi.waitFor(() => expect(actionMocks.selectItemRange).toHaveBeenCalledWith(orderedRefs, rangeItems[2]));
   });
+
+  it('keeps persisted Shift anchor after Gallery evicts its page', async () => {
+    const orderedRefs = Array.from({ length: 651 }, (_unused, index) => ({
+      kind: 'image' as const,
+      name: `item-${index}.png`,
+    }));
+    const anchor = createItem('image', 'item-0.png');
+    const target = createItem('image', 'item-650.png');
+
+    mocks.fetchNames.mockResolvedValue({ items: orderedRefs, total: orderedRefs.length });
+    const gallery = createGallery({
+      items: [anchor],
+      primarySelectedItemKey: 'image:item-0.png',
+      selectedItemKey: 'image:item-0.png',
+      selectedItemKeys: ['image:item-0.png'],
+    });
+    await renderGallery(gallery);
+    await renderGallery({
+      ...gallery,
+      items: [target],
+      page: 10,
+      primarySelectedItemKey: 'image:item-0.png',
+      selectedItemKey: null,
+      selectedItemKeys: [],
+    });
+
+    await click(getButton('Select item-650.png for preview'), { shiftKey: true });
+    await vi.waitFor(() => expect(actionMocks.selectItemRange).toHaveBeenCalledWith(orderedRefs, target));
+    expect(actionMocks.selectItemRange.mock.lastCall?.[0]).toHaveLength(651);
+  });
 });
 
 describe('GalleryImageGrid upload drop zone', () => {

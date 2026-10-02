@@ -1,6 +1,8 @@
 import type { GalleryItem, GalleryItemKey } from '@features/gallery/core/items';
+import type { GallerySelectionCursor } from '@features/gallery/core/selection';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
+import { resolveGallerySelectionCursor } from '@features/gallery/core/selection';
 
 export const GALLERY_GRID_GAP_PX = 4;
 /** The disclosure row of a pinned section (in progress, starred). */
@@ -226,6 +228,35 @@ export const getGalleryGridSelectionPage = (
   }
   const index = listing ? getGalleryGridWindowIndexForItemKey(listing.itemsByIndex, itemKey) : -1;
   return index < 0 ? undefined : Math.floor(index / pageSize);
+};
+
+export const getGalleryGridSelectionCursor = (
+  item: GalleryItem,
+  listing:
+    | {
+        itemsByIndex: ReadonlyMap<number, GalleryItem>;
+        selectionIndexByItemKey?: ReadonlyMap<string, number>;
+      }
+    | undefined,
+  starredItems: readonly GalleryItem[],
+  listingId: string
+): GallerySelectionCursor | null => {
+  if (listingId === '') {
+    return null;
+  }
+
+  const itemKey = toGalleryItemKey(item);
+  const starredStripIndex = starredItems.findIndex((candidate) => toGalleryItemKey(candidate) === itemKey);
+  const listingIndex =
+    listing?.selectionIndexByItemKey?.get(itemKey) ??
+    (listing ? getGalleryGridWindowIndexForItemKey(listing.itemsByIndex, itemKey) : -1);
+
+  return resolveGallerySelectionCursor({
+    itemKey,
+    listingId,
+    listingIndex: listingIndex < 0 ? undefined : listingIndex,
+    starredStripIndex: starredStripIndex < 0 ? undefined : starredStripIndex,
+  });
 };
 
 export const getGalleryProgressLayout = ({

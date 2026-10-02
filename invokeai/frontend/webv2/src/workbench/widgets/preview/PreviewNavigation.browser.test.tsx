@@ -1,5 +1,11 @@
 /* oxlint-disable react-perf/jsx-no-new-object-as-prop */
-import type { GalleryImage, GalleryImageItem, GalleryItemsPage, GalleryVideoItem } from '@features/gallery';
+import type {
+  GalleryImage,
+  GalleryImageItem,
+  GalleryItemsPage,
+  GallerySelectionCursor,
+  GalleryVideoItem,
+} from '@features/gallery';
 import type { InvocationProgressEvent, QueueItem, QueueItemStatusChangedEvent } from '@features/queue/contracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
@@ -114,18 +120,20 @@ const mocks = vi.hoisted(() => {
         preview: { state: { values: {} }, typeId: 'preview' },
       },
     },
-    galleryItemFilters: [] as Array<{ boardId: string; starred?: boolean }>,
+    galleryItemFilters: [] as Array<{ boardId: string; semanticQuery?: unknown; starred?: boolean }>,
     galleryItemConsumerIds: [] as Array<string | undefined>,
     galleryItemFetchOnConsumerIds: new Set<string>(),
     galleryStripFetches: [] as Array<{ boardId: string; starred?: boolean }>,
     galleryStripItems: [] as Array<GalleryImageItem | GalleryVideoItem>,
     galleryItemPageOffsets: [] as number[],
     galleryItemWindowOffsets: [] as number[],
+    galleryNamesFilters: [] as Array<{ boardId: string; semanticQuery?: unknown; starred?: boolean }>,
     galleryItemInitialPageCount: 1,
     galleryItemPages: [] as GalleryItemsPage[],
     imageActionOptions: null as null | {
       getItemActionContext?: () => {
         getItemSelectionPage?: (item: GalleryImageItem | GalleryVideoItem) => number;
+        getItemSelectionCursor?: (item: GalleryImageItem | GalleryVideoItem) => unknown;
         items: Array<GalleryImageItem | GalleryVideoItem>;
         loadOrderedRefs: (signal: AbortSignal) => Promise<Array<{ kind: 'image' | 'video'; name: string }>>;
         selectedItemKey: string | null;
@@ -188,6 +196,32 @@ vi.mock('@features/gallery/queries', () => ({
     data?.pages.flatMap((page) => page.items) ?? [],
   galleryBoardsOptions: () => ({ queryFn: () => [], queryKey: ['test-boards'], staleTime: Infinity }),
   getGalleryListingBoardsQuery: () => ({}),
+  getGalleryListingIdentity: (filter: unknown) => JSON.stringify(filter),
+  galleryItemNamesOptions: (query: { boardId: string; semanticQuery?: unknown; starred?: boolean }) => ({
+    queryFn: () => {
+      mocks.galleryNamesFilters.push(query);
+      const indexed = new Map<number, GalleryImageItem | GalleryVideoItem>();
+
+      mocks.galleryItemPages.forEach((page, pageIndex) => {
+        page.items.forEach((item, itemIndex) => {
+          if (item.boardId === query.boardId && (query.starred === undefined || item.starred === query.starred)) {
+            indexed.set(page.itemIndices?.[itemIndex] ?? pageIndex * 60 + itemIndex, item);
+          }
+        });
+      });
+
+      const lastIndex = Math.max(-1, ...indexed.keys());
+      const items = Array.from({ length: lastIndex + 1 }, (_unused, index) => {
+        const item = indexed.get(index);
+
+        return item ? { kind: item.kind, name: item.name } : { kind: 'video' as const, name: `__hole-${index}` };
+      });
+
+      return { items };
+    },
+    queryKey: ['test-names', JSON.stringify(query)],
+    staleTime: Infinity,
+  }),
   galleryStarredStripOptions: (query: { boardId: string; starred?: boolean }) => ({
     queryFn: () => {
       mocks.galleryStripFetches.push(query);
@@ -455,6 +489,28 @@ const deepQuery = {
   searchTerm: '',
 };
 
+const getTestListingId = ({ semanticQuery, starred = false }: { semanticQuery?: unknown; starred?: boolean } = {}) =>
+  JSON.stringify({
+    boardId: 'none',
+    galleryView: 'images',
+    orderDir: 'DESC',
+    searchTerm: '',
+    ...(semanticQuery ? { semanticQuery } : {}),
+    starred,
+  });
+
+const makeCursor = (
+  listingId: string,
+  itemName: string,
+  index: number,
+  section: 'listing' | 'starred-strip' = 'listing'
+): GallerySelectionCursor => ({
+  index,
+  itemKey: `image:${itemName}`,
+  listingId,
+  section,
+});
+
 const legacyImage = (name: string, queuedAt: string, sourceQueueItemId = `queue-${name}`) => ({
   boardId: 'none',
   height: 64,
@@ -568,6 +624,7 @@ beforeEach(() => {
   mocks.galleryStripItems = [];
   mocks.galleryItemPageOffsets.length = 0;
   mocks.galleryItemWindowOffsets.length = 0;
+  mocks.galleryNamesFilters.length = 0;
   mocks.galleryItemInitialPageCount = 1;
   mocks.imageActionOptions = null;
   mocks.galleryItemPages = [
@@ -676,6 +733,45 @@ describe('preview keyboard navigation boundary', () => {
       undefined,
       0,
       true
+    );
+  });
+
+  it('reanchors retained Preview from deep listing to starred strip using cursor section', async () => {
+    const deep = createImageItem('deep-board-item', '2026-07-20T00:00:00.000Z');
+    const starredA = { ...createImageItem('starred-a', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredB = { ...createImageItem('starred-b', '2026-07-22T00:00:00.000Z'), starred: true };
+
+    mocks.galleryStripItems = [starredA, starredB];
+    mocks.galleryItemPages = deepBoardPages([deep]);
+    setGalleryValues({
+      recentImages: [],
+      selectedImage: legacyImage(deep.name, deep.createdAt),
+      selectedImageName: deep.name,
+      selectedImageQuery: { ...deepQuery, page: 30 },
+    });
+    await render();
+
+    const listingId = getTestListingId();
+    setGalleryValues({
+      selectedImage: legacyImage(starredA.name, starredA.createdAt),
+      selectedImageName: starredA.name,
+      selectedImagePage: 0,
+      selectedImageQuery: {
+        ...deepQuery,
+        cursor: makeCursor(listingId, starredA.name, 0, 'starred-strip'),
+        page: 0,
+      },
+    });
+    await rerender();
+    await expect.poll(() => mocks.galleryItemWindowOffsets.at(-1)).toBe(0);
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: starredB.name }),
+      undefined,
+      0,
+      true,
+      expect.objectContaining({ section: 'starred-strip', itemKey: `image:${starredB.name}` })
     );
   });
 
@@ -1734,6 +1830,88 @@ describe('preview keyboard navigation boundary', () => {
       undefined,
       0,
       true
+    );
+  });
+
+  it('opens infinite similarity navigation at selected rank and steps to next rank', async () => {
+    const rankedItems = Array.from({ length: 122 }, (_unused, index) =>
+      createImageItem(`rank-${index}`, new Date(Date.UTC(2026, 6, 21, 0, 0, 122 - index)).toISOString())
+    );
+    const selected = rankedItems[60]!;
+    const semanticQuery = { kind: 'text', query: 'boats' } as const;
+    const listingId = getTestListingId({ semanticQuery });
+
+    mocks.galleryItemPages = [
+      { items: rankedItems.slice(0, 60), total: rankedItems.length },
+      { items: rankedItems.slice(60, 120), total: rankedItems.length },
+      { items: rankedItems.slice(120), total: rankedItems.length },
+    ];
+    setGalleryValues({
+      recentImages: [],
+      semanticImageQuery: semanticQuery,
+      selectedImage: legacyImage(selected.name, selected.createdAt),
+      selectedImageName: selected.name,
+      selectedImageQuery: {
+        ...deepQuery,
+        cursor: makeCursor(listingId, selected.name, 60),
+        page: 0,
+      },
+    });
+    await render();
+
+    expect(mocks.galleryItemWindowOffsets.at(-1)).toBe(60);
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'rank-61' }),
+      undefined,
+      0,
+      true,
+      expect.objectContaining({ listingId, itemKey: 'image:rank-61', section: 'listing', index: 61 })
+    );
+  });
+
+  it('resolves ranked cursor against chronological board after similarity clears', async () => {
+    const rankItems = Array.from({ length: 62 }, (_unused, index) =>
+      createImageItem(`rank-${index}`, new Date(Date.UTC(2026, 6, 21, 0, 0, 62 - index)).toISOString())
+    );
+    const selected = rankItems[61]!;
+    const successor = createImageItem('chronological-successor', '2026-07-20T00:00:00.000Z');
+    const semanticQuery = { kind: 'text', query: 'boats' } as const;
+    const rankingId = getTestListingId({ semanticQuery });
+
+    mocks.galleryItemPages = [
+      { items: rankItems.slice(0, 60), total: rankItems.length },
+      { items: rankItems.slice(60), total: rankItems.length },
+    ];
+    setGalleryValues({
+      recentImages: [],
+      semanticImageQuery: semanticQuery,
+      selectedImage: legacyImage(selected.name, selected.createdAt),
+      selectedImageName: selected.name,
+      selectedImageQuery: {
+        ...deepQuery,
+        cursor: makeCursor(rankingId, selected.name, 61),
+        page: 1,
+      },
+    });
+    await render();
+
+    mocks.galleryItemPages = [{ items: [selected, successor], total: 2 }];
+    setGalleryValues({
+      semanticImageQuery: null,
+      selectedImageQuery: { ...deepQuery, cursor: makeCursor(rankingId, selected.name, 61), page: 1 },
+    });
+    await rerender();
+    await expect.poll(() => mocks.galleryItemFilters.at(-1)?.semanticQuery).toBeUndefined();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: successor.name }),
+      undefined,
+      0,
+      true,
+      expect.objectContaining({ itemKey: `image:${successor.name}`, index: 1, section: 'listing' })
     );
   });
 

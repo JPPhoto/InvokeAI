@@ -11,10 +11,10 @@ import {
   type GalleryItem,
   type GalleryItemKey,
   type GalleryItemRef,
+  type GallerySelectionCursor,
 } from '@features/gallery';
 import {
   getGalleryCompareImage,
-  getGalleryPage,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
   getGallerySelectedBoardId,
@@ -222,8 +222,8 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   );
 
   const selectGalleryItemAtPage = useCallback(
-    (item: GalleryItem, selectionPage: number) => {
-      gallery.selectItem(item, undefined, selectionPage, true);
+    (item: GalleryItem, selectionPage: number, cursor: GallerySelectionCursor | null) => {
+      gallery.selectItem(item, undefined, selectionPage, true, cursor);
       // Deliberate navigation: the grid follows it, unlike auto-selection.
       requestGalleryItemReveal(toGalleryItemKey(item));
     },
@@ -232,6 +232,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const {
     boardItems,
     getSelectionPage,
+    getSelectionCursor,
     getSelectionPageAfterRemoval,
     handleNavigationKeyDown,
     isLoadingBoard,
@@ -251,8 +252,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     selectedImageQuery,
     selectedItem,
     galleryBoardId,
-    galleryPage: getGalleryPage(galleryValues),
-    galleryPaginationMode: gallerySettings.paginationMode,
     selectedItemKey,
     semanticQuery: gallerySemanticQuery,
   });
@@ -267,6 +266,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     () => ({
       filterIdentity: navigationQueryKey,
       getItemSelectionPage: getSelectionPage,
+      getItemSelectionCursor: getSelectionCursor,
       getItemSelectionPageAfterRemoval: getSelectionPageAfterRemoval,
       items: boardItems,
       loadOrderedRefs: (signal: AbortSignal) => {
@@ -276,7 +276,14 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       preserveNavigationQuery: true,
       selectedItemKey,
     }),
-    [boardItems, getSelectionPage, getSelectionPageAfterRemoval, navigationQueryKey, selectedItemKey]
+    [
+      boardItems,
+      getSelectionCursor,
+      getSelectionPage,
+      getSelectionPageAfterRemoval,
+      navigationQueryKey,
+      selectedItemKey,
+    ]
   );
   const projectId = useActiveProjectId();
   const { dialog: deletionConfirmationDialog, requestDeletionConfirmation } = useDeletionConfirmation();
@@ -297,7 +304,13 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const exitCompare = useCallback(() => gallery.setCompareItem(null), [gallery]);
   // Remember the comparison item's original page for swap-back, but only within its original query and board. Item
   // moves can invalidate the page without changing query identity.
-  const swappedOutRef = useRef<{ boardId: string; key: GalleryItemKey; page: number; queryKey: string } | null>(null);
+  const swappedOutRef = useRef<{
+    boardId: string;
+    cursor: GallerySelectionCursor | null;
+    key: GalleryItemKey;
+    page: number;
+    queryKey: string;
+  } | null>(null);
   const swapCompareImages = useCallback(() => {
     if (selectedItem?.kind === 'image' && compareImage) {
       const compareItem = legacyGeneratedImageToGalleryItem(compareImage);
@@ -305,6 +318,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
 
       swappedOutRef.current = {
         boardId: selectedItem.boardId,
+        cursor: selectedImageQuery.cursor ?? null,
         key: toGalleryItemKey(selectedItem),
         page: selectedImageQuery.page,
         queryKey: navigationQueryKey,
@@ -315,7 +329,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
         swappedOut.queryKey === navigationQueryKey &&
         swappedOut.boardId === compareItem.boardId
       ) {
-        selectGalleryItemAtPage(compareItem, swappedOut.page);
+        selectGalleryItemAtPage(compareItem, swappedOut.page, swappedOut.cursor);
       } else {
         selectPreviewItem(compareItem);
       }
@@ -328,6 +342,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     selectGalleryItemAtPage,
     selectPreviewItem,
     selectedImageQuery.page,
+    selectedImageQuery.cursor,
     selectedItem,
   ]);
   const isItemCurrent = useCallback(

@@ -4,7 +4,7 @@ import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 import { getGallerySelectionPageAfterRemoval, toGalleryItemRef } from '@features/gallery/core/items';
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import { getGallerySettings } from '@features/gallery/core/settings';
-import { GALLERY_PAGE_SIZE, galleryItemNamesOptions } from '@features/gallery/data/queries';
+import { GALLERY_PAGE_SIZE, galleryItemNamesOptions, getGalleryListingIdentity } from '@features/gallery/data/queries';
 import { StatusWidgetChip } from '@platform/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { ImageIcon } from 'lucide-react';
@@ -14,7 +14,11 @@ import { useTranslation } from 'react-i18next';
 import type { GalleryStateView } from './galleryStateView';
 
 import { GalleryBoardDragMonitor } from './GalleryBoardDragMonitor';
-import { getGalleryGridSelectionPage, mergeGalleryLoadedItems } from './galleryGridLayout';
+import {
+  getGalleryGridSelectionCursor,
+  getGalleryGridSelectionPage,
+  mergeGalleryLoadedItems,
+} from './galleryGridLayout';
 import { GalleryLayout } from './GalleryLayout';
 import {
   getGalleryAnchoredWindowPage,
@@ -135,6 +139,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   }, [notifications, semanticError]);
 
   const { selectedBoardId, total } = data;
+  const listingId = getGalleryListingIdentity(data.filter);
   // No strip under a ranked result (no starred filter applies) or a
   // starred-only listing (it would repeat the grid). Infinite windows use
   // their retained offset because backward loading can return to zero while
@@ -150,8 +155,9 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     filter: data.filter,
   });
   const gallery = useMemo(
-    () => getGalleryStateView(galleryValues, data.boards, data.items, data.isLoadingItems, starredStrip.items),
-    [data.boards, data.isLoadingItems, data.items, galleryValues, starredStrip.items]
+    () =>
+      getGalleryStateView(galleryValues, data.boards, data.items, data.isLoadingItems, starredStrip.items, listingId),
+    [data.boards, data.isLoadingItems, data.items, galleryValues, listingId, starredStrip.items]
   );
   const loadedItems = useMemo(
     () => mergeGalleryLoadedItems(starredStrip.items, gallery.items),
@@ -160,8 +166,15 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   const lastPublishedTotalRef = useRef<number | null>(null);
   const itemActionFilterIdentity = useMemo(() => JSON.stringify(data.filter), [data.filter]);
   const getItemSelectionPage = useCallback(
-    (item: GalleryItem) => getGalleryGridSelectionPage(item, data.listing, starredStrip.items, GALLERY_PAGE_SIZE),
-    [data.listing, starredStrip.items]
+    (item: GalleryItem) =>
+      semanticQuery !== null
+        ? 0
+        : getGalleryGridSelectionPage(item, data.listing, starredStrip.items, GALLERY_PAGE_SIZE),
+    [data.listing, semanticQuery, starredStrip.items]
+  );
+  const getItemSelectionCursor = useCallback(
+    (item: GalleryItem) => getGalleryGridSelectionCursor(item, data.listing, starredStrip.items, listingId),
+    [data.listing, listingId, starredStrip.items]
   );
   const getItemSelectionPageAfterRemoval = useCallback(
     (item: GalleryItem, orderedRefs: GalleryItemRef[], removedRefs: GalleryItemRef[]) =>
@@ -192,6 +205,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   itemActionContextRef.current = {
     filterIdentity: itemActionFilterIdentity,
     getItemSelectionPage,
+    getItemSelectionCursor,
     getItemSelectionPageAfterRemoval,
     items: gallery.items,
     loadOrderedRefs: loadOrderedItemRefs,

@@ -223,6 +223,14 @@ export const galleryItemNamesOptions = (inputFilter: GalleryItemsFilter) => {
   return galleryItemNamesOptionsForOwner(owner, canonicalizeGalleryItemsFilter(inputFilter));
 };
 
+/** Stable identity for positions stored with Gallery selections; includes account and canonical listing filters. */
+export const getGalleryListingIdentity = (inputFilter: GalleryItemsFilter): string => {
+  const owner = captureAccountScope();
+  const filter = canonicalizeGalleryItemsFilter(inputFilter);
+
+  return hashKey(galleryKeys.itemNames(owner, filter));
+};
+
 const dateBoardNamesConsumers = new WeakMap<QueryClient, Map<string, number>>();
 
 /**

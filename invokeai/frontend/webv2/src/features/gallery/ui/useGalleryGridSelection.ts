@@ -14,7 +14,7 @@ import { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react';
 
 import type { GalleryItemContextMenuTarget } from './GalleryUiContext';
 
-import { getGalleryGridSelectionPage } from './galleryGridLayout';
+import { getGalleryGridSelectionCursor, getGalleryGridSelectionPage } from './galleryGridLayout';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
 const getGalleryItemRange = (
@@ -50,15 +50,15 @@ export const useGalleryGridSelection = () => {
   const selectedItemRefs = useMemo(() => gallery.selectedItemKeys.map(parseGalleryItemKey), [gallery.selectedItemKeys]);
 
   const filterIdentity = useMemo(() => JSON.stringify(filter), [filter]);
-  const rangeInteractionContextRef = useRef({ filterIdentity, selectedItemKey: gallery.selectedItemKey });
+  const rangeInteractionContextRef = useRef({ filterIdentity, selectedItemKey: gallery.primarySelectedItemKey });
 
   const syncRangeInteractionContext = useCallback(
     (node: HTMLDivElement | null) => {
       if (node) {
-        rangeInteractionContextRef.current = { filterIdentity, selectedItemKey: gallery.selectedItemKey };
+        rangeInteractionContextRef.current = { filterIdentity, selectedItemKey: gallery.primarySelectedItemKey };
       }
     },
-    [filterIdentity, gallery.selectedItemKey]
+    [filterIdentity, gallery.primarySelectedItemKey]
   );
 
   const activeContextMenuTarget = useMemo(() => {
@@ -150,11 +150,18 @@ export const useGalleryGridSelection = () => {
                 (candidate) => toGalleryItemKey(candidate) === remainingItemKeys[remainingItemKeys.length - 1]
               ) ?? null)
             : null;
+        const cursor = getGalleryGridSelectionCursor(
+          nextPrimaryItem ?? item,
+          listing,
+          starredStrip.items,
+          gallery.listingId ?? ''
+        );
 
         actions.toggleItemInSelection(
           item,
           nextPrimaryItem,
-          getGalleryGridSelectionPage(nextPrimaryItem ?? item, listing, starredStrip.items, GALLERY_PAGE_SIZE)
+          getGalleryGridSelectionPage(nextPrimaryItem ?? item, listing, starredStrip.items, GALLERY_PAGE_SIZE),
+          cursor
         );
       } else {
         actions.selectItem(item);
@@ -164,6 +171,7 @@ export const useGalleryGridSelection = () => {
       actions,
       gallery.selectedItemKey,
       gallery.selectedItemKeys,
+      gallery.listingId,
       loadedItems,
       listing,
       starredStrip.items,

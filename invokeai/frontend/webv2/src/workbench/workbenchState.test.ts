@@ -5109,6 +5109,32 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(query.page).toBe(30);
   });
 
+  it('stores listing cursor with selection and clears ranked page when similarity search clears', () => {
+    let state = createInitialWorkbenchState();
+    const item = createGalleryImageItem('rank-61.png');
+    const cursor = {
+      itemKey: 'image:rank-61.png',
+      listingId: 'account-scoped-ranking',
+      section: 'listing' as const,
+      index: 61,
+    } as const;
+
+    state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+    state = workbenchReducer(state, {
+      cursor,
+      item,
+      selectionPage: 0,
+      type: 'selectGalleryItem',
+    });
+
+    let values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.selectedImageQuery).toMatchObject({ cursor, page: 0 });
+
+    state = workbenchReducer(state, { type: 'clearGallerySearch' });
+    values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.selectedImageQuery).toMatchObject({ cursor, page: 0 });
+  });
+
   it('pauses live-follow for saved Gallery multi-selection and comparison intents', () => {
     const primaryImage = createGalleryImageItem('primary.png');
     const compareImage = createGalleryImageItem('compare.png');

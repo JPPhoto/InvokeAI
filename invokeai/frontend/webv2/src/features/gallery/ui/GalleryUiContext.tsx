@@ -1,4 +1,10 @@
-import type { GalleryImageItem, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery/contracts';
+import type {
+  GalleryImageItem,
+  GalleryItem,
+  GalleryItemKey,
+  GalleryItemRef,
+  GallerySelectionCursor,
+} from '@features/gallery/contracts';
 import type { GallerySettings } from '@features/gallery/core/settings';
 import type { GalleryBoard, GalleryBoardDeletionResult, GalleryImage, GalleryView } from '@features/gallery/core/types';
 import type { QueueProgressSession } from '@features/queue/contracts';
@@ -24,6 +30,7 @@ export interface GalleryItemActionContext {
    * Preview windows.
    */
   getItemSelectionPage?(item: GalleryItem): number | undefined;
+  getItemSelectionCursor?(item: GalleryItem): GallerySelectionCursor | null;
   /** Recompute a successor's page after confirmed removals ahead of it in the listing. */
   getItemSelectionPageAfterRemoval?(
     item: GalleryItem,
@@ -59,7 +66,7 @@ export interface GalleryCommandsPort {
   clearSelection(): void;
   reconcileDeletedBoardOutcome(outcome: GalleryBoardDeletionResult): void;
   selectBoard(boardId: string): void;
-  selectItem(item: GalleryItem, selectionPage?: number): void;
+  selectItem(item: GalleryItem, selectionPage?: number, cursor?: GallerySelectionCursor | null): void;
   selectImage(image: GalleryImage): void;
   setCompareItem(image: GalleryImageItem | null): void;
   setCompareImage(image: GalleryImage | null): void;
@@ -67,7 +74,8 @@ export interface GalleryCommandsPort {
     itemKeys: GalleryItemKey[],
     primaryItem: GalleryItem,
     selectionPage?: number,
-    preserveNavigationQuery?: boolean
+    preserveNavigationQuery?: boolean,
+    cursor?: GallerySelectionCursor | null
   ): void;
   setPage(page: number): void;
   setPageInfo(totalImages: number): void;
@@ -78,7 +86,12 @@ export interface GalleryCommandsPort {
   commitSemanticSearch(text: string): void;
   clearSearch(): void;
   setView(view: GalleryView): void;
-  toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null, selectionPage?: number): void;
+  toggleItemSelection(
+    item: GalleryItem,
+    nextPrimaryItem: GalleryItem | null,
+    selectionPage?: number,
+    cursor?: GallerySelectionCursor | null
+  ): void;
   updateSettings(settings: Partial<GallerySettings>): void;
 }
 

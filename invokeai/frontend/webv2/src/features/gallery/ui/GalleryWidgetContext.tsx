@@ -1,4 +1,9 @@
-import type { GalleryImageItem, GalleryItem, GalleryItemRef } from '@features/gallery/contracts';
+import type {
+  GalleryImageItem,
+  GalleryItem,
+  GalleryItemRef,
+  GallerySelectionCursor,
+} from '@features/gallery/contracts';
 import type { GallerySemanticReference } from '@features/gallery/core/semanticImageQuery';
 import type { GallerySettings } from '@features/gallery/core/settings';
 import type { GalleryView } from '@features/gallery/core/types';
@@ -41,7 +46,12 @@ export interface GalleryActions {
   /** The semantic field's live text, ahead of the debounced commit. */
   setSemanticSearchText: (text: string) => void;
   setView: (galleryView: GalleryView) => void;
-  toggleItemInSelection: (item: GalleryItem, nextPrimaryItem: GalleryItem | null, selectionPage?: number) => void;
+  toggleItemInSelection: (
+    item: GalleryItem,
+    nextPrimaryItem: GalleryItem | null,
+    selectionPage?: number,
+    cursor?: GallerySelectionCursor | null
+  ) => void;
   updateSettings: (settings: Partial<GallerySettings>) => void;
   /** Resolves with the confirmed uploads; empty when nothing landed. */
   uploadFiles: (files: File[]) => Promise<GalleryItem[]>;

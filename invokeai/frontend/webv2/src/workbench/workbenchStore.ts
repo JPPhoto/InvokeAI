@@ -133,8 +133,10 @@ const createCommands = (
           item: ActionPayload<'selectGalleryItem'>['item'],
           projectId?: string,
           selectionPage?: number,
-          preserveNavigationQuery?: boolean
+          preserveNavigationQuery?: boolean,
+          cursor?: ActionPayload<'selectGalleryItem'>['cursor']
         ) => ({
+          cursor,
           item,
           preserveNavigationQuery,
           projectId,
@@ -152,8 +154,9 @@ const createCommands = (
           primaryItem: ActionPayload<'setGalleryMultiSelection'>['primaryItem'],
           projectId?: string,
           selectionPage?: number,
-          preserveNavigationQuery?: boolean
-        ) => ({ itemKeys, preserveNavigationQuery, primaryItem, projectId, selectionPage })
+          preserveNavigationQuery?: boolean,
+          cursor?: ActionPayload<'setGalleryMultiSelection'>['cursor']
+        ) => ({ cursor, itemKeys, preserveNavigationQuery, primaryItem, projectId, selectionPage })
       ),
       toggleItemSelection: command(
         'toggleGalleryItemInSelection',
@@ -161,9 +164,11 @@ const createCommands = (
           item: ActionPayload<'toggleGalleryItemInSelection'>['item'],
           nextPrimaryItem: ActionPayload<'toggleGalleryItemInSelection'>['nextPrimaryItem'],
           projectId?: string,
-          selectionPage?: number
+          selectionPage?: number,
+          cursor?: ActionPayload<'toggleGalleryItemInSelection'>['cursor']
         ) => ({
           item,
+          cursor,
           nextPrimaryItem,
           projectId,
           selectionPage,

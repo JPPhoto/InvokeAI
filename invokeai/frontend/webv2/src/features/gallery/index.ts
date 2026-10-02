@@ -30,6 +30,12 @@ export {
   type GalleryItemsPage,
   type GalleryVideoItem,
 } from './core/items';
+export {
+  isGallerySelectionCursor,
+  resolveGallerySelectionCursor,
+  type GalleryPositionSection,
+  type GallerySelectionCursor,
+} from './core/selection';
 import {
   toGalleryItemKey as getGalleryItemKey,
   type GalleryItemKind as ItemKind,

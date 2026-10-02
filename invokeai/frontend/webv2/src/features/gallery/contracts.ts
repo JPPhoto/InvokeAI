@@ -77,7 +77,11 @@ export {
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,
   isGalleryNavigationCurrent,
+  isGallerySelectionCursor,
   requestGalleryItemReveal,
+  resolveGallerySelectionCursor,
+  type GalleryPositionSection,
   type GalleryNavigationDirection,
   type GalleryNavigationEntry,
+  type GallerySelectionCursor,
 } from './core/selection';

@@ -198,19 +198,19 @@ export const useGalleryActions = ({
       },
       selectBoard: gallery.selectBoard,
       selectItem: (item) => {
-        const selectionPage = getItemActionContext?.()?.getItemSelectionPage?.(item);
+        const actionContext = getItemActionContext?.();
+        const selectionPage = actionContext?.getItemSelectionPage?.(item);
+        const cursor = actionContext?.getItemSelectionCursor?.(item);
 
-        if (selectionPage === undefined) {
-          gallery.selectItem(item);
-        } else {
-          gallery.selectItem(item, selectionPage);
-        }
+        gallery.selectItem(item, selectionPage, cursor);
       },
       selectItemRange: (items, primaryItem) => {
-        const selectionPage = getItemActionContext?.()?.getItemSelectionPage?.(primaryItem);
+        const actionContext = getItemActionContext?.();
+        const selectionPage = actionContext?.getItemSelectionPage?.(primaryItem);
+        const cursor = actionContext?.getItemSelectionCursor?.(primaryItem);
         const itemKeys = items.map(toGalleryItemKey);
 
-        gallery.setItemMultiSelection(itemKeys, primaryItem, selectionPage, false);
+        gallery.setItemMultiSelection(itemKeys, primaryItem, selectionPage, false, cursor);
       },
       setCompareItem: gallery.setCompareItem,
       setSearchTerm: gallery.setSearchTerm,
