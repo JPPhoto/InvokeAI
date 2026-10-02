@@ -25,6 +25,7 @@ import {
 import {
   type GalleryItemNames,
   fetchImageIndexAvailability,
+  getGalleryImageItemsByNames,
   hydrateGalleryDateBoardItemPage,
   isDateBoardId,
   listGalleryBoards,
@@ -191,6 +192,10 @@ export const galleryKeys = {
   itemNamesForAccount: (owner: AccountScope) => [...galleryKeys.itemNamesRoot(), getAccountKey(owner)] as const,
   itemNames: (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
     [...galleryKeys.itemNamesForAccount(owner), filter] as const,
+  recentItemsForAccount: (owner: AccountScope) =>
+    [...galleryKeys.itemsRoot(), 'recent-membership', getAccountKey(owner)] as const,
+  recentItems: (owner: AccountScope, imageNames: readonly string[]) =>
+    [...galleryKeys.recentItemsForAccount(owner), imageNames] as const,
   imageIndexAvailability: (owner: AccountScope) => [...galleryKeys.all, 'image-index', getAccountKey(owner)] as const,
 };
 
@@ -221,6 +226,26 @@ export const galleryItemNamesOptions = (inputFilter: GalleryItemsFilter) => {
   const owner = captureAccountScope();
 
   return galleryItemNamesOptionsForOwner(owner, canonicalizeGalleryItemsFilter(inputFilter));
+};
+
+/** Resolve the bounded set of persisted recent images without loading the full ordered listing. */
+export const galleryRecentItemsOptions = (imageNames: readonly string[]) => {
+  const owner = captureAccountScope();
+  const names = [...new Set(imageNames)].sort();
+
+  return queryOptions({
+    queryFn: async ({ signal }) => {
+      const requestSignal = AbortSignal.any([signal, owner.signal]);
+      const items = await getGalleryImageItemsByNames(names, requestSignal);
+
+      assertAccountScopeCurrent(owner);
+      requestSignal.throwIfAborted();
+
+      return items;
+    },
+    queryKey: galleryKeys.recentItems(owner, names),
+    staleTime: 60_000,
+  });
 };
 
 /** Stable identity for positions stored with Gallery selections; includes account and canonical listing filters. */

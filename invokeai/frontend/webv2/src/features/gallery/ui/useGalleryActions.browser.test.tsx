@@ -1,4 +1,4 @@
-import type { GalleryItem } from '@features/gallery/contracts';
+import type { GalleryItem, GallerySelectionCursor } from '@features/gallery/contracts';
 import type { GalleryUiAdapter } from '@features/gallery/react';
 
 import { GalleryUiProvider } from '@features/gallery/react';
@@ -90,6 +90,7 @@ const selectItem = vi.fn();
 const setItemMultiSelection = vi.fn();
 const patchGalleryValues = vi.fn();
 let getItemSelectionPage: ((item: GalleryItem) => number | undefined) | undefined;
+let getItemSelectionCursor: ((item: GalleryItem) => GallerySelectionCursor | null) | undefined;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const Probe = ({
@@ -109,10 +110,11 @@ const Probe = ({
   const getCurrentGalleryLocation = useCallback(() => currentGalleryLocationRef.current, []);
   const getItemActionContext = useCallback(
     () =>
-      getItemSelectionPage
+      getItemSelectionPage || getItemSelectionCursor
         ? {
             filterIdentity: 'active-listing',
             getItemSelectionPage,
+            getItemSelectionCursor,
             items: [],
             loadOrderedRefs: () => Promise.resolve([]),
             preserveNavigationQuery: false,
@@ -159,6 +161,7 @@ const Probe = ({
 const NoopProvider = ({ children }: { children: ReactNode }) => children;
 const NoopContextMenu = () => null;
 const noop = vi.fn();
+const toggleItemSelection = vi.fn();
 const adapter: GalleryUiAdapter = {
   ItemActionsProvider: NoopProvider,
   ImageContextMenu: NoopContextMenu,
@@ -182,7 +185,7 @@ const adapter: GalleryUiAdapter = {
     commitSemanticSearch: noop,
     clearSearch: noop,
     setView: noop,
-    toggleItemSelection: noop,
+    toggleItemSelection,
     updateSettings: noop,
   },
   galleryValues: {},
@@ -220,6 +223,7 @@ const renderProbe = async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   getItemSelectionPage = undefined;
+  getItemSelectionCursor = undefined;
   accountLifecycle.activate('user-a');
   selectedBoardId = 'board-1';
   galleryView = 'images';
@@ -417,7 +421,13 @@ describe('mixed item selection', () => {
       primaryItem
     );
 
-    expect(setItemMultiSelection).toHaveBeenCalledWith(['image:shared', 'video:shared'], primaryItem, undefined, false);
+    expect(setItemMultiSelection).toHaveBeenCalledWith(
+      ['image:shared', 'video:shared'],
+      primaryItem,
+      undefined,
+      false,
+      undefined
+    );
   });
 });
 
@@ -465,16 +475,45 @@ describe('selection page stamping', () => {
     actionsRef.current?.selectItem(item);
     actionsRef.current?.selectItemRange([{ kind: 'image', name: item.name }], item);
 
-    expect(selectItem).toHaveBeenCalledExactlyOnceWith(item, 10);
-    expect(setItemMultiSelection).toHaveBeenCalledExactlyOnceWith(['image:deep.png'], item, 10, false);
+    expect(selectItem).toHaveBeenCalledExactlyOnceWith(item, 10, undefined);
+    expect(setItemMultiSelection).toHaveBeenCalledExactlyOnceWith(['image:deep.png'], item, 10, false, undefined);
 
     getItemSelectionPage = () => undefined;
     await renderProbe();
     actionsRef.current?.selectItem(item);
     actionsRef.current?.selectItemRange([{ kind: 'image', name: item.name }], item);
 
-    expect(selectItem).toHaveBeenLastCalledWith(item);
-    expect(setItemMultiSelection).toHaveBeenLastCalledWith(['image:deep.png'], item, undefined, false);
+    expect(selectItem).toHaveBeenLastCalledWith(item, undefined, undefined);
+    expect(setItemMultiSelection).toHaveBeenLastCalledWith(['image:deep.png'], item, undefined, false, undefined);
+  });
+});
+
+describe('multi-selection cursor forwarding', () => {
+  it('preserves the known listing cursor when toggling the primary item', async () => {
+    const item = {
+      boardId: 'board-1',
+      category: 'general',
+      createdAt: '2026-07-30T12:00:00.000Z',
+      fullUrl: '/full/deep.png',
+      height: 64,
+      isIntermediate: false,
+      kind: 'image',
+      name: 'deep.png',
+      starred: false,
+      thumbnailUrl: '/thumbnail/deep.png',
+      width: 64,
+    } as const as GalleryItem;
+    const cursor: GallerySelectionCursor = {
+      index: 640,
+      itemKey: 'image:deep.png',
+      listingId: 'active-listing',
+      section: 'listing',
+    };
+
+    await renderProbe();
+    actionsRef.current?.toggleItemInSelection(item, null, 10, cursor);
+
+    expect(toggleItemSelection).toHaveBeenCalledExactlyOnceWith(item, null, 10, cursor);
   });
 });
 

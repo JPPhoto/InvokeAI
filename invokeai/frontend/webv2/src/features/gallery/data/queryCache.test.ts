@@ -5,7 +5,7 @@ import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { getImageCluster, registerImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { accountLifecycle, captureAccountScope } from '@platform/state/accountLifecycle';
-import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
+import { InfiniteQueryObserver, QueryClient, QueryObserver, type InfiniteData } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -242,6 +242,41 @@ describe('Gallery item cache patches', () => {
     expect(after.pageParams).toBe(before.pageParams);
     expect(after.pages.map((page) => page.items)).toEqual([[firstUntouched], [secondUntouched]]);
     expect(after.pages.map((page) => page.total)).toEqual([2, 2]);
+  });
+
+  it('compacts surviving absolute indices before reducing a deleted listing total', () => {
+    const client = createClient();
+    const items = Array.from({ length: 13 }, (_, index) => createItem(`row-${index}`));
+    const key = getItemsKey('board-1');
+
+    client.setQueryData(key, {
+      pageParams: [0],
+      pages: [{ itemIndices: items.map((_item, index) => index), items, total: items.length }],
+    });
+
+    patchGalleryItemCaches(client, {
+      kind: 'delete',
+      result: getResult([{ kind: 'image', name: 'row-5' }]),
+    });
+
+    const page = getData(client, key).pages[0]!;
+
+    expect(page.total).toBe(12);
+    expect(page.items.map((item) => item.name)).toEqual([
+      'row-0',
+      'row-1',
+      'row-2',
+      'row-3',
+      'row-4',
+      'row-6',
+      'row-7',
+      'row-8',
+      'row-9',
+      'row-10',
+      'row-11',
+      'row-12',
+    ]);
+    expect(page.itemIndices).toEqual(Array.from({ length: 12 }, (_unused, index) => index));
   });
 
   it('removes moved items from source boards while all-items and date views retain updated items', () => {
@@ -600,6 +635,30 @@ describe('Gallery window rebuild', () => {
     unsubscribe();
   });
 
+  it('keeps an observed window invalidated until its replacement span is ready', async () => {
+    const { client, key } = setUpStaleWindow();
+    const unsubscribe = observeItems(client, listFilter);
+    let resolveRange: ((page: GalleryItemsPage) => void) | undefined;
+    vi.mocked(listGalleryItems).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRange = resolve;
+        })
+    );
+
+    const invalidation = invalidateGalleryItems(client);
+    await vi.waitFor(() => expect(resolveRange).toBeTypeOf('function'));
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(key)?.fetchStatus).toBe('idle');
+
+    resolveRange?.({ items: createPageItems('replacement', 120), total: 120 });
+    await invalidation;
+
+    expect(getData(client, key).pageParams).toEqual([0, 60]);
+    expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+    unsubscribe();
+  });
+
   it('refreshes a slid window atomically at its retained offset after listing changes', async () => {
     const client = createClient();
     const options = galleryItemsInfiniteOptions(listFilter);
@@ -832,6 +891,7 @@ describe('Gallery cache invalidation', () => {
       searchTerm: '',
     });
     const oldDateNamesKey = galleryKeys.itemNames(oldOwner, oldFilter);
+    const oldRecentItemsKey = galleryKeys.recentItems(oldOwner, ['recent.png']);
     const oldBoardsKey = galleryKeys.boards(oldOwner, {
       includeArchived: false,
       includeDateBoards: true,
@@ -841,6 +901,7 @@ describe('Gallery cache invalidation', () => {
 
     client.setQueryData(oldItemsKey, createData([[createItem('old.png')]]));
     client.setQueryData(oldDateNamesKey, { items: [{ kind: 'image', name: 'old.png' }], total: 1 });
+    client.setQueryData(oldRecentItemsKey, []);
     client.setQueryData(oldBoardsKey, []);
 
     accountLifecycle.activate('gallery-query-cache-current-account');
@@ -852,6 +913,7 @@ describe('Gallery cache invalidation', () => {
       searchTerm: '',
     });
     const currentDateNamesKey = galleryKeys.itemNames(currentOwner, currentFilter);
+    const currentRecentItemsKey = galleryKeys.recentItems(currentOwner, ['recent.png']);
     const currentBoardsKey = galleryKeys.boards(currentOwner, {
       includeArchived: false,
       includeDateBoards: true,
@@ -861,6 +923,7 @@ describe('Gallery cache invalidation', () => {
 
     client.setQueryData(currentItemsKey, createData([[createItem('current.png')]]));
     client.setQueryData(currentDateNamesKey, { items: [{ kind: 'image', name: 'current.png' }], total: 1 });
+    client.setQueryData(currentRecentItemsKey, []);
     client.setQueryData(currentBoardsKey, []);
     const initialCardinality = client.getQueryCache().getAll().length;
 
@@ -871,14 +934,63 @@ describe('Gallery cache invalidation', () => {
     expect(client.getQueryCache().getAll()).toHaveLength(initialCardinality);
     expect(client.getQueryState(currentItemsKey)?.isInvalidated).toBe(true);
     expect(client.getQueryState(currentDateNamesKey)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(currentRecentItemsKey)?.isInvalidated).toBe(true);
     expect(client.getQueryState(currentBoardsKey)?.isInvalidated).toBe(false);
     expect(client.getQueryState(oldItemsKey)?.isInvalidated).toBe(false);
     expect(client.getQueryState(oldDateNamesKey)?.isInvalidated).toBe(false);
+    expect(client.getQueryState(oldRecentItemsKey)?.isInvalidated).toBe(false);
 
     await invalidateGallery(client);
 
     expect(client.getQueryCache().getAll()).toHaveLength(initialCardinality);
     expect(client.getQueryState(currentBoardsKey)?.isInvalidated).toBe(true);
     expect(client.getQueryState(oldBoardsKey)?.isInvalidated).toBe(false);
+  });
+
+  it('refetches active recent-membership lookups when Gallery items change', async () => {
+    const client = createClient();
+    const owner = captureAccountScope();
+    const queryKey = galleryKeys.recentItems(owner, ['new-image.png']);
+    const fetchMembership = vi.fn().mockResolvedValue([]);
+    const observer = new QueryObserver(client, { queryFn: fetchMembership, queryKey, staleTime: Infinity });
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    try {
+      await observer.refetch();
+      expect(fetchMembership).toHaveBeenCalledTimes(1);
+
+      fetchMembership.mockResolvedValue([{ kind: 'image', name: 'new-image.png' }]);
+      await invalidateGalleryItems(client, owner);
+
+      expect(fetchMembership).toHaveBeenCalledTimes(2);
+      expect(client.getQueryData(queryKey)).toEqual([{ kind: 'image', name: 'new-image.png' }]);
+      expect(client.getQueryState(queryKey)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('refetches active ordered-name lookups before their ranks can be reused', async () => {
+    const client = createClient();
+    const owner = captureAccountScope();
+    const filter = canonicalizeGalleryItemsFilter({ boardId: 'board-1', galleryView: 'images', searchTerm: '' });
+    const queryKey = galleryKeys.itemNames(owner, filter);
+    const fetchNames = vi.fn().mockResolvedValue({ items: [{ kind: 'image', name: 'before.png' }], total: 1 });
+    const observer = new QueryObserver(client, { queryFn: fetchNames, queryKey, staleTime: Infinity });
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    try {
+      await observer.refetch();
+      expect(fetchNames).toHaveBeenCalledTimes(1);
+
+      fetchNames.mockResolvedValue({ items: [{ kind: 'image', name: 'after.png' }], total: 1 });
+      await invalidateGalleryItems(client, owner);
+
+      expect(fetchNames).toHaveBeenCalledTimes(2);
+      expect(client.getQueryData(queryKey)).toEqual({ items: [{ kind: 'image', name: 'after.png' }], total: 1 });
+      expect(client.getQueryState(queryKey)?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+    }
   });
 });

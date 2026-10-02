@@ -229,8 +229,8 @@ export const useGalleryActions = ({
           semanticSearchText: null,
         }),
       setView: gallery.setView,
-      toggleItemInSelection: (item, nextPrimaryItem, selectionPage) =>
-        gallery.toggleItemSelection(item, nextPrimaryItem, selectionPage),
+      toggleItemInSelection: (item, nextPrimaryItem, selectionPage, cursor) =>
+        gallery.toggleItemSelection(item, nextPrimaryItem, selectionPage, cursor),
       updateSettings: gallery.updateSettings,
       uploadFiles,
     };

@@ -3,6 +3,7 @@ import type {
   GalleryImage,
   GalleryImageItem,
   GalleryItemsPage,
+  GalleryItemRef,
   GallerySelectionCursor,
   GalleryVideoItem,
 } from '@features/gallery';
@@ -125,11 +126,16 @@ const mocks = vi.hoisted(() => {
     galleryItemFetchOnConsumerIds: new Set<string>(),
     galleryStripFetches: [] as Array<{ boardId: string; starred?: boolean }>,
     galleryStripItems: [] as Array<GalleryImageItem | GalleryVideoItem>,
+    galleryStripQuery: null as
+      | null
+      | (() => Promise<{ items: Array<GalleryImageItem | GalleryVideoItem>; total: number }>),
     galleryItemPageOffsets: [] as number[],
     galleryItemWindowOffsets: [] as number[],
     galleryNamesFilters: [] as Array<{ boardId: string; semanticQuery?: unknown; starred?: boolean }>,
+    galleryNamesQuery: null as null | (() => Promise<{ items: GalleryItemRef[]; total: number }>),
     galleryItemInitialPageCount: 1,
     galleryItemPages: [] as GalleryItemsPage[],
+    galleryItemQuery: null as null | ((pageParam: number) => Promise<GalleryItemsPage>),
     imageActionOptions: null as null | {
       getItemActionContext?: () => {
         getItemSelectionPage?: (item: GalleryImageItem | GalleryVideoItem) => number;
@@ -200,6 +206,10 @@ vi.mock('@features/gallery/queries', () => ({
   galleryItemNamesOptions: (query: { boardId: string; semanticQuery?: unknown; starred?: boolean }) => ({
     queryFn: () => {
       mocks.galleryNamesFilters.push(query);
+      if (mocks.galleryNamesQuery) {
+        return mocks.galleryNamesQuery();
+      }
+
       const indexed = new Map<number, GalleryImageItem | GalleryVideoItem>();
 
       mocks.galleryItemPages.forEach((page, pageIndex) => {
@@ -226,13 +236,17 @@ vi.mock('@features/gallery/queries', () => ({
     queryFn: () => {
       mocks.galleryStripFetches.push(query);
 
+      if (mocks.galleryStripQuery) {
+        return mocks.galleryStripQuery();
+      }
+
       return Promise.resolve({ items: mocks.galleryStripItems, total: mocks.galleryStripItems.length });
     },
     queryKey: ['test-strip', query.boardId, mocks.galleryStripItems.map((item) => item.name).join(',')],
     staleTime: Infinity,
   }),
   galleryItemsInfiniteOptions: (
-    query: { boardId: string; orderDir?: 'ASC' | 'DESC'; starred?: boolean },
+    query: { boardId: string; orderDir?: 'ASC' | 'DESC'; semanticQuery?: unknown; starred?: boolean },
     window: { kind: 'anchor' | 'infinite' | 'page'; offset?: number } = { kind: 'infinite' },
     consumerId?: string
   ) => {
@@ -268,6 +282,11 @@ vi.mock('@features/gallery/queries', () => ({
       maxPages: 10,
       queryFn: ({ pageParam }: { pageParam: number }) => {
         mocks.galleryItemPageOffsets.push(pageParam);
+
+        if (mocks.galleryItemQuery) {
+          return mocks.galleryItemQuery(pageParam);
+        }
+
         return Promise.resolve(pages[pageParam / 60] ?? { items: [], total: 0 });
       },
       queryKey: [
@@ -276,6 +295,7 @@ vi.mock('@features/gallery/queries', () => ({
         query.orderDir,
         window.kind,
         initialOffset,
+        ...(query.semanticQuery ? ['semantic', JSON.stringify(query.semanticQuery)] : []),
         ...(consumerId === undefined ? [] : ['view', consumerId]),
       ],
       staleTime: Infinity,
@@ -442,6 +462,39 @@ const rerender = async () => {
   await renderTree(queryClient);
 };
 
+const waitForPreviewWindow = async (offset: number) => {
+  await vi.waitFor(() => {
+    const query = queryClient
+      ?.getQueryCache()
+      .getAll()
+      .find((candidate) => candidate.queryKey[0] === 'test-items' && candidate.queryKey[4] === offset);
+
+    expect(query?.state.status).toBe('success');
+    expect(query?.state.fetchStatus).toBe('idle');
+  });
+};
+
+const waitForPreviewStrip = async () => {
+  await vi.waitFor(() => {
+    const query = queryClient
+      ?.getQueryCache()
+      .getAll()
+      .find((candidate) => candidate.queryKey[0] === 'test-strip');
+
+    expect(query?.state.status).toBe('success');
+    expect(query?.state.fetchStatus).toBe('idle');
+    expect(query?.state.isInvalidated).toBe(false);
+  });
+  await rerender();
+};
+
+const getActivePreviewWindowOffsets = (): number[] =>
+  queryClient
+    ?.getQueryCache()
+    .findAll({ queryKey: ['test-items'] })
+    .filter((query) => query.isActive())
+    .map((query) => query.queryKey[4] as number) ?? [];
+
 const setGalleryValues = (patch: Record<string, unknown>) => {
   const state = mocks.project.widgetInstances.gallery.state as { values: Record<string, unknown> };
 
@@ -452,7 +505,7 @@ const setGalleryValues = (patch: Record<string, unknown>) => {
 // item.
 const commitLastSelection = async () => {
   const lastCall = mocks.commands.gallery.selectItem.mock.lastCall as
-    | [GalleryImageItem, unknown, number | undefined, boolean | undefined]
+    | [GalleryImageItem, unknown, number | undefined, boolean | undefined, GallerySelectionCursor | null | undefined]
     | undefined;
 
   if (!lastCall) {
@@ -510,6 +563,17 @@ const makeCursor = (
   listingId,
   section,
 });
+
+const createIndexedPages = (items: GalleryImageItem[]): GalleryItemsPage[] =>
+  Array.from({ length: Math.ceil(items.length / 60) }, (_unused, pageIndex) => {
+    const offset = pageIndex * 60;
+
+    return {
+      itemIndices: items.slice(offset, offset + 60).map((_item, itemIndex) => offset + itemIndex),
+      items: items.slice(offset, offset + 60),
+      total: items.length,
+    };
+  });
 
 const legacyImage = (name: string, queuedAt: string, sourceQueueItemId = `queue-${name}`) => ({
   boardId: 'none',
@@ -622,9 +686,11 @@ beforeEach(() => {
   mocks.galleryItemFetchOnConsumerIds.clear();
   mocks.galleryStripFetches.length = 0;
   mocks.galleryStripItems = [];
+  mocks.galleryStripQuery = null;
   mocks.galleryItemPageOffsets.length = 0;
   mocks.galleryItemWindowOffsets.length = 0;
   mocks.galleryNamesFilters.length = 0;
+  mocks.galleryNamesQuery = null;
   mocks.galleryItemInitialPageCount = 1;
   mocks.imageActionOptions = null;
   mocks.galleryItemPages = [
@@ -646,6 +712,7 @@ beforeEach(() => {
       total: mocks.recentImages.length,
     },
   ];
+  mocks.galleryItemQuery = null;
   mocks.useActiveProgressTarget.mockReturnValue(null);
   mocks.useProgressImage.mockReturnValue(null);
   mocks.bridgeProgressImage = null;
@@ -690,14 +757,16 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'newest' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
     await pressArrow('ArrowLeft');
     expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
       expect.objectContaining({ name: 'starred-top' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
 
     // Back from the listing's first item, left lands on the strip's last.
@@ -708,7 +777,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'starred-next' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -732,7 +802,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'starred-next' }),
       undefined,
       0,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -764,6 +835,17 @@ describe('preview keyboard navigation boundary', () => {
     });
     await rerender();
     await expect.poll(() => mocks.galleryItemWindowOffsets.at(-1)).toBe(0);
+    await waitForPreviewWindow(0);
+    await vi.waitFor(() => {
+      const stripQuery = queryClient
+        ?.getQueryCache()
+        .getAll()
+        .find((candidate) => candidate.queryKey[0] === 'test-strip');
+
+      expect(stripQuery?.state.status).toBe('success');
+      expect(stripQuery?.state.fetchStatus).toBe('idle');
+    });
+    await rerender();
     await pressArrow('ArrowRight');
 
     expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
@@ -772,6 +854,104 @@ describe('preview keyboard navigation boundary', () => {
       0,
       true,
       expect.objectContaining({ section: 'starred-strip', itemKey: `image:${starredB.name}` })
+    );
+  });
+
+  it('waits for refreshed starred-strip order before enabling Preview navigation', async () => {
+    const starredA = { ...createImageItem('starred-a', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredB = { ...createImageItem('starred-b', '2026-07-22T00:00:00.000Z'), starred: true };
+    const starredC = { ...createImageItem('starred-c', '2026-07-21T00:00:00.000Z'), starred: true };
+    const refreshedStrip = [starredC, starredB, starredA];
+    let resolveStrip: ((result: { items: typeof refreshedStrip; total: number }) => void) | undefined;
+
+    mocks.galleryStripItems = [starredA, starredB, starredC];
+    setGalleryValues({
+      recentImages: [],
+      selectedImage: { ...legacyImage(starredB.name, starredB.createdAt), starred: true },
+      selectedImageName: starredB.name,
+      selectedImageQuery: {
+        ...deepQuery,
+        cursor: makeCursor(getTestListingId(), starredB.name, 1, 'starred-strip'),
+        page: 0,
+      },
+    });
+    await render();
+    await expect.poll(() => selectedThumb()).toBe(starredB.name);
+
+    mocks.galleryStripQuery = () =>
+      new Promise((resolve) => {
+        resolveStrip = resolve;
+      });
+    let pendingStripRefresh: Promise<void> | undefined;
+    await act(async () => {
+      pendingStripRefresh = queryClient?.invalidateQueries({ queryKey: ['test-strip'] });
+      await Promise.resolve();
+    });
+    await expect.poll(() => resolveStrip).toBeTypeOf('function');
+
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveStrip?.({ items: refreshedStrip, total: refreshedStrip.length });
+      await pendingStripRefresh;
+      await Promise.resolve();
+    });
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: starredA.name }),
+      undefined,
+      0,
+      true,
+      expect.objectContaining({ section: 'starred-strip', itemKey: `image:${starredA.name}`, index: 2 })
+    );
+  });
+
+  it('waits for a stale starred strip before navigating from a listing item', async () => {
+    const selected = createImageItem('selected-unstarred', '2026-07-23T00:00:00.000Z');
+    const formerStarredNeighbor = createImageItem('former-starred-neighbor', '2026-07-22T00:00:00.000Z');
+    const older = createImageItem('older', '2026-07-21T00:00:00.000Z');
+    const staleStripItem = { ...formerStarredNeighbor, starred: true };
+    let resolveStrip: ((result: GalleryItemsPage) => void) | undefined;
+
+    mocks.galleryStripItems = [staleStripItem];
+    mocks.galleryItemPages = [{ items: [selected, formerStarredNeighbor, older], total: 3 }];
+    setGalleryValues({
+      recentImages: [],
+      selectedImage: legacyImage(selected.name, selected.createdAt),
+      selectedImageName: selected.name,
+    });
+    await render();
+    await expect.poll(() => selectedThumb()).toBe(selected.name);
+
+    mocks.galleryStripQuery = () =>
+      new Promise((resolve) => {
+        resolveStrip = resolve;
+      });
+    let pendingStripRefresh: Promise<void> | undefined;
+    await act(async () => {
+      pendingStripRefresh = queryClient?.invalidateQueries({ queryKey: ['test-strip'] });
+      await Promise.resolve();
+    });
+    await expect.poll(() => resolveStrip).toBeTypeOf('function');
+
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveStrip?.({ items: [], total: 0 });
+      await pendingStripRefresh;
+      await Promise.resolve();
+    });
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: formerStarredNeighbor.name }),
+      undefined,
+      0,
+      true,
+      expect.objectContaining({ itemKey: `image:${formerStarredNeighbor.name}`, section: 'listing' })
     );
   });
 
@@ -792,7 +972,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'oldest' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -801,6 +982,7 @@ describe('preview keyboard navigation boundary', () => {
     const starredDeep = { ...createImageItem('starred-deep', '2026-07-01T00:00:00.000Z'), starred: true };
 
     mocks.galleryStripItems = [starredTop];
+    mocks.galleryItemPages = [{ items: [starredTop, starredDeep], total: 2 }];
     setGalleryValues({
       recentImages: [],
       selectedImage: { ...legacyImage('starred-deep', '2026-07-01T00:00:00.000Z'), starred: true },
@@ -812,7 +994,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'starred-top' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
 
     mocks.commands.gallery.selectItem.mockClear();
@@ -835,7 +1018,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'starred-top' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -852,7 +1036,8 @@ describe('preview keyboard navigation boundary', () => {
         expect.objectContaining({ kind: 'image', name: 'oldest' }),
         undefined,
         expect.any(Number),
-        true
+        true,
+        expect.anything()
       );
       expect(documentKeydown).not.toHaveBeenCalled();
     } finally {
@@ -911,7 +1096,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'batch-1' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -942,7 +1128,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'starred-older' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -971,7 +1158,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'deep-older' }),
       undefined,
       30,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1001,7 +1189,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'deep-older' }),
       undefined,
       30,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1024,7 +1213,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'in-flight' }),
       undefined,
       0,
-      true
+      true,
+      null
     );
   });
 
@@ -1054,7 +1244,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'compare-top' }),
       undefined,
       0,
-      true
+      true,
+      null
     );
   });
 
@@ -1127,12 +1318,13 @@ describe('preview keyboard navigation boundary', () => {
     await rerender();
     await pressArrow('ArrowRight');
 
-    expect(mocks.galleryItemWindowOffsets).not.toContain(1800);
+    await expect.poll(() => getActivePreviewWindowOffsets()).toEqual([0]);
     expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'image', name: 'top-older' }),
       undefined,
       0,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1165,12 +1357,13 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'page-six' }),
       undefined,
       6,
-      true
+      true,
+      expect.anything()
     );
     await commitLastSelection();
 
     // The selection's actual page changes while the sliding navigation query keeps its original anchor.
-    expect(mocks.galleryItemWindowOffsets).toEqual([300]);
+    expect(getActivePreviewWindowOffsets()).toEqual([300]);
   });
 
   it('retains only the current anchored Preview window for keep-alive restoration', async () => {
@@ -1255,7 +1448,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'backend-1199' }),
       undefined,
       19,
-      true
+      true,
+      expect.anything()
     );
     await commitLastSelection();
     await pressArrow('ArrowRight');
@@ -1263,7 +1457,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'backend-1199' }),
       undefined,
       19,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1302,7 +1497,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'backend-600' }),
       undefined,
       10,
-      true
+      true,
+      expect.anything()
     );
     await commitLastSelection();
 
@@ -1335,7 +1531,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'backend-1' }),
       undefined,
       0,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1427,7 +1624,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'compare-top' }),
       undefined,
       0,
-      true
+      true,
+      null
     );
 
     await commitLastSelection();
@@ -1439,7 +1637,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'deep-newer' }),
       undefined,
       30,
-      true
+      true,
+      null
     );
   });
 
@@ -1479,7 +1678,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'deep-newer' }),
       undefined,
       0,
-      true
+      true,
+      null
     );
   });
 
@@ -1514,7 +1714,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'another-top' }),
       undefined,
       0,
-      true
+      true,
+      null
     );
   });
 
@@ -1579,7 +1780,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'deep-newer', boardId: 'board-b' }),
       undefined,
       0,
-      true
+      true,
+      null
     );
   });
 
@@ -1639,6 +1841,7 @@ describe('preview keyboard navigation boundary', () => {
     ];
 
     await render();
+    await waitForPreviewStrip();
     await pressArrow('ArrowRight');
 
     await vi.waitFor(() => {
@@ -1646,7 +1849,8 @@ describe('preview keyboard navigation boundary', () => {
         expect.objectContaining({ kind: 'image', name: 'oldest' }),
         undefined,
         expect.any(Number),
-        true
+        true,
+        expect.anything()
       );
     });
     expect(mocks.galleryItemPageOffsets).toEqual([60]);
@@ -1726,7 +1930,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
       undefined,
       1,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1740,6 +1945,7 @@ describe('preview keyboard navigation boundary', () => {
       queuedAt: '2026-07-21T12:02:30.000Z',
       starred: false,
     };
+    const selectedItem = createImageItem(selected.imageName, selected.queuedAt);
 
     galleryValues.galleryPage = 0;
     galleryValues.paginationMode = 'paginated';
@@ -1750,10 +1956,11 @@ describe('preview keyboard navigation boundary', () => {
       {
         items: [
           createImageItem('newest', '2026-07-21T12:03:00.000Z'),
+          selectedItem,
           { ...createImageItem('starred-mid', '2026-07-21T12:02:00.000Z'), starred: true },
           createImageItem('oldest', '2026-07-21T12:01:00.000Z'),
         ],
-        total: 3,
+        total: 4,
       },
     ];
 
@@ -1765,7 +1972,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'starred-mid' }),
       undefined,
       0,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1829,7 +2037,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
       undefined,
       0,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -1871,6 +2080,169 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
+  it('waits for the selected chronological rank before stepping after similarity clears', async () => {
+    const chronologicalItems = Array.from({ length: 1862 }, (_unused, index) =>
+      createImageItem(`chron-${index}`, new Date(Date.UTC(2026, 6, 21, 0, 0, 1862 - index)).toISOString())
+    );
+    const selected = chronologicalItems[1859]!;
+    const semanticQuery = { kind: 'text', query: 'boats' } as const;
+    const rankingId = getTestListingId({ semanticQuery });
+    let resolveNames: ((result: { items: GalleryItemRef[]; total: number }) => void) | undefined;
+
+    setGalleryValues({
+      recentImages: [],
+      semanticImageQuery: semanticQuery,
+      selectedImage: legacyImage(selected.name, selected.createdAt),
+      selectedImageName: selected.name,
+      selectedImageQuery: {
+        ...deepQuery,
+        cursor: makeCursor(rankingId, selected.name, 0),
+        page: 0,
+      },
+    });
+    mocks.galleryItemPages = [{ itemIndices: [0], items: [selected], total: 1 }];
+    await render();
+
+    mocks.galleryItemPages = createIndexedPages(chronologicalItems);
+    mocks.galleryNamesQuery = () =>
+      new Promise((resolve) => {
+        resolveNames = resolve;
+      });
+    setGalleryValues({
+      semanticImageQuery: null,
+      selectedImageQuery: { ...deepQuery, cursor: makeCursor(rankingId, selected.name, 0), page: 0 },
+    });
+    await rerender();
+    await expect.poll(() => resolveNames).toBeTypeOf('function');
+
+    await pressArrow('ArrowLeft');
+    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveNames?.({
+        items: chronologicalItems.map(({ kind, name }) => ({ kind, name })),
+        total: chronologicalItems.length,
+      });
+      await Promise.resolve();
+    });
+    await rerender();
+    await expect.poll(() => mocks.galleryItemWindowOffsets.at(-1)).toBe(1800);
+    await pressArrow('ArrowLeft');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'chron-1858' }),
+      undefined,
+      30,
+      true,
+      expect.objectContaining({ index: 1858, itemKey: 'image:chron-1858', section: 'listing' })
+    );
+  });
+
+  it('reanchors Preview again when an insertion moves the selected item across a page boundary', async () => {
+    const chronologicalItems = Array.from({ length: 1862 }, (_unused, index) =>
+      createImageItem(`chron-${index}`, new Date(Date.UTC(2026, 6, 21, 0, 0, 1862 - index)).toISOString())
+    );
+    const selected = chronologicalItems[1859]!;
+    mocks.galleryItemPages = createIndexedPages(chronologicalItems);
+    setGalleryValues({
+      recentImages: [],
+      selectedImage: legacyImage(selected.name, selected.createdAt),
+      selectedImageName: selected.name,
+      selectedImageQuery: { ...deepQuery, page: 0 },
+    });
+    await render();
+    await expect.poll(() => mocks.galleryItemWindowOffsets.at(-1)).toBe(1800);
+
+    const inserted = createImageItem('inserted-before-selection', '2026-07-20T00:00:00.000Z');
+    const updatedItems = [...chronologicalItems.slice(0, 1859), inserted, ...chronologicalItems.slice(1859)];
+    const updatedPages = createIndexedPages(updatedItems);
+    const listingNamesQuery = queryClient?.getQueryCache().findAll({ queryKey: ['test-names'] })[0];
+
+    expect(listingNamesQuery).toBeDefined();
+    mocks.galleryItemPages = updatedPages;
+    await act(async () => {
+      queryClient?.setQueryData<InfiniteData<GalleryItemsPage, number>>(
+        ['test-items', 'none', 'DESC', 'infinite', 1800, 'view', 'preview-reanchor:1'],
+        { pageParams: [1800], pages: [updatedPages[30]!] }
+      );
+      queryClient?.setQueryData(listingNamesQuery!.queryKey, {
+        items: updatedItems.map(({ kind, name }) => ({ kind, name })),
+        total: updatedItems.length,
+      });
+      await Promise.resolve();
+    });
+
+    await expect.poll(() => mocks.galleryItemWindowOffsets.at(-1)).toBe(1860);
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'chron-1860' }),
+      undefined,
+      31,
+      true,
+      expect.objectContaining({ index: 1861, itemKey: 'image:chron-1860', section: 'listing' })
+    );
+  });
+
+  it('waits for the listing refresh when the selected item remains inside its cached page', async () => {
+    const selected = createImageItem('selected', '2026-07-21T00:00:03.000Z');
+    const oldNeighbor = createImageItem('old-neighbor', '2026-07-21T00:00:02.000Z');
+    const inserted = createImageItem('inserted', '2026-07-21T00:00:04.000Z');
+    const currentNeighbor = createImageItem('current-neighbor', '2026-07-21T00:00:01.000Z');
+    const listingId = getTestListingId();
+    const updatedPage: GalleryItemsPage = {
+      itemIndices: [0, 1, 2],
+      items: [inserted, selected, currentNeighbor],
+      total: 3,
+    };
+    let resolvePage: ((page: GalleryItemsPage) => void) | undefined;
+
+    mocks.galleryItemPages = [{ items: [selected, oldNeighbor], total: 2 }];
+    setGalleryValues({
+      recentImages: [],
+      selectedImage: legacyImage(selected.name, selected.createdAt),
+      selectedImageName: selected.name,
+      selectedImageQuery: {
+        ...deepQuery,
+        cursor: makeCursor(listingId, selected.name, 0),
+        page: 0,
+      },
+    });
+    await render();
+    await expect.poll(() => selectedThumb()).toBe(selected.name);
+
+    mocks.galleryItemPages = [updatedPage];
+    mocks.galleryItemQuery = () =>
+      new Promise((resolve) => {
+        resolvePage = resolve;
+      });
+    let pendingRefresh: Promise<void> | undefined;
+    await act(async () => {
+      pendingRefresh = queryClient?.invalidateQueries({ queryKey: ['test-items'] });
+      await Promise.resolve();
+    });
+    await expect.poll(() => resolvePage).toBeTypeOf('function');
+
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePage?.(updatedPage);
+      await pendingRefresh;
+      await Promise.resolve();
+    });
+    await rerender();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: currentNeighbor.name }),
+      undefined,
+      0,
+      true,
+      expect.objectContaining({ index: 2, itemKey: `image:${currentNeighbor.name}`, section: 'listing' })
+    );
+  });
+
   it('resolves ranked cursor against chronological board after similarity clears', async () => {
     const rankItems = Array.from({ length: 62 }, (_unused, index) =>
       createImageItem(`rank-${index}`, new Date(Date.UTC(2026, 6, 21, 0, 0, 62 - index)).toISOString())
@@ -1904,6 +2276,7 @@ describe('preview keyboard navigation boundary', () => {
     });
     await rerender();
     await expect.poll(() => mocks.galleryItemFilters.at(-1)?.semanticQuery).toBeUndefined();
+    await waitForPreviewStrip();
     await pressArrow('ArrowRight');
 
     expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
@@ -1968,6 +2341,8 @@ describe('preview keyboard navigation boundary', () => {
       starred: false,
     };
     const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    const semanticQuery = { kind: 'text', query: 'sunset' } as const;
+    const listingId = getTestListingId({ semanticQuery });
     const toItem = (image: typeof filler) => ({
       boardId: image.boardId,
       category: image.imageCategory,
@@ -1988,13 +2363,14 @@ describe('preview keyboard navigation boundary', () => {
     galleryValues.galleryPage = 1;
     galleryValues.paginationMode = 'paginated';
     galleryValues.recentImages = [];
-    galleryValues.semanticImageQuery = { kind: 'text', query: 'sunset' };
+    galleryValues.semanticImageQuery = semanticQuery;
     galleryValues.selectedImage = selected;
     galleryValues.selectedImageName = selected.imageName;
     galleryValues.selectedImageQuery = {
       boardId: 'none',
       galleryView: 'images',
       imageOrderDir: 'DESC',
+      cursor: makeCursor(listingId, selected.imageName, 60),
       page: 30,
       paginationMode: 'paginated',
       searchTerm: '',
@@ -2011,7 +2387,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
       undefined,
       0,
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -2066,7 +2443,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'newest' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -2110,7 +2488,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ boardId: 'none', name: 'newest' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
     expect(mocks.galleryItemFilters.every((filter) => filter.boardId !== 'board-live')).toBe(true);
   });
@@ -2515,7 +2894,8 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'oldest' }),
       undefined,
       expect.any(Number),
-      true
+      true,
+      expect.anything()
     );
   });
 
@@ -2588,7 +2968,13 @@ describe('preview keyboard navigation boundary', () => {
 
     await pressArrow('ArrowLeft');
 
-    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(sameNameImage, undefined, 0, true);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      sameNameImage,
+      undefined,
+      0,
+      true,
+      expect.objectContaining({ itemKey: 'image:shared', section: 'listing' })
+    );
   });
 
   it('leaves native video keys untouched and omits image-only hotkey registrations', async () => {
@@ -2694,7 +3080,8 @@ describe('preview keyboard navigation boundary', () => {
         expect.objectContaining({ name: 'oldest' }),
         undefined,
         expect.any(Number),
-        true
+        true,
+        expect.anything()
       );
     });
     // The swipe and the step agree: the panel that slid in shows that same item at full size.

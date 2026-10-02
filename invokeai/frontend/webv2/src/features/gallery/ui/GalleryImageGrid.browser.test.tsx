@@ -5,6 +5,7 @@ import type { ImageIndexAvailability } from '@features/gallery/data/backend';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 import type { QueueProgressSession } from '@features/queue/contracts';
 import type { StreamingImageSource } from '@platform/ui/streaming-image/streamingImageSource';
+import type { QueryFunction, QueryKey } from '@tanstack/react-query';
 import type * as VirtualModule from 'react-hook-tanstack-virtual';
 
 import { Box, ChakraProvider } from '@chakra-ui/react';
@@ -20,6 +21,7 @@ import {
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { requestGalleryItemReveal } from '@features/gallery/core/selection';
 import { getGallerySettings } from '@features/gallery/core/settings';
+import { invalidateGalleryItems } from '@features/gallery/data/queryCache';
 import { GalleryUiProvider, type GalleryUiAdapter } from '@features/gallery/react';
 import { GALLERY_PINNED_FOOTER_PX } from '@features/gallery/ui/galleryGridLayout';
 import { isGalleryImageDragData } from '@features/gallery/utility';
@@ -53,15 +55,18 @@ const mocks = vi.hoisted(() => ({
   itemProgress: null as { percentage: number; message: string } | null,
   progressFrame: null as { dataUrl: string; width: number; height: number } | null,
   fetchNames: vi.fn(),
+  fetchRecentItems: vi.fn(),
   fetchGalleryPage: vi.fn(),
   queryItems: [] as GalleryItem[],
   galleryItemsByIndex: null as Map<number, GalleryItem> | null,
   galleryTotal: null as number | null,
   galleryLoadRange: null as GalleryListing['loadRange'] | null,
+  galleryListingError: null as Error | null,
   getItemLabel: vi.fn<GalleryUiAdapter['getItemLabel']>(),
   indexAvailability: { modelName: null, state: 'disabled' } as ImageIndexAvailability,
   measure: vi.fn(),
   scrollToIndex: vi.fn(),
+  suppressVirtualizerOnChange: false,
   setPage: vi.fn(),
   useActualVirtualizer: false,
   virtualizerOptions: [] as Array<{
@@ -75,35 +80,48 @@ const mocks = vi.hoisted(() => ({
 
 const getNamesKey = (filter: unknown) => ['test-gallery-item-names', JSON.stringify(filter)] as const;
 
-vi.mock('@features/gallery/data/queries', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  galleryBoardsOptions: () => ({
-    queryFn: () => [board],
-    queryKey: ['test-gallery-boards'],
-    staleTime: Infinity,
-  }),
-  galleryItemsInfiniteOptions: (filter: unknown, window: { kind: string; offset?: number }, consumerId?: string) => ({
-    getNextPageParam: (lastPage: { total: number }, _pages: unknown[], lastOffset: number) =>
-      lastOffset + 60 < lastPage.total ? lastOffset + 60 : undefined,
-    getPreviousPageParam: (_firstPage: unknown, _pages: unknown[], firstOffset: number) =>
-      firstOffset > 0 ? firstOffset - 60 : undefined,
-    initialPageParam: window.offset ?? 0,
-    maxPages: 10,
-    queryFn: ({ pageParam }: { pageParam: number }) =>
-      mocks.fetchGalleryPage(pageParam, mocks.queryItems.slice(pageParam, pageParam + 60)),
-    queryKey: ['test-gallery-items', JSON.stringify(filter), window.kind, window.offset ?? 0, consumerId],
-    staleTime: 0,
-  }),
-  imageIndexAvailabilityOptions: () => ({
-    queryFn: () => mocks.indexAvailability,
-    queryKey: ['test-image-index-availability'],
-  }),
-  galleryItemNamesOptions: (filter: unknown) => ({
-    queryFn: () => mocks.fetchNames(filter),
-    queryKey: getNamesKey(filter),
-    staleTime: Infinity,
-  }),
-}));
+vi.mock('@features/gallery/data/queries', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const getRecentItemsOptions = actual.galleryRecentItemsOptions as (imageNames: readonly string[]) => {
+    queryFn: QueryFunction<GalleryItem[]>;
+    queryKey: QueryKey;
+    staleTime?: number;
+  };
+
+  return {
+    ...actual,
+    galleryBoardsOptions: () => ({
+      queryFn: () => [board],
+      queryKey: ['test-gallery-boards'],
+      staleTime: Infinity,
+    }),
+    galleryItemsInfiniteOptions: (filter: unknown, window: { kind: string; offset?: number }, consumerId?: string) => ({
+      getNextPageParam: (lastPage: { total: number }, _pages: unknown[], lastOffset: number) =>
+        lastOffset + 60 < lastPage.total ? lastOffset + 60 : undefined,
+      getPreviousPageParam: (_firstPage: unknown, _pages: unknown[], firstOffset: number) =>
+        firstOffset > 0 ? firstOffset - 60 : undefined,
+      initialPageParam: window.offset ?? 0,
+      maxPages: 10,
+      queryFn: ({ pageParam }: { pageParam: number }) =>
+        mocks.fetchGalleryPage(pageParam, mocks.queryItems.slice(pageParam, pageParam + 60)),
+      queryKey: ['test-gallery-items', JSON.stringify(filter), window.kind, window.offset ?? 0, consumerId],
+      staleTime: 0,
+    }),
+    imageIndexAvailabilityOptions: () => ({
+      queryFn: () => mocks.indexAvailability,
+      queryKey: ['test-image-index-availability'],
+    }),
+    galleryItemNamesOptions: (filter: unknown) => ({
+      queryFn: () => mocks.fetchNames(filter),
+      queryKey: getNamesKey(filter),
+      staleTime: Infinity,
+    }),
+    galleryRecentItemsOptions: (imageNames: string[]) => ({
+      ...getRecentItemsOptions(imageNames),
+      queryFn: () => mocks.fetchRecentItems(imageNames) as Promise<GalleryItem[]>,
+    }),
+  };
+});
 
 vi.mock('react-hook-tanstack-virtual', async (importOriginal) => {
   const actual = await importOriginal<typeof VirtualModule>();
@@ -126,7 +144,13 @@ vi.mock('react-hook-tanstack-virtual', async (importOriginal) => {
         (_, index) => (options.scrollMargin ?? 0) + sizes.slice(0, index).reduce((total, size) => total + size, 0)
       );
 
-      options.onChange?.({ getVirtualIndexes: () => Array.from({ length: options.count }, (_, index) => index) });
+      const virtualizerInstance = {
+        getVirtualIndexes: () => Array.from({ length: options.count }, (_, index) => index),
+        scrollToIndex: mocks.scrollToIndex,
+      };
+      if (!mocks.suppressVirtualizerOnChange) {
+        options.onChange?.(virtualizerInstance);
+      }
 
       return {
         measure: mocks.measure,
@@ -560,6 +584,7 @@ const QueryBackedGallery = ({
     mocks.galleryItemsByIndex = new Map(data.listing.itemsByIndex);
     mocks.galleryTotal = data.listing.total;
     mocks.galleryLoadRange = data.listing.loadRange;
+    mocks.galleryListingError = data.listing.error;
   }, [data.listing]);
   const gallery = createGallery({
     anchoredWindowPage,
@@ -666,6 +691,7 @@ beforeEach(() => {
   mocks.itemProgress = null;
   mocks.indexAvailability = { modelName: null, state: 'disabled' };
   mocks.getItemLabel.mockReset();
+  mocks.fetchRecentItems.mockResolvedValue([]);
   currentProgressSessions = [];
   currentLiveFollowEnabled = false;
   currentPinnedSessionId = null;
@@ -675,6 +701,8 @@ beforeEach(() => {
   mocks.galleryItemsByIndex = null;
   mocks.galleryTotal = null;
   mocks.galleryLoadRange = null;
+  mocks.galleryListingError = null;
+  mocks.suppressVirtualizerOnChange = false;
   mocks.useActualVirtualizer = false;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
@@ -726,7 +754,7 @@ describe('GalleryImageGrid mixed item cells', () => {
 
     await click(getButton('Select backend-last.png for preview'), { ctrlKey: true });
 
-    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(backend, null, 0);
+    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(backend, null, 0, null);
   });
 
   it('passes the promoted selection page when toggling off the primary on another page', async () => {
@@ -756,7 +784,7 @@ describe('GalleryImageGrid mixed item cells', () => {
       })
     );
     await click(getButton('Select page-one.png for preview'), { ctrlKey: true });
-    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(second, first, 0);
+    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(second, first, 0, null);
   });
 
   it('keeps recent completions out of paginated page positions', async () => {
@@ -1320,8 +1348,9 @@ describe('GalleryImageGrid mixed item cells', () => {
       .find((query) => query.queryKey[0] === 'test-gallery-items')?.queryKey;
     expect(queryKey).toBeDefined();
 
-    await interact(() => root?.render(<QueryBackedGalleryProvider recentImages={[recentImage]} />), 80);
+    await interact(() => root?.render(<QueryBackedGalleryProvider recentImages={[recentImage]} />), 250);
 
+    await vi.waitFor(() => expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('completed.png'));
     expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('completed.png');
     expect(mocks.galleryItemsByIndex?.get(1)?.name).toBe('cached-0.png');
     expect(mocks.galleryTotal).toBe(1201);
@@ -1347,7 +1376,9 @@ describe('GalleryImageGrid mixed item cells', () => {
 
     mocks.queryItems = [recentItem, ...staleItems];
     failRefresh = false;
+    mocks.fetchRecentItems.mockResolvedValue([recentItem]);
     await act(async () => {
+      await invalidateGalleryItems(queryClient!);
       await queryClient!.invalidateQueries({ exact: true, queryKey: queryKey! });
     });
 
@@ -1686,7 +1717,7 @@ describe('GalleryImageGrid mixed item cells', () => {
       })
     );
     await click(getButton('Select starred-top.png for preview'), { ctrlKey: true });
-    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(starredTop, null, 0);
+    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(starredTop, null, 0, null);
   });
 
   it('offers Show all when the board holds more starred items than the strip, switching to the starred listing', async () => {
@@ -2151,6 +2182,133 @@ describe('GalleryImageGrid mixed item cells', () => {
     await click(getButton('Star clip.mp4'));
 
     expect(imageActionMocks.setItemsStarred).toHaveBeenCalledWith([{ kind: 'video', name: 'clip.mp4' }], true);
+  });
+});
+
+describe('recent-image reconciliation', () => {
+  it('does not overlay a persisted recent outside the retained window', async () => {
+    const recentImage = createRecentImage('persisted-recent.png');
+    const persistedRecent = createItem('image', recentImage.imageName, { createdAt: recentImage.createdAt });
+    mocks.queryItems = [
+      persistedRecent,
+      ...Array.from({ length: 1000 }, (_, index) => createItem('image', `cached-${index}.png`)),
+    ];
+    mocks.fetchRecentItems.mockResolvedValue([persistedRecent]);
+    mocks.fetchGalleryPage.mockImplementation((_offset: number, items: GalleryItem[]) => ({
+      items,
+      total: mocks.queryItems.length,
+    }));
+
+    await interact(
+      () => root?.render(<QueryBackedGalleryProvider anchoredWindowPage={10} recentImages={[recentImage]} />),
+      250
+    );
+
+    expect(mocks.fetchRecentItems).toHaveBeenCalledWith(['persisted-recent.png']);
+    expect(mocks.galleryTotal).toBe(1001);
+    expect(mocks.galleryItemsByIndex?.get(600)?.name).toBe('cached-599.png');
+    expect(mocks.galleryItemsByIndex?.get(601)?.name).toBe('cached-600.png');
+  });
+
+  it('keeps recent membership unknown until Retry resolves it', async () => {
+    const recentImage = createRecentImage('persisted-recent.png');
+    const persistedRecent = createItem('image', recentImage.imageName, { createdAt: recentImage.createdAt });
+    mocks.queryItems = [
+      persistedRecent,
+      ...Array.from({ length: 1000 }, (_, index) => createItem('image', `cached-${index}.png`)),
+    ];
+    let failMembershipRequest = true;
+    mocks.suppressVirtualizerOnChange = true;
+    mocks.fetchRecentItems.mockImplementation(() => {
+      if (failMembershipRequest) {
+        return Promise.reject(new Error('recent membership failed'));
+      }
+
+      return Promise.resolve([persistedRecent]);
+    });
+    mocks.fetchGalleryPage.mockImplementation((_offset: number, items: GalleryItem[]) => ({
+      items,
+      total: mocks.queryItems.length,
+    }));
+
+    await interact(
+      () => root?.render(<QueryBackedGalleryProvider anchoredWindowPage={10} recentImages={[recentImage]} />),
+      250
+    );
+
+    await vi.waitFor(() => expect(mocks.fetchRecentItems).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      const membershipQuery = queryClient
+        ?.getQueryCache()
+        .getAll()
+        .find(
+          (query) =>
+            query.queryKey[2] === 'recent-membership' &&
+            (query.queryKey.at(-1) as string[]).includes('persisted-recent.png')
+        );
+
+      expect(membershipQuery?.state.status).toBe('error');
+    });
+    await vi.waitFor(() => expect(mocks.galleryListingError?.message).toBe('recent membership failed'));
+    await vi.waitFor(() => expect(host?.textContent ?? '').toContain('recent membership failed'));
+    expect(mocks.galleryTotal).toBe(1001);
+    expect(mocks.galleryItemsByIndex?.get(600)?.name).toBe('cached-599.png');
+    expect(mocks.galleryItemsByIndex?.get(601)?.name).toBe('cached-600.png');
+
+    failMembershipRequest = false;
+    const previousMembershipRequestCount = mocks.fetchRecentItems.mock.calls.length;
+    const retryButton = host?.querySelector<HTMLButtonElement>('[role="alert"] button');
+    expect(retryButton).not.toBeNull();
+    await click(retryButton!);
+
+    await vi.waitFor(() =>
+      expect(mocks.fetchRecentItems.mock.calls.length).toBeGreaterThan(previousMembershipRequestCount)
+    );
+    await vi.waitFor(() => expect(host?.querySelector('[role="alert"]')).toBeNull());
+    expect(mocks.galleryTotal).toBe(1001);
+    expect(mocks.galleryItemsByIndex?.get(600)?.name).toBe('cached-599.png');
+    expect(mocks.galleryItemsByIndex?.get(601)?.name).toBe('cached-600.png');
+  });
+
+  it('restores a persisted recent overlay when refreshed backend membership removes it', async () => {
+    const recentImage = createRecentImage('persisted-recent.png');
+    const persistedRecent = createItem('image', recentImage.imageName, { createdAt: recentImage.createdAt });
+    mocks.queryItems = [
+      persistedRecent,
+      ...Array.from({ length: 1000 }, (_, index) => createItem('image', `cached-${index}.png`)),
+    ];
+    mocks.fetchRecentItems.mockResolvedValue([persistedRecent]);
+    mocks.fetchGalleryPage.mockImplementation((_offset: number, items: GalleryItem[]) => ({
+      items,
+      total: mocks.queryItems.length,
+    }));
+
+    await interact(
+      () => root?.render(<QueryBackedGalleryProvider anchoredWindowPage={10} recentImages={[recentImage]} />),
+      250
+    );
+    await vi.waitFor(() => expect(mocks.galleryTotal).toBe(1001));
+    await vi.waitFor(() => expect(mocks.fetchRecentItems).toHaveBeenCalledWith(['persisted-recent.png']));
+
+    mocks.queryItems = Array.from({ length: 1000 }, (_, index) => createItem('image', `cached-${index}.png`));
+    mocks.fetchRecentItems.mockResolvedValue([]);
+    mocks.fetchGalleryPage.mockImplementation((_offset: number, items: GalleryItem[]) => ({
+      items,
+      total: mocks.queryItems.length,
+    }));
+    const initialMembershipRequestCount = mocks.fetchRecentItems.mock.calls.length;
+
+    await interact(async () => {
+      await invalidateGalleryItems(queryClient!);
+      await queryClient!.invalidateQueries({ queryKey: ['test-gallery-items'] });
+    });
+
+    await vi.waitFor(() =>
+      expect(mocks.fetchRecentItems.mock.calls.length).toBeGreaterThan(initialMembershipRequestCount)
+    );
+    await vi.waitFor(() => expect(mocks.galleryTotal).toBe(1001));
+    expect(mocks.galleryItemsByIndex?.get(0)?.name).toBe('persisted-recent.png');
+    expect(mocks.galleryItemsByIndex?.get(601)?.name).toBe('cached-600.png');
   });
 });
 

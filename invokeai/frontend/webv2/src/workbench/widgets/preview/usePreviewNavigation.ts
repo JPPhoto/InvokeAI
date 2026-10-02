@@ -313,28 +313,46 @@ export const usePreviewNavigation = ({
     hasNextPage: hasNextBoardItemsPage,
     hasPreviousPage: hasPreviousBoardItemsPage,
     isFetching: isFetchingBoardItems,
+    isStale: isListingStale,
     isFetchingNextPage: isFetchingNextBoardItemsPage,
     isFetchingPreviousPage: isFetchingPreviousBoardItemsPage,
   } = useInfiniteQuery({ ...navigationItemsOptions, enabled: hasNavigationContext });
+  const isListingInvalidated =
+    isListingStale && (queryClient.getQueryState(navigationItemsOptions.queryKey)?.isInvalidated ?? false);
   const selectedItemInWindow =
     selectedItemKey !== null &&
     (boardItemsData?.pages.some((page) => page.items.some((item) => toGalleryItemKey(item) === selectedItemKey)) ??
       false);
+  // Share Gallery's bounded starred strip except for ranked, starred-only, or mid-board windows.
+  const hasTopPage = boardItemsData?.pageParams.includes(0) ?? navigationAnchorOffset === 0;
+  const hasStrip = hasNavigationContext && !navigationStarredOnly && navigationSemanticQuery === null && hasTopPage;
+  const {
+    data: stripData,
+    isFetching: isFetchingStrip,
+    isStale: isStripStale,
+    isSuccess: hasLoadedStrip,
+  } = useQuery({
+    ...galleryStarredStripOptions(listingFilter),
+    enabled: hasStrip,
+  });
+  const queriedStripItems = hasStrip ? (stripData?.items ?? EMPTY_PREVIEW_ITEMS) : EMPTY_PREVIEW_ITEMS;
+  const selectedStripIndex = queriedStripItems.findIndex((item) => toGalleryItemKey(item) === selectedItemKey);
+  const stripPositionIsCurrent = !hasStrip || (hasLoadedStrip && !isFetchingStrip && !isStripStale);
+  const savedStripCursorWasRemoved =
+    savedCursorMatchesListing &&
+    savedCursor?.section === 'starred-strip' &&
+    stripPositionIsCurrent &&
+    selectedStripIndex < 0;
   const shouldResolveSelection =
     hasNavigationContext &&
     selectedItemKey !== null &&
     (!savedCursorMatchesListing ||
-      (savedCursor?.section === 'listing' && boardItemsData !== undefined && !selectedItemInWindow));
+      (savedCursor?.section === 'listing' && boardItemsData !== undefined && !selectedItemInWindow) ||
+      savedStripCursorWasRemoved);
   const orderedNamesQuery = useQuery({
     ...galleryItemNamesOptions({ ...listingFilter, starred: navigationStarredOnly }),
     enabled: shouldResolveSelection,
   });
-
-  // Share Gallery's bounded starred strip except for ranked, starred-only, or mid-board windows.
-  const hasTopPage = boardItemsData?.pageParams.includes(0) ?? navigationAnchorOffset === 0;
-  const hasStrip = hasNavigationContext && !navigationStarredOnly && navigationSemanticQuery === null && hasTopPage;
-  const { data: stripData } = useQuery({ ...galleryStarredStripOptions(listingFilter), enabled: hasStrip });
-  const queriedStripItems = hasStrip ? (stripData?.items ?? EMPTY_PREVIEW_ITEMS) : EMPTY_PREVIEW_ITEMS;
 
   const getSelectionIndexIn = useCallback((item: GalleryItem, data: typeof boardItemsData): number | undefined => {
     const itemKey = toGalleryItemKey(item);
@@ -349,11 +367,59 @@ export const usePreviewNavigation = ({
       ? (page?.itemIndices?.[itemIndex] ?? pageParam + itemIndex)
       : undefined;
   }, []);
+  const getLocalListingIndexIn = useCallback(
+    (item: GalleryItem, data: typeof boardItemsData): number | undefined => {
+      const itemKey = toGalleryItemKey(item);
+      const hasLocalItem = localItems.some((candidate) => toGalleryItemKey(candidate) === itemKey);
+      const startsAtListingHead = data?.pageParams[0] === 0;
+      const hasListingFilters =
+        navigationSemanticQuery !== null ||
+        navigationStarredOnly ||
+        selectedImageSearch.text !== '' ||
+        selectedImageSearch.range !== undefined;
+
+      if (!hasLocalItem || !startsAtListingHead || hasListingFilters) {
+        return undefined;
+      }
+
+      const visibleLocalItems = getOrderedLocalItems({
+        boardId: navigationBoardId,
+        galleryView: navigationGalleryView,
+        items: localItems,
+        imageOrderDir: navigationOrderDir,
+      });
+      const mergedItems = mergePreviewBoardItems(flattenPreviewItems(data), visibleLocalItems, navigationOrderDir);
+      const index = mergedItems.findIndex((candidate) => toGalleryItemKey(candidate) === itemKey);
+
+      return index >= 0 ? index : undefined;
+    },
+    [
+      localItems,
+      navigationBoardId,
+      navigationGalleryView,
+      navigationOrderDir,
+      navigationSemanticQuery,
+      navigationStarredOnly,
+      selectedImageSearch,
+    ]
+  );
   const selectedListingIndex = selectedItem ? getSelectionIndexIn(selectedItem, boardItemsData) : undefined;
   const namedSelectionIndex = orderedNamesQuery.data?.items.findIndex(
     (itemRef) => toGalleryItemKey(itemRef) === selectedItemKey
   );
-  const selectedStripIndex = queriedStripItems.findIndex((item) => toGalleryItemKey(item) === selectedItemKey);
+  const selectedLocalListingIndex =
+    selectedItem &&
+    orderedNamesQuery.isSuccess &&
+    !orderedNamesQuery.isFetching &&
+    !orderedNamesQuery.isStale &&
+    namedSelectionIndex === -1
+      ? getLocalListingIndexIn(selectedItem, boardItemsData)
+      : undefined;
+  const namedPositionIsCurrent =
+    orderedNamesQuery.isSuccess &&
+    !orderedNamesQuery.isFetching &&
+    !orderedNamesQuery.isStale &&
+    namedSelectionIndex !== undefined;
   const resolvedCursor =
     selectedItem && selectedItemKey !== null
       ? resolveGallerySelectionCursor({
@@ -361,9 +427,9 @@ export const usePreviewNavigation = ({
           listingId: navigationListingId,
           listingIndex:
             selectedListingIndex ??
-            (namedSelectionIndex !== undefined && namedSelectionIndex >= 0 ? namedSelectionIndex : undefined),
-          savedCursor: savedCursorMatchesListing ? savedCursor : null,
-          starredStripIndex: selectedStripIndex >= 0 ? selectedStripIndex : undefined,
+            (namedPositionIsCurrent && namedSelectionIndex >= 0 ? namedSelectionIndex : selectedLocalListingIndex),
+          savedCursor: savedCursorMatchesListing && !savedStripCursorWasRemoved ? savedCursor : null,
+          starredStripIndex: stripPositionIsCurrent && selectedStripIndex >= 0 ? selectedStripIndex : undefined,
         })
       : null;
   const resolvedSelectionPage =
@@ -377,18 +443,35 @@ export const usePreviewNavigation = ({
   const selectedPageIsLoaded = boardItemsData?.pageParams.some(
     (pageParam) => Math.floor(pageParam / GALLERY_PAGE_SIZE) === resolvedSelectionPage
   );
+  const selectionPositionIsCurrent =
+    (selectedListingIndex !== undefined && !isFetchingBoardItems && !isListingInvalidated) ||
+    (selectedStripIndex >= 0 && stripPositionIsCurrent) ||
+    (selectedLocalListingIndex !== undefined && !isListingInvalidated) ||
+    (namedPositionIsCurrent && namedSelectionIndex >= 0 && !isListingInvalidated) ||
+    (savedCursorMatchesListing && !shouldResolveSelection && !isListingInvalidated);
+  const isNavigationReady =
+    !hasNavigationContext ||
+    followedSessionId !== null ||
+    selectedItemKey === null ||
+    (resolvedCursor !== null &&
+      !isFetchingBoardItems &&
+      !isListingInvalidated &&
+      selectionPositionIsCurrent &&
+      selectedPageIsLoaded === true &&
+      !(hasStrip && !stripPositionIsCurrent));
+  const resolvedPositionContextKey = `${navigationContextKey}:${resolvedCursor?.section ?? ''}:${resolvedCursor?.index ?? ''}`;
 
   if (
     !hasStaleNavigationAnchor &&
     hasNavigationContext &&
     boardItemsData !== undefined &&
     !selectedPageIsLoaded &&
-    navigationAnchor.reanchorContextKey !== navigationContextKey
+    navigationAnchor.reanchorContextKey !== resolvedPositionContextKey
   ) {
     setNavigationAnchor({
       page: resolvedSelectionPage,
       queryKey: navigationQueryKey,
-      reanchorContextKey: navigationContextKey,
+      reanchorContextKey: resolvedPositionContextKey,
       revision: navigationAnchor.revision + 1,
     });
   }
@@ -408,12 +491,13 @@ export const usePreviewNavigation = ({
     (item: GalleryItem, data: typeof boardItemsData): GallerySelectionCursor | null => {
       const itemKey = toGalleryItemKey(item);
       const listingIndex = getSelectionIndexIn(item, data);
+      const localListingIndex = listingIndex === undefined ? getLocalListingIndexIn(item, data) : undefined;
       const starredStripIndex = stripItems.findIndex((candidate) => toGalleryItemKey(candidate) === itemKey);
 
       return resolveGallerySelectionCursor({
         itemKey,
         listingId: navigationListingId,
-        listingIndex,
+        listingIndex: listingIndex ?? localListingIndex,
         savedCursor:
           itemKey === selectedItemKey && savedCursorMatchesListing && savedCursor?.itemKey === itemKey
             ? savedCursor
@@ -421,7 +505,15 @@ export const usePreviewNavigation = ({
         starredStripIndex: starredStripIndex >= 0 ? starredStripIndex : undefined,
       });
     },
-    [getSelectionIndexIn, navigationListingId, savedCursor, savedCursorMatchesListing, selectedItemKey, stripItems]
+    [
+      getLocalListingIndexIn,
+      getSelectionIndexIn,
+      navigationListingId,
+      savedCursor,
+      savedCursorMatchesListing,
+      selectedItemKey,
+      stripItems,
+    ]
   );
   const getSelectionPageIn = useCallback(
     (item: GalleryItem, data: typeof boardItemsData): number => {
@@ -434,9 +526,9 @@ export const usePreviewNavigation = ({
           ? 0
           : cursor
             ? Math.floor(cursor.index / GALLERY_PAGE_SIZE)
-            : selectedImageQuery.page;
+            : 0;
     },
-    [getSelectionCursorIn, navigationSemanticQuery, selectedImageQuery.page]
+    [getSelectionCursorIn, navigationSemanticQuery]
   );
   const stampSelection = useCallback(
     (item: GalleryItem, data: typeof boardItemsData) =>
@@ -561,7 +653,12 @@ export const usePreviewNavigation = ({
     () => (stripItems.length === 0 ? listingItems : [...stripItems, ...listingItems]),
     [listingItems, stripItems]
   );
-  const isLoadingBoard = hasNavigationContext && isFetchingBoardItems;
+  const isLoadingBoard =
+    hasNavigationContext &&
+    (isFetchingBoardItems ||
+      isListingInvalidated ||
+      (shouldResolveSelection && orderedNamesQuery.isFetching) ||
+      (hasStrip && isFetchingStrip && resolvedCursor?.section === 'starred-strip'));
   const sessionEntries = useMemo(
     (): GalleryNavigationEntry[] =>
       progressSessions.map((session) => ({ id: session.id, kind: 'session', navigable: session.state === 'running' })),
@@ -597,7 +694,7 @@ export const usePreviewNavigation = ({
   // Share navigation between keyboard, footer, and swipe; comparison does not step saved images.
   const navigate = useCallback(
     (offset: -1 | 1): Promise<boolean> => {
-      if (isComparing) {
+      if (isComparing || !isNavigationReady) {
         return Promise.resolve(false);
       }
 
@@ -649,6 +746,7 @@ export const usePreviewNavigation = ({
       followSession,
       isAtLoadedBackendBoundary,
       isComparing,
+      isNavigationReady,
       isFetchingNextBoardItemsPage,
       isFetchingPreviousBoardItemsPage,
       mergeListingItems,
@@ -685,7 +783,7 @@ export const usePreviewNavigation = ({
 
   // The same resolution navigate() makes, so a swipe reveals what committing it will select.
   const neighbors = useMemo((): PreviewNeighbors => {
-    if (isComparing) {
+    if (isComparing || !isNavigationReady) {
       return NO_NEIGHBORS;
     }
 
@@ -695,7 +793,7 @@ export const usePreviewNavigation = ({
         : toNeighbor(getGalleryNavigationStep(navigationSections, cursorKey, offset === 1 ? 'right' : 'left'));
 
     return { next: resolve(1), previous: resolve(-1) };
-  }, [cursorKey, isAtLoadedBackendBoundary, isComparing, navigationSections]);
+  }, [cursorKey, isAtLoadedBackendBoundary, isComparing, isNavigationReady, navigationSections]);
 
   // Prefetch the images a step would land on to avoid decode flashes during navigation.
   const previousNeighborUrl =

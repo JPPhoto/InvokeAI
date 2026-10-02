@@ -162,22 +162,49 @@ const patchItemsInfiniteData = (
   itemKeys: ReadonlySet<GalleryItemKey>
 ): InfiniteData<GalleryItemsPage, number> => {
   const removedItemKeys = new Set<GalleryItemKey>();
+  const removedItemIndices = new Set<number>();
 
   if (patchRemovesItems(filter, patch)) {
-    for (const page of data.pages) {
-      for (const item of page.items) {
+    for (const [pageIndex, page] of data.pages.entries()) {
+      const pageOffset = data.pageParams[pageIndex] ?? 0;
+
+      for (const [itemIndex, item] of page.items.entries()) {
         const key = toGalleryItemKey(item);
 
         if (itemKeys.has(key)) {
           removedItemKeys.add(key);
+          removedItemIndices.add(page.itemIndices?.[itemIndex] ?? pageOffset + itemIndex);
         }
       }
     }
   }
 
+  const sortedRemovedIndices = [...removedItemIndices].sort((a, b) => a - b);
+  const getShiftedIndex = (index: number) =>
+    index - sortedRemovedIndices.filter((removedIndex) => removedIndex < index).length;
   let changed = false;
-  const pages = data.pages.map((page) => {
-    const nextPage = patchItemPage(page, filter, patch, itemKeys, removedItemKeys.size);
+  const pages = data.pages.map((page, pageIndex) => {
+    let nextPage = patchItemPage(page, filter, patch, itemKeys, removedItemKeys.size);
+
+    if (sortedRemovedIndices.length > 0) {
+      const pageOffset = data.pageParams[pageIndex] ?? 0;
+      const itemIndices = page.items.flatMap((item, itemIndex) => {
+        if (patchRemovesItems(filter, patch) && itemKeys.has(toGalleryItemKey(item))) {
+          return [];
+        }
+
+        const index = page.itemIndices?.[itemIndex] ?? pageOffset + itemIndex;
+
+        return [getShiftedIndex(index)];
+      });
+
+      const hasSparseRanks = itemIndices.some((index, itemIndex) => index !== pageOffset + itemIndex);
+
+      if (page.itemIndices || hasSparseRanks) {
+        nextPage = { ...nextPage, itemIndices };
+      }
+    }
+
     changed ||= nextPage !== page;
 
     return nextPage;
@@ -471,7 +498,9 @@ const rebuildGalleryItemWindow = async (client: QueryClient, owner: AccountScope
 };
 
 /** Collapses a window to its anchor page, so its refetch replays one request. */
-const collapseGalleryItemWindowToAnchor = (client: QueryClient, query: Query): void => {
+const collapseGalleryItemWindowToAnchor = async (client: QueryClient, query: Query): Promise<void> => {
+  await client.cancelQueries({ exact: true, queryKey: query.queryKey });
+
   // A transient entry (anchored windows carry gcTime 0) may have been
   // collected while a rebuild awaited; writing to its key would resurrect it.
   if (client.getQueryCache().get(query.queryHash) !== query) {
@@ -494,6 +523,7 @@ const collapseGalleryItemWindowToAnchor = (client: QueryClient, query: Query): v
     pageParams: [data.pageParams[anchorIndex] ?? anchorOffset],
     pages: [data.pages[anchorIndex] ?? data.pages[0]],
   });
+  await client.invalidateQueries({ exact: true, queryKey: query.queryKey, refetchType: 'none' });
 };
 
 const runGalleryInvalidation = async (
@@ -501,14 +531,18 @@ const runGalleryInvalidation = async (
   owner: AccountScope,
   includeBoards: boolean
 ): Promise<void> => {
-  // Date-board pages and lazy range selection share these names. Mark them
-  // stale before active pages refetch so they cannot hydrate stale refs.
+  // Date-board pages and lazy range selection share these names. Mark names
+  // and item windows stale before refreshed memberships can enable navigation.
   await client.cancelQueries({ queryKey: galleryKeys.itemNamesForAccount(owner) });
   await client.invalidateQueries({
     queryKey: galleryKeys.itemNamesForAccount(owner),
     refetchType: 'none',
   });
   await client.cancelQueries({ queryKey: galleryKeys.itemListsForAccount(owner) });
+  await client.invalidateQueries({ queryKey: galleryKeys.itemListsForAccount(owner), refetchType: 'none' });
+  await client.cancelQueries({ queryKey: galleryKeys.recentItemsForAccount(owner) });
+  await client.invalidateQueries({ queryKey: galleryKeys.recentItemsForAccount(owner) });
+  await client.invalidateQueries({ queryKey: galleryKeys.itemNamesForAccount(owner), refetchType: 'active' });
 
   const rebuiltQueryHashes = new Set<string>();
 
@@ -526,7 +560,7 @@ const runGalleryInvalidation = async (
       continue;
     }
 
-    collapseGalleryItemWindowToAnchor(client, query);
+    await collapseGalleryItemWindowToAnchor(client, query);
   }
 
   await client.invalidateQueries({

@@ -11,6 +11,7 @@ import {
   GALLERY_PAGE_SIZE,
   galleryBoardsOptions,
   galleryItemsInfiniteOptions,
+  galleryRecentItemsOptions,
   getGalleryListingBoardsQuery,
   type GalleryItemsFilter,
 } from '@features/gallery/data/queries';
@@ -266,7 +267,7 @@ const getRecentGalleryItemsMissingFromWindow = ({
 
 const createRecentReconciliationStore = (identityQueryKey: string) => {
   const listeners = new Set<() => void>();
-  let snapshot = { identityQueryKey, keys: new Set<string>(), positions: new Map<string, number>() };
+  let snapshot = { identityQueryKey, positions: new Map<string, number>() };
 
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
@@ -275,38 +276,30 @@ const createRecentReconciliationStore = (identityQueryKey: string) => {
   const update = (
     recentItemKeys: ReadonlySet<string>,
     backendItems: readonly GalleryItem[],
-    confirmedRecentPositions: ReadonlyMap<string, number>
+    confirmedRecentPositions: ReadonlyMap<string, number>,
+    persistedRecentKeys: ReadonlySet<string>
   ) => {
-    const next = new Set([...snapshot.keys].filter((key) => recentItemKeys.has(key)));
     const backendItemKeys = new Set<string>(backendItems.map(toGalleryItemKey));
+    const knownRecentKeys = new Set([...backendItemKeys, ...persistedRecentKeys]);
     const positions = new Map(
-      [...snapshot.positions].filter(([key]) => recentItemKeys.has(key) && !backendItemKeys.has(key))
+      [...snapshot.positions].filter(([key]) => recentItemKeys.has(key) && !knownRecentKeys.has(key))
     );
 
-    for (const item of backendItems) {
-      const key = toGalleryItemKey(item);
-
-      if (recentItemKeys.has(key)) {
-        next.add(key);
-      }
-    }
-
     for (const [key, position] of confirmedRecentPositions) {
-      if (recentItemKeys.has(key) && !backendItemKeys.has(key)) {
+      if (recentItemKeys.has(key) && !knownRecentKeys.has(key)) {
         positions.set(key, position);
       }
     }
 
-    const sameKeys = next.size === snapshot.keys.size && [...next].every((key) => snapshot.keys.has(key));
     const samePositions =
       positions.size === snapshot.positions.size &&
       [...positions].every(([key, position]) => snapshot.positions.get(key) === position);
 
-    if (sameKeys && samePositions) {
+    if (samePositions) {
       return;
     }
 
-    snapshot = { identityQueryKey, keys: next, positions };
+    snapshot = { identityQueryKey, positions };
     listeners.forEach((listener) => listener());
   };
 
@@ -416,7 +409,6 @@ export const useGalleryData = ({
   );
   const runtimeSnapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
   const queryData = runtimeSnapshot.result.data;
-  const queryError = runtimeSnapshot.result.error;
   const isFetching = runtimeSnapshot.result.isFetching;
   const requestedAnchorOffset = isPaginated ? page * GALLERY_PAGE_SIZE : runtimeSnapshot.offset;
   const backendItems = useMemo(() => {
@@ -439,22 +431,38 @@ export const useGalleryData = ({
     reconciledRecentStore.getSnapshot,
     reconciledRecentStore.getSnapshot
   );
+  const recentCandidates = useMemo(
+    () => getRecentGalleryItemsMissingFromWindow({ backendItems, filter, recentImages }),
+    [backendItems, filter, recentImages]
+  );
+  const recentNamesToResolve = useMemo(() => recentCandidates.map((item) => item.name), [recentCandidates]);
+  const recentMembershipQuery = useQuery({
+    ...galleryRecentItemsOptions(recentNamesToResolve),
+    enabled: !isPaginated && recentNamesToResolve.length > 0,
+  });
+  const recentMembershipError = recentMembershipQuery.error ?? null;
+  const isRecentMembershipResolved =
+    recentMembershipQuery.isSuccess && !recentMembershipQuery.isFetching && recentMembershipError === null;
+  const queryError = runtimeSnapshot.result.error ?? recentMembershipError;
+  const persistedRecentKeys = useMemo(
+    () => new Set((recentMembershipQuery.data ?? []).map(toGalleryItemKey)),
+    [recentMembershipQuery.data]
+  );
   const knownRecentKeys = useMemo(
-    () => new Set([...reconciledRecentSnapshot.keys, ...backendItems.map(toGalleryItemKey)]),
-    [backendItems, reconciledRecentSnapshot]
+    () => new Set([...backendItems.map(toGalleryItemKey), ...persistedRecentKeys]),
+    [backendItems, persistedRecentKeys]
   );
   const overlayRecentImages = useMemo(
-    () => (!isPaginated ? recentImages.filter((image) => !knownRecentKeys.has(`image:${image.imageName}`)) : []),
-    [isPaginated, knownRecentKeys, recentImages]
+    () =>
+      !isPaginated && isRecentMembershipResolved
+        ? recentImages.filter((image) => !knownRecentKeys.has(`image:${image.imageName}`))
+        : [],
+    [isPaginated, isRecentMembershipResolved, knownRecentKeys, recentImages]
   );
   const recentOverlayItems = useMemo(
     () =>
-      getRecentGalleryItemsMissingFromWindow({
-        backendItems,
-        filter,
-        recentImages: overlayRecentImages,
-      }),
-    [backendItems, filter, overlayRecentImages]
+      isRecentMembershipResolved ? recentCandidates.filter((item) => !knownRecentKeys.has(toGalleryItemKey(item))) : [],
+    [isRecentMembershipResolved, knownRecentKeys, recentCandidates]
   );
   const offset = runtimeSnapshot.offset;
   const displayTotal = runtimeSnapshot.total === null ? null : runtimeSnapshot.total + recentOverlayItems.length;
@@ -487,9 +495,21 @@ export const useGalleryData = ({
   const virtualOffset = indexedWindow.getDisplayIndexForBackendIndex(requestedAnchorOffset);
   useEffect(() => {
     if (!isPaginated) {
-      reconciledRecentStore.update(recentItemKeys, backendItems, indexedWindow.confirmedRecentPositions);
+      reconciledRecentStore.update(
+        recentItemKeys,
+        backendItems,
+        indexedWindow.confirmedRecentPositions,
+        persistedRecentKeys
+      );
     }
-  }, [backendItems, indexedWindow.confirmedRecentPositions, isPaginated, recentItemKeys, reconciledRecentStore]);
+  }, [
+    backendItems,
+    indexedWindow.confirmedRecentPositions,
+    isPaginated,
+    persistedRecentKeys,
+    recentItemKeys,
+    reconciledRecentStore,
+  ]);
   const loadRange = useMemo(() => {
     const backendTotal = runtimeSnapshot.total;
 
@@ -534,7 +554,7 @@ export const useGalleryData = ({
   return {
     boards,
     filter,
-    isLoadingItems: isFetching,
+    isLoadingItems: isFetching || recentMembershipQuery.isFetching,
     items,
     queryError,
     selectedBoardId: boardId,
@@ -552,7 +572,13 @@ export const useGalleryData = ({
       selectionPageByItemKey,
       selectionIndexByItemKey,
       loadRange,
-      retry: runtime.retry,
+      retry: () => {
+        runtime.retry();
+
+        if (recentMembershipError !== null) {
+          void recentMembershipQuery.refetch();
+        }
+      },
       error: queryError,
     },
   };
