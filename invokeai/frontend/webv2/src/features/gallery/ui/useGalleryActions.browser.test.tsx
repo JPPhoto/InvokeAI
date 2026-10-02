@@ -115,6 +115,7 @@ const Probe = ({
             getItemSelectionPage,
             items: [],
             loadOrderedRefs: () => Promise.resolve([]),
+            preserveNavigationQuery: false,
             selectedItemKey: null,
           }
         : null,
@@ -416,7 +417,7 @@ describe('mixed item selection', () => {
       primaryItem
     );
 
-    expect(setItemMultiSelection).toHaveBeenCalledWith(['image:shared', 'video:shared'], primaryItem);
+    expect(setItemMultiSelection).toHaveBeenCalledWith(['image:shared', 'video:shared'], primaryItem, undefined, false);
   });
 });
 
@@ -465,7 +466,7 @@ describe('selection page stamping', () => {
     actionsRef.current?.selectItemRange([{ kind: 'image', name: item.name }], item);
 
     expect(selectItem).toHaveBeenCalledExactlyOnceWith(item, 10);
-    expect(setItemMultiSelection).toHaveBeenCalledExactlyOnceWith(['image:deep.png'], item, 10);
+    expect(setItemMultiSelection).toHaveBeenCalledExactlyOnceWith(['image:deep.png'], item, 10, false);
 
     getItemSelectionPage = () => undefined;
     await renderProbe();
@@ -473,7 +474,7 @@ describe('selection page stamping', () => {
     actionsRef.current?.selectItemRange([{ kind: 'image', name: item.name }], item);
 
     expect(selectItem).toHaveBeenLastCalledWith(item);
-    expect(setItemMultiSelection).toHaveBeenLastCalledWith(['image:deep.png'], item);
+    expect(setItemMultiSelection).toHaveBeenLastCalledWith(['image:deep.png'], item, undefined, false);
   });
 });
 

@@ -211,6 +211,7 @@ interface ItemActionContext {
     removedRefs: GalleryItemRef[]
   ) => number | undefined;
   filterIdentity: string;
+  preserveNavigationQuery: boolean;
   items: GalleryItem[];
   loadOrderedRefs(): Promise<GalleryItemRef[]>;
   selectedItemKey: GalleryItemKey | null;
@@ -1054,6 +1055,7 @@ describe('primary successor after confirmed deletion', () => {
     const refs = [before, primary, after].map(({ kind, name }) => ({ kind, name }));
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [before, primary, after],
       loadOrderedRefs: () => Promise.resolve(refs),
       selectedItemKey: 'image:primary.png',
@@ -1068,7 +1070,7 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1');
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1', undefined, true);
   });
 
   it('resolves an unloaded successor by qualified ref', async () => {
@@ -1077,6 +1079,7 @@ describe('primary successor after confirmed deletion', () => {
     const unloaded = galleryItem('video', 'unloaded.mp4');
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [before, primary],
       loadOrderedRefs: () =>
         Promise.resolve([
@@ -1098,7 +1101,7 @@ describe('primary successor after confirmed deletion', () => {
     });
 
     expect(mocks.resolveItem).toHaveBeenCalledWith({ kind: 'video', name: unloaded.name }, expect.any(AbortSignal));
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(unloaded, 'project-1');
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(unloaded, 'project-1', undefined, true);
   });
 
   it('falls back to materialized order and then the nearest successor when names fail', async () => {
@@ -1106,6 +1109,7 @@ describe('primary successor after confirmed deletion', () => {
     const after = galleryItem('video', 'after.mp4');
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [primary, after],
       loadOrderedRefs: () => Promise.reject(new Error('names unavailable')),
       selectedItemKey: 'image:primary.png',
@@ -1120,7 +1124,7 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: primary.name }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1');
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1', undefined, true);
   });
 
   it('does not promote a failed deletion and keeps a failed primary selected', async () => {
@@ -1129,6 +1133,7 @@ describe('primary successor after confirmed deletion', () => {
     const primary = galleryItem('image', 'primary.png');
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [survivingBefore, failedBefore, primary],
       loadOrderedRefs: () =>
         Promise.resolve([
@@ -1154,7 +1159,9 @@ describe('primary successor after confirmed deletion', () => {
     expect(mocks.gallerySetItemMultiSelection).toHaveBeenCalledWith(
       ['video:failed-before.mp4', 'image:surviving-before.png'],
       survivingBefore,
-      'project-1'
+      'project-1',
+      undefined,
+      true
     );
     expect(mocks.gallerySelectItem).not.toHaveBeenCalled();
 
@@ -1182,6 +1189,7 @@ describe('primary successor after confirmed deletion', () => {
     const refs = [before, primary, after].map(({ kind, name }) => ({ kind, name }));
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       getItemSelectionPage: () => 30,
       items: [before, primary, after],
       loadOrderedRefs: () => Promise.resolve(refs),
@@ -1200,6 +1208,53 @@ describe('primary successor after confirmed deletion', () => {
     expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1', 30, true);
   });
 
+  it('preserves the Preview query when a deletion successor has no mapped page', async () => {
+    const primary = galleryItem('image', 'primary.png');
+    const successor = galleryItem('image', 'successor.png');
+    currentItemActionContext = {
+      filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
+      items: [primary, successor],
+      loadOrderedRefs: () => Promise.resolve([primary, successor].map(({ kind, name }) => ({ kind, name }))),
+      selectedItemKey: 'image:primary.png',
+    };
+    mocks.itemDelete.mockResolvedValue({
+      affectedBoardIds: ['board-1'],
+      failed: [],
+      succeeded: [{ kind: 'image', name: primary.name }],
+    });
+
+    await act(async () => {
+      await getItemActions().deleteItems([{ kind: 'image', name: primary.name }]);
+    });
+
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(successor, 'project-1', undefined, true);
+  });
+
+  it('uses the Gallery listing query when selecting a deletion successor from Gallery', async () => {
+    const primary = galleryItem('image', 'primary.png');
+    const successor = galleryItem('image', 'successor.png');
+    currentItemActionContext = {
+      filterIdentity: 'gallery-search',
+      getItemSelectionPage: () => 30,
+      items: [primary, successor],
+      loadOrderedRefs: () => Promise.resolve([primary, successor].map(({ kind, name }) => ({ kind, name }))),
+      preserveNavigationQuery: false,
+      selectedItemKey: 'image:primary.png',
+    };
+    mocks.itemDelete.mockResolvedValue({
+      affectedBoardIds: ['board-1'],
+      failed: [],
+      succeeded: [{ kind: 'image', name: primary.name }],
+    });
+
+    await act(async () => {
+      await getItemActions().deleteItems([{ kind: 'image', name: primary.name }]);
+    });
+
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(successor, 'project-1', 30, false);
+  });
+
   it('stamps a deletion successor with its shifted page after the preceding row is removed', async () => {
     const items = Array.from({ length: 62 }, (_, index) => galleryItem('image', `row-${index}.png`));
     const primary = items[59]!;
@@ -1207,6 +1262,7 @@ describe('primary successor after confirmed deletion', () => {
     const refs = items.map(({ kind, name }) => ({ kind, name }));
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       getItemSelectionPage: () => 1,
       getItemSelectionPageAfterRemoval: (item, orderedRefs, removedRefs) =>
         getGallerySelectionPageAfterRemoval({ item, orderedRefs, removedRefs, listingOffset: 0 }),
@@ -1232,6 +1288,7 @@ describe('primary successor after confirmed deletion', () => {
 
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       getItemSelectionPage: () => 30,
       items: [item],
       loadOrderedRefs: () => Promise.resolve([{ kind: 'image' as const, name: item.name }]),
@@ -1255,6 +1312,7 @@ describe('primary successor after confirmed deletion', () => {
     ];
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       getItemSelectionPage: () => 30,
       items: [successor, primary, failedImage],
       loadOrderedRefs: () =>
@@ -1279,7 +1337,47 @@ describe('primary successor after confirmed deletion', () => {
       ['image:failed.png', 'image:successor.png'],
       successor,
       'project-1',
-      30
+      30,
+      true
+    );
+  });
+
+  it('preserves the Preview query for a retained multi-selection without a mapped page', async () => {
+    const successor = galleryItem('image', 'successor.png');
+    const primary = galleryItem('image', 'primary.png');
+    const failedImage = galleryItem('image', 'failed.png');
+    const requested = [
+      { kind: 'image' as const, name: failedImage.name },
+      { kind: 'image' as const, name: primary.name },
+    ];
+    currentItemActionContext = {
+      filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
+      items: [successor, primary, failedImage],
+      loadOrderedRefs: () =>
+        Promise.resolve([
+          { kind: 'image' as const, name: successor.name },
+          { kind: 'image' as const, name: primary.name },
+          { kind: 'image' as const, name: failedImage.name },
+        ]),
+      selectedItemKey: 'image:primary.png',
+    };
+    mocks.itemDelete.mockResolvedValue({
+      affectedBoardIds: ['board-1'],
+      failed: [requested[0]],
+      succeeded: [requested[1]],
+    });
+
+    await act(async () => {
+      await getItemActions().deleteItems(requested);
+    });
+
+    expect(mocks.gallerySetItemMultiSelection).toHaveBeenCalledWith(
+      ['image:failed.png', 'image:successor.png'],
+      successor,
+      'project-1',
+      undefined,
+      true
     );
   });
 
@@ -1295,6 +1393,7 @@ describe('primary successor after confirmed deletion', () => {
     ];
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [successor, primary, failedSameNameVideo, failedImage],
       loadOrderedRefs: () =>
         Promise.resolve([
@@ -1320,7 +1419,9 @@ describe('primary successor after confirmed deletion', () => {
     expect(mocks.gallerySetItemMultiSelection).toHaveBeenCalledWith(
       ['image:failed.png', 'video:shared', 'image:successor.png'],
       successor,
-      'project-1'
+      'project-1',
+      undefined,
+      true
     );
     expect(mocks.gallerySelectItem).not.toHaveBeenCalled();
   });
@@ -1331,6 +1432,7 @@ describe('primary successor after confirmed deletion', () => {
     let resolveItem = (_item: GalleryItem): void => undefined;
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [primary],
       loadOrderedRefs: () =>
         Promise.resolve([
@@ -1354,6 +1456,7 @@ describe('primary successor after confirmed deletion', () => {
     await vi.waitFor(() => expect(mocks.resolveItem).toHaveBeenCalledOnce());
     currentItemActionContext = {
       filterIdentity: 'filter-b',
+      preserveNavigationQuery: true,
       items: [],
       loadOrderedRefs: () => Promise.resolve([]),
       selectedItemKey: 'video:other.mp4',
@@ -1370,6 +1473,7 @@ describe('primary successor after confirmed deletion', () => {
     let resolveItem = (_item: GalleryItem): void => undefined;
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [primary],
       loadOrderedRefs: () =>
         Promise.resolve([
@@ -1413,6 +1517,7 @@ describe('primary successor after confirmed deletion', () => {
     const unrelated = galleryItem('video', 'unrelated.mp4');
     currentItemActionContext = {
       filterIdentity: 'filter-a',
+      preserveNavigationQuery: true,
       items: [primary, unrelated],
       loadOrderedRefs: () => Promise.resolve([{ kind: 'video', name: unrelated.name }]),
       selectedItemKey: 'image:primary.png',

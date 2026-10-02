@@ -229,14 +229,22 @@ export const usePreviewNavigation = ({
   const [navigationAnchor, setNavigationAnchor] = useState({
     page: selectedImageQuery.page,
     queryKey: navigationQueryKey,
+    reanchorContextKey: null as string | null,
+    revision: 0,
   });
   const hasStaleNavigationAnchor = navigationAnchor.queryKey !== navigationQueryKey;
 
   if (hasStaleNavigationAnchor) {
-    setNavigationAnchor({ page: selectedImageQuery.page, queryKey: navigationQueryKey });
+    setNavigationAnchor({
+      page: selectedImageQuery.page,
+      queryKey: navigationQueryKey,
+      reanchorContextKey: null,
+      revision: 0,
+    });
   }
 
   const navigationAnchorPage = hasStaleNavigationAnchor ? selectedImageQuery.page : navigationAnchor.page;
+  const navigationAnchorRevision = hasStaleNavigationAnchor ? 0 : navigationAnchor.revision;
   const isPaginatedWindow = selectedImageQuery.paginationMode === 'paginated';
   const navigationAnchorOffset = navigationAnchorPage * GALLERY_PAGE_SIZE;
 
@@ -278,7 +286,8 @@ export const usePreviewNavigation = ({
   const queryClient = useQueryClient();
   const navigationItemsOptions = galleryItemsInfiniteOptions(
     { ...listingFilter, starred: navigationStarredOnly },
-    navigationWindow
+    navigationWindow,
+    navigationAnchorRevision > 0 ? `preview-reanchor:${navigationAnchorRevision}` : undefined
   );
   const navigationItemsKeyHash = hashKey(navigationItemsOptions.queryKey);
   const previousNavigationItemsKeyHashRef = useRef(navigationItemsKeyHash);
@@ -325,9 +334,15 @@ export const usePreviewNavigation = ({
     hasNavigationContext &&
     selectedItem?.starred !== true &&
     boardItemsData !== undefined &&
-    !selectedPageIsLoaded
+    !selectedPageIsLoaded &&
+    navigationAnchor.reanchorContextKey !== navigationContextKey
   ) {
-    setNavigationAnchor({ page: selectedImageQuery.page, queryKey: navigationQueryKey });
+    setNavigationAnchor({
+      page: selectedImageQuery.page,
+      queryKey: navigationQueryKey,
+      reanchorContextKey: navigationContextKey,
+      revision: navigationAnchor.revision + 1,
+    });
   }
 
   // Share Gallery's bounded starred strip except for ranked, starred-only, or mid-board windows.

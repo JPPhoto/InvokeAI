@@ -273,6 +273,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
         signal.throwIfAborted();
         return Promise.resolve(boardItems.map(toGalleryItemRef));
       },
+      preserveNavigationQuery: true,
       selectedItemKey,
     }),
     [boardItems, getSelectionPage, getSelectionPageAfterRemoval, navigationQueryKey, selectedItemKey]

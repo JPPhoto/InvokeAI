@@ -210,11 +210,7 @@ export const useGalleryActions = ({
         const selectionPage = getItemActionContext?.()?.getItemSelectionPage?.(primaryItem);
         const itemKeys = items.map(toGalleryItemKey);
 
-        if (selectionPage === undefined) {
-          gallery.setItemMultiSelection(itemKeys, primaryItem);
-        } else {
-          gallery.setItemMultiSelection(itemKeys, primaryItem, selectionPage);
-        }
+        gallery.setItemMultiSelection(itemKeys, primaryItem, selectionPage, false);
       },
       setCompareItem: gallery.setCompareItem,
       setSearchTerm: gallery.setSearchTerm,

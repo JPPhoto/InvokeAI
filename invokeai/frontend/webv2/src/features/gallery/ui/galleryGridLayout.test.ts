@@ -113,6 +113,19 @@ describe('getGalleryCellSizePx', () => {
   });
 });
 
+describe('getGalleryStarredStripItems', () => {
+  it('extends its ordered prefix through a hidden reveal target without exceeding the bounded strip', () => {
+    const items = Array.from({ length: 36 }, (_, index) => createImageItem(`starred-${index}.png`, true));
+
+    expect(getGalleryStarredStripItems(items, 2)).toHaveLength(6);
+
+    const revealed = getGalleryStarredStripItems(items, 2, 'image:starred-35.png');
+
+    expect(revealed).toEqual(items);
+    expect(revealed).toHaveLength(36);
+  });
+});
+
 describe('buildGalleryGridRows', () => {
   it('chunks the listing into rows of the column count, keyed by their leading cell', () => {
     const rows = buildRows(['a', 'b', 'c'].map((name) => createImageItem(name)));

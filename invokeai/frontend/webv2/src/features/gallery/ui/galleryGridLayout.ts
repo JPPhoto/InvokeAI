@@ -70,8 +70,16 @@ export type GalleryGridWindowRow = {
 /** The starred strip shows at most this many rows at the current column count. */
 const GALLERY_STARRED_STRIP_MAX_ROWS = 3;
 
-export const getGalleryStarredStripItems = (starredItems: readonly GalleryItem[], columnCount: number): GalleryItem[] =>
-  starredItems.slice(0, GALLERY_STARRED_STRIP_MAX_ROWS * columnCount);
+export const getGalleryStarredStripItems = (
+  starredItems: readonly GalleryItem[],
+  columnCount: number,
+  revealItemKey?: GalleryItemKey | null
+): GalleryItem[] => {
+  const revealIndex = revealItemKey ? starredItems.findIndex((item) => toGalleryItemKey(item) === revealItemKey) : -1;
+  const visibleCount = Math.max(GALLERY_STARRED_STRIP_MAX_ROWS * columnCount, revealIndex + 1);
+
+  return starredItems.slice(0, visibleCount);
+};
 
 /**
  * Every item the grid has on hand — strip first, then the listing. The two

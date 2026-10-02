@@ -330,8 +330,13 @@ export const GalleryImageGrid = () => {
     return new Map(gallery.items.map((item, index) => [index, item]));
   }, [gallery.items, listing]);
   const starredCells = useMemo(
-    () => getGalleryStarredStripItems(starredStrip.items, columnCount),
-    [columnCount, starredStrip.items]
+    () =>
+      getGalleryStarredStripItems(
+        starredStrip.items,
+        columnCount,
+        revealRequest?.itemKey === gallery.selectedItemKey ? revealRequest.itemKey : null
+      ),
+    [columnCount, gallery.selectedItemKey, revealRequest, starredStrip.items]
   );
   // Exclude collapsed tiles from navigation, but retain hidden starred selections' section identity so arrows can
   // step out.
@@ -504,15 +509,28 @@ export const GalleryImageGrid = () => {
         return true;
       }
 
-      // Strip cells sit in the pinned block at the top of the scroll content.
-      if (isStarredOpen && starredCells.some((item) => toGalleryItemKey(item) === itemKey)) {
-        viewportRef.current?.scrollTo({ top: 0 });
+      // The strip precedes the listing; scroll its reveal row into view if the normal three-row cap expanded it.
+      const starredIndex = starredCells.findIndex((item) => toGalleryItemKey(item) === itemKey);
+
+      if (isStarredOpen && starredIndex >= 0) {
+        viewportRef.current?.scrollTo({
+          top: Math.floor(starredIndex / columnCount) * starredLayout.rowHeight,
+        });
         return true;
       }
 
       return false;
     },
-    [columnCount, gallery.items, isStarredOpen, itemsByIndex, listing, starredCells, virtualizer]
+    [
+      columnCount,
+      gallery.items,
+      isStarredOpen,
+      itemsByIndex,
+      listing,
+      starredCells,
+      starredLayout.rowHeight,
+      virtualizer,
+    ]
   );
   const scrollToAbsoluteIndex = useCallback(
     (index: number) => virtualizer.scrollToIndex(Math.floor(index / columnCount)),
@@ -560,7 +578,7 @@ export const GalleryImageGrid = () => {
   const pendingRevealRef = useRef<GalleryRevealRequest | null>(null);
   // Honor requests preceding mount; selection mismatch, rather than request age, determines staleness.
   const consumedRevealTokenRef = useRef(0);
-  const handleGridRowsCommitted = useCallback(
+  const handleGalleryContentCommitted = useCallback(
     (node: HTMLDivElement | null) => {
       if (!node) {
         return;
@@ -870,7 +888,7 @@ export const GalleryImageGrid = () => {
         ) : null}
         <ScrollArea.Root h="full" minH="0" size="xs" variant="hover" w="full">
           <ScrollArea.Viewport ref={viewportRef} data-dnd-auto-scroll="false" h="full" outline="none" w="full">
-            <ScrollArea.Content display="flex" flexDirection="column" minH="full">
+            <ScrollArea.Content ref={handleGalleryContentCommitted} display="flex" flexDirection="column" minH="full">
               {pinnedHeight > 0 ? (
                 <Box
                   borderBottomWidth="1px"
@@ -936,7 +954,6 @@ export const GalleryImageGrid = () => {
               ) : rowCount > 0 ? (
                 <Box flexShrink={0} h={`${virtualizer.totalSize}px`} position="relative" w="full">
                   <Box
-                    ref={handleGridRowsCommitted}
                     aria-label={t('widgets.gallery.itemsAriaLabel')}
                     h="full"
                     inset="0"

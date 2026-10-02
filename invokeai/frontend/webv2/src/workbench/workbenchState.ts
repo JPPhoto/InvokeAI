@@ -426,8 +426,9 @@ type WorkbenchReducerAction =
       itemKeys: GalleryItemKey[];
       primaryItem: GalleryItem;
       projectId?: string;
-      /** Stamps this page, in the navigation query already on the selection, instead of the grid's. */
       selectionPage?: number;
+      /** Keep the existing navigation listing while stamping the host's absolute selection page. */
+      preserveNavigationQuery?: boolean;
     }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
@@ -1050,6 +1051,30 @@ const getGalleryItemFromPersistedValue = (values: Record<string, unknown>, value
     selectedImage: value,
     selectedImageName: null,
   });
+
+const getGallerySelectionPage = (
+  values: Record<string, unknown>,
+  selectionPage: number | undefined,
+  preserveNavigationQuery: boolean
+): number => {
+  if (typeof selectionPage === 'number' && Number.isFinite(selectionPage)) {
+    return Math.max(0, Math.floor(selectionPage));
+  }
+
+  const navigationQuery =
+    preserveNavigationQuery && values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+      ? (values.selectedImageQuery as Record<string, unknown>)
+      : null;
+  const navigationPage = navigationQuery?.page;
+
+  if (typeof navigationPage === 'number' && Number.isFinite(navigationPage)) {
+    return Math.max(0, Math.floor(navigationPage));
+  }
+
+  return typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
+    ? Math.max(0, Math.floor(values.galleryPage))
+    : 0;
+};
 
 /**
  * Deep-clones an already-v2 canvas state and normalizes staging candidate placements. Not a
@@ -4582,12 +4607,11 @@ export const __workbenchReducerInternal = (
       return updateGalleryValuesAndPauseLiveFollow(
         state,
         (values) => {
-          const selectedImagePage =
-            typeof action.selectionPage === 'number' && Number.isFinite(action.selectionPage)
-              ? Math.max(0, Math.floor(action.selectionPage))
-              : typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
-                ? Math.max(0, Math.floor(values.galleryPage))
-                : 0;
+          const selectedImagePage = getGallerySelectionPage(
+            values,
+            action.selectionPage,
+            action.preserveNavigationQuery === true
+          );
           const settings = getGallerySettings(values);
           const existingNavigationQuery =
             values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
@@ -4697,12 +4721,11 @@ export const __workbenchReducerInternal = (
         state,
         (values) => {
           const settings = getGallerySettings(values);
-          const hasSelectionPage = typeof action.selectionPage === 'number' && Number.isFinite(action.selectionPage);
-          const selectedImagePage = hasSelectionPage
-            ? Math.max(0, Math.floor(action.selectionPage as number))
-            : typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
-              ? Math.max(0, Math.floor(values.galleryPage))
-              : 0;
+          const selectedImagePage = getGallerySelectionPage(
+            values,
+            action.selectionPage,
+            action.preserveNavigationQuery === true
+          );
           const existingNavigationQuery =
             values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
               ? (values.selectedImageQuery as Record<string, unknown>)
@@ -4715,9 +4738,8 @@ export const __workbenchReducerInternal = (
             selectedImageName: toGalleryItemKey(action.primaryItem),
             selectedImageNames: action.itemKeys,
             selectedImagePage,
-            // An explicit host page belongs to the selection's query, matching preserveNavigationQuery.
             selectedImageQuery:
-              hasSelectionPage && existingNavigationQuery
+              action.preserveNavigationQuery && existingNavigationQuery
                 ? { ...existingNavigationQuery, page: selectedImagePage }
                 : {
                     boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',

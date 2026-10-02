@@ -143,6 +143,14 @@ describe('Gallery selection adapter ownership', () => {
       selectedImageQuery: { page: 11 },
     });
 
+    owner.gallery.selectBoard('board-elsewhere');
+    owner.gallery.setSearchTerm('sunset');
+    owner.gallery.setItemMultiSelection(['image:deep.png'], item, 12, true);
+    expect(values(owner.projectId)).toMatchObject({
+      selectedImagePage: 12,
+      selectedImageQuery: { boardId: 'none', page: 12, searchTerm: '' },
+    });
+
     owner.gallery.toggleItemSelection({ ...item, name: 'toggled.png' }, null, 12);
     expect(values(owner.projectId)).toMatchObject({
       selectedImagePage: 12,

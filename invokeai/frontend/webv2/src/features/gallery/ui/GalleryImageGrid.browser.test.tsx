@@ -2448,6 +2448,76 @@ describe('GalleryImageGrid reveal requests', () => {
     expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 0 });
   });
 
+  it('reveals starred items on an all-starred board, including after the strip expands', async () => {
+    const starredItems = Array.from({ length: 12 }, (_, index) =>
+      createItem('image', `starred-${index}.png`, { starred: true })
+    );
+    setStrip(starredItems, 20);
+    const gallery = createGallery({
+      items: [],
+      selectedItemKey: 'image:starred-0.png',
+      selectedItemKeys: ['image:starred-0.png'],
+      settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true },
+    });
+    host!.style.height = '120px';
+
+    await renderGallery(gallery);
+    const viewport = host!.querySelector<HTMLElement>('[data-part="viewport"]')!;
+    const scrollTo = vi.spyOn(viewport, 'scrollTo');
+
+    // With no regular rows, the collapsed all-starred board has no listing ref to process the request.
+    await interact(() => requestGalleryItemReveal('image:starred-0.png'));
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    await renderGallery({ ...gallery, settings: DENSE_SETTINGS });
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 0 });
+    expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight);
+
+    await interact(() => {
+      viewport.scrollTop = viewport.scrollHeight;
+      viewport.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    expect(viewport.scrollTop).toBeGreaterThan(0);
+
+    await interact(() => requestGalleryItemReveal('image:starred-0.png'));
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 0 });
+  });
+
+  it('scrolls to a Preview-selected starred item beyond the normal three-row strip', async () => {
+    const starredItems = Array.from({ length: 20 }, (_, index) =>
+      createItem('image', `starred-${index}.png`, { starred: true })
+    );
+    const target = starredItems[12]!;
+    setStrip(starredItems);
+    host!.style.cssText = 'height:120px;left:20px;position:fixed;top:20px;width:120px;';
+
+    await renderGallery(
+      createGallery({
+        items: [],
+        selectedItemKey: `image:${target.name}`,
+        selectedItemKeys: [`image:${target.name}`],
+        settings: DENSE_SETTINGS,
+      })
+    );
+
+    const viewport = host!.querySelector<HTMLElement>('[data-part="viewport"]')!;
+    const targetCellBeforeReveal = [...viewport.querySelectorAll<HTMLElement>('[data-gallery-item-key]')].find(
+      (element) => element.dataset.galleryItemKey === `image:${target.name}`
+    );
+    expect(targetCellBeforeReveal).toBeUndefined();
+
+    await interact(() => requestGalleryItemReveal(`image:${target.name}`));
+
+    const targetCell = [...viewport.querySelectorAll<HTMLElement>('[data-gallery-item-key]')].find(
+      (element) => element.dataset.galleryItemKey === `image:${target.name}`
+    );
+    expect(targetCell).toBeDefined();
+    expect(viewport.scrollTop).toBeGreaterThan(0);
+    expect(targetCell!.getBoundingClientRect().top).toBeGreaterThanOrEqual(viewport.getBoundingClientRect().top);
+    expect(targetCell!.getBoundingClientRect().bottom).toBeLessThanOrEqual(viewport.getBoundingClientRect().bottom);
+  });
+
   /** A persisted off-page selection of deep.png with page-zero content loaded. */
   const createOffPageGallery = (revealTargetPage: number | null) =>
     createGallery({

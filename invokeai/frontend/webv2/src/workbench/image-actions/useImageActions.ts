@@ -460,19 +460,14 @@ export const useImageActions = ({
                 ? (deletionContext?.getItemSelectionPageAfterRemoval?.(successor, orderedRefs, result.succeeded) ??
                   deletionContext?.getItemSelectionPage?.(successor))
                 : deletionContext?.getItemSelectionPage?.(successor);
+            const preserveNavigationQuery = deletionContext?.preserveNavigationQuery ?? false;
 
             if (retainedFailedKeys.length > 0) {
               const itemKeys = [...retainedFailedKeys, toGalleryItemKey(successor)];
 
-              if (selectionPage === undefined) {
-                gallery.setItemMultiSelection(itemKeys, successor, projectId);
-              } else {
-                gallery.setItemMultiSelection(itemKeys, successor, projectId, selectionPage);
-              }
-            } else if (selectionPage === undefined) {
-              gallery.selectItem(successor, projectId);
+              gallery.setItemMultiSelection(itemKeys, successor, projectId, selectionPage, preserveNavigationQuery);
             } else {
-              gallery.selectItem(successor, projectId, selectionPage, true);
+              gallery.selectItem(successor, projectId, selectionPage, preserveNavigationQuery);
             }
           }
           onImagesDeleted?.(result.succeeded.filter((item) => item.kind === 'image').map((item) => item.name));

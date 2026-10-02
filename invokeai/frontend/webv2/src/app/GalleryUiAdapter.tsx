@@ -60,9 +60,9 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
             gallery.selectItem(item, projectId, selectionPage);
           }
         },
-        setItemMultiSelection: (itemKeys, primaryItem, selectionPage) => {
+        setItemMultiSelection: (itemKeys, primaryItem, selectionPage, preserveNavigationQuery) => {
           if (isAccountScopeCurrent(accountScope) && queries.isActiveProject(projectId)) {
-            gallery.setItemMultiSelection(itemKeys, primaryItem, projectId, selectionPage);
+            gallery.setItemMultiSelection(itemKeys, primaryItem, projectId, selectionPage, preserveNavigationQuery);
           }
         },
         toggleItemSelection: (item, nextPrimaryItem, selectionPage) => {

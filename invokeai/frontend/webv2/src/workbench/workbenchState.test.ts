@@ -5010,15 +5010,42 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').liveFollowPausedAt).toBeUndefined();
   });
 
-  it('stamps an explicit page into the navigation query already on a multi-selection', () => {
-    // Host navigation uses the selection's query and page, which may differ from the gallery's current
-    // board/search.
+  it('uses the current Gallery listing for range selection while stamping its absolute page', () => {
+    // The grid page is absolute in its own listing, but the query follows current Gallery filters.
     let state = createInitialWorkbenchState();
 
     state = workbenchReducer(state, { boardId: 'board-deep', type: 'selectGalleryBoard' });
     state = workbenchReducer(state, {
       item: createGalleryImageItem('deep.png'),
-      preserveNavigationQuery: false,
+      preserveNavigationQuery: true,
+      selectionPage: 30,
+      type: 'selectGalleryItem',
+    });
+    state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
+    state = workbenchReducer(state, {
+      itemKeys: ['image:deep.png', 'image:next.png'],
+      primaryItem: createGalleryImageItem('next.png'),
+      selectionPage: 31,
+      type: 'setGalleryMultiSelection',
+    });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    const query = values.selectedImageQuery as { boardId: string; page: number; searchTerm: string };
+
+    expect(values.selectedImagePage).toBe(31);
+    expect(query.page).toBe(31);
+    expect(query.boardId).toBe('board-deep');
+    expect(query.searchTerm).toBe('sunset');
+    expect(values.galleryPage).toBe(0);
+  });
+
+  it('preserves the navigation listing for a Preview deletion successor when requested', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'board-deep', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      item: createGalleryImageItem('deep.png'),
+      preserveNavigationQuery: true,
       selectionPage: 30,
       type: 'selectGalleryItem',
     });
@@ -5027,6 +5054,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     state = workbenchReducer(state, {
       itemKeys: ['image:failed.png', 'image:successor.png'],
       primaryItem: createGalleryImageItem('successor.png'),
+      preserveNavigationQuery: true,
       selectionPage: 30,
       type: 'setGalleryMultiSelection',
     });
@@ -5035,10 +5063,32 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     const query = values.selectedImageQuery as { boardId: string; page: number; searchTerm: string };
 
     expect(values.selectedImagePage).toBe(30);
-    expect(query.page).toBe(30);
-    expect(query.boardId).toBe('board-deep');
-    expect(query.searchTerm).toBe('');
+    expect(query).toMatchObject({ boardId: 'board-deep', page: 30, searchTerm: '' });
     expect(values.galleryPage).toBe(0);
+  });
+
+  it('keeps the navigation page when a Preview deletion successor has no mapped page', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'board-deep', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      item: createGalleryImageItem('deep.png'),
+      preserveNavigationQuery: true,
+      selectionPage: 30,
+      type: 'selectGalleryItem',
+    });
+    state = workbenchReducer(state, { page: 4, type: 'setGalleryPage' });
+    state = workbenchReducer(state, {
+      itemKeys: ['image:failed.png', 'image:successor.png'],
+      primaryItem: createGalleryImageItem('successor.png'),
+      preserveNavigationQuery: true,
+      type: 'setGalleryMultiSelection',
+    });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.selectedImagePage).toBe(30);
+    expect(values.selectedImageQuery).toMatchObject({ boardId: 'board-deep', page: 30 });
   });
 
   it('stamps an explicit absolute page when a multi-select toggle adds the primary item', () => {

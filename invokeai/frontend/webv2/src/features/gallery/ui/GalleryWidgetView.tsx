@@ -206,6 +206,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     getItemSelectionPageAfterRemoval,
     items: gallery.items,
     loadOrderedRefs: loadOrderedItemRefs,
+    preserveNavigationQuery: false,
     selectedItemKey: gallery.selectedItemKey,
   };
   // Capture upload destination at launch; judge completion visibility against the latest rendered board and view.

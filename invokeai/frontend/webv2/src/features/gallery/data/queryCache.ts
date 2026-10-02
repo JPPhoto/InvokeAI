@@ -912,6 +912,44 @@ export const createGalleryWindowRuntime = ({
     pendingRange = null;
 
     if (action.kind === 'none') {
+      if (currentResult.isError && retryRequested) {
+        const operation = {};
+        const operationGeneration = generation;
+        activeOperation = operation;
+        retryRequested = false;
+
+        void currentObserver
+          .refetch({ cancelRefetch: false, throwOnError: true })
+          .then((result) => {
+            if (disposed || operationGeneration !== generation || activeOperation !== operation) {
+              return;
+            }
+
+            if (result.isError) {
+              failedRange = latestRange ?? range;
+              return;
+            }
+
+            reconcilePageTotals();
+            pendingRange = latestRange;
+          })
+          .catch(() => {
+            if (!disposed && operationGeneration === generation && activeOperation === operation) {
+              failedRange = latestRange ?? range;
+            }
+          })
+          .finally(() => {
+            if (disposed || operationGeneration !== generation || activeOperation !== operation) {
+              return;
+            }
+
+            activeOperation = null;
+            runRangeLoader();
+          });
+        return;
+      }
+
+      retryRequested = false;
       return;
     }
 

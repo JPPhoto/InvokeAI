@@ -221,6 +221,59 @@ describe('gallery window runtime', () => {
     }
   });
 
+  it('refetches cached pages when retry follows a failed listing refetch', async () => {
+    let failRefetch = false;
+    let returnRecoveredPages = false;
+    backend.listGalleryItems.mockImplementation(({ offset }: { offset: number }) => {
+      if (failRefetch && offset === 60) {
+        return Promise.reject(new Error('temporary refetch failure'));
+      }
+      const page = createPage(offset);
+      return Promise.resolve(
+        returnRecoveredPages
+          ? {
+              ...page,
+              items: page.items.map((item) => ({ ...item, name: `recovered-${item.name}` })),
+            }
+          : page
+      );
+    });
+    const runtime = createGalleryWindowRuntime({
+      consumerId: 'retry-cached-pages',
+      filter,
+      initialOffset: 0,
+      isPaginated: false,
+      queryClient,
+    });
+    const unsubscribe = runtime.subscribe(() => undefined);
+    try {
+      await waitFor(() => runtime.getSnapshot().result.isSuccess);
+      runtime.loadRange(60, 70);
+      await waitFor(() => Boolean(runtime.getSnapshot().result.data?.pageParams.includes(60)));
+
+      failRefetch = true;
+      const query = queryClient.getQueryCache().getAll()[0];
+      expect(query).toBeDefined();
+      await queryClient.invalidateQueries({ queryKey: query?.queryKey, exact: true });
+      await waitFor(() => runtime.getSnapshot().result.isError);
+      expect(runtime.getSnapshot().result.data?.pageParams).toEqual([0, 60]);
+
+      const requestsBeforeRetry = backend.listGalleryItems.mock.calls.length;
+      failRefetch = false;
+      returnRecoveredPages = true;
+      runtime.retry();
+
+      await waitFor(() => {
+        const result = runtime.getSnapshot().result;
+        return Boolean(result.isSuccess && result.data?.pages[1]?.items[0]?.name === 'recovered-image-60');
+      });
+      expect(backend.listGalleryItems.mock.calls.length).toBeGreaterThan(requestsBeforeRetry);
+      expect(runtime.getSnapshot().result.data?.pageParams).toEqual([0, 60]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('rebuilds the retained span when the backend total changes between adjacent pages', async () => {
     let initialPage = true;
     backend.listGalleryItems.mockImplementation(({ limit, offset }: { limit: number; offset: number }) => {

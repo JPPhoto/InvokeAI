@@ -17,6 +17,8 @@ export interface GalleryItemActions {
 
 export interface GalleryItemActionContext {
   filterIdentity: string;
+  /** Gallery selections use the current listing query; Preview selections retain their navigation query. */
+  preserveNavigationQuery: boolean;
   /**
    * Stamp selections with the host window's page; using the grid's unrelated page would break navigation from deep
    * Preview windows.
@@ -61,7 +63,12 @@ export interface GalleryCommandsPort {
   selectImage(image: GalleryImage): void;
   setCompareItem(image: GalleryImageItem | null): void;
   setCompareImage(image: GalleryImage | null): void;
-  setItemMultiSelection(itemKeys: GalleryItemKey[], primaryItem: GalleryItem, selectionPage?: number): void;
+  setItemMultiSelection(
+    itemKeys: GalleryItemKey[],
+    primaryItem: GalleryItem,
+    selectionPage?: number,
+    preserveNavigationQuery?: boolean
+  ): void;
   setPage(page: number): void;
   setPageInfo(totalImages: number): void;
   setSearchTerm(searchTerm: string): void;

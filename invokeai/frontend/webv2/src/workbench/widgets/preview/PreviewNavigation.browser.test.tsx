@@ -115,6 +115,8 @@ const mocks = vi.hoisted(() => {
       },
     },
     galleryItemFilters: [] as Array<{ boardId: string; starred?: boolean }>,
+    galleryItemConsumerIds: [] as Array<string | undefined>,
+    galleryItemFetchOnConsumerIds: new Set<string>(),
     galleryStripFetches: [] as Array<{ boardId: string; starred?: boolean }>,
     galleryStripItems: [] as Array<GalleryImageItem | GalleryVideoItem>,
     galleryItemPageOffsets: [] as number[],
@@ -197,9 +199,11 @@ vi.mock('@features/gallery/queries', () => ({
   }),
   galleryItemsInfiniteOptions: (
     query: { boardId: string; orderDir?: 'ASC' | 'DESC'; starred?: boolean },
-    window: { kind: 'anchor' | 'infinite' | 'page'; offset?: number } = { kind: 'infinite' }
+    window: { kind: 'anchor' | 'infinite' | 'page'; offset?: number } = { kind: 'infinite' },
+    consumerId?: string
   ) => {
     mocks.galleryItemFilters.push(query);
+    mocks.galleryItemConsumerIds.push(consumerId);
     const pages = mocks.galleryItemPages.map((page) => {
       const items = page.items.filter((item) => item.boardId === query.boardId);
 
@@ -222,14 +226,24 @@ vi.mock('@features/gallery/queries', () => ({
         pages[lastPageParam / 60 + 1] ? lastPageParam + 60 : undefined,
       getPreviousPageParam: (_firstPage: GalleryItemsPage, _allPages: GalleryItemsPage[], firstPageParam: number) =>
         firstPageParam >= 60 ? firstPageParam - 60 : undefined,
-      initialData: { pageParams: initialPageParams, pages: initialPages },
+      initialData:
+        consumerId !== undefined && mocks.galleryItemFetchOnConsumerIds.has(consumerId)
+          ? undefined
+          : { pageParams: initialPageParams, pages: initialPages },
       initialPageParam: initialOffset,
       maxPages: 10,
       queryFn: ({ pageParam }: { pageParam: number }) => {
         mocks.galleryItemPageOffsets.push(pageParam);
         return Promise.resolve(pages[pageParam / 60] ?? { items: [], total: 0 });
       },
-      queryKey: ['test-items', query.boardId, query.orderDir, window.kind, initialOffset],
+      queryKey: [
+        'test-items',
+        query.boardId,
+        query.orderDir,
+        window.kind,
+        initialOffset,
+        ...(consumerId === undefined ? [] : ['view', consumerId]),
+      ],
       staleTime: Infinity,
     };
   },
@@ -547,6 +561,8 @@ beforeEach(() => {
   };
   mocks.project.widgetInstances.gallery.state.values.selectedImageName = 'newest';
   mocks.galleryItemFilters.length = 0;
+  mocks.galleryItemConsumerIds.length = 0;
+  mocks.galleryItemFetchOnConsumerIds.clear();
   mocks.galleryStripFetches.length = 0;
   mocks.galleryStripItems = [];
   mocks.galleryItemPageOffsets.length = 0;
@@ -1126,6 +1142,78 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'backend-1199' }),
       undefined,
       19,
+      true
+    );
+  });
+
+  it('reloads an evicted initial Preview page when an outside selection returns to it', async () => {
+    const backendPages = Array.from({ length: 11 }, (_unused, pageIndex) => ({
+      items: Array.from({ length: 60 }, (_pageUnused, itemIndex) => {
+        const absoluteIndex = pageIndex * 60 + itemIndex;
+
+        return createImageItem(`backend-${absoluteIndex}`, new Date((2_000 - absoluteIndex) * 1_000).toISOString());
+      }),
+      total: 11 * 60,
+    }));
+    const pageZero = legacyImage('backend-0', new Date(2_000_000).toISOString());
+
+    mocks.galleryItemPages = backendPages;
+    mocks.galleryItemInitialPageCount = 10;
+    setGalleryValues({
+      recentImages: [],
+      selectedImage: pageZero,
+      selectedImageName: 'backend-0',
+      selectedImageQuery: { ...deepQuery, page: 0 },
+    });
+
+    await render();
+
+    // Place the Preview at the first window's end, then cross into page 10. The query's ten-page window slides off page zero.
+    const pageTen = legacyImage('backend-599', new Date((2_000 - 599) * 1_000).toISOString());
+    setGalleryValues({
+      selectedImage: pageTen,
+      selectedImageName: 'backend-599',
+      selectedImageQuery: { ...deepQuery, page: 9 },
+    });
+    await rerender();
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'backend-600' }),
+      undefined,
+      10,
+      true
+    );
+    await commitLastSelection();
+
+    const baseWindowKey = ['test-items', 'none', 'DESC', 'infinite', 0] as const;
+    expect(queryClient?.getQueryData<InfiniteData<GalleryItemsPage, number>>(baseWindowKey)?.pageParams[0]).toBe(60);
+
+    // A Gallery selection can return to page zero after Preview evicted it. This must reanchor once, not set an
+    // equivalent state object on every render.
+    const reanchoredKey = ['test-items', 'none', 'DESC', 'infinite', 0, 'view', 'preview-reanchor:1'] as const;
+    const pageOffsetCountBeforeReanchor = mocks.galleryItemPageOffsets.length;
+    mocks.galleryItemFetchOnConsumerIds.add('preview-reanchor:1');
+    setGalleryValues({
+      selectedImage: pageZero,
+      selectedImageName: 'backend-0',
+      selectedImageQuery: { ...deepQuery, page: 0 },
+    });
+    await rerender();
+
+    expect(mocks.galleryItemConsumerIds).toContain('preview-reanchor:1');
+    await vi.waitFor(() => expect(mocks.galleryItemPageOffsets.slice(pageOffsetCountBeforeReanchor)).toContain(0));
+    await vi.waitFor(() =>
+      expect(
+        queryClient?.getQueryData<InfiniteData<GalleryItemsPage, number>>(reanchoredKey)?.pages[0]?.items[0]?.name
+      ).toBe('backend-0')
+    );
+    expect(queryClient?.getQueryData<InfiniteData<GalleryItemsPage, number>>(reanchoredKey)?.pageParams[0]).toBe(0);
+    await rerender();
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'backend-1' }),
+      undefined,
+      0,
       true
     );
   });
