@@ -72,6 +72,7 @@ export const GalleryPickerView = ({
 
   const [activeCursor, setActiveCursor] = useState<ActiveCursor>(undefined);
   const [columnCount, setColumnCount] = useState(GALLERY_PICKER_MIN_COLUMNS);
+  const [visibleRange, setVisibleRange] = useState<{ firstIndex: number; lastIndex: number } | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   // Async uploads need current selection capacity.
   const selectionRef = useRef(selection);
@@ -79,6 +80,11 @@ export const GalleryPickerView = ({
   const [activeScope, setActiveScope] = useState(dataScopeKey);
   // Keep prior items dimmed during scope changes; show skeletons only before the first result.
   const [lastItems, setLastItems] = useState<GalleryItem[] | null>(null);
+  const updateVisibleRange = useCallback((firstIndex: number, lastIndex: number) => {
+    setVisibleRange((current) =>
+      current?.firstIndex === firstIndex && current.lastIndex === lastIndex ? current : { firstIndex, lastIndex }
+    );
+  }, []);
 
   // eslint-disable-next-line react/refs
   selectionRef.current = selection;
@@ -94,6 +100,7 @@ export const GalleryPickerView = ({
   if (activeScope !== dataScopeKey) {
     setActiveScope(dataScopeKey);
     setActiveCursor(undefined);
+    setVisibleRange(null);
   }
   // Seed once the first range lands, keeping the highlighted key authoritative if a same-filter listing changes.
   const seededEntry = seedKey
@@ -113,16 +120,42 @@ export const GalleryPickerView = ({
     activeCursor ?? (initialEntry ? { index: initialEntry[0], key: toGalleryItemKey(initialEntry[1]) } : undefined);
   const matchingActiveEntry = cursor?.key
     ? [...data.listing.itemsByIndex.entries()].find(([, item]) => toGalleryItemKey(item) === cursor.key)
-    : undefined;
-  const resolvedActiveIndex = matchingActiveEntry?.[0] ?? cursor?.index ?? -1;
-  if (matchingActiveEntry && cursor && matchingActiveEntry[0] !== cursor.index) {
-    setActiveCursor({ ...cursor, index: matchingActiveEntry[0] });
+    : cursor && data.listing.itemsByIndex.has(cursor.index)
+      ? ([cursor.index, data.listing.itemsByIndex.get(cursor.index)!] as const)
+      : undefined;
+  let firstVisibleEntry: [number, GalleryItem] | undefined;
+  if (visibleRange && activeScope === dataScopeKey && !isStale) {
+    for (const entry of data.listing.itemsByIndex) {
+      if (
+        entry[0] >= visibleRange.firstIndex &&
+        entry[0] <= visibleRange.lastIndex &&
+        (firstVisibleEntry === undefined || entry[0] < firstVisibleEntry[0])
+      ) {
+        firstVisibleEntry = entry;
+      }
+    }
   }
+  const shouldResetEvictedCursor = Boolean(
+    cursor &&
+    !matchingActiveEntry &&
+    firstVisibleEntry &&
+    (cursor.key !== null || (data.listing.total !== null && cursor.index >= data.listing.total))
+  );
+  const resolvedCursor = shouldResetEvictedCursor
+    ? { index: firstVisibleEntry![0], key: toGalleryItemKey(firstVisibleEntry![1]) }
+    : matchingActiveEntry && cursor
+      ? { index: matchingActiveEntry[0], key: toGalleryItemKey(matchingActiveEntry[1]) }
+      : cursor;
+  const resolvedEntry = shouldResetEvictedCursor ? firstVisibleEntry : matchingActiveEntry;
+  if (resolvedCursor && (activeCursor?.index !== resolvedCursor.index || activeCursor.key !== resolvedCursor.key)) {
+    setActiveCursor(resolvedCursor);
+  }
+  const resolvedActiveIndex = resolvedEntry?.[0] ?? resolvedCursor?.index ?? -1;
   // An evicted active key must not fall through to the different item now occupying its old index.
-  const activeItem = cursor?.key
-    ? matchingActiveEntry?.[1]
-    : cursor
-      ? data.listing.itemsByIndex.get(cursor.index)
+  const activeItem = resolvedCursor?.key
+    ? resolvedEntry?.[1]
+    : resolvedCursor
+      ? data.listing.itemsByIndex.get(resolvedCursor.index)
       : undefined;
   const resolvedActiveKey = activeItem ? toGalleryItemKey(activeItem) : null;
   const selectedBoard = data.boards.find((board) => board.id === data.selectedBoardId);
@@ -466,6 +499,8 @@ export const GalleryPickerView = ({
             label={t('widgets.gallery.picker.itemsLabel')}
             onActivate={handleActivate}
             onColumnCountChange={setColumnCount}
+            onVisibleRangeChange={updateVisibleRange}
+            visibleRange={visibleRange}
           />
         ) : (
           <Stack align="center" color="fg.muted" gap="2" justify="center" minH="7rem" px="4" py="6">

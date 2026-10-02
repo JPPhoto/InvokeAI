@@ -326,7 +326,10 @@ describe('GalleryPickerPopover', () => {
   it('keeps the active item key when the same listing inserts an item before it', async () => {
     const { dialog } = await openPicker();
     const input = getSearchInput(dialog);
-    const query = queryClient!.getQueryCache().findAll({ queryKey: ['test-picker-items', 'dogs'] })[0];
+    const query = queryClient!
+      .getQueryCache()
+      .findAll({ queryKey: ['test-picker-items', 'dogs'] })
+      .find((candidate) => candidate.getObserversCount() > 0);
 
     expect(query).toBeDefined();
     expect(getActiveOption(dialog)).toBe(getOption(dialog, 'image:b.png'));
@@ -436,6 +439,85 @@ describe('GalleryPickerPopover', () => {
 
     await pressKey(getSearchInput(dialog), 'ArrowLeft');
     expect(getActiveOption(dialog)?.getAttribute('data-item-key')).toBe('image:item-718.png');
+  });
+
+  it('reanchors the active option to the visible window after eviction and total shrink', async () => {
+    const manyItems = Array.from({ length: 720 }, (_, index) => image(`window-${index}.png`));
+    let currentItems = manyItems;
+    mocks.listItems.mockImplementation(() => ({ items: currentItems, total: currentItems.length }));
+
+    const { dialog } = await openPicker();
+    const input = getSearchInput(dialog);
+    const listbox = dialog.querySelector<HTMLElement>('[role="listbox"]');
+    const viewport = dialog.querySelector<HTMLElement>('[data-scope="scroll-area"][data-part="viewport"]');
+    const columns = getColumnCount(dialog);
+    const virtualRowPitch = listbox!.scrollHeight / Math.ceil(manyItems.length / columns);
+
+    await act(() => {
+      viewport!.scrollTop = (Math.floor(650 / columns) - 2) * virtualRowPitch;
+      viewport!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    const scrollTopBeforeEviction = viewport!.scrollTop;
+    await settle();
+
+    await vi.waitFor(() => {
+      const activeOption = getActiveOption(dialog);
+      const activeIndex = Number(activeOption?.dataset.itemIndex);
+
+      expect(activeOption).not.toBeNull();
+      expect(activeIndex).toBeGreaterThan(600);
+      expect(activeIndex).toBeLessThan(680);
+    });
+    const visibleActive = getActiveOption(dialog)!;
+    const visibleRect = visibleActive.getBoundingClientRect();
+    const viewportRect = viewport!.getBoundingClientRect();
+    expect(visibleRect.bottom).toBeGreaterThan(viewportRect.top);
+    expect(visibleRect.top).toBeLessThan(viewportRect.bottom);
+    expect(viewport!.scrollTop).toBe(scrollTopBeforeEviction);
+    const scrollTopAfterEviction = viewport!.scrollTop;
+
+    await pressKey(input, 'ArrowRight');
+    expect(Number(getActiveOption(dialog)?.dataset.itemIndex)).toBe(Number(visibleActive.dataset.itemIndex) + 1);
+    expect(viewport!.scrollTop).toBe(scrollTopAfterEviction);
+
+    await pressKey(input, 'End');
+    await vi.waitFor(() => expect(getActiveOption(dialog)?.dataset.itemKey).toBe('image:window-719.png'));
+
+    const query = queryClient!
+      .getQueryCache()
+      .findAll({ queryKey: ['test-picker-items', 'dogs'] })
+      .find((candidate) => candidate.getObserversCount() > 0);
+    expect(query).toBeDefined();
+    currentItems = manyItems.slice(0, 660);
+    await act(async () => {
+      await queryClient!.invalidateQueries({ exact: true, queryKey: query!.queryKey });
+    });
+    await settle();
+    const refreshedData = queryClient!.getQueryData<{
+      pages: { items: GalleryItem[]; total: number }[];
+      pageParams: number[];
+    }>(query!.queryKey);
+    expect(refreshedData?.pages.at(-1)?.total).toBe(currentItems.length);
+    expect(refreshedData?.pages.some((page) => page.items.some((item) => item.name === 'window-719.png'))).toBe(false);
+
+    await vi.waitFor(() => {
+      const activeOption = getActiveOption(dialog);
+
+      expect(activeOption).not.toBeNull();
+      expect(activeOption?.dataset.itemKey).not.toBe('image:window-719.png');
+      expect(Number(activeOption?.getAttribute('aria-posinset'))).toBeLessThanOrEqual(currentItems.length);
+    });
+    const reanchoredOption = getActiveOption(dialog)!;
+    const reanchoredIndex = Number(reanchoredOption.dataset.itemIndex);
+    const reanchoredRect = reanchoredOption.getBoundingClientRect();
+    const resizedViewportRect = viewport!.getBoundingClientRect();
+    expect(reanchoredRect.bottom).toBeGreaterThan(resizedViewportRect.top);
+    expect(reanchoredRect.top).toBeLessThan(resizedViewportRect.bottom);
+    expect(viewport!.scrollTop).toBeGreaterThan(0);
+
+    await pressKey(input, 'Enter');
+
+    expect(onPick).toHaveBeenCalledExactlyOnceWith(currentItems[reanchoredIndex]);
   });
 
   it('keeps a failed deep-range retry available in the picker footer', async () => {

@@ -160,6 +160,8 @@ export const GalleryPickerGrid = ({
   label,
   onActivate,
   onColumnCountChange,
+  onVisibleRangeChange,
+  visibleRange,
 }: {
   activeIndex: number;
   columnCount: number;
@@ -182,6 +184,8 @@ export const GalleryPickerGrid = ({
   label: string;
   onActivate: (item: GalleryItem, index: number) => void;
   onColumnCountChange: (columnCount: number) => void;
+  onVisibleRangeChange: (firstIndex: number, lastIndex: number) => void;
+  visibleRange: { firstIndex: number; lastIndex: number } | null;
 }) => {
   const { t } = useTranslation();
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -196,7 +200,9 @@ export const GalleryPickerGrid = ({
     setLastIndexItems(listing.itemsByIndex);
   }
   if (revealState.activeIndex !== activeIndex) {
-    setRevealState({ activeIndex, pendingIndex: activeIndex >= 0 ? activeIndex : null });
+    const isVisible =
+      visibleRange !== null && activeIndex >= visibleRange.firstIndex && activeIndex <= visibleRange.lastIndex;
+    setRevealState({ activeIndex, pendingIndex: activeIndex >= 0 && !isVisible ? activeIndex : null });
   }
   const pendingRevealIndex = revealState.activeIndex === activeIndex ? revealState.pendingIndex : null;
   const finishReveal = useCallback(() => {
@@ -280,10 +286,10 @@ export const GalleryPickerGrid = ({
         return;
       }
 
-      listing.loadRange(
-        range.startIndex * columnCount,
-        Math.min(itemCount - 1, (range.endIndex + 1) * columnCount - 1)
-      );
+      const firstIndex = range.startIndex * columnCount;
+      const lastIndex = Math.min(itemCount - 1, (range.endIndex + 1) * columnCount - 1);
+      onVisibleRangeChange(firstIndex, lastIndex);
+      listing.loadRange(firstIndex, lastIndex);
     },
     useFlushSync: false,
   });
