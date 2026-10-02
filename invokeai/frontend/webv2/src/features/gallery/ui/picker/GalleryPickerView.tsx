@@ -118,9 +118,12 @@ export const GalleryPickerView = ({
   }
   const cursor =
     activeCursor ?? (initialEntry ? { index: initialEntry[0], key: toGalleryItemKey(initialEntry[1]) } : undefined);
+  const isWithinListing = (index: number) => data.listing.total === null || index < data.listing.total;
   const matchingActiveEntry = cursor?.key
-    ? [...data.listing.itemsByIndex.entries()].find(([, item]) => toGalleryItemKey(item) === cursor.key)
-    : cursor && data.listing.itemsByIndex.has(cursor.index)
+    ? [...data.listing.itemsByIndex.entries()].find(
+        ([index, item]) => isWithinListing(index) && toGalleryItemKey(item) === cursor.key
+      )
+    : cursor && isWithinListing(cursor.index) && data.listing.itemsByIndex.has(cursor.index)
       ? ([cursor.index, data.listing.itemsByIndex.get(cursor.index)!] as const)
       : undefined;
   let firstVisibleEntry: [number, GalleryItem] | undefined;
@@ -129,6 +132,7 @@ export const GalleryPickerView = ({
       if (
         entry[0] >= visibleRange.firstIndex &&
         entry[0] <= visibleRange.lastIndex &&
+        isWithinListing(entry[0]) &&
         (firstVisibleEntry === undefined || entry[0] < firstVisibleEntry[0])
       ) {
         firstVisibleEntry = entry;
@@ -154,7 +158,7 @@ export const GalleryPickerView = ({
   // An evicted active key must not fall through to the different item now occupying its old index.
   const activeItem = resolvedCursor?.key
     ? resolvedEntry?.[1]
-    : resolvedCursor
+    : resolvedCursor && isWithinListing(resolvedCursor.index)
       ? data.listing.itemsByIndex.get(resolvedCursor.index)
       : undefined;
   const resolvedActiveKey = activeItem ? toGalleryItemKey(activeItem) : null;

@@ -520,6 +520,118 @@ describe('GalleryPickerPopover', () => {
     expect(onPick).toHaveBeenCalledExactlyOnceWith(currentItems[reanchoredIndex]);
   });
 
+  it('does not keep an active item from a stale tail page after the reported total shrinks', async () => {
+    const manyItems = Array.from({ length: 720 }, (_, index) => image(`partial-${index}.png`));
+    mocks.listItems.mockReturnValue({ items: manyItems, total: manyItems.length });
+
+    const { dialog } = await openPicker();
+    const input = getSearchInput(dialog);
+    const listbox = dialog.querySelector<HTMLElement>('[role="listbox"]');
+    const viewport = dialog.querySelector<HTMLElement>('[data-scope="scroll-area"][data-part="viewport"]');
+    const columns = getColumnCount(dialog);
+    const virtualRowPitch = listbox!.scrollHeight / Math.ceil(manyItems.length / columns);
+
+    await act(() => {
+      viewport!.scrollTop = (Math.floor(650 / columns) - 2) * virtualRowPitch;
+      viewport!.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+    await settle();
+    const query = queryClient!
+      .getQueryCache()
+      .findAll({ queryKey: ['test-picker-items', 'dogs'] })
+      .find((candidate) => candidate.getObserversCount() > 0);
+    expect(query).toBeDefined();
+    const originalData = queryClient!.getQueryData<{
+      pages: { items: GalleryItem[]; total: number }[];
+      pageParams: number[];
+    }>(query!.queryKey);
+    expect(originalData?.pageParams).toContain(600);
+    expect(originalData?.pageParams).not.toContain(660);
+    const originalVisiblePage = originalData!.pages[originalData!.pageParams.indexOf(600)]!;
+
+    // Make End target an unloaded cursor while the query still reports all 720 items.
+    await act(() => {
+      queryClient!.setQueryData(query!.queryKey, {
+        ...originalData!,
+        pages: [...originalData!.pages, { items: manyItems.slice(660, 719), total: manyItems.length }],
+        pageParams: [...originalData!.pageParams, 660],
+      });
+    });
+    await settle();
+    await pressKey(input, 'End');
+    expect(getActiveOption(dialog)).toBeNull();
+
+    const newTotal = 660;
+    await act(() => {
+      queryClient!.setQueryData<{ pages: { items: GalleryItem[]; total: number }[]; pageParams: number[] }>(
+        query!.queryKey,
+        (previous) => {
+          if (!previous) {
+            throw new Error('picker listing query missing');
+          }
+
+          return {
+            ...previous,
+            pages: previous.pages.map((page, index) => {
+              const pageOffset = previous.pageParams[index];
+
+              if (pageOffset === 600) {
+                return { ...page, items: [], total: newTotal };
+              }
+              if (pageOffset === 660) {
+                return { ...page, items: manyItems.slice(660) };
+              }
+
+              return page;
+            }),
+          };
+        }
+      );
+    });
+    await settle();
+
+    const partialData = queryClient!.getQueryData<{
+      pages: { items: GalleryItem[]; total: number }[];
+      pageParams: number[];
+    }>(query!.queryKey);
+    expect(partialData?.pages[0]?.total).toBe(newTotal);
+    expect(partialData?.pages.some((page) => page.items.some((item) => item.name === 'partial-719.png'))).toBe(true);
+    expect(getActiveOption(dialog)).toBeNull();
+
+    await pressKey(input, 'Enter');
+    expect(onPick).not.toHaveBeenCalled();
+
+    // Once a current visible row is loaded, the pending cursor reanchors and remains pickable.
+    await act(() => {
+      queryClient!.setQueryData<{ pages: { items: GalleryItem[]; total: number }[]; pageParams: number[] }>(
+        query!.queryKey,
+        (previous) => {
+          if (!previous) {
+            throw new Error('picker listing query missing');
+          }
+
+          return {
+            ...previous,
+            pages: previous.pages.map((page, index) =>
+              previous.pageParams[index] === 600 ? { ...page, items: originalVisiblePage.items } : page
+            ),
+          };
+        }
+      );
+    });
+    await settle();
+    await vi.waitFor(() => expect(getActiveOption(dialog)).not.toBeNull());
+    const activeOption = getActiveOption(dialog)!;
+    const activeIndex = Number(activeOption.dataset.itemIndex);
+    expect(activeIndex).toBeLessThan(newTotal);
+    expect(Number(activeOption.getAttribute('aria-posinset'))).toBeLessThanOrEqual(newTotal);
+
+    await pressKey(input, 'Enter');
+
+    expect(onPick).toHaveBeenCalledExactlyOnceWith(manyItems[activeIndex]);
+    expect(onPick).not.toHaveBeenCalledWith(manyItems[719]);
+  });
+
   it('keeps a failed deep-range retry available in the picker footer', async () => {
     const manyItems = Array.from({ length: 720 }, (_, index) => image(`retry-${index}.png`));
     mocks.listItems.mockReturnValue({ items: manyItems, total: manyItems.length });
