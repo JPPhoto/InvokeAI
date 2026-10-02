@@ -204,6 +204,30 @@ export const getGalleryGridWindowIndexForItemKey = (
   return -1;
 };
 
+/** Strip items navigate from the top; listing items retain backend page coordinates. */
+export const getGalleryGridSelectionPage = (
+  item: GalleryItem,
+  listing:
+    | {
+        itemsByIndex: ReadonlyMap<number, GalleryItem>;
+        selectionPageByItemKey?: ReadonlyMap<string, number>;
+      }
+    | undefined,
+  starredItems: readonly GalleryItem[],
+  pageSize: number
+): number | undefined => {
+  const itemKey = toGalleryItemKey(item);
+  if (starredItems.some((candidate) => toGalleryItemKey(candidate) === itemKey)) {
+    return 0;
+  }
+  const selectionPage = listing?.selectionPageByItemKey?.get(itemKey);
+  if (selectionPage !== undefined) {
+    return selectionPage;
+  }
+  const index = listing ? getGalleryGridWindowIndexForItemKey(listing.itemsByIndex, itemKey) : -1;
+  return index < 0 ? undefined : Math.floor(index / pageSize);
+};
+
 export const getGalleryProgressLayout = ({
   columns,
   tileSize,

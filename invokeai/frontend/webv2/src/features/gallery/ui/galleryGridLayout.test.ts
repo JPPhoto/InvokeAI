@@ -12,6 +12,7 @@ import {
   getGalleryColumnCount,
   getGalleryColumnCountForCell,
   getGalleryGridRowIndexForItemKey,
+  getGalleryGridSelectionPage,
   getGalleryPinnedHeightPx,
   getGalleryStarredLayout,
   getGalleryStarredStripItems,
@@ -206,5 +207,16 @@ describe('getGalleryGridRowIndexForItemKey', () => {
     expect(getGalleryGridRowIndexForItemKey(items, 'image:starred-1', 2)).toBe(-1);
     expect(getGalleryGridRowIndexForItemKey(items, 'image:regular-1', 2)).toBe(0);
     expect(getGalleryGridRowIndexForItemKey(items, 'image:regular-3', 2)).toBe(1);
+  });
+});
+
+describe('gallery selection page coordinates', () => {
+  it('stamps a restored strip at page zero even while the listing holds a deep window', () => {
+    const starred = createImageItem('starred', true);
+    const deep = createImageItem('deep');
+    const listing = { itemsByIndex: new Map([[1800, deep]]), selectionPageByItemKey: new Map([['image:deep', 30]]) };
+    expect(getGalleryGridSelectionPage(starred, listing, [starred], 60)).toBe(0);
+    expect(getGalleryGridSelectionPage(deep, listing, [starred], 60)).toBe(30);
+    expect(getGalleryGridSelectionPage(createImageItem('absent'), listing, [starred], 60)).toBeUndefined();
   });
 });

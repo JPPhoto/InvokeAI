@@ -221,6 +221,34 @@ describe('gallery window runtime', () => {
     }
   });
 
+  it('retries a failed paginated refresh while retaining cached data', async () => {
+    const runtime = createGalleryWindowRuntime({
+      consumerId: 'retry-paginated',
+      filter,
+      initialOffset: 60,
+      isPaginated: true,
+      queryClient,
+    });
+    const unsubscribe = runtime.subscribe(() => undefined);
+    try {
+      await waitFor(() => runtime.getSnapshot().result.isSuccess);
+      backend.listGalleryItems.mockRejectedValue(new Error('offline'));
+      await queryClient.invalidateQueries();
+      await waitFor(() => runtime.getSnapshot().result.isError);
+      expect(runtime.getSnapshot().result.data?.pages[0]?.items[0]?.name).toBe('image-60');
+      const requestsBeforeRetry = backend.listGalleryItems.mock.calls.length;
+      backend.listGalleryItems.mockImplementation(({ offset }: { offset: number }) =>
+        Promise.resolve({ ...createPage(offset), items: [{ ...createPage(offset).items[0]!, name: 'recovered' }] })
+      );
+      runtime.retry();
+      await waitFor(() => runtime.getSnapshot().result.isSuccess);
+      expect(backend.listGalleryItems.mock.calls.length).toBe(requestsBeforeRetry + 1);
+      expect(runtime.getSnapshot().result.data?.pages[0]?.items[0]?.name).toBe('recovered');
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('refetches cached pages when retry follows a failed listing refetch', async () => {
     let failRefetch = false;
     let returnRecoveredPages = false;

@@ -14,7 +14,7 @@ import { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react';
 
 import type { GalleryItemContextMenuTarget } from './GalleryUiContext';
 
-import { getGalleryGridWindowIndexForItemKey } from './galleryGridLayout';
+import { getGalleryGridSelectionPage } from './galleryGridLayout';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
 const getGalleryItemRange = (
@@ -43,7 +43,6 @@ export const useGalleryGridSelection = () => {
   // `loadedItems` includes the strip, whose starred items the listing window
   // may not hold; the context menu and ctrl-toggle must resolve those too.
   const { actions, filter, gallery, loadedItems, listing, starredStrip } = useGalleryWidget();
-  const listingItemsByIndex = listing?.itemsByIndex;
   const queryClient = useQueryClient();
   const [contextMenuTarget, setContextMenuTarget] = useState<GalleryItemContextMenuTarget | null>(null);
 
@@ -152,12 +151,10 @@ export const useGalleryGridSelection = () => {
               ) ?? null)
             : null;
 
-        const selectionPage = listing?.selectionPageByItemKey?.get(itemKey);
-        const index = listingItemsByIndex ? getGalleryGridWindowIndexForItemKey(listingItemsByIndex, itemKey) : -1;
         actions.toggleItemInSelection(
           item,
           nextPrimaryItem,
-          selectionPage ?? (index < 0 ? undefined : Math.floor(index / GALLERY_PAGE_SIZE))
+          getGalleryGridSelectionPage(nextPrimaryItem ?? item, listing, starredStrip.items, GALLERY_PAGE_SIZE)
         );
       } else {
         actions.selectItem(item);
@@ -168,8 +165,8 @@ export const useGalleryGridSelection = () => {
       gallery.selectedItemKey,
       gallery.selectedItemKeys,
       loadedItems,
-      listing?.selectionPageByItemKey,
-      listingItemsByIndex,
+      listing,
+      starredStrip.items,
       selectItemRange,
     ]
   );

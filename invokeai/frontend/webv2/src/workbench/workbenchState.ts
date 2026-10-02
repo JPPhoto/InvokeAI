@@ -4704,10 +4704,16 @@ export const __workbenchReducerInternal = (
               ? action.nextPrimaryItem
               : null;
           const nextPrimaryKey = nextPrimaryItem ? toGalleryItemKey(nextPrimaryItem) : null;
+          const selectedImagePage = getGallerySelectionPage(values, action.selectionPage, false);
 
           return {
             ...values,
             ...(nextPrimaryItem?.kind === 'image' ? {} : { compareImage: null }),
+            selectedImagePage,
+            selectedImageQuery:
+              nextPrimaryItem && values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+                ? { ...values.selectedImageQuery, page: selectedImagePage }
+                : null,
             selectedImage: nextPrimaryItem,
             selectedImageName: nextPrimaryKey,
             selectedImageNames: expectedNextPrimaryKey && !nextPrimaryItem ? [] : remainingItemKeys,

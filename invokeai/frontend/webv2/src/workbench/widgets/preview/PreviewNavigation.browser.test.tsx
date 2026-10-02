@@ -553,6 +553,7 @@ beforeEach(() => {
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).semanticImageQuery;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).selectedBoardId;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).selectedImageQuery;
+  delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).selectedImagePage;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).starredOnly;
   mocks.project.widgetInstances.gallery.state.values.recentImages = mocks.recentImages;
   mocks.project.widgetInstances.gallery.state.values.selectedImage = {
@@ -650,6 +651,30 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ name: 'starred-next' }),
       undefined,
       expect.any(Number),
+      true
+    );
+  });
+
+  it('keeps Preview on starred neighbors after backward browsing restores the strip from a deep reveal', async () => {
+    const starredTop = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredNext = { ...createImageItem('starred-next', '2026-07-22T00:00:00.000Z'), starred: true };
+    mocks.galleryStripItems = [starredTop, starredNext];
+    setGalleryValues({
+      galleryPage: 30,
+      paginationMode: 'infinite',
+      selectedImage: { ...legacyImage('starred-top', '2026-07-23T00:00:00.000Z'), starred: true },
+      selectedImageName: 'starred-top',
+      selectedImagePage: 0,
+      // Gallery restored the strip after backward traversal and stamped its own page, not the old reveal anchor.
+      selectedImageQuery: { ...deepQuery, page: 0 },
+    });
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'starred-next' }),
+      undefined,
+      0,
       true
     );
   });

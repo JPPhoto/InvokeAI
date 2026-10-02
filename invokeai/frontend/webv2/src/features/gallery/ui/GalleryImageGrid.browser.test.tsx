@@ -729,6 +729,36 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(backend, null, 0);
   });
 
+  it('passes the promoted selection page when toggling off the primary on another page', async () => {
+    const first = createItem('image', 'page-zero.png');
+    const second = createItem('image', 'page-one.png');
+    currentListing = {
+      error: null,
+      itemsByIndex: new Map([
+        [0, first],
+        [60, second],
+      ]),
+      loadRange: vi.fn(),
+      offset: 0,
+      retry: vi.fn(),
+      total: 120,
+      selectionPageByItemKey: new Map([
+        ['image:page-zero.png', 0],
+        ['image:page-one.png', 1],
+      ]),
+    };
+    await renderGallery(
+      createGallery({
+        items: [first, second],
+        selectedItemKey: 'image:page-one.png',
+        primarySelectedItemKey: 'image:page-one.png',
+        selectedItemKeys: ['image:page-zero.png', 'image:page-one.png'],
+      })
+    );
+    await click(getButton('Select page-one.png for preview'), { ctrlKey: true });
+    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(second, first, 0);
+  });
+
   it('keeps recent completions out of paginated page positions', async () => {
     const recentImage = createRecentImage('recent.png');
     const recentItem = createItem('image', recentImage.imageName, { createdAt: recentImage.createdAt });
@@ -1631,6 +1661,32 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(sectionOrder()).toEqual(['starred', 'regular']);
     // Every starred item is on screen, so there is nothing more to show.
     expect(host?.querySelector('button[aria-label="Show all starred items"]')).toBeNull();
+  });
+
+  it('stamps a restored starred strip selection at page zero while the reveal anchor stays deep', async () => {
+    const starredTop = createItem('image', 'starred-top.png', { starred: true });
+    const regular = createItem('image', 'regular.png');
+    setStrip([starredTop]);
+    currentListing = {
+      error: null,
+      itemsByIndex: new Map([[0, regular]]),
+      loadRange: vi.fn(),
+      offset: 0,
+      retry: vi.fn(),
+      total: 61,
+    };
+    await renderGallery(
+      createGallery({
+        anchoredWindowPage: 30,
+        items: [regular],
+        primarySelectedItemKey: null,
+        selectedItemKey: null,
+        selectedItemKeys: [],
+        settings: { ...DENSE_SETTINGS, paginationMode: 'infinite' },
+      })
+    );
+    await click(getButton('Select starred-top.png for preview'), { ctrlKey: true });
+    expect(actionMocks.toggleItemInSelection).toHaveBeenLastCalledWith(starredTop, null, 0);
   });
 
   it('offers Show all when the board holds more starred items than the strip, switching to the starred listing', async () => {

@@ -1,7 +1,7 @@
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 
-import { getGallerySelectionPageAfterRemoval, toGalleryItemKey, toGalleryItemRef } from '@features/gallery/core/items';
+import { getGallerySelectionPageAfterRemoval, toGalleryItemRef } from '@features/gallery/core/items';
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import { getGallerySettings } from '@features/gallery/core/settings';
 import { GALLERY_PAGE_SIZE, galleryItemNamesOptions } from '@features/gallery/data/queries';
@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next';
 import type { GalleryStateView } from './galleryStateView';
 
 import { GalleryBoardDragMonitor } from './GalleryBoardDragMonitor';
-import { getGalleryGridWindowIndexForItemKey, mergeGalleryLoadedItems } from './galleryGridLayout';
+import { getGalleryGridSelectionPage, mergeGalleryLoadedItems } from './galleryGridLayout';
 import { GalleryLayout } from './GalleryLayout';
 import {
   getGalleryAnchoredWindowPage,
@@ -160,19 +160,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   const lastPublishedTotalRef = useRef<number | null>(null);
   const itemActionFilterIdentity = useMemo(() => JSON.stringify(data.filter), [data.filter]);
   const getItemSelectionPage = useCallback(
-    (item: GalleryItem) => {
-      const itemKey = toGalleryItemKey(item);
-      const selectionPage = data.listing.selectionPageByItemKey?.get(itemKey);
-
-      if (selectionPage !== undefined) {
-        return selectionPage;
-      }
-
-      const index = getGalleryGridWindowIndexForItemKey(data.listing.itemsByIndex, itemKey);
-
-      return index < 0 ? undefined : Math.floor(index / GALLERY_PAGE_SIZE);
-    },
-    [data.listing.itemsByIndex, data.listing.selectionPageByItemKey]
+    (item: GalleryItem) => getGalleryGridSelectionPage(item, data.listing, starredStrip.items, GALLERY_PAGE_SIZE),
+    [data.listing, starredStrip.items]
   );
   const getItemSelectionPageAfterRemoval = useCallback(
     (item: GalleryItem, orderedRefs: GalleryItemRef[], removedRefs: GalleryItemRef[]) =>

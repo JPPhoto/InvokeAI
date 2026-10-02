@@ -9,7 +9,7 @@ import { GalleryTileFrame } from '@features/gallery/ui/GalleryTileFrame';
 import { Button } from '@platform/ui/Button';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { CheckIcon } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { defaultRangeExtractor, useVirtualizer, type Range } from 'react-hook-tanstack-virtual';
 import { useTranslation } from 'react-i18next';
 
@@ -293,6 +293,10 @@ export const GalleryPickerGrid = ({
     },
     useFlushSync: false,
   });
+  const measureVirtualizer = useEffectEvent(() => virtualizer.measure());
+  useLayoutEffect(() => {
+    measureVirtualizer();
+  }, [columnCount, rowCount, rowPitch]);
   const virtualRows = virtualizer.virtualItems;
   const virtualHeight = virtualizer.totalSize;
   const handleRangeClick = useCallback(

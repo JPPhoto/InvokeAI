@@ -5746,6 +5746,32 @@ describe('workbench backend connection recovery', () => {
     expect(values.compareImage).toBeNull();
   });
 
+  it('restores the promoted item page after cross-page multi-selection', () => {
+    const first = createGalleryImageItem('page-zero');
+    const second = createGalleryImageItem('page-one');
+    let state = createInitialWorkbenchState();
+    state = workbenchReducer(state, { item: first, selectionPage: 0, type: 'selectGalleryItem' });
+    state = workbenchReducer(state, {
+      item: second,
+      nextPrimaryItem: null,
+      selectionPage: 1,
+      type: 'toggleGalleryItemInSelection',
+    });
+    state = workbenchReducer(state, {
+      item: second,
+      nextPrimaryItem: first,
+      selectionPage: 0,
+      type: 'toggleGalleryItemInSelection',
+    });
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery')).toMatchObject({
+      selectedImage: first,
+      selectedImageName: 'image:page-zero',
+      selectedImagePage: 0,
+      selectedImageQuery: { page: 0 },
+      selectedImageNames: ['image:page-zero'],
+    });
+  });
+
   it('atomically promotes the remaining video when the image primary is toggled off', () => {
     const image = createGalleryImageItem('shared');
     const video = createGalleryVideoItem('shared');

@@ -389,6 +389,24 @@ describe('GalleryPickerPopover', () => {
     expect(document.querySelector(OPEN_DIALOG)).toBeNull();
   });
 
+  it('remeasures row spacing when width changes without changing columns', async () => {
+    const manyItems = Array.from({ length: 120 }, (_, index) => image(`resize-${index}.png`));
+    mocks.listItems.mockReturnValue({ items: manyItems, total: manyItems.length });
+    const { dialog } = await openPicker();
+    const listbox = dialog.querySelector<HTMLElement>('[role="listbox"]')!;
+    for (const width of [302, 274]) {
+      await act(() => {
+        listbox.style.width = `${width}px`;
+      });
+      await settle();
+      const first = getOption(dialog, 'image:resize-0.png').getBoundingClientRect();
+      const nextRow = getOption(dialog, 'image:resize-4.png').getBoundingClientRect();
+      expect(getColumnCount(dialog)).toBe(4);
+      expect(nextRow.top - first.top).toBeCloseTo(first.height + 4, 1);
+      expect(nextRow.top - first.top).toBeCloseTo((width + 4) / 4, 1);
+    }
+  });
+
   it('loads and renders an absolute range beyond the retained ten-page window', async () => {
     const manyItems = Array.from({ length: 720 }, (_, index) => image(`item-${index}.png`));
     mocks.listItems.mockReturnValue({ items: manyItems, total: manyItems.length });

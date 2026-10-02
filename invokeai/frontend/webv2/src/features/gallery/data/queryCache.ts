@@ -1072,18 +1072,22 @@ export const createGalleryWindowRuntime = ({
       }
 
       failedRange = null;
-      retryRequested = true;
+      retryRequested = !isPaginated;
       if (range) {
         latestRange = range;
         pendingRange = range;
       }
       const result = currentObserver.getCurrentResult();
-      if (result.data) {
+      if (result.data && !isPaginated) {
         runRangeLoader();
         return;
       }
 
-      void queryClient.resetQueries({ exact: true, queryKey: currentObserver.options.queryKey });
+      if (result.data) {
+        void currentObserver.refetch();
+      } else {
+        void queryClient.resetQueries({ exact: true, queryKey: currentObserver.options.queryKey });
+      }
     },
   };
 };
