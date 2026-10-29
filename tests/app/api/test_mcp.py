@@ -379,6 +379,105 @@ def test_mcp_mount_preserves_api_and_supports_base_url_with_host_origin_checks(
     assert all(thread_id != event_loop_thread_id for thread_id in auth_thread_ids)
 
 
+def test_mcp_list_shared_workflows_returns_only_shared_records_over_http(
+    monkeypatch: pytest.MonkeyPatch, mcp_users: Any, mock_invoker: Any
+) -> None:
+    import json
+
+    from invokeai.app import api_app
+    from invokeai.app.api_app import SubPathASGIMiddleware
+    from invokeai.app.services.shared.pagination import SQLiteDirection
+    from invokeai.app.services.workflow_records.workflow_records_common import (
+        WorkflowCategory,
+        WorkflowMeta,
+        WorkflowRecordOrderBy,
+        WorkflowWithoutID,
+    )
+
+    records = mock_invoker.services.workflow_records
+    records.start(mock_invoker)
+
+    def workflow(name: str) -> WorkflowWithoutID:
+        return WorkflowWithoutID(
+            name=name,
+            author="MCP test",
+            description=f"{name} description",
+            version="1.0.0",
+            contact="",
+            tags="",
+            notes="",
+            exposedFields=[],
+            meta=WorkflowMeta(version="3.0.0", category=WorkflowCategory.User),
+            nodes=[],
+            edges=[],
+        )
+
+    public = records.create(workflow("Public MCP workflow"), user_id=mcp_users.first.user_id, is_public=True)
+    private = records.create(workflow("Private MCP workflow"), user_id=mcp_users.second.user_id)
+    defaults = records.get_many(
+        order_by=WorkflowRecordOrderBy.Name,
+        direction=SQLiteDirection.Ascending,
+        categories=[WorkflowCategory.Default],
+    ).items
+
+    monkeypatch.setattr(
+        api_app,
+        "app_config",
+        InvokeAIAppConfig(host="127.0.0.1", port=9090, allow_origins=["https://studio.example:8443"]),
+    )
+    app = FastAPI()
+    server = api_app._mount_mcp_server(app, enabled=True)
+    assert server is not None
+    routed_app = SubPathASGIMiddleware(app, "/invoke")
+    token = mcp_users.token(mcp_users.first.user_id, mcp_users.first.email)
+    from mcp_types import CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY
+
+    tool_call = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "list_shared_workflows",
+            "arguments": {"per_page": 100},
+            "_meta": {
+                PROTOCOL_VERSION_META_KEY: "2026-07-28",
+                CLIENT_CAPABILITIES_META_KEY: {},
+                CLIENT_INFO_META_KEY: {"name": "test", "version": "1"},
+            },
+        },
+    }
+
+    async def request() -> httpx.Response:
+        transport = httpx.ASGITransport(app=routed_app)
+        async with (
+            server.session_manager.run(),
+            httpx.AsyncClient(transport=transport, base_url="http://localhost") as client,
+        ):
+            return await client.post(
+                "/invoke/api/mcp",
+                json=tool_call,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json, text/event-stream",
+                    "MCP-Protocol-Version": "2026-07-28",
+                    "MCP-Method": "tools/call",
+                    "MCP-Name": "list_shared_workflows",
+                    "Host": "studio.example:8443",
+                    "Origin": "https://studio.example:8443",
+                },
+            )
+
+    response = asyncio.run(asyncio.wait_for(request(), timeout=10))
+    assert response.status_code == 200, response.text
+    result = json.loads(response.json()["result"]["content"][0]["text"])
+    items = result["items"]
+    default_ids = {item.workflow_id for item in defaults}
+    assert {item["workflow_id"] for item in items} == default_ids | {public.workflow_id}
+    assert private.workflow_id not in {item["workflow_id"] for item in items}
+    assert {item["name"] for item in items} == {item.name for item in defaults} | {public.name}
+    assert private.name not in {item["name"] for item in items}
+
+
 @pytest.mark.parametrize("startup_failure", [False, True])
 def test_mcp_lifespan_cleans_up_server_socket_and_dependencies(
     monkeypatch: pytest.MonkeyPatch, startup_failure: bool
