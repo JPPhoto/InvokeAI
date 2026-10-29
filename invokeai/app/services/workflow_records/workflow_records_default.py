@@ -213,6 +213,7 @@ class WorkflowRecordsStorage(WorkflowRecordsStorageBase):
         has_been_opened: Optional[bool] = None,
         user_id: Optional[str] = None,
         is_public: Optional[bool] = None,
+        shared_only: bool = False,
     ) -> PaginatedResults[WorkflowRecordListItemDTO]:
         workflows, total = self._queries.workflows.page(
             order_by=order_by,
@@ -225,6 +226,7 @@ class WorkflowRecordsStorage(WorkflowRecordsStorageBase):
             query=query,
             user_id=user_id,
             is_public=is_public,
+            shared_only=shared_only,
         )
         pages = total // per_page + (total % per_page > 0) if per_page else 1  # Without pagination, one page.
         return PaginatedResults(

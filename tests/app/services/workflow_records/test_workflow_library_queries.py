@@ -12,6 +12,7 @@ from invokeai.app.services.shared.database.schema.workflows import workflow_libr
 from invokeai.app.services.shared.pagination import SQLiteDirection
 from invokeai.app.services.workflow_records import workflow_records_default
 from invokeai.app.services.workflow_records.workflow_records_common import (
+    WORKFLOW_LIBRARY_DEFAULT_USER_ID,
     Workflow,
     WorkflowCategory,
     WorkflowMeta,
@@ -140,6 +141,43 @@ def test_an_account_sees_its_own_and_the_bundled_workflows(workflow_records: Wor
     assert {item.category for item in listed} == {WorkflowCategory.User, WorkflowCategory.Default}
     assert _names(workflow_records, is_public=True) == ["Theirs"]
     assert _names(workflow_records, is_public=False) == ["Mine"]
+
+
+def test_shared_only_pages_include_public_and_default_but_exclude_private_system_workflows(
+    workflow_records: WorkflowRecordsStorage,
+) -> None:
+    public = workflow_records.create(_workflow("Public"), user_id=OTHER, is_public=True)
+    private = workflow_records.create(_workflow("Private"), user_id=OTHER)
+    private_system = workflow_records.create(_workflow("Private system"), user_id=WORKFLOW_LIBRARY_DEFAULT_USER_ID)
+    defaults = workflow_records.get_many(
+        order_by=WorkflowRecordOrderBy.Name,
+        direction=SQLiteDirection.Ascending,
+        categories=[WorkflowCategory.Default],
+    ).items
+    assert defaults
+
+    expected_total = len(defaults) + 1
+    expected_pages = (expected_total + 1) // 2
+    pages = [
+        workflow_records.get_many(
+            order_by=WorkflowRecordOrderBy.Name,
+            direction=SQLiteDirection.Ascending,
+            categories=None,
+            page=page,
+            per_page=2,
+            user_id=None,
+            shared_only=True,
+        )
+        for page in range(expected_pages)
+    ]
+    listed_ids = {item.workflow_id for result in pages for item in result.items}
+
+    assert public.workflow_id in listed_ids
+    assert {item.workflow_id for item in defaults} <= listed_ids
+    assert private.workflow_id not in listed_ids
+    assert private_system.workflow_id not in listed_ids
+    assert [len(result.items) for result in pages] == [2] * (expected_pages - 1) + [expected_total % 2 or 2]
+    assert [(result.total, result.pages) for result in pages] == [(expected_total, expected_pages)] * expected_pages
 
 
 def test_listings_tell_opened_workflows_apart(workflow_records: WorkflowRecordsStorage) -> None:

@@ -69,6 +69,7 @@ class WorkflowRecordsStorageBase(ABC):
         has_been_opened: Optional[bool],
         user_id: Optional[str] = None,
         is_public: Optional[bool] = None,
+        shared_only: bool = False,
     ) -> PaginatedResults[WorkflowRecordListItemDTO]:
         """Gets many workflows."""
         pass

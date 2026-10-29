@@ -62,6 +62,8 @@ class _Shape(NamedTuple):
     # Whether it covers only the account's own workflows and the bundled ones.
     scoped: bool
     is_public: Optional[bool]
+    # Whether it covers only public workflows and the bundled ones.
+    shared_only: bool
 
 
 # A client chooses how many tags it sends, and every number would be a statement of its own that SQLAlchemy keeps
@@ -89,6 +91,7 @@ def _where(
     query: Optional[str] = None,
     user_id: Optional[str] = None,
     is_public: Optional[bool] = None,
+    shared_only: bool = False,
 ) -> tuple[_Shape, dict[str, Any]]:
     """The conditions' shape, and their values: tags and the text looked for match as they are, ignoring case."""
     searched = query.strip() if query else ""
@@ -101,6 +104,7 @@ def _where(
         searching=bool(searched),
         scoped=user_id is not None,
         is_public=_flag(is_public),
+        shared_only=bool(shared_only),
     )
     parameters: dict[str, Any] = {
         f"tag_{i}": like_contains(tags[i].strip()) if i < len(tags) else None for i in range(slots)
@@ -182,6 +186,8 @@ def _conditions(shape: _Shape) -> list[ColumnElement[bool]]:
         )
     if shape.is_public is not None:
         conditions.append(_W.is_public == (true() if shape.is_public else false()))
+    if shape.shared_only:
+        conditions.append(or_(_W.category == literal(WorkflowCategory.Default.value), _W.is_public == true()))
     return conditions
 
 
@@ -308,9 +314,11 @@ class WorkflowQueries(QueryModule):
         query: Optional[str],
         user_id: Optional[str],
         is_public: Optional[bool],
+        shared_only: bool = False,
     ) -> tuple[Sequence[Row[Any]], int]:
         """The workflows the filters keep, in order, `limit` of them from `offset` (all of them with None), and how
-        many the filters keep in all. `user_id` keeps the account's own workflows and the bundled ones."""
+        many the filters keep in all. `user_id` keeps the account's own workflows and the bundled ones; `shared_only`
+        keeps public workflows and the bundled ones."""
         shape, parameters = _where(
             categories=categories,
             tags=tags,
@@ -318,6 +326,7 @@ class WorkflowQueries(QueryModule):
             query=query,
             user_id=user_id,
             is_public=is_public,
+            shared_only=shared_only,
         )
         if shape.tags <= _TAG_SLOTS:
             listing, count, options = _list(shape, order_by, direction, limit is not None), _count(shape), None
