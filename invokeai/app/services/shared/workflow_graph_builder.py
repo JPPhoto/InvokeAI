@@ -1,6 +1,6 @@
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from invokeai.app.invocations.baseinvocation import Classification, InvocationRegistry
 from invokeai.app.invocations.call_saved_workflow import (
@@ -364,10 +364,15 @@ def _resolve_for_connector_loop_linkage_path(
         current_connector_id = target_id
 
 
-def build_graph_from_workflow(workflow: Mapping[str, Any]) -> Graph:
+def build_graph_from_workflow(
+    workflow: Mapping[str, Any], *, workflow_mode: Literal["callable_child", "root"] = "callable_child"
+) -> Graph:
     workflow_nodes_raw = workflow.get("nodes", [])
     workflow_edges_raw = workflow.get("edges", [])
-    _validate_callable_workflow_nodes(workflow_nodes_raw if isinstance(workflow_nodes_raw, Sequence) else [])
+    if workflow_mode == "callable_child":
+        _validate_callable_workflow_nodes(workflow_nodes_raw if isinstance(workflow_nodes_raw, Sequence) else [])
+    elif workflow_mode != "root":
+        raise ValueError(f"Unsupported workflow mode: {workflow_mode}")
 
     workflow_nodes = {
         node["id"]: node for node in workflow_nodes_raw if _is_mapping(node) and isinstance(node.get("id"), str)

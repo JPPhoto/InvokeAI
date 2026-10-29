@@ -156,6 +156,21 @@ def test_build_graph_from_workflow_converts_invocation_nodes():
     assert graph.nodes["return-1"].get_type() == "workflow_return"
 
 
+def test_build_graph_from_workflow_root_mode_converts_without_workflow_return():
+    workflow = _build_workflow(
+        nodes=[_build_workflow_node("add-1", "add", {"a": 1, "b": 2})],
+        edges=[],
+    )
+
+    graph = build_graph_from_workflow(workflow, workflow_mode="root")
+
+    assert isinstance(graph, Graph)
+    assert set(graph.nodes.keys()) == {"add-1"}
+    assert graph.nodes["add-1"].get_type() == "add"
+    assert graph.nodes["add-1"].a == 1
+    assert graph.nodes["add-1"].b == 2
+
+
 def test_build_graph_from_workflow_preserves_loop_linkage_edges():
     workflow = _build_workflow(
         nodes=[
