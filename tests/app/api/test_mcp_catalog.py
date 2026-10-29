@@ -151,7 +151,7 @@ def test_catalog_tools_are_registered_and_list_only_shared_metadata(catalog_reco
     from invokeai.mcp.server import create_mcp_server
 
     tools = asyncio.run(create_mcp_server().list_tools())
-    assert {tool.name for tool in tools} == {"list_shared_workflows", "describe_workflow"}
+    assert {tool.name for tool in tools} == {"list_shared_workflows", "describe_workflow", "acknowledge_submission"}
 
     _, list_shared_workflows = _catalog_tools()
     result = list_shared_workflows(ctx=_ctx(), page=0, per_page=1000)
