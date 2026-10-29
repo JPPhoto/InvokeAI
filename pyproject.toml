@@ -84,6 +84,7 @@ dependencies = [
 
   # Core application dependencies, pinned for reproducible builds.
   "fastapi-events",
+  "mcp==2.3.0",
   # The old pin sat at 0.118.3 because 0.119.0 crashed generating our OpenAPI schema. That was a FastAPI bug, not
   # ours (`KeyError: '$ref'` in fastapi/_compat/v2.py, which assumed every field mapping carries a `$ref`), and it
   # is fixed as of 0.124.0 — no change to AnyInvocation was needed.

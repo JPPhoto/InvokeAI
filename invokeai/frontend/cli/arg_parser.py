@@ -13,6 +13,7 @@ _config_file_help = r"""Path to the invokeai.yaml configuration file. If omitted
 _parser = ArgumentParser(description="Invoke Studio", formatter_class=RawTextHelpFormatter)
 _parser.add_argument("--root", type=str, help=_root_help)
 _parser.add_argument("--config", dest="config_file", type=str, help=_config_file_help)
+_parser.add_argument("--enable-mcp-server", action="store_true", help="Enable the MCP server at /api/mcp.")
 _frontend_group = _parser.add_mutually_exclusive_group()
 _frontend_group.add_argument("--webv2", action="store_true", help="Serve the default frontend (compatibility alias).")
 _frontend_group.add_argument(

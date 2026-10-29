@@ -3,9 +3,9 @@ import inspect
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -67,41 +67,51 @@ logger = InvokeAILogger.get_logger(config=app_config)
 loop = asyncio.new_event_loop()
 
 
+def _mount_mcp_server(app: FastAPI, enabled: bool) -> Any | None:
+    if not enabled:
+        return None
+
+    from invokeai.mcp.server import create_mcp_server
+    from invokeai.mcp.transport import build_mcp_transport
+
+    server = create_mcp_server()
+    app.mount("/api", build_mcp_transport(server, app_config), name="mcp")
+    return server
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Add startup event to load dependencies
-    ApiDependencies.initialize(config=app_config, event_handler_id=event_handler_id, loop=loop, logger=logger)
-
-    # Log the server address when it starts - in case the network log level is not high enough to see the startup log
-    proto = "https" if app_config.ssl_certfile else "http"
-    msg = f"Invoke running on {proto}://{app_config.host}:{app_config.port} (Press CTRL+C to quit)"
-
-    # Logging this way ignores the logger's log level and _always_ logs the message
-    record = logger.makeRecord(
-        name=logger.name,
-        level=logging.INFO,
-        fn="",
-        lno=0,
-        msg=msg,
-        args=(),
-        exc_info=None,
-    )
-    logger.handle(record)
-
-    # Re-derive open sockets' authorization from the database on a timer. This is what
-    # catches user changes made by another process — the `invoke-usermod` / `invoke-userdel`
-    # CLIs — which cannot raise an in-process event. `socket_io` is created further down
-    # this module and is bound by the time the app is served.
-    socket_io.start()
-
+    initialized = False
     try:
-        yield
+        ApiDependencies.initialize(config=app_config, event_handler_id=event_handler_id, loop=loop, logger=logger)
+        initialized = True
+
+        # Log the address even when the network log level is higher than info.
+        proto = "https" if app_config.ssl_certfile else "http"
+        msg = f"Invoke running on {proto}://{app_config.host}:{app_config.port} (Press CTRL+C to quit)"
+        record = logger.makeRecord(
+            name=logger.name,
+            level=logging.INFO,
+            fn="",
+            lno=0,
+            msg=msg,
+            args=(),
+            exc_info=None,
+        )
+        logger.handle(record)
+
+        mcp_server = getattr(app.state, "mcp_server", None)
+        mcp_lifespan = mcp_server.session_manager.run() if mcp_server is not None else nullcontext()
+        async with mcp_lifespan:
+            # Revalidate sockets against user changes made by another process.
+            socket_io.start()
+            yield
     finally:
-        # In a `finally` so an exception propagating into the generator cannot leave the
-        # sweep running against a half-torn-down process, or skip the thread shutdown.
-        socket_io.stop()
-        # Shut down threads
-        ApiDependencies.shutdown()
+        try:
+            socket_io.stop()
+        finally:
+            if initialized:
+                ApiDependencies.shutdown()
 
 
 # Create the app
@@ -810,6 +820,10 @@ app.include_router(projects.projects_router, prefix="/api")
 app.include_router(recall_parameters.recall_parameters_router, prefix="/api")
 app.include_router(video_recall.video_recall_router, prefix="/api")
 app.include_router(custom_nodes.custom_nodes_router, prefix="/api")
+
+mcp_server = _mount_mcp_server(app, getattr(InvokeAIArgs.args, "enable_mcp_server", False))
+if mcp_server is not None:
+    app.state.mcp_server = mcp_server
 
 app.openapi = get_openapi_func(app)
 
