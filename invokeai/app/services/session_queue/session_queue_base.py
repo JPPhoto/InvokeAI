@@ -55,7 +55,14 @@ class SessionQueueBase(ABC):
 
     @abstractmethod
     def enqueue_batch(
-        self, queue_id: str, batch: Batch, prepend: bool, user_id: str = "system", *, all_or_none: bool = False
+        self,
+        queue_id: str,
+        batch: Batch,
+        prepend: bool,
+        user_id: str = "system",
+        *,
+        all_or_none: bool = False,
+        request_fingerprint: Optional[str] = None,
     ) -> Coroutine[Any, Any, EnqueueBatchResult]:
         """Enqueues all permutations of a batch for execution for a specific user. A queue without room for all of
         them takes as many as fit, or with `all_or_none` none of them. A repeat with the batch's idempotency key
@@ -69,9 +76,14 @@ class SessionQueueBase(ABC):
 
     @abstractmethod
     def get_enqueue_receipt(
-        self, queue_id: str, idempotency_key: str, user_id: str = "system"
+        self,
+        queue_id: str,
+        idempotency_key: str,
+        user_id: str = "system",
+        *,
+        request_fingerprint: Optional[str] = None,
     ) -> Optional[EnqueueBatchReceipt]:
-        """Get an idempotent enqueue result owned by the user, if it exists."""
+        """Get an idempotent enqueue result owned by the user, if it exists; a supplied fingerprint must match."""
         pass
 
     @abstractmethod

@@ -103,6 +103,7 @@ session_queue_enqueue_receipts = table(
     Column("byte_size", BigInt(), nullable=False),
     inserted_at(),
     Column("acknowledged_at", Timestamp()),
+    Column("request_fingerprint", LongText()),
 )
 
 Index(

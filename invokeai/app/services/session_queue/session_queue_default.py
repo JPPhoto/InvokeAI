@@ -121,10 +121,19 @@ def _payload_hash(batch: Batch, prepend: bool) -> str:
 
 
 def _settled_result(
-    queue_id: str, batch: Batch, payload_hash: Optional[str], receipt: SettledReceipt
+    queue_id: str,
+    batch: Batch,
+    payload_hash: Optional[str],
+    receipt: SettledReceipt,
+    request_fingerprint: Optional[str] = None,
 ) -> EnqueueBatchResult:
     """The result a repeat of `batch`'s enqueue answers with: its key's settled receipt."""
-    if receipt.payload_hash != payload_hash:
+    matches = (
+        receipt.request_fingerprint == request_fingerprint
+        if request_fingerprint is not None
+        else receipt.payload_hash == payload_hash
+    )
+    if not matches:
         raise EnqueueIdempotencyConflictError(
             f"Idempotency key {batch.idempotency_key} is already used by another submission"
         )
@@ -176,20 +185,42 @@ class SessionQueue(SessionQueueBase):
         return self._queries.session_queue.prune(queue_id, user_id=None, keep=keep)
 
     async def enqueue_batch(
-        self, queue_id: str, batch: Batch, prepend: bool, user_id: str = "system", *, all_or_none: bool = False
+        self,
+        queue_id: str,
+        batch: Batch,
+        prepend: bool,
+        user_id: str = "system",
+        *,
+        all_or_none: bool = False,
+        request_fingerprint: Optional[str] = None,
     ) -> EnqueueBatchResult:
         # The route awaits this method, but every operation below is synchronous database/CPU work. Keep the
         # complete enqueue in one worker operation, off the event loop.
-        return await asyncio.to_thread(self._enqueue_batch, queue_id, batch, prepend, user_id, all_or_none)
+        if request_fingerprint is not None and batch.idempotency_key is None:
+            raise ValueError("A request fingerprint requires an idempotency key")
+        return await asyncio.to_thread(
+            self._enqueue_batch, queue_id, batch, prepend, user_id, all_or_none, request_fingerprint
+        )
 
     def acknowledge_enqueue(self, queue_id: str, idempotency_key: str, user_id: str = "system") -> None:
         self._queries.session_queue.acknowledge_receipt(queue_id, user_id, idempotency_key)
 
     def get_enqueue_receipt(
-        self, queue_id: str, idempotency_key: str, user_id: str = "system"
+        self,
+        queue_id: str,
+        idempotency_key: str,
+        user_id: str = "system",
+        *,
+        request_fingerprint: Optional[str] = None,
     ) -> EnqueueBatchReceipt | None:
-        receipt = self._queries.session_queue.enqueue_receipt(queue_id, user_id, idempotency_key)
-        return _decode_enqueue_receipt(*receipt) if receipt is not None else None
+        receipt = self._queries.session_queue.enqueue_receipt_with_fingerprint(queue_id, user_id, idempotency_key)
+        if receipt is None:
+            return None
+        if request_fingerprint is not None and receipt.request_fingerprint != request_fingerprint:
+            raise EnqueueIdempotencyConflictError(
+                f"Idempotency key {idempotency_key} is already used by another submission"
+            )
+        return _decode_enqueue_receipt(receipt.batch_id, receipt.requested, receipt.enqueued, receipt.item_ids)
 
     def replay_enqueue(
         self, queue_id: str, batch: Batch, prepend: bool, user_id: str = "system"
@@ -201,14 +232,20 @@ class SessionQueue(SessionQueueBase):
         return _settled_result(queue_id, batch, _payload_hash(batch, prepend), receipt) if receipt is not None else None
 
     def _enqueue_batch(
-        self, queue_id: str, batch: Batch, prepend: bool, user_id: str, all_or_none: bool = False
+        self,
+        queue_id: str,
+        batch: Batch,
+        prepend: bool,
+        user_id: str,
+        all_or_none: bool = False,
+        request_fingerprint: Optional[str] = None,
     ) -> EnqueueBatchResult:
         requested_count = calc_session_count(batch=batch)
         payload_hash = _payload_hash(batch, prepend) if batch.idempotency_key is not None else None
         key = batch.idempotency_key
 
         def settle(receipt: SettledReceipt) -> EnqueueBatchResult:
-            return _settled_result(queue_id, batch, payload_hash, receipt)
+            return _settled_result(queue_id, batch, payload_hash, receipt, request_fingerprint)
 
         def require_project(q: Queries) -> None:
             if batch.project_id is not None and q.projects.summary(user_id, batch.project_id) is None:
@@ -216,7 +253,10 @@ class SessionQueue(SessionQueueBase):
 
         def survey(q: Queries) -> SettledReceipt | int:
             """A settled receipt, or the pending items' count to size the values to prepare."""
-            if key is not None and (receipt := q.session_queue.settled_receipt(queue_id, user_id, key)) is not None:
+            if (
+                key is not None
+                and (receipt := q.session_queue.settled_receipt_with_fingerprint(queue_id, user_id, key)) is not None
+            ):
                 return receipt
             require_project(q)
             return q.session_queue.pending_count(queue_id)
@@ -240,7 +280,7 @@ class SessionQueue(SessionQueueBase):
             q.locks.acquire(*_ADMISSION, also_shared=_PROTECTING_MEDIA)
             if key is not None:
                 q.session_queue.delete_acknowledged_receipts(user_id, ACKNOWLEDGED_ENQUEUE_RECEIPT_RETENTION)
-                if (receipt := q.session_queue.settled_receipt(queue_id, user_id, key)) is not None:
+                if (receipt := q.session_queue.settled_receipt_with_fingerprint(queue_id, user_id, key)) is not None:
                     return receipt
             require_project(q)
 
@@ -275,19 +315,22 @@ class SessionQueue(SessionQueueBase):
             q.session_queue.insert_items(values_to_insert)
             item_ids = q.session_queue.batch_item_ids(queue_id, user_id, accepted_batch.batch_id)
             if usage is not None:
+                receipt_contents = [
+                    queue_id,
+                    user_id,
+                    key,
+                    payload_hash,
+                    accepted_batch.batch_id,
+                    requested_count,
+                    enqueued_count,
+                    priority,
+                    item_ids,
+                ]
+                if request_fingerprint is not None:
+                    receipt_contents.append(request_fingerprint)
                 receipt_byte_size = len(
                     json.dumps(
-                        [
-                            queue_id,
-                            user_id,
-                            key,
-                            payload_hash,
-                            accepted_batch.batch_id,
-                            requested_count,
-                            enqueued_count,
-                            priority,
-                            item_ids,
-                        ],
+                        receipt_contents,
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ).encode("utf-8")
@@ -302,6 +345,7 @@ class SessionQueue(SessionQueueBase):
                         "user_id": user_id,
                         "idempotency_key": key,
                         "payload_hash": payload_hash,
+                        "request_fingerprint": request_fingerprint,
                         "batch_id": accepted_batch.batch_id,
                         "requested": requested_count,
                         "enqueued": enqueued_count,

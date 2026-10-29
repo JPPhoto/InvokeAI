@@ -34,7 +34,7 @@ def session_queue(mock_invoker: Invoker, mock_sqlite_database: Database) -> Sess
 def _batch(
     *,
     batch_id: str | None = None,
-    idempotency_key: str = "webv2:item-1",
+    idempotency_key: str | None = "webv2:item-1",
     origin: str = "webv2:project-1:item-1",
     prompt: str = "test",
     project_id: str | None = None,
@@ -174,6 +174,125 @@ def test_enqueue_batch_rejects_identity_reuse_for_changed_payload(session_queue:
 
     with pytest.raises(EnqueueIdempotencyConflictError):
         asyncio.run(session_queue.enqueue_batch("default", _batch(), True, "user-1"))
+
+
+def test_request_fingerprint_replays_the_winning_result_across_compiled_payloads(session_queue: SessionQueue) -> None:
+    first = asyncio.run(
+        session_queue.enqueue_batch(
+            "default", _batch(batch_id="winner"), False, "user-1", request_fingerprint="request-fingerprint"
+        )
+    )
+
+    replay = asyncio.run(
+        session_queue.enqueue_batch(
+            "default",
+            _batch(batch_id="loser", prompt="compiled differently"),
+            False,
+            "user-1",
+            request_fingerprint="request-fingerprint",
+        )
+    )
+
+    assert (replay.item_ids, replay.batch.batch_id, replay.enqueued) == (
+        first.item_ids,
+        first.batch.batch_id,
+        first.enqueued,
+    )
+    assert len(session_queue.list_all_queue_items("default")) == 2
+
+
+def test_request_fingerprint_is_scoped_by_queue_and_user(session_queue: SessionQueue) -> None:
+    batch = _batch(idempotency_key="shared-key")
+    first = asyncio.run(
+        session_queue.enqueue_batch("queue-1", batch, False, "user-1", request_fingerprint="fingerprint-1")
+    )
+
+    assert (
+        session_queue.get_enqueue_receipt("queue-1", "shared-key", "user-1", request_fingerprint="fingerprint-1")
+        is not None
+    )
+    assert (
+        session_queue.get_enqueue_receipt("queue-2", "shared-key", "user-1", request_fingerprint="fingerprint-1")
+        is None
+    )
+    assert (
+        session_queue.get_enqueue_receipt("queue-1", "shared-key", "user-2", request_fingerprint="fingerprint-1")
+        is None
+    )
+
+    other_queue = asyncio.run(
+        session_queue.enqueue_batch("queue-2", batch, False, "user-1", request_fingerprint="fingerprint-2")
+    )
+    other_user = asyncio.run(
+        session_queue.enqueue_batch("queue-1", batch, False, "user-2", request_fingerprint="fingerprint-2")
+    )
+    assert set(first.item_ids).isdisjoint(other_queue.item_ids)
+    assert set(first.item_ids).isdisjoint(other_user.item_ids)
+
+
+def test_request_fingerprint_mismatch_conflicts_in_lookup_and_admission(session_queue: SessionQueue) -> None:
+    batch = _batch()
+    asyncio.run(session_queue.enqueue_batch("default", batch, False, "user-1", request_fingerprint="original"))
+
+    with pytest.raises(EnqueueIdempotencyConflictError):
+        session_queue.get_enqueue_receipt(
+            "default", batch.idempotency_key or "", "user-1", request_fingerprint="different"
+        )
+    with pytest.raises(EnqueueIdempotencyConflictError):
+        asyncio.run(session_queue.enqueue_batch("default", batch, False, "user-1", request_fingerprint="different"))
+
+
+def test_request_fingerprint_lookup_conflicts_with_a_legacy_receipt(session_queue: SessionQueue) -> None:
+    batch = _batch()
+    asyncio.run(session_queue.enqueue_batch("default", batch, False, "user-1"))
+
+    with pytest.raises(EnqueueIdempotencyConflictError):
+        session_queue.get_enqueue_receipt(
+            "default", batch.idempotency_key or "", "user-1", request_fingerprint="mcp-request"
+        )
+
+
+def test_concurrent_request_fingerprints_share_the_winner_result(
+    session_queue: SessionQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepared = threading.Barrier(2)
+    original = session_queue_default.prepare_values_to_insert
+
+    def interleave_prepare(*args: Any, **kwargs: Any):
+        values = original(*args, **kwargs)
+        prepared.wait(timeout=5)
+        return values
+
+    monkeypatch.setattr(session_queue_default, "prepare_values_to_insert", interleave_prepare)
+
+    async def enqueue_variants():
+        return await asyncio.gather(
+            session_queue.enqueue_batch(
+                "default", _batch(batch_id="first", prompt="first"), False, "user-1", request_fingerprint="same"
+            ),
+            session_queue.enqueue_batch(
+                "default", _batch(batch_id="second", prompt="second"), False, "user-1", request_fingerprint="same"
+            ),
+        )
+
+    first, second = asyncio.run(enqueue_variants())
+    receipt = session_queue.get_enqueue_receipt("default", "webv2:item-1", "user-1", request_fingerprint="same")
+    items = session_queue.list_all_queue_items("default")
+
+    assert receipt is not None
+    assert (first.item_ids, first.batch.batch_id) == (second.item_ids, second.batch.batch_id)
+    assert (receipt.item_ids, receipt.batch_id) == (first.item_ids, first.batch.batch_id)
+    assert len(items) == 2
+    assert {item.batch_id for item in items} == {receipt.batch_id}
+
+
+def test_request_fingerprint_requires_an_idempotency_key(session_queue: SessionQueue) -> None:
+    with pytest.raises(ValueError, match="idempotency key"):
+        asyncio.run(
+            session_queue.enqueue_batch(
+                "default", _batch(idempotency_key=None), False, "user-1", request_fingerprint="fp"
+            )
+        )
 
 
 def test_enqueue_receipt_survives_queue_item_deletion(session_queue: SessionQueue) -> None:
@@ -453,6 +572,67 @@ def test_partial_acceptance_is_settled_idempotently_after_capacity_changes(
     assert first.enqueued == retry.enqueued == 1
     assert retry.item_ids == first.item_ids
     assert session_queue.list_all_queue_items("default") == []
+
+
+def test_fingerprinted_partial_acceptance_replays_exact_ids_after_capacity_changes(
+    session_queue: SessionQueue, mock_invoker: Invoker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mock_invoker.services.configuration, "max_queue_size", 1)
+    first = asyncio.run(
+        session_queue.enqueue_batch("default", _batch(runs=2), False, "user-1", request_fingerprint="stable-request")
+    )
+    session_queue.delete_queue_items_by_id(first.item_ids)
+    monkeypatch.setattr(mock_invoker.services.configuration, "max_queue_size", 10)
+
+    retry = asyncio.run(
+        session_queue.enqueue_batch(
+            "default",
+            _batch(runs=3, prompt="workflow compiled differently"),
+            False,
+            "user-1",
+            request_fingerprint="stable-request",
+        )
+    )
+
+    assert first.enqueued == 1
+    assert (retry.enqueued, retry.item_ids, retry.batch.batch_id) == (
+        first.enqueued,
+        first.item_ids,
+        first.batch.batch_id,
+    )
+    assert session_queue.list_all_queue_items("default") == []
+
+
+def test_zero_item_fingerprinted_admission_leaves_key_unsettled_for_retry(
+    session_queue: SessionQueue, mock_invoker: Invoker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mock_invoker.services.configuration, "max_queue_size", 0)
+    batch = _batch(runs=2)
+
+    rejected = asyncio.run(
+        session_queue.enqueue_batch("default", batch, False, "user-1", request_fingerprint="stable-request")
+    )
+
+    assert rejected.enqueued == 0
+    assert (
+        session_queue.get_enqueue_receipt(
+            "default", batch.idempotency_key or "", "user-1", request_fingerprint="stable-request"
+        )
+        is None
+    )
+
+    monkeypatch.setattr(mock_invoker.services.configuration, "max_queue_size", 1)
+    accepted = asyncio.run(
+        session_queue.enqueue_batch("default", batch, False, "user-1", request_fingerprint="stable-request")
+    )
+
+    assert accepted.enqueued == 1
+    assert (
+        session_queue.get_enqueue_receipt(
+            "default", batch.idempotency_key or "", "user-1", request_fingerprint="stable-request"
+        )
+        is not None
+    )
 
 
 def test_full_queue_does_not_prepare_session_payloads(

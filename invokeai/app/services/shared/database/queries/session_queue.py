@@ -86,6 +86,11 @@ _RECEIPT = select(_R.batch_id, _R.requested, _R.enqueued, _R.item_ids).where(
     _R.user_id == bindparam("user_id"),
     _R.idempotency_key == bindparam("idempotency_key"),
 )
+_RECEIPT_WITH_FINGERPRINT = select(_R.batch_id, _R.requested, _R.enqueued, _R.item_ids, _R.request_fingerprint).where(
+    _R.queue_id == bindparam("queue_id"),
+    _R.user_id == bindparam("user_id"),
+    _R.idempotency_key == bindparam("idempotency_key"),
+)
 _ITEM_BY_ID = select(*_ITEM).select_from(_ITEMS).where(_Q.item_id == bindparam("item_id"))
 _WORKFLOW = select(_Q.workflow).where(_Q.item_id == bindparam("item_id"))
 _PARENT = select(_Q.parent_item_id).where(_Q.item_id == bindparam("item_id"))
@@ -309,6 +314,15 @@ class EnqueueReceipt(NamedTuple):
     item_ids: str
 
 
+class EnqueueReceiptWithFingerprint(NamedTuple):
+    batch_id: str
+    requested: int
+    enqueued: int
+    # The enqueued items' ids, as a JSON array.
+    item_ids: str
+    request_fingerprint: Optional[str]
+
+
 class CurrentItem(NamedTuple):
     item_id: int
     session_id: str
@@ -506,6 +520,15 @@ _THE_RECEIPT = and_(
 _SETTLED_RECEIPT = select(_R.payload_hash, _R.batch_id, _R.requested, _R.enqueued, _R.priority, _R.item_ids).where(
     _THE_RECEIPT
 )
+_SETTLED_RECEIPT_WITH_FINGERPRINT = select(
+    _R.payload_hash,
+    _R.batch_id,
+    _R.requested,
+    _R.enqueued,
+    _R.priority,
+    _R.item_ids,
+    _R.request_fingerprint,
+).where(_THE_RECEIPT)
 _ACKNOWLEDGE = (
     update(session_queue_enqueue_receipts)
     .where(
@@ -729,6 +752,7 @@ class SettledReceipt(NamedTuple):
     priority: int
     # The enqueued items' ids, as a JSON array.
     item_ids: str
+    request_fingerprint: Optional[str] = None
 
 
 class ReceiptUsage(NamedTuple):
@@ -763,6 +787,14 @@ class SessionQueueQueries(QueryModule):
         parameters = {"queue_id": queue_id, "user_id": user_id, "idempotency_key": idempotency_key}
         row = conn.execute(_RECEIPT, parameters).first()
         return EnqueueReceipt(row[0], row[1], row[2], row[3]) if row is not None else None
+
+    @read
+    def enqueue_receipt_with_fingerprint(
+        self, conn: Connection, queue_id: str, user_id: str, idempotency_key: str
+    ) -> Optional[EnqueueReceiptWithFingerprint]:
+        parameters = {"queue_id": queue_id, "user_id": user_id, "idempotency_key": idempotency_key}
+        row = conn.execute(_RECEIPT_WITH_FINGERPRINT, parameters).first()
+        return EnqueueReceiptWithFingerprint(row[0], row[1], row[2], row[3], row[4]) if row is not None else None
 
     @mapped(_item_or_none)
     @read
@@ -1168,6 +1200,14 @@ class SessionQueueQueries(QueryModule):
         parameters = {"queue_id": queue_id, "user_id": user_id, "idempotency_key": idempotency_key}
         row = conn.execute(_SETTLED_RECEIPT, parameters).first()
         return SettledReceipt(row[0], row[1], row[2], row[3], row[4], row[5]) if row is not None else None
+
+    @read
+    def settled_receipt_with_fingerprint(
+        self, conn: Connection, queue_id: str, user_id: str, idempotency_key: str
+    ) -> Optional[SettledReceipt]:
+        parameters = {"queue_id": queue_id, "user_id": user_id, "idempotency_key": idempotency_key}
+        row = conn.execute(_SETTLED_RECEIPT_WITH_FINGERPRINT, parameters).first()
+        return SettledReceipt(row[0], row[1], row[2], row[3], row[4], row[5], row[6]) if row is not None else None
 
     @write
     def delete_acknowledged_receipts(self, conn: Connection, user_id: str, older_than: timedelta) -> None:
