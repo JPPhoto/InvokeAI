@@ -35,6 +35,7 @@ class _CatalogInvocation(BaseModel):
         json_schema_extra=_input_extra(),
     )
     zero: int = Field(default=3, ge=0, description="Schema zero description", json_schema_extra=_input_extra())
+    seed: int = Field(default=0, ge=0, le=4294967295, json_schema_extra=_input_extra())
     enabled: bool = Field(default=True, description="Schema enabled description", json_schema_extra=_input_extra())
     nullable: str | None = InputField(default="schema nullable", input=Input.Any)
     required_any: int | None = InputField(input=Input.Any)
@@ -137,6 +138,23 @@ def _register_catalog_invocation(monkeypatch: pytest.MonkeyPatch, additional: di
     )
 
 
+@pytest.mark.parametrize(
+    ("schema", "value", "expected"),
+    [
+        ({"type": "integer", "multipleOf": 2}, 4_294_967_295, False),
+        ({"type": "integer", "multipleOf": 2}, 4_294_967_294, True),
+        ({"type": "number", "multipleOf": 0.1}, 0.3, True),
+        ({"type": "number", "multipleOf": 0.1}, 0.31, False),
+    ],
+)
+def test_schema_multiple_of_uses_exact_json_number_arithmetic(
+    schema: dict[str, Any], value: int | float, expected: bool
+) -> None:
+    from invokeai.mcp.catalog import _schema_value_matches
+
+    assert _schema_value_matches(schema, value, {}) is expected
+
+
 def test_catalog_tools_are_registered_and_list_only_shared_metadata(catalog_records: Any) -> None:
     public = catalog_records.create(
         _workflow("Zebra public", notes="stored-private-note"), user_id="public-owner", is_public=True
@@ -151,7 +169,12 @@ def test_catalog_tools_are_registered_and_list_only_shared_metadata(catalog_reco
     from invokeai.mcp.server import create_mcp_server
 
     tools = asyncio.run(create_mcp_server().list_tools())
-    assert {tool.name for tool in tools} == {"list_shared_workflows", "describe_workflow", "acknowledge_submission"}
+    assert {tool.name for tool in tools} == {
+        "list_shared_workflows",
+        "describe_workflow",
+        "submit_workflow",
+        "acknowledge_submission",
+    }
 
     _, list_shared_workflows = _catalog_tools()
     result = list_shared_workflows(ctx=_ctx(), page=0, per_page=1000)
@@ -205,6 +228,35 @@ def test_describe_hides_private_workflows_from_owner_and_admin(catalog_records: 
     }
     assert default_result["status"] == "ok"
     assert default_result["workflow_id"] == default.workflow_id
+
+
+def test_describe_defaults_missing_seed_mode_to_fixed(catalog_records: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _register_catalog_invocation(monkeypatch)
+    workflow = catalog_records.create(
+        _workflow(
+            "Seed mode",
+            nodes=[_node("node", {"seed": {"value": 42}})],
+            form=_form(["seed"]),
+        ),
+        user_id="owner",
+        is_public=True,
+    )
+    random_workflow = catalog_records.create(
+        _workflow(
+            "Random seed mode",
+            nodes=[_node("node", {"seed": {"value": 42, "seedMode": "random"}})],
+            form=_form(["seed"]),
+        ),
+        user_id="owner",
+        is_public=True,
+    )
+
+    describe_workflow, _ = _catalog_tools()
+    result = describe_workflow(ctx=_ctx("owner"), workflow_id=workflow.workflow_id)
+    random_result = describe_workflow(ctx=_ctx("owner"), workflow_id=random_workflow.workflow_id)
+
+    assert result["parameters"][0]["seed_mode"] == "fixed"
+    assert random_result["parameters"][0]["seed_mode"] == "random"
 
 
 def test_describe_uses_cycle_safe_form_order_and_registered_safe_inputs(

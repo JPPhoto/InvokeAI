@@ -3,6 +3,7 @@
 import math
 import re
 from collections.abc import Mapping, Sequence
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, get_args, get_origin
 
@@ -23,6 +24,7 @@ _MAX_PAGE = 1_000
 _MAX_PER_PAGE = 100
 _JSON_SCALAR_TYPES = frozenset({"boolean", "integer", "number", "string"})
 _RESOURCE_FORMATS = frozenset({"binary", "directory-path", "file-path", "path", "uri", "uri-reference", "url"})
+_SEED_MODES = frozenset({"fixed", "random", "increment", "decrement"})
 _INPUT_SCHEMA_KEYS = frozenset(
     {
         "anyOf",
@@ -369,8 +371,10 @@ def _schema_value_matches(
             return False
         multiple_of = schema.get("multipleOf")
         if isinstance(multiple_of, (int, float)) and multiple_of > 0:
-            quotient = value / multiple_of
-            if not math.isclose(quotient, round(quotient), rel_tol=1e-9, abs_tol=1e-9):
+            try:
+                if Fraction(str(value)) % Fraction(str(multiple_of)) != 0:
+                    return False
+            except (ValueError, ZeroDivisionError):
                 return False
 
     if isinstance(value, str):
@@ -589,13 +593,17 @@ def _field_parameter(
     if saved_value_is_valid:
         required = False
 
-    return {
+    parameter = {
         "name": f"{node_id}::{field_name}",
         "node_id": node_id,
         "field_name": field_name,
         "required": required,
         "input_schema": input_schema,
     }
+    if field_name == "seed" and input_schema.get("type") == "integer":
+        seed_mode = instance.get("seedMode") if isinstance(instance, Mapping) else None
+        parameter["seed_mode"] = seed_mode if isinstance(seed_mode, str) and seed_mode in _SEED_MODES else "fixed"
+    return parameter
 
 
 def _workflow_parameters(workflow: Any) -> list[dict[str, Any]]:
@@ -623,6 +631,17 @@ def _workflow_parameters(workflow: Any) -> list[dict[str, Any]]:
     if form_references:
         return extract(form_references)
     return extract(_legacy_field_references(workflow.exposedFields))
+
+
+def _workflow_seed_parameters(workflow: Any) -> list[dict[str, Any]]:
+    nodes = _node_maps(workflow.nodes)
+    connected = _connected_inputs(workflow.edges)
+    invocation_cache: dict[str, tuple[Any, Mapping[str, Any], Mapping[str, Any]] | None] = {}
+    return [
+        parameter
+        for node_id, node_data in nodes.items()
+        if (parameter := _field_parameter(node_id, "seed", node_data, invocation_cache, connected, None)) is not None
+    ]
 
 
 def describe_workflow(ctx: Context[Any, Request], workflow_id: str) -> dict[str, Any]:
