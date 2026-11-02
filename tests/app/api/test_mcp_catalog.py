@@ -174,6 +174,8 @@ def test_catalog_tools_are_registered_and_list_only_shared_metadata(catalog_reco
         "describe_workflow",
         "submit_workflow",
         "acknowledge_submission",
+        "get_job_status",
+        "get_job_results",
     }
 
     _, list_shared_workflows = _catalog_tools()

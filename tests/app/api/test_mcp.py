@@ -379,6 +379,73 @@ def test_mcp_mount_preserves_api_and_supports_base_url_with_host_origin_checks(
     assert all(thread_id != event_loop_thread_id for thread_id in auth_thread_ids)
 
 
+def test_mcp_image_url_uses_scope_root_for_nested_and_root_deployments(
+    monkeypatch: pytest.MonkeyPatch, mcp_users: Any
+) -> None:
+    from mcp.server.mcpserver import Context
+    from mcp_types import CLIENT_CAPABILITIES_META_KEY, CLIENT_INFO_META_KEY, PROTOCOL_VERSION_META_KEY
+
+    from invokeai.app import api_app
+    from invokeai.app.api_app import SubPathASGIMiddleware
+    from invokeai.mcp.jobs import _request_path
+
+    monkeypatch.setattr(
+        api_app,
+        "app_config",
+        InvokeAIAppConfig(host="127.0.0.1", port=9090, allow_origins=["http://localhost:9090"]),
+    )
+    app = FastAPI()
+    server = api_app._mount_mcp_server(app, enabled=True)
+    assert server is not None
+
+    async def image_url(ctx: Context) -> str:
+        scope = ctx.request_context.request.scope
+        return _request_path("api/v1/images/i/mounted-output/full", scope)
+
+    server.add_tool(image_url, name="image_url")
+    routed_app = SubPathASGIMiddleware(app, "/invoke")
+    token = mcp_users.token(mcp_users.first.user_id, mcp_users.first.email)
+    tool_call = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "image_url",
+            "arguments": {},
+            "_meta": {
+                PROTOCOL_VERSION_META_KEY: "2026-07-28",
+                CLIENT_CAPABILITIES_META_KEY: {},
+                CLIENT_INFO_META_KEY: {"name": "test", "version": "1"},
+            },
+        },
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2026-07-28",
+        "MCP-Method": "tools/call",
+        "MCP-Name": "image_url",
+        "Host": "localhost:9090",
+        "Origin": "http://localhost:9090",
+    }
+
+    async def requests() -> tuple[httpx.Response, httpx.Response]:
+        async with server.session_manager.run():
+            routed_transport = httpx.ASGITransport(app=routed_app)
+            async with httpx.AsyncClient(transport=routed_transport, base_url="http://localhost") as client:
+                proxied = await client.post("/invoke/api/mcp", json=tool_call, headers=headers)
+            root_transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=root_transport, base_url="http://localhost") as client:
+                root = await client.post("/api/mcp", json=tool_call, headers=headers)
+        return proxied, root
+
+    proxied, root = asyncio.run(asyncio.wait_for(requests(), timeout=10))
+    assert proxied.status_code == 200, proxied.text
+    assert root.status_code == 200, root.text
+    assert proxied.json()["result"]["content"][0]["text"] == "/invoke/api/v1/images/i/mounted-output/full"
+    assert root.json()["result"]["content"][0]["text"] == "/api/v1/images/i/mounted-output/full"
+
+
 def test_mcp_list_shared_workflows_returns_only_shared_records_over_http(
     monkeypatch: pytest.MonkeyPatch, mcp_users: Any, mock_invoker: Any
 ) -> None:
