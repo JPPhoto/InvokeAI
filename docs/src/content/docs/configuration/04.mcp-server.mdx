@@ -1,0 +1,43 @@
+---
+title: MCP Server
+sidebar:
+  order: 4
+---
+
+InvokeAI can expose a Model Context Protocol (MCP) server for listing shared workflows, submitting one workflow run, and checking that run's status and image results. The server is opt-in and uses the existing InvokeAI API listener.
+
+## Enable the server
+
+For a manual or headless server, start InvokeAI with the MCP server enabled:
+
+```bash
+invokeai-web --enable-mcp-server
+```
+
+The Streamable HTTP endpoint is `/api/mcp`. It uses the API listener's existing host and port; it does not open another port. If InvokeAI is served under `base_url: /invoke`, the endpoint is `/invoke/api/mcp`. Restart InvokeAI after enabling the flag.
+
+## Authentication
+
+In multi-user mode, each request must include an InvokeAI bearer token for the user making the request. MCP does not provide an OAuth sign-in flow or renew tokens. Obtain tokens through InvokeAI's regular authentication API; after a token expires, requests must use a valid token again. How a particular MCP client stores or renews tokens has not been verified here.
+
+In single-user mode, InvokeAI supplies its system identity and does not require a token. Any client that can reach the MCP endpoint receives that identity, so protect network access with the same care as the API, including TLS and reverse-proxy access controls.
+
+MCP tools use the caller's InvokeAI permissions. The workflow catalog includes Default-category workflows and public workflows. System ownership alone does not expose a private workflow.
+
+## Browse and submit workflows
+
+`list_shared_workflows` lists workflows available to the caller. `describe_workflow` reports the current revision and supported exposed inputs, including each input's schema, requiredness, and default. A saved value is advertised as the default when it is valid for that schema; otherwise the schema default is used. Seed inputs also report their saved seed mode, with a missing mode treated as `fixed`.
+
+Submit a described workflow with its revision and exposed parameter values. Submission rejects a stale revision, unknown parameters, and values that do not match the input schemas. It queues one run. Queue batch-expansion nodes and generator nodes are unsupported, including disconnected ones; ordinary collection nodes such as `range` remain allowed. Seed modes `fixed` and `random` are supported. Increment and decrement seed modes are rejected. A random seed is drawn once when omitted; an explicit seed value acts as a fixed override.
+
+Give each logical submission an idempotency key. Repeating an accepted request with the same key and request values returns the original batch and item IDs rather than compiling or enqueueing another run. A different request with that key is a conflict. Record the accepted response, then call `acknowledge_submission`; acknowledged receipts remain replayable for seven days. An already accepted retry still returns its receipt during image-storage maintenance, while new submissions wait until maintenance ends.
+
+## Check jobs and image results
+
+`get_job_status` and `get_job_results` take the batch ID and exact item IDs returned by submission. They only report items in the default queue that belong to the authenticated caller and that batch. Unknown, pruned, or inaccessible items return an unavailable result without item details.
+
+Results come from those queue items, not from the newest gallery images. They include accessible final image outputs; intermediate images are omitted. Images are checked against the caller's image access before metadata, URLs, or image data are returned. Deleted records or files are marked unavailable. A partially successful job can include both available images and failed item statuses. Job status and error type are kept, but raw error messages are omitted.
+
+Each results call embeds at most four images and at most 16 MiB of raw image data in total. Accessible outputs that do not fit those limits still include image and thumbnail URLs without embedded image data. In multi-user mode, fetching those URLs requires the same valid bearer token. During image-storage maintenance, the results tool returns a retryable error; retry after it ends.
+
+The workflow catalog does not yet list model, LoRA, or ControlNet compatibility. A workflow may therefore be listed and accepted for queueing even if its resources are unavailable or incompatible at execution time.
