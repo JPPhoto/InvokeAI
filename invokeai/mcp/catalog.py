@@ -568,12 +568,22 @@ def _field_parameter(
     _apply_form_number_settings(input_schema, form_settings)
     inputs = node_data.get("inputs")
     instance = inputs.get(field_name) if isinstance(inputs, Mapping) else None
+    is_seed = field_name == "seed" and input_schema.get("type") == "integer"
+    seed_mode = None
+    if is_seed:
+        raw_seed_mode = instance.get("seedMode") if isinstance(instance, Mapping) else None
+        seed_mode = raw_seed_mode if isinstance(raw_seed_mode, str) and raw_seed_mode in _SEED_MODES else "fixed"
     has_saved_value = isinstance(instance, Mapping) and "value" in instance
     saved_value_is_valid = has_saved_value and _schema_value_matches(input_schema, instance["value"], definitions)
     if input_kind == "any" and original_required is True and not saved_value_is_valid:
         # Input.Any is optional in the Pydantic model so a connection can provide it. Its None
         # schema default is synthetic; the original requiredness lives in json_schema_extra.
         input_schema.pop("default", None)
+    invalid_schema_default = "default" in input_schema and not _schema_value_matches(
+        input_schema, input_schema["default"], definitions
+    )
+    if invalid_schema_default:
+        input_schema.pop("default")
     if isinstance(instance, Mapping):
         label = instance.get("label")
         if isinstance(label, str) and label:
@@ -590,7 +600,11 @@ def _field_parameter(
             input_schema["default"] = instance["value"]
 
     required = original_required if isinstance(original_required, bool) else "default" not in input_schema
+    if invalid_schema_default:
+        required = True
     if saved_value_is_valid:
+        required = False
+    if seed_mode == "random":
         required = False
 
     parameter = {
@@ -600,9 +614,8 @@ def _field_parameter(
         "required": required,
         "input_schema": input_schema,
     }
-    if field_name == "seed" and input_schema.get("type") == "integer":
-        seed_mode = instance.get("seedMode") if isinstance(instance, Mapping) else None
-        parameter["seed_mode"] = seed_mode if isinstance(seed_mode, str) and seed_mode in _SEED_MODES else "fixed"
+    if is_seed:
+        parameter["seed_mode"] = seed_mode
     return parameter
 
 

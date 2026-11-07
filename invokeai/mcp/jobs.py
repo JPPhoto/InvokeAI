@@ -59,7 +59,7 @@ def _get_job_items(batch_id: str, item_ids: list[int], user_id: str) -> list[Ses
     items: list[SessionQueueItem] = []
     for item_id in item_ids:
         try:
-            item = queue.get_queue_item(item_id)
+            item = queue.get_queue_item_for_api(item_id)
         except SessionQueueItemNotFoundError:
             return None
         if item.queue_id != DEFAULT_QUEUE_ID or item.batch_id != batch_id or item.user_id != user_id:

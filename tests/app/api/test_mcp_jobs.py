@@ -216,6 +216,41 @@ def test_status_and_results_return_queue_state_and_final_image_content(job_env: 
     assert base64.b64decode(result.content[0].data) == image_bytes
 
 
+def test_status_and_results_read_queue_items_through_the_api_projection(
+    job_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_name = "projected-result.png"
+    image_bytes = b"projected result"
+    _save_image(job_env, image_name, image_bytes)
+    batch_id, item_ids = _enqueue(job_env)
+    item_id = item_ids[0]
+    _set_results(
+        job_env,
+        item_id,
+        {"final-node": ImageOutput(image=ImageField(image_name=image_name), width=8, height=8)},
+    )
+    job_env.queue.complete_queue_item(item_id)
+
+    projected_calls: list[int] = []
+    get_projected = job_env.queue.get_queue_item_for_api
+
+    def get_projected_item(requested_id: int) -> Any:
+        projected_calls.append(requested_id)
+        return get_projected(requested_id)
+
+    monkeypatch.setattr(job_env.queue, "get_queue_item", lambda _item_id: pytest.fail("runtime state was hydrated"))
+    monkeypatch.setattr(job_env.queue, "get_queue_item_for_api", get_projected_item)
+
+    status = _call_tool("get_job_status", {"batch_id": batch_id, "item_ids": item_ids}).structured_content
+    result = _call_tool("get_job_results", {"batch_id": batch_id, "item_ids": item_ids})
+
+    assert status["items"][0]["status"] == "completed"
+    assert result.structured_content["items"][0]["status"] == "completed"
+    assert result.structured_content["items"][0]["images"][0]["image_name"] == image_name
+    assert base64.b64decode(result.content[0].data) == image_bytes
+    assert projected_calls == [item_id, item_id]
+
+
 def test_status_and_results_replace_all_error_messages_with_safe_text(job_env: SimpleNamespace) -> None:
     batch_id, item_ids = _enqueue(job_env, runs=3)
     posix_item_id, windows_item_id, network_path_item_id = item_ids

@@ -96,6 +96,27 @@ class TestSaveImageToFileInvocation:
 
         assert (tmp_path / "u_s.png").exists()
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("prefix", "../outside-"),
+            ("suffix", "/../../outside"),
+            ("prefix", "C:drive-"),
+            ("suffix", r"\..\outside"),
+        ],
+    )
+    def test_path_syntax_in_filename_parts_fails_before_saving(self, tmp_path, field, value):
+        img = Image.new("RGB", (8, 8))
+        ctx = _make_context(tmp_path, img)
+        node = _build_node(**{field: value})
+
+        with pytest.raises(ValueError, match="filename"):
+            node.invoke(ctx)
+
+        ctx.images.get_pil.assert_not_called()
+        ctx.images.save.assert_not_called()
+        assert list(tmp_path.iterdir()) == []
+
     def test_filename_uses_gallery_uuid_not_input_uuid(self, tmp_path):
         """The exported filename must use the UUID from the new gallery entry,
         not the UUID of the input image_name."""

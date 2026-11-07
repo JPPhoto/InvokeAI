@@ -367,6 +367,31 @@ def test_describe_uses_cycle_safe_form_order_and_registered_safe_inputs(
     assert "user_id" not in result and "workflow" not in result
 
 
+def test_describe_does_not_advertise_defaults_outside_narrowed_form_constraints(
+    catalog_records: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _register_catalog_invocation(monkeypatch)
+    form = _form(["seed"])
+    form["elements"]["seed"]["data"]["settings"] = {
+        "type": "integer-field-config",
+        "component": "number-input",
+        "min": 10,
+    }
+    workflow = catalog_records.create(
+        _workflow("Narrowed input", nodes=[_node("node", {"seed": {"value": 5}})], form=form),
+        user_id="owner",
+        is_public=True,
+    )
+
+    describe_workflow, _ = _catalog_tools()
+    result = describe_workflow(ctx=_ctx("owner"), workflow_id=workflow.workflow_id)
+    parameter = result["parameters"][0]
+
+    assert parameter["input_schema"]["minimum"] == 10
+    assert "default" not in parameter["input_schema"]
+    assert parameter["required"] is True
+
+
 def test_describe_omits_path_and_nested_uri_resources(catalog_records: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     from invokeai.app.invocations.image import SaveImageToFileInvocation
 

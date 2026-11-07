@@ -67,6 +67,7 @@ def _submission_workflow(
     edges: list[dict[str, Any]] | None = None,
     exposed_fields: list[dict[str, str]] | None = None,
     category: WorkflowCategory = WorkflowCategory.User,
+    form: dict[str, Any] | None = None,
 ) -> WorkflowWithoutID:
     return WorkflowWithoutID(
         name="Submission workflow",
@@ -80,7 +81,7 @@ def _submission_workflow(
         meta=WorkflowMeta(version="3.0.0", category=category),
         nodes=nodes or [_workflow_node("add-1", "add", {"a": {"value": 2}, "b": {"value": 3}})],
         edges=edges or [],
-        form=None,
+        form=form,
     )
 
 
@@ -90,6 +91,23 @@ def _seed_workflow(seed_mode: str | None, seed: int = 42, *, exposed: bool = Tru
         nodes=[_workflow_node("noise-1", "noise", {"seed": seed_input})],
         exposed_fields=[{"nodeId": "noise-1", "fieldName": "seed"}] if exposed else [],
     )
+
+
+def _narrowed_seed_form() -> dict[str, Any]:
+    return {
+        "rootElementId": "root",
+        "elements": {
+            "root": {"id": "root", "type": "container", "data": {"children": ["seed"]}},
+            "seed": {
+                "id": "seed",
+                "type": "node-field",
+                "data": {
+                    "fieldIdentifier": {"nodeId": "noise-1", "fieldName": "seed"},
+                    "settings": {"type": "integer-field-config", "component": "number-input", "min": 10},
+                },
+            },
+        },
+    }
 
 
 def _configure_submission(
@@ -285,6 +303,84 @@ def test_described_schema_default_replaces_invalid_saved_value_when_omitted(
     _call_submit()
 
     assert harness.queue_calls[0]["batch"].graph.nodes["noise-1"].seed == seed_parameter["input_schema"]["default"]
+
+
+def test_omitted_narrowed_input_cannot_enqueue_invalid_saved_or_invocation_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from invokeai.mcp.catalog import describe_workflow
+
+    workflow = _submission_workflow(
+        nodes=[_workflow_node("noise-1", "noise", {"seed": {"value": 5}})],
+        form=_narrowed_seed_form(),
+    )
+    harness = _configure_submission(monkeypatch, workflow)
+    description = describe_workflow(ctx=_ctx("submission-owner"), workflow_id="workflow-id")
+    seed_parameter = description["parameters"][0]
+
+    assert seed_parameter["input_schema"]["minimum"] == 10
+    assert "default" not in seed_parameter["input_schema"]
+    assert seed_parameter["required"] is True
+    with pytest.raises(ToolError, match="Missing required workflow parameter: noise-1::seed"):
+        _call_submit()
+    assert harness.queue_calls == []
+
+    _call_submit(parameters={"noise-1::seed": 10})
+    assert harness.queue_calls[0]["batch"].graph.nodes["noise-1"].seed == 10
+
+
+def test_omitted_narrowed_random_seed_is_generated_once_and_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from invokeai.mcp import submission
+    from invokeai.mcp.catalog import describe_workflow
+
+    workflow = _submission_workflow(
+        nodes=[_workflow_node("noise-1", "noise", {"seed": {"value": 5, "seedMode": "random"}})],
+        form=_narrowed_seed_form(),
+    )
+    harness = _configure_submission(monkeypatch, workflow)
+    draws: list[int] = []
+
+    def draw_seed(upper: int) -> int:
+        draws.append(upper)
+        return 2
+
+    monkeypatch.setattr(submission.secrets, "randbelow", draw_seed)
+    description = describe_workflow(ctx=_ctx("submission-owner"), workflow_id="workflow-id")
+    seed_parameter = description["parameters"][0]
+
+    assert seed_parameter["input_schema"]["minimum"] == 10
+    assert "default" not in seed_parameter["input_schema"]
+    assert seed_parameter["required"] is False
+    harness.workflow_reads.clear()
+    first = _call_submit()
+    harness.record.revision = 5
+    harness.record.is_public = False
+    replay = _call_submit()
+
+    assert first == replay
+    assert harness.queue_calls[0]["batch"].graph.nodes["noise-1"].seed == 12
+    assert draws == [4294967286]
+    assert harness.workflow_reads == ["workflow-id"]
+    assert len(harness.queue_calls) == 1
+
+
+def test_submit_preserves_saved_call_dynamic_literal_in_accepted_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    dynamic_input = "saved_workflow_input::child-prompt::value"
+    workflow = _submission_workflow(
+        nodes=[
+            _workflow_node(
+                "call-1",
+                "call_saved_workflow",
+                {"workflow_id": {"value": "child-workflow"}, dynamic_input: {"value": "the stored prompt"}},
+            )
+        ]
+    )
+    harness = _configure_submission(monkeypatch, workflow)
+
+    result = _call_submit()
+
+    assert result["status"] == "accepted"
+    assert harness.queue_calls[0]["batch"].graph.nodes["call-1"].workflow_inputs == {dynamic_input: "the stored prompt"}
 
 
 def test_submit_workflow_schema_requires_identity_revision_and_bounded_key(monkeypatch: pytest.MonkeyPatch) -> None:

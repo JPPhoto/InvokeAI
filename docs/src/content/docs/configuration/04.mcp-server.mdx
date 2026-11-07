@@ -18,9 +18,22 @@ The Streamable HTTP endpoint is `/api/mcp`. It uses the API listener's existing 
 
 ## Authentication
 
-In multi-user mode, each request must include an InvokeAI bearer token for the user making the request. MCP does not provide an OAuth sign-in flow or renew tokens. Obtain tokens through InvokeAI's regular authentication API; after a token expires, requests must use a valid token again. How a particular MCP client stores or renews tokens has not been verified here.
+In multi-user mode, each request must include an InvokeAI bearer token for the user making the request. MCP does not provide an OAuth sign-in or token-renewal flow. InvokeAI's API adds an `X-Refreshed-Token` header to successful authenticated `POST`, `PUT`, `PATCH`, and `DELETE` responses, including successful MCP HTTP `POST` responses. A client can use that replacement bearer token to keep its session active; whether a particular MCP client reads and adopts the header has not been verified.
 
 In single-user mode, InvokeAI supplies its system identity and does not require a token. Any client that can reach the MCP endpoint receives that identity, so protect network access with the same care as the API, including TLS and reverse-proxy access controls.
+
+## Remote access and reverse proxies
+
+The MCP transport checks the request `Host` and, when present, `Origin` to limit DNS-rebinding requests. Local hosts and the configured InvokeAI bind host are allowed by default. To allow a public hostname, add its exact origin to `allow_origins` in `invokeai.yaml`:
+
+```yaml
+allow_origins:
+  - "https://invoke.example.com"
+```
+
+Use the public scheme, hostname, and port if it is nonstandard; `Origin` values do not include a path. This also configures CORS. Do not use a wildcard for the MCP hostname.
+
+If a reverse proxy serves InvokeAI beneath a path such as `/invoke`, set `base_url: /invoke` when the proxy preserves that path in requests to InvokeAI. If the proxy strips the prefix, `base_url` is optional but can still be set so generated API and documentation URLs include the public prefix. When `base_url` is set, configure `forwarded_allow_ips` with the reverse proxy's IP so InvokeAI trusts its `X-Forwarded-*` headers.
 
 MCP tools use the caller's InvokeAI permissions. The workflow catalog includes Default-category workflows and public workflows. System ownership alone does not expose a private workflow.
 

@@ -1162,6 +1162,9 @@ class SaveImageToFileInvocation(BaseInvocation, WithMetadata, WithBoard):
     )
 
     def invoke(self, context: InvocationContext) -> ImageOutput:
+        if any(character in part for part in (self.prefix, self.suffix) for character in "/\\:"):
+            raise ValueError("prefix and suffix must be filename text; use output_directory for paths")
+
         image = context.images.get_pil(self.image.image_name)
 
         image_dto = context.images.save(image=image)

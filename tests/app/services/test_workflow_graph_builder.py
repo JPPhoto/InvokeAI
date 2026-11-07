@@ -171,6 +171,24 @@ def test_build_graph_from_workflow_root_mode_converts_without_workflow_return():
     assert graph.nodes["add-1"].b == 2
 
 
+def test_build_root_graph_packs_saved_call_dynamic_literals_into_workflow_inputs():
+    dynamic_input = "saved_workflow_input::child-prompt::value"
+    workflow = _build_workflow(
+        nodes=[
+            _build_workflow_node(
+                "call-1",
+                "call_saved_workflow",
+                {"workflow_id": "child-workflow", dynamic_input: "the stored prompt"},
+            )
+        ],
+        edges=[],
+    )
+
+    graph = build_graph_from_workflow(workflow, workflow_mode="root")
+
+    assert graph.nodes["call-1"].workflow_inputs == {dynamic_input: "the stored prompt"}
+
+
 def test_build_graph_from_workflow_preserves_loop_linkage_edges():
     workflow = _build_workflow(
         nodes=[

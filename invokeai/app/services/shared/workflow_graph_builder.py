@@ -443,6 +443,7 @@ def build_graph_from_workflow(
 
         inputs = data.get("inputs", {})
         if _is_mapping(inputs):
+            dynamic_workflow_inputs: dict[str, Any] = {}
             for field_name, field_value in inputs.items():
                 if not isinstance(field_name, str) or not _is_mapping(field_value):
                     continue
@@ -453,7 +454,17 @@ def build_graph_from_workflow(
                     # automatic and no-board selection as the board field default, None.
                     if field_name == "board" and field_value["value"] in ("auto", "none"):
                         continue
+                    if node_type == "call_saved_workflow" and field_name.startswith(
+                        CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX
+                    ):
+                        dynamic_workflow_inputs[field_name] = field_value["value"]
+                        continue
                     graph_node[field_name] = field_value["value"]
+            if dynamic_workflow_inputs:
+                workflow_inputs = graph_node.get("workflow_inputs", {})
+                if not isinstance(workflow_inputs, Mapping):
+                    raise InvalidWorkflowInputError(f"call_saved_workflow node '{node_id}' has invalid workflow_inputs")
+                graph_node["workflow_inputs"] = {**workflow_inputs, **dynamic_workflow_inputs}
 
         parsed_nodes[node_id] = graph_node
 
@@ -536,7 +547,15 @@ def build_graph_from_workflow(
         if edge["type"] == "default":
             destination_node_id = edge["destination"]["node_id"]
             destination_field = edge["destination"]["field"]
-            parsed_nodes[destination_node_id].pop(destination_field, None)
+            destination_node = parsed_nodes[destination_node_id]
+            if destination_node["type"] == "call_saved_workflow" and destination_field.startswith(
+                CALL_SAVED_WORKFLOW_DYNAMIC_FIELD_PREFIX
+            ):
+                workflow_inputs = destination_node.get("workflow_inputs")
+                if isinstance(workflow_inputs, MutableMapping):
+                    workflow_inputs.pop(destination_field, None)
+            else:
+                destination_node.pop(destination_field, None)
 
     return Graph.model_validate(
         {
