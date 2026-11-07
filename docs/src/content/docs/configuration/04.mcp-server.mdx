@@ -18,7 +18,7 @@ The Streamable HTTP endpoint is `/api/mcp`. It uses the API listener's existing 
 
 ## Authentication
 
-In multi-user mode, each request must include an InvokeAI bearer token for the user making the request. MCP does not provide an OAuth sign-in or token-renewal flow. InvokeAI's API adds an `X-Refreshed-Token` header to successful authenticated `POST`, `PUT`, `PATCH`, and `DELETE` responses, including successful MCP HTTP `POST` responses. A client can use that replacement bearer token to keep its session active; whether a particular MCP client reads and adopts the header has not been verified.
+In multi-user mode, each request must include an InvokeAI bearer token for the user making the request. MCP does not provide an OAuth sign-in or token-renewal flow. InvokeAI's API adds an `X-Refreshed-Token` header to successful authenticated `POST`, `PUT`, `PATCH`, and `DELETE` responses, including successful MCP HTTP `POST` responses. A client that adopts this replacement token can keep its session active. In a local check with Codex CLI 0.166.0 configured with `bearer_token_env_var`, Codex reused the previous bearer token after receiving `X-Refreshed-Token`; reconnect or reconfigure after token expiry when using this setup. Other MCP clients have not been verified.
 
 In single-user mode, InvokeAI supplies its system identity and does not require a token. Any client that can reach the MCP endpoint receives that identity, so protect network access with the same care as the API, including TLS and reverse-proxy access controls.
 
