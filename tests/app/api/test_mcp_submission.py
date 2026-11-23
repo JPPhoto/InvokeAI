@@ -305,6 +305,33 @@ def test_described_schema_default_replaces_invalid_saved_value_when_omitted(
     assert harness.queue_calls[0]["batch"].graph.nodes["noise-1"].seed == seed_parameter["input_schema"]["default"]
 
 
+def test_submission_accepts_union_array_values_and_rejects_invalid_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    from invokeai.app.invocations.baseinvocation import InvocationRegistry
+    from invokeai.app.invocations.flux.flux_denoise import FluxDenoiseInvocation
+    from invokeai.mcp.submission import _apply_parameters
+
+    monkeypatch.setattr(
+        InvocationRegistry,
+        "get_invocation_for_type",
+        classmethod(lambda _cls, invocation_type: FluxDenoiseInvocation if invocation_type == "flux_denoise" else None),
+    )
+    workflow = _submission_workflow(
+        nodes=[_workflow_node("denoise", "flux_denoise", {"cfg_scale": {"value": [2.0, 3.0]}})],
+        exposed_fields=[{"nodeId": "denoise", "fieldName": "cfg_scale"}],
+    )
+
+    _apply_parameters(workflow, {})
+    assert workflow.nodes[0]["data"]["inputs"]["cfg_scale"]["value"] == [2.0, 3.0]
+
+    _apply_parameters(workflow, {"denoise::cfg_scale": [4.0, 5.0]})
+    assert workflow.nodes[0]["data"]["inputs"]["cfg_scale"]["value"] == [4.0, 5.0]
+
+    with pytest.raises(ToolError, match="Invalid value for workflow parameter: denoise::cfg_scale"):
+        _apply_parameters(workflow, {"denoise::cfg_scale": [6.0, "invalid"]})
+
+    assert workflow.nodes[0]["data"]["inputs"]["cfg_scale"]["value"] == [4.0, 5.0]
+
+
 def test_omitted_narrowed_input_cannot_enqueue_invalid_saved_or_invocation_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

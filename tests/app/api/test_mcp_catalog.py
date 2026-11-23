@@ -155,6 +155,31 @@ def test_schema_multiple_of_uses_exact_json_number_arithmetic(
     assert _schema_value_matches(schema, value, {}) is expected
 
 
+def test_describe_preserves_saved_array_value_for_scalar_or_list_input(
+    catalog_records: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from invokeai.app.invocations.flux.flux_denoise import FluxDenoiseInvocation
+
+    _register_catalog_invocation(monkeypatch, {"flux_denoise": FluxDenoiseInvocation})
+    workflow = catalog_records.create(
+        _workflow(
+            "CFG schedule",
+            nodes=[_node("denoise", {"cfg_scale": {"value": [2.0, 3.0]}}, "flux_denoise")],
+            exposed_fields=[{"nodeId": "denoise", "fieldName": "cfg_scale"}],
+        ),
+        user_id="owner",
+        is_public=True,
+    )
+
+    describe_workflow, _ = _catalog_tools()
+    result = describe_workflow(ctx=_ctx("owner"), workflow_id=workflow.workflow_id)
+
+    parameter = result["parameters"][0]
+    assert parameter["name"] == "denoise::cfg_scale"
+    assert parameter["input_schema"]["default"] == [2.0, 3.0]
+    assert parameter["required"] is False
+
+
 def test_catalog_tools_are_registered_and_list_only_shared_metadata(catalog_records: Any) -> None:
     public = catalog_records.create(
         _workflow("Zebra public", notes="stored-private-note"), user_id="public-owner", is_public=True

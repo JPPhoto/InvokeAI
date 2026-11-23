@@ -396,8 +396,9 @@ def _schema_value_matches(
         if isinstance(schema.get("maxItems"), int) and len(value) > schema["maxItems"]:
             return False
         items = schema.get("items")
-        if not isinstance(items, Mapping) or not all(
-            _schema_value_matches(items, item, definitions, resolving) for item in value
+        if items is not None and (
+            not isinstance(items, Mapping)
+            or not all(_schema_value_matches(items, item, definitions, resolving) for item in value)
         ):
             return False
 
